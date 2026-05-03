@@ -1,0 +1,11 @@
+node_modules/
+dist/
+*.log
+coverage/
+.idea/
+.vscode/
+*.lock
+package-lock.json
+*.tgz
+.env
+.env.*
