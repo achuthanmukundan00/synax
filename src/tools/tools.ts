@@ -56,7 +56,8 @@ const readOnlySafety = {
 
 const listFilesTool: ToolDefinition<ListFilesInput> = {
   name: 'list_files',
-  description: 'List safe, non-generated repository files under an optional repo-relative directory. Use before reading files when you need candidate paths.',
+  description:
+    'List safe, non-generated repository files under an optional repo-relative directory. Use before reading files when you need candidate paths.',
   inputSchema: {
     type: 'object',
     properties: {
@@ -86,14 +87,18 @@ const listFilesTool: ToolDefinition<ListFilesInput> = {
 
 const readFileRangeTool: ToolDefinition<ReadFileRangeInput> = {
   name: 'read_file_range',
-  description: 'Read a bounded, line-numbered range from one safe repo-relative text file. Use this before proposing edits to that file.',
+  description:
+    'Read a bounded, line-numbered range from one safe repo-relative text file. Use this before proposing edits to that file.',
   inputSchema: {
     type: 'object',
     required: ['path'],
     properties: {
       path: { type: 'string', description: 'Repo-relative file path to read.' },
       startLine: { type: 'number', description: '1-based first line to include. Defaults to 1.' },
-      endLine: { type: 'number', description: `1-based final line to include. Defaults to startLine + ${DEFAULT_MAX_READ_LINES - 1}.` },
+      endLine: {
+        type: 'number',
+        description: `1-based final line to include. Defaults to startLine + ${DEFAULT_MAX_READ_LINES - 1}.`,
+      },
     },
   },
   safetyPolicy: readOnlySafety,
@@ -109,7 +114,11 @@ const readFileRangeTool: ToolDefinition<ReadFileRangeInput> = {
     }
 
     const startLine = boundedPositiveInteger(input.startLine, 1, Number.MAX_SAFE_INTEGER);
-    const requestedEndLine = boundedPositiveInteger(input.endLine, startLine + DEFAULT_MAX_READ_LINES - 1, Number.MAX_SAFE_INTEGER);
+    const requestedEndLine = boundedPositiveInteger(
+      input.endLine,
+      startLine + DEFAULT_MAX_READ_LINES - 1,
+      Number.MAX_SAFE_INTEGER,
+    );
     const endLine = Math.min(requestedEndLine, startLine + DEFAULT_MAX_READ_LINES - 1);
 
     try {
@@ -138,7 +147,8 @@ const readFileRangeTool: ToolDefinition<ReadFileRangeInput> = {
 
 const searchTextTool: ToolDefinition<SearchTextInput> = {
   name: 'search_text',
-  description: 'Search safe repository text files for a literal string. Returns bounded repo-relative matches with line numbers.',
+  description:
+    'Search safe repository text files for a literal string. Returns bounded repo-relative matches with line numbers.',
   inputSchema: {
     type: 'object',
     required: ['query'],
@@ -199,9 +209,15 @@ const showGitStatusTool: ToolDefinition<Record<string, never>> = {
   ledgerBehavior: 'records-git-status',
   async execute(_input: Record<string, never>, context: ToolContext): Promise<ToolResult> {
     try {
-      const { stdout } = await execFileAsync('git', ['status', '--short'], { cwd: context.repoRoot, maxBuffer: 64 * 1024 });
+      const { stdout } = await execFileAsync('git', ['status', '--short'], {
+        cwd: context.repoRoot,
+        maxBuffer: 64 * 1024,
+      });
       context.ledger.recordGitStatus();
-      return success('show_git_status', { status: splitLines(stdout).slice(0, DEFAULT_MAX_GIT_LINES), truncated: splitLines(stdout).length > DEFAULT_MAX_GIT_LINES });
+      return success('show_git_status', {
+        status: splitLines(stdout).slice(0, DEFAULT_MAX_GIT_LINES),
+        truncated: splitLines(stdout).length > DEFAULT_MAX_GIT_LINES,
+      });
     } catch (error) {
       return failure('show_git_status', errorMessage(error));
     }
@@ -210,7 +226,8 @@ const showGitStatusTool: ToolDefinition<Record<string, never>> = {
 
 const showGitDiffTool: ToolDefinition<GitDiffInput> = {
   name: 'show_git_diff',
-  description: 'Show a bounded git diff for unstaged repository changes. Read-only and useful for reviewing the current patch.',
+  description:
+    'Show a bounded git diff for unstaged repository changes. Read-only and useful for reviewing the current patch.',
   inputSchema: {
     type: 'object',
     properties: {
@@ -222,7 +239,10 @@ const showGitDiffTool: ToolDefinition<GitDiffInput> = {
   async execute(input: GitDiffInput, context: ToolContext): Promise<ToolResult> {
     const maxLines = boundedPositiveInteger(input.maxLines, DEFAULT_MAX_GIT_LINES, DEFAULT_MAX_GIT_LINES);
     try {
-      const { stdout } = await execFileAsync('git', ['diff', '--no-ext-diff'], { cwd: context.repoRoot, maxBuffer: 256 * 1024 });
+      const { stdout } = await execFileAsync('git', ['diff', '--no-ext-diff'], {
+        cwd: context.repoRoot,
+        maxBuffer: 256 * 1024,
+      });
       const lines = splitLines(stdout);
       context.ledger.recordGitDiff();
       return success('show_git_diff', { diff: lines.slice(0, maxLines), truncated: lines.length > maxLines });
