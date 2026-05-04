@@ -2,7 +2,21 @@ import { extname, isAbsolute, normalize, relative, resolve, sep } from 'path';
 
 const BLOCKED_SEGMENTS = new Set(['.git', 'node_modules', 'dist', 'build', 'coverage', '.next', '.cache', '.vite']);
 const BLOCKED_BASENAMES = new Set(['package-lock.json', 'pnpm-lock.yaml', 'yarn.lock']);
-const BLOCKED_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.ico', '.pdf', '.zip', '.tar', '.gz', '.woff', '.woff2', '.ttf']);
+const BLOCKED_EXTENSIONS = new Set([
+  '.png',
+  '.jpg',
+  '.jpeg',
+  '.gif',
+  '.webp',
+  '.ico',
+  '.pdf',
+  '.zip',
+  '.tar',
+  '.gz',
+  '.woff',
+  '.woff2',
+  '.ttf',
+]);
 
 export interface PathPolicyResult {
   ok: boolean;
@@ -27,7 +41,11 @@ export function normalizeRepoPath(repoRoot: string, inputPath: string): PathPoli
 
   const segments = normalized.split('/').filter(Boolean);
   const basename = segments[segments.length - 1] ?? '';
-  if (segments.some(segment => BLOCKED_SEGMENTS.has(segment)) || BLOCKED_BASENAMES.has(basename) || isEnvFile(basename)) {
+  if (
+    segments.some((segment) => BLOCKED_SEGMENTS.has(segment)) ||
+    BLOCKED_BASENAMES.has(basename) ||
+    isEnvFile(basename)
+  ) {
     return { ok: false, reason: `unsafe path rejected: ${normalized}` };
   }
 
