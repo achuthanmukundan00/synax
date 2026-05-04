@@ -34,7 +34,7 @@ export function runInspectCommand(program: any): void {
     .action((options: any) => {
       const targetPath = options.path ? resolve(options.path) : cwd;
       const projectProfile = buildProjectProfile(targetPath);
-      const parsedConfig = loadProjectConfig('file', options.path);
+      const parsedConfig = loadProjectConfig(options.path);
 
       const fullProfile: FullProfile = {
         project: projectProfile,
