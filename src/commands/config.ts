@@ -93,7 +93,7 @@ function handleInit(baseDir: string, opts: ConfigCommandOptions): void {
  * Handle `config show` subcommand.
  */
 function handleShow(baseDir: string, opts: ConfigCommandOptions): void {
-  const parsedConfig = loadProjectConfig(opts.path ? 'file' : 'default', opts.path);
+  const parsedConfig = loadProjectConfig(opts.path);
   const projectProfile = buildProjectProfile(baseDir);
 
   const fullProfile: FullProfile = {
@@ -118,7 +118,7 @@ function handleGet(_baseDir: string, opts: ConfigCommandOptions): void {
     process.exit(1);
   }
 
-  const parsedConfig = loadProjectConfig(opts.path ? 'file' : 'default', opts.path);
+      const parsedConfig = loadProjectConfig(opts.path);
   const config = parsedConfig.config as ProjectConfig;
 
   // Parse nested key path (e.g., "subagents.enabled")
