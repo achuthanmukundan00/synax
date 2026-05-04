@@ -185,14 +185,22 @@ describe('loadProjectConfig for inspect', () => {
   });
 
   it('returns defaults when no config file', () => {
-    const result = loadProjectConfig('default');
-    expect(result.source).toBe('default');
+    const tmpDir = join(__dirname, '..', '..', '..', 'tmp', 'synax-inspect-defaults');
+    const { mkdirSync, rmSync, existsSync } = require('fs');
+    if (existsSync(tmpDir)) rmSync(tmpDir, { recursive: true, force: true });
+    mkdirSync(tmpDir, { recursive: true });
+    try {
+      const result = loadProjectConfig(tmpDir);
+      expect(result.source).toBe('default');
+    } finally {
+      if (existsSync(tmpDir)) rmSync(tmpDir, { recursive: true, force: true });
+    }
   });
 
   it('returns parsed config when file exists', () => {
     const configPath = join(TMP, '.synax.toml');
     writeFileSync(configPath, 'model = "test-model"\ncontextBudgetTokens = 2000', 'utf-8');
-    const result = loadProjectConfig('file', configPath);
+    const result = loadProjectConfig(configPath);
     expect(result.source).toBe('file');
     expect(result.config.model).toBe('test-model');
   });
