@@ -1,6 +1,13 @@
 import { InspectionLedger } from './ledger';
+import { ContextLedger } from './context-ledger';
 
-export type LedgerBehavior = 'none' | 'records-file-list' | 'records-file-range' | 'records-search-results' | 'records-git-status' | 'records-git-diff';
+export type LedgerBehavior =
+  | 'none'
+  | 'records-file-list'
+  | 'records-file-range'
+  | 'records-search-results'
+  | 'records-git-status'
+  | 'records-git-diff';
 
 export interface ToolSafetyPolicy {
   readOnly: boolean;
@@ -11,6 +18,12 @@ export interface ToolSafetyPolicy {
 export interface ToolContext {
   repoRoot: string;
   ledger: InspectionLedger;
+}
+
+export interface AgentContext {
+  repoRoot: string;
+  inspectionLedger: InspectionLedger;
+  contextLedger: ContextLedger;
 }
 
 export interface ToolResult<TOutput = unknown> {
