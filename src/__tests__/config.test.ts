@@ -198,11 +198,7 @@ describe('detectCommands', () => {
   });
 
   it('extracts scripts from package.json', () => {
-    writeFileSync(
-      join(TMP, 'package.json'),
-      JSON.stringify({ scripts: { test: 'jest', lint: 'eslint .' } }),
-      'utf-8'
-    );
+    writeFileSync(join(TMP, 'package.json'), JSON.stringify({ scripts: { test: 'jest', lint: 'eslint .' } }), 'utf-8');
     const result = detectCommands(TMP);
     expect(result.test).toBe('jest');
     expect(result.lint).toBe('eslint .');
