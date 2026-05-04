@@ -6,6 +6,7 @@
  */
 
 import { type NormalizedProviderConfig, type ChatOptions, type ChatResponse, type LlmError } from './types';
+import { type ContextLedger } from '../tools';
 
 // ---------------------------------------------------------------------------
 // Error helpers
@@ -142,7 +143,22 @@ function parseSuccessResponse(bodyText: string): ChatResponse {
 // Client
 // ---------------------------------------------------------------------------
 
-export function createOpenAICompatibleClient(cfg: NormalizedProviderConfig) {
+/**
+ * Options for budget enforcement when the ledger is provided.
+ */
+export interface BudgetPolicy {
+  /** Hard stop when remaining budget falls at or below this threshold. */
+  hardStopThreshold?: number;
+  /** Emit a warning when remaining budget falls at or below this threshold. */
+  warnThreshold?: number;
+}
+
+export function createOpenAICompatibleClient(
+  cfg: NormalizedProviderConfig,
+  opts?: { ledger?: ContextLedger; budgetPolicy?: BudgetPolicy },
+) {
+  const ledger = opts?.ledger ?? null;
+  const budgetPolicy = opts?.budgetPolicy ?? {};
   const timeoutMs = cfg.timeoutMs ?? 120000;
   const model = cfg.model ?? '';
   const baseUrl = (cfg.baseUrl ?? 'http://127.0.0.1:1234/v1').replace(/\/+$/, '');
@@ -169,6 +185,11 @@ export function createOpenAICompatibleClient(cfg: NormalizedProviderConfig) {
   return {
     /**
      * Send a chat request.
+     *
+     * When a ledger is provided, this method:
+     * 1. Records token usage from the response (prompt + completion tokens).
+     * 2. Updates the budget state (used / remaining).
+     * 3. Enforces budget policy (warn or hard-stop).
      */
     async chat(opts: ChatOptions): Promise<ChatResponse> {
       const body = {
@@ -181,7 +202,40 @@ export function createOpenAICompatibleClient(cfg: NormalizedProviderConfig) {
       const result = await dispatchRequest(endpoint, body, headers, timeoutMs);
 
       if (result.status >= 200 && result.status < 300) {
-        return parseSuccessResponse(result.bodyText);
+        const response = parseSuccessResponse(result.bodyText);
+
+        // Record token usage from the response when a ledger is present.
+        if (ledger && response.usage) {
+          const used = (response.usage.promptTokens ?? 0) + (response.usage.completionTokens ?? 0);
+          ledger.recordTokenUsage(used);
+        }
+
+        // Enforce budget policy when a ledger is present.
+        if (ledger) {
+          const remaining = budgetPolicy.hardStopThreshold ?? 0;
+          const warnRemaining = budgetPolicy.warnThreshold ?? 1000;
+          const safe = ledger.isSafe();
+
+          if (!safe) {
+            throw new Error(
+              `Context budget exhausted: ${ledger.getExpanded().budget.used}/${ledger.getExpanded().budget.total} tokens used.\n${ledger.getCompact()}`,
+            );
+          }
+
+          if (ledger.getExpanded().budget.remaining <= remaining) {
+            throw new Error(
+              `Context budget hard-stop: ${ledger.getExpanded().budget.remaining} tokens remaining (threshold: ${remaining}).\n${ledger.getCompact()}`,
+            );
+          }
+
+          if (ledger.getExpanded().budget.remaining <= warnRemaining) {
+            process.stderr.write(
+              `[synax] ⚠️ Context budget low: ${ledger.getExpanded().budget.remaining} tokens remaining (warn threshold: ${warnRemaining}).\n${ledger.getCompact()}\n`,
+            );
+          }
+        }
+
+        return response;
       }
 
       throw parseErrorResponse(result.status, result.bodyText);
