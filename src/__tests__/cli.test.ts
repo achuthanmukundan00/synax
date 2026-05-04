@@ -5,7 +5,7 @@ const SYNAX_BIN = path.resolve(__dirname, '../../dist/cli.js');
 
 function runSynax(args: string[]): string {
   try {
-    const cmd = `node "${SYNAX_BIN}" ${args.map(a => `'${a}'`).join(' ')}`;
+    const cmd = `node "${SYNAX_BIN}" ${args.map((a) => `'${a}'`).join(' ')}`;
     return execSync(cmd, {
       encoding: 'utf8',
       timeout: 15000,
@@ -37,15 +37,14 @@ describe('CLI', () => {
   });
 
   describe('synax chat', () => {
-    test('should show placeholder without arguments', () => {
+    test('should initialize chat mode', () => {
       const output = runSynax(['chat']);
-      expect(output).toContain('[synax] Chat command initialized');
+      expect(output).toContain('[synax] Chat initialized');
     });
 
     test('should accept --message option', () => {
       const output = runSynax(['chat', '--message', 'hello']);
       expect(output).toContain('hello');
-      expect(output).toContain('Placeholder');
     });
   });
 
