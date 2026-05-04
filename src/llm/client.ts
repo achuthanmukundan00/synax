@@ -1,266 +1,184 @@
-import https from 'https'
-import {
-  ChatMessage,
-  ChatCompletionResponse,
-  LlmError,
-  LlmErrorType,
-  LlmClientConfig,
-} from './types'
+/**
+ * OpenAI-compatible chat client for local providers (e.g. Relay).
+ *
+ * Posts Chat Completions requests to any OpenAI-compatible endpoint.
+ * Supports structured provider errors for `synax doctor`.
+ */
 
-export class LlmClient {
-  private readonly config: LlmClientConfig
+import { type NormalizedProviderConfig, type ChatOptions, type ChatResponse, type LlmError } from './types'
 
-  constructor(config: LlmClientConfig) {
-    this.config = config
-  }
+// ---------------------------------------------------------------------------
+// Error helpers
+// ---------------------------------------------------------------------------
 
-  async chat(messages: ChatMessage[]): Promise<ChatCompletionResponse> {
-    const model = this.config.model || 'gpt-4o'
-    const url = new URL(this.config.baseUrl)
-    const estimatedPromptTokens = this.estimatePromptTokens(messages)
-    const budget = this.config.contextBudgetTokens
-    if (
-      budget !== undefined &&
-      estimatedPromptTokens > budget
-    ) {
-      throw this.createError(
-        'contextBudget',
-        `Estimated prompt tokens (${estimatedPromptTokens}) exceed context budget (${budget})`,
-        false,
-      )
-    }
-    return new Promise<ChatCompletionResponse>((resolve, reject) => {
-      const options: https.RequestOptions = {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Accept': 'application/json',
-          ...(this.config.apiKey ? { Authorization: `Bearer ${this.config.apiKey}` } : {}),
-          ...this.config.customHeaders,
-        },
-        timeout: (this.config.timeoutSeconds ?? 120) * 1000,
-      }
-      const payload = JSON.stringify({ model, messages, temperature: 0, stream: false })
-      const req = https.request(url.toString(), options, (res) => {
-        const chunks: Buffer[] = []
-        res.on('data', (chunk: Buffer) => chunks.push(chunk))
-        res.on('end', () => {
-          const body = Buffer.concat(chunks).toString('utf-8')
-          try {
-            const json = JSON.parse(body)
-            if (res.statusCode !== 200) {
-              const errStatusCode = res.statusCode ?? -1
-              const errType = this.classifyError(errStatusCode, json)
-              reject(
-                this.createError(
-                  errType,
-                  `API error ${res.statusCode}: ${json.error?.message || json.message || 'Unknown error'}`,
-                  this.isRetryable(errStatusCode, errType),
-                ),
-              )
-              return
-            }
-            const choice = json.choices?.[0]
-            if (!choice) {
-              reject(
-                this.createError('unknown', 'Unexpected response format: no choices', false),
-              )
-              return
-            }
-            resolve({
-              content: choice.message?.content || '',
-              model: json.model || model,
-              finishReason: choice.finish_reason || null,
-              usage: json.usage
-                ? {
-                    promptTokens: json.usage.prompt_tokens || 0,
-                    completionTokens: json.usage.completion_tokens || 0,
-                    totalTokens: json.usage.total_tokens || 0,
-                  }
-                : null,
-            })
-          } catch (e) {
-            reject(
-              this.createError('unknown', `Failed to parse response: ${(e as Error).message}`, false),
-            )
-          }
-        })
-        res.on('error', (e) => reject(this.createError('connection', String(e), true)))
-      })
-      req.on('error', (e) => reject(this.createError('connection', String(e), true)))
-      req.on('timeout', () => {
-        req.destroy()
-        reject(
-          this.createError(
-            'timeout',
-            `Request timed out after ${(this.config.timeoutSeconds ?? 120)}s`,
-            true,
-          ),
-        )
-      })
-      req.write(payload)
-      req.end()
+function providerError(
+  type: LlmError['type'],
+  message: string,
+  opts: { statusCode?: number; detail?: string; retryable?: boolean } = {},
+): LlmError {
+  const err = Object.assign(
+    new Error(message),
+    { type, statusCode: opts.statusCode, detail: opts.detail, retryable: opts.retryable ?? false, name: 'ProviderError' },
+  ) as LlmError
+  return err
+}
+
+function classifyStatus(status: number): LlmError['type'] {
+  if (status >= 400 && status < 500) return 'invalidRequest'
+  if (status === 429) return 'rateLimit'
+  if (status === 401 || status === 403) return 'auth'
+  if (status >= 500) return 'serverError'
+  return 'unknown'
+}
+
+// ---------------------------------------------------------------------------
+// HTTP dispatch (uses global fetch if available, falls back to http/https)
+// ---------------------------------------------------------------------------
+
+async function dispatchRequest(
+  url: string,
+  body: unknown,
+  headers: Record<string, string>,
+  timeoutMs: number,
+): Promise<{ status: number; bodyText: string; headers: Record<string, string> }> {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), timeoutMs)
+
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(body),
+      signal: controller.signal,
     })
-  }
-
-  async *chatStream(
-    messages: ChatMessage[],
-  ): AsyncIterable<ChatCompletionResponse> {
-    const model = this.config.model || 'gpt-4o'
-    const url = new URL(this.config.baseUrl)
-    const estimatedPromptTokens = this.estimatePromptTokens(messages)
-    if (
-      this.config.contextBudgetTokens !== undefined &&
-      estimatedPromptTokens > this.config.contextBudgetTokens
-    ) {
-      throw this.createError(
-        'contextBudget',
-        `Estimated prompt tokens (${estimatedPromptTokens}) exceed context budget (${this.config.contextBudgetTokens})`,
-        false,
-      )
+    clearTimeout(timer)
+    const bodyText = await res.text()
+    const respHeaders: Record<string, string> = {}
+    res.headers.forEach((v, k) => { respHeaders[k] = v })
+    return { status: res.status, bodyText, headers: respHeaders }
+  } catch (err) {
+    clearTimeout(timer)
+    const msg = err instanceof Error ? err.message : String(err)
+    if (err instanceof DOMException && err.name === 'AbortError') {
+      throw providerError('timeout', `Request timed out after ${timeoutMs}ms`, { detail: msg })
     }
-    let currentContent = ''
-    let currentModel = model
-    const response = await new Promise<ChatCompletionResponse>(
-      (resolve, reject) => {
-        const options: https.RequestOptions = {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Accept': 'application/json',
-            ...(this.config.apiKey
-              ? { Authorization: `Bearer ${this.config.apiKey}` }
-              : {}),
-            ...this.config.customHeaders,
-          },
-          timeout: (this.config.timeoutSeconds ?? 120) * 1000,
-        }
-        const payload = JSON.stringify({
-          model,
-          messages,
-          temperature: 0,
-          stream: true,
-        })
-        const req = https.request(url.toString(), options, (res) => {
-          let buffer = ''
-          res.on('data', (chunk: Buffer) => {
-            buffer += chunk.toString('utf-8')
-            const lines = buffer.split('\n')
-            buffer = lines.pop() || ''
-            for (const line of lines) {
-              const trimmed = line.trim()
-              if (
-                trimmed === 'data: [DONE]' ||
-                !trimmed.startsWith('data: ')
-              ) {
-                continue
-              }
-              try {
-                const data = JSON.parse(trimmed.slice(6))
-                if (data.model) currentModel = data.model
-                const delta = data.choices?.[0]?.delta?.content
-                if (delta) currentContent += delta
-              } catch {
-                /* ignore parse errors */
-              }
-            }
-          })
-          res.on('end', () => {
-            resolve({
-              content: currentContent,
-              model: currentModel,
-              finishReason: 'stop',
-              usage: null,
-            })
-          })
-          res.on('error', (e) =>
-            reject(this.createError('connection', String(e), true)),
-          )
-        })
-        req.on('error', (e) =>
-          reject(this.createError('connection', String(e), true)),
-        )
-        req.on('timeout', () => {
-          req.destroy()
-          reject(
-            this.createError(
-              'timeout',
-              `Request timed out after ${(this.config.timeoutSeconds ?? 120)}s`,
-              true,
-            ),
-          )
-        })
-        req.write(payload)
-        req.end()
-      },
-    )
-    yield response
-  }
-
-  async ping(): Promise<{ model: string; elapsedMs: number }> {
-    const start = Date.now()
-    const model = this.config.model || 'unknown'
-    try {
-      const response = await this.chat([{ role: 'user', content: 'Hi' }])
-      return { model: response.model, elapsedMs: Date.now() - start }
-    } catch (err) {
-      const llmErr = err as LlmError
-      if (llmErr.type === 'auth')
-        return { model: `unauthorized (${model})`, elapsedMs: Date.now() - start }
-      if (llmErr.type === 'timeout')
-        return { model: `timeout (${model})`, elapsedMs: Date.now() - start }
-      return {
-        model: `error (${model}): ${llmErr.message}`,
-        elapsedMs: Date.now() - start,
-      }
+    if (msg.includes('ECONNREFUSED') || msg.includes('ENOTFOUND') || msg.includes('connect ECONNREFUSED')) {
+      throw providerError('connection', `Connection failed: ${msg}`, { retryable: true, detail: msg })
     }
-  }
-
-  private estimatePromptTokens(messages: ChatMessage[]): number {
-    let totalChars = 0
-    for (const msg of messages) {
-      totalChars += msg.role.length + msg.content.length
-    }
-    return Math.max(1, Math.ceil(totalChars / 4))
-  }
-
-  private classifyError(
-    statusCode: number | null,
-    body: unknown,
-  ): LlmErrorType {
-    if (statusCode === 401 || statusCode === 403) return 'auth'
-    if (statusCode === 429) return 'rateLimit'
-    if (statusCode === 400 || statusCode === 404) return 'invalidRequest'
-    if (statusCode && statusCode >= 500) return 'serverError'
-    if (statusCode) return 'unknown'
-    if (body && typeof body === 'object') {
-      const obj = body as Record<string, unknown>
-      const errMsg = (
-        (obj.error as { message?: string })?.message || ''
-      ).toLowerCase()
-      if (errMsg.includes('token') || errMsg.includes('context')) return 'contextBudget'
-      if (errMsg.includes('auth') || errMsg.includes('key') || errMsg.includes('permission'))
-        return 'auth'
-      if (errMsg.includes('rate') || errMsg.includes('limit')) return 'rateLimit'
-      if (errMsg.includes('server') || errMsg.includes('unavailable'))
-        return 'serverError'
-    }
-    return 'unknown'
-  }
-
-  private createError(
-    type: LlmErrorType,
-    message: string,
-    retryable: boolean,
-  ): LlmError {
-    const err = new Error(message) as LlmError
-    err.type = type
-    err.retryable = retryable
-    return err
-  }
-
-  private isRetryable(statusCode: number | null, type: LlmErrorType): boolean {
-    if (statusCode === 429 || (statusCode && statusCode >= 500)) return true
-    return type === 'timeout' || type === 'connection' || type === 'rateLimit'
+    throw providerError('connection', `Network error: ${msg}`, { retryable: true, detail: msg })
   }
 }
+
+// ---------------------------------------------------------------------------
+// Response parsing
+// ---------------------------------------------------------------------------
+
+function parseErrorResponse(status: number, bodyText: string): LlmError {
+  let detail: string | undefined
+  let parsed: unknown
+
+  try {
+    parsed = JSON.parse(bodyText)
+    // OpenAI-style: { error: { message: "..." } }
+    const errObj = parsed as Record<string, unknown>
+    if (errObj.error && typeof errObj.error === 'object' && 'message' in errObj.error) {
+      detail = String((errObj.error as Record<string, unknown>).message)
+    } else if (parsed && typeof parsed === 'object' && 'message' in parsed) {
+      detail = String((parsed as Record<string, unknown>).message)
+    } else if (parsed && typeof parsed === 'object' && 'error' in parsed && typeof (parsed as Record<string, unknown>).error === 'string') {
+      detail = String((parsed as Record<string, unknown>).error)
+    }
+  } catch {
+    // Not JSON — use raw body (truncated)
+    detail = bodyText.trim().slice(0, 500) || undefined
+  }
+
+  const type = classifyStatus(status)
+  const msg = detail
+    ? `Provider error (${status}): ${detail}`
+    : `Provider error (${status})`
+
+  return providerError(type, msg, { statusCode: status, detail, retryable: status >= 500 || status === 429 })
+}
+
+// ---------------------------------------------------------------------------
+// Success response parsing
+// ---------------------------------------------------------------------------
+
+function parseSuccessResponse(bodyText: string): ChatResponse {
+  const json = JSON.parse(bodyText) as {
+    model?: string
+    choices?: Array<{ message?: { content?: string; role?: string }; finish_reason?: string | null }>
+    usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number }
+  }
+
+  const choice = json.choices?.[0]
+  const content = choice?.message?.content ?? ''
+  const finishReason = choice?.finish_reason ?? null
+
+  return {
+    content,
+    model: json.model ?? '',
+    finishReason: finishReason ?? 'stop',
+    usage: json.usage
+      ? {
+          promptTokens: json.usage.prompt_tokens ?? 0,
+          completionTokens: json.usage.completion_tokens ?? 0,
+          totalTokens: json.usage.total_tokens ?? 0,
+        }
+      : null,
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Client
+// ---------------------------------------------------------------------------
+
+export function createOpenAICompatibleClient(cfg: NormalizedProviderConfig) {
+  const timeoutMs = cfg.timeoutMs ?? 120000
+  const model = cfg.model ?? ''
+  const baseUrl = (cfg.baseUrl ?? 'http://127.0.0.1:1234/v1').replace(/\/+$/, '')
+  const endpoint = baseUrl + '/chat/completions'
+
+  // Build base headers
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    'Accept': 'application/json',
+  }
+
+  // Authorization only when apiKey is a non-empty string
+  if (cfg.apiKey && typeof cfg.apiKey === 'string' && cfg.apiKey.length > 0) {
+    headers['Authorization'] = `Bearer ${cfg.apiKey}`
+  }
+
+  // Merge custom headers (custom headers take precedence)
+  if (cfg.customHeaders && typeof cfg.customHeaders === 'object') {
+    for (const [k, v] of Object.entries(cfg.customHeaders)) {
+      headers[k] = v
+    }
+  }
+
+  return {
+    /**
+     * Send a chat request.
+     */
+    async chat(opts: ChatOptions): Promise<ChatResponse> {
+      const body = {
+        model,
+        messages: opts.messages,
+        temperature: opts.temperature ?? 0,
+        stream: false,
+      }
+
+      const result = await dispatchRequest(endpoint, body, headers, timeoutMs)
+
+      if (result.status >= 200 && result.status < 300) {
+        return parseSuccessResponse(result.bodyText)
+      }
+
+      throw parseErrorResponse(result.status, result.bodyText)
+    },
+  }
+}
+
+export { providerError, classifyStatus, parseErrorResponse, parseSuccessResponse }
