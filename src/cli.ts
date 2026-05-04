@@ -3,8 +3,8 @@ import { Command } from 'commander';
 import { chatCommand } from './commands/chat.js';
 import { askCommand } from './commands/ask.js';
 import { runCommand } from './commands/run.js';
-import { inspectCommand } from './commands/inspect.js';
-import { configCommand } from './commands/config.js';
+import { runInspectCommand } from './commands/inspect.js';
+import { runConfigCommand } from './commands/config.js';
 import { doctorCommand } from './commands/doctor.js';
 
 const program = new Command();
@@ -31,14 +31,14 @@ askCommand(program);
 // Run command
 runCommand(program);
 
-// Inspect command
-inspectCommand(program);
-
 // Config command
-configCommand(program);
+runConfigCommand(program);
 
 // Doctor command
 doctorCommand(program);
+
+// Inspect command (options registered in runInspectCommand)
+runInspectCommand(program);
 
 // Parse command line arguments
 program.parse(process.argv);

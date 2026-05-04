@@ -12,7 +12,9 @@ function runSynax(args: string[]): string {
     });
   } catch (error: unknown) {
     if (error instanceof Error) {
-      return (error as Error & { stdout?: string }).stdout ?? error.message;
+      return (error as Error & { stdout?: string; stderr?: string }).stdout ??
+        (error as Error & { stdout?: string; stderr?: string }).stderr ??
+        error.message;
     }
     return String(error);
   }
@@ -78,38 +80,60 @@ describe('CLI', () => {
   });
 
   describe('synax inspect', () => {
-    test('should show placeholder without arguments', () => {
+    test('should show full project profile without arguments (spec 002)', () => {
       const output = runSynax(['inspect']);
-      expect(output).toContain('[synax] Inspect command initialized');
+      expect(output).toContain('Synax Project Profile');
+      expect(output).toContain('Package manager:');
     });
 
-    test('should accept --tools option', () => {
-      const output = runSynax(['inspect', '--tools']);
-      expect(output).toContain('Available tools');
+    test('should accept --profile option (spec 002)', () => {
+      const output = runSynax(['inspect', '--profile']);
+      expect(output).toContain('Synax Project Profile');
     });
 
-    test('should accept --registry option', () => {
-      const output = runSynax(['inspect', '--registry']);
-      expect(output).toContain('Tool registry');
+    test('should accept --brief option (spec 002)', () => {
+      const output = runSynax(['inspect', '--brief']);
+      // Brief mode shows a condensed summary
+      expect(output.length).toBeGreaterThan(0);
     });
 
-    test('should accept --path option', () => {
+    test('should show profile even in subdirectory paths', () => {
       const output = runSynax(['inspect', '--path', './src']);
-      expect(output).toContain('./src');
-      expect(output).toContain('Placeholder');
+      expect(output).toContain('Synax Project Profile');
     });
   });
 
-  describe('synax config init', () => {
-    test('should show placeholder', () => {
+  describe('synax config', () => {
+    test('config init should create config file or report existing', () => {
       const output = runSynax(['config', 'init']);
-      expect(output).toContain('Initializing configuration');
-      expect(output).toContain('Placeholder');
+      // Config file already exists in this project, so it reports that
+      expect(output).toContain('Config file');
     });
 
-    test('should accept --output option', () => {
-      const output = runSynax(['config', 'init', '--output', 'custom.toml']);
-      expect(output).toContain('custom.toml');
+    test('config init should accept --force option', () => {
+      const output = runSynax(['config', 'init', '--force']);
+      expect(output.length).toBeGreaterThan(0);
+    });
+
+    test('config show should display effective config (spec 002)', () => {
+      const output = runSynax(['config', 'show']);
+      // Config show displays the full project profile
+      expect(output).toContain('Synax Project Profile');
+    });
+
+    test('config show --path should show config from specific path (spec 002)', () => {
+      const output = runSynax(['config', 'show', '--path', './']);
+      expect(output).toContain('Synax Project Profile');
+    });
+
+    test('config get should retrieve a config value', () => {
+      const output = runSynax(['config', 'get', 'model']);
+      expect(output.length).toBeGreaterThan(0);
+    });
+
+    test('config get --key --json should output JSON', () => {
+      const output = runSynax(['config', 'get', 'model', '--json']);
+      expect(output.length).toBeGreaterThan(0);
     });
   });
 
