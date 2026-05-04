@@ -6,6 +6,7 @@
 
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'http';
 import { classifyStatus, createOpenAICompatibleClient } from '../llm/client';
+import { createContextLedger } from '../tools';
 import { normalizeProviderConfig, validateConfig, type ProviderConfig } from '../config/project';
 import type { NormalizedProviderConfig } from '../llm/types';
 
@@ -233,5 +234,112 @@ describe('Config validation — unsupported kind', () => {
       provider: { kind: 'anthropic' as unknown as 'openai-compatible', base_url: 'http://x' },
     } as any);
     expect(errors.some((e) => e.path === 'provider.kind' && e.message.includes('unsupported-provider'))).toBeTruthy();
+  });
+});
+
+// Test 8: Ledger integration — records token usage
+describe('LLM client — ledger records token usage', () => {
+  let srv: Server;
+
+  beforeEach(async () => {
+    srv = await createMockServer((_req, res) => {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(
+        JSON.stringify({
+          model: 'test-model',
+          choices: [{ message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }],
+          usage: { prompt_tokens: 100, completion_tokens: 50, total_tokens: 150 },
+        }),
+      );
+    });
+  });
+
+  afterEach(() => {
+    srv.close();
+  });
+
+  test('records token usage when ledger is provided', async () => {
+    const ledger = createContextLedger();
+    ledger.setBudget(16000);
+    const client = createOpenAICompatibleClient(makeConfig({ baseUrl: getServerUrl(srv) }), { ledger });
+
+    await client.chat({ messages: [{ role: 'user', content: 'hi' }] });
+
+    const expanded = ledger.getExpanded();
+    expect(expanded.budget.used).toBe(150);
+    expect(expanded.budget.remaining).toBe(16000 - 150);
+    expect(ledger.isSafe()).toBe(true);
+  });
+
+  test('records no usage when no ledger is provided', async () => {
+    const client = createOpenAICompatibleClient(makeConfig({ baseUrl: getServerUrl(srv) }));
+    await client.chat({ messages: [{ role: 'user', content: 'hi' }] });
+    // No error — silently ignores missing ledger
+  });
+
+  test('records no usage when response has no usage data', async () => {
+    srv = await createMockServer((_req, res) => {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(
+        JSON.stringify({
+          model: 't',
+          choices: [{ message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }],
+          // No usage field
+        }),
+      );
+    });
+    const ledger = createContextLedger();
+    ledger.setBudget(16000);
+    const client = createOpenAICompatibleClient(makeConfig({ baseUrl: getServerUrl(srv) }), { ledger });
+    await client.chat({ messages: [{ role: 'user', content: 'hi' }] });
+    const expanded = ledger.getExpanded();
+    expect(expanded.budget.used).toBe(0);
+  });
+});
+
+// Test 9: Ledger budget enforcement — hard stop and warn
+describe('LLM client — budget policy enforcement', () => {
+  // Already initialized with safe response for all tests in this block
+  let srv: Server;
+
+  beforeEach(async () => {
+    srv = await createMockServer((_req, res) => {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(
+        JSON.stringify({
+          model: 't',
+          choices: [{ message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }],
+          usage: { prompt_tokens: 10000, completion_tokens: 5000, total_tokens: 15000 },
+        }),
+      );
+    });
+  });
+
+  afterEach(() => {
+    srv.close();
+  });
+
+  test('throws when budget is exhausted after call', async () => {
+    const ledger = createContextLedger();
+    ledger.setBudget(1000); // total budget is smaller than usage
+    const client = createOpenAICompatibleClient(makeConfig({ baseUrl: getServerUrl(srv) }), {
+      ledger,
+      budgetPolicy: { hardStopThreshold: -1 },
+    });
+
+    await expect(client.chat({ messages: [{ role: 'user', content: 'hi' }] })).rejects.toThrow(
+      'Context budget exhausted',
+    );
+  });
+
+  test('throws when remaining budget falls at or below hard-stop threshold', async () => {
+    const ledger = createContextLedger();
+    ledger.setBudget(5000);
+    const client = createOpenAICompatibleClient(
+      makeConfig({ baseUrl: getServerUrl(srv) }),
+      { ledger, budgetPolicy: { hardStopThreshold: 100 } }, // remaining will be -10000, which is <= 100
+    );
+
+    await expect(client.chat({ messages: [{ role: 'user', content: 'hi' }] })).rejects.toThrow();
   });
 });
