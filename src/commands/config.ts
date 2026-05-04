@@ -118,7 +118,7 @@ function handleGet(_baseDir: string, opts: ConfigCommandOptions): void {
     process.exit(1);
   }
 
-      const parsedConfig = loadProjectConfig(opts.path);
+  const parsedConfig = loadProjectConfig(opts.path);
   const config = parsedConfig.config as ProjectConfig;
 
   // Parse nested key path (e.g., "subagents.enabled")
