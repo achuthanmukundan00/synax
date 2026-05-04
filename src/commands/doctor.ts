@@ -1,10 +1,6 @@
 import { spawnSync, execSync } from 'child_process';
 import { Command } from 'commander';
-import {
-  loadProjectConfig,
-  normalizeProviderConfig,
-  type ProjectConfig,
-} from '../config/project';
+import { loadProjectConfig, normalizeProviderConfig, type ProjectConfig } from '../config/project';
 import { createOpenAICompatibleClient } from '../llm/client';
 import type { NormalizedProviderConfig } from '../llm/types';
 
@@ -73,11 +69,17 @@ export function checkGitRepository(): DiagnosticResult {
     if (result.trim() === 'true') {
       return pass('git-repository', 'Inside a git repository');
     }
-    return warn('git-repository', 'Not inside a git repository',
-      'doctor works best inside a git repository for file operations');
+    return warn(
+      'git-repository',
+      'Not inside a git repository',
+      'doctor works best inside a git repository for file operations',
+    );
   } catch {
-    return warn('git-repository', 'git not found or not inside a git repository',
-      'doctor works best inside a git repository for file operations');
+    return warn(
+      'git-repository',
+      'git not found or not inside a git repository',
+      'doctor works best inside a git repository for file operations',
+    );
   }
 }
 
@@ -94,8 +96,11 @@ export function checkConfig(baseDir?: string): DiagnosticResult {
     }
     return pass('config', `Loaded from ${result.path}`, result.path);
   }
-  return warn('config', 'No .synax.toml found; using defaults',
-    'Create .synax.toml with a [provider] section for explicit configuration');
+  return warn(
+    'config',
+    'No .synax.toml found; using defaults',
+    'Create .synax.toml with a [provider] section for explicit configuration',
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -113,8 +118,11 @@ async function checkProviderReachability(normalized: NormalizedProviderConfig): 
       if (res.ok) {
         return pass('provider-reachability', `Provider at ${baseUrl} is reachable (HTTP ${res.status})`);
       }
-      return warn('provider-reachability', `Provider at ${baseUrl} returned HTTP ${res.status}`,
-        `Status ${res.status} — provider may be running but not fully healthy`);
+      return warn(
+        'provider-reachability',
+        `Provider at ${baseUrl} returned HTTP ${res.status}`,
+        `Status ${res.status} — provider may be running but not fully healthy`,
+      );
     } catch (err) {
       clearTimeout(timeout);
       const msg = err instanceof Error ? err.message : String(err);
@@ -147,19 +155,28 @@ async function checkModelRequest(normalized: NormalizedProviderConfig): Promise<
     const latencyMs = Math.round(performance.now() - start);
     const content = (response.content || '').trim().slice(0, 200);
     if (content.toLowerCase() === 'ok') {
-      return pass('model-request', `Model responded OK in ${latencyMs}ms`,
-        `Model: ${response.model || 'unknown'}, Content: ${content}`);
+      return pass(
+        'model-request',
+        `Model responded OK in ${latencyMs}ms`,
+        `Model: ${response.model || 'unknown'}, Content: ${content}`,
+      );
     }
-    return warn('model-request', `Model responded but unexpected content: ${content}`,
-      `Model: ${response.model || 'unknown'}, Latency: ${latencyMs}ms`);
+    return warn(
+      'model-request',
+      `Model responded but unexpected content: ${content}`,
+      `Model: ${response.model || 'unknown'}, Latency: ${latencyMs}ms`,
+    );
   } catch (err) {
     const error = err as Error & { type?: string; statusCode?: number; retryable?: boolean; detail?: string };
     const errorType = error.type ?? 'unknown';
     const statusCode = error.statusCode;
     const detail = error.detail ?? error.message ?? String(error);
     const retryable = error.retryable ?? false;
-    return fail('model-request', `Model request failed (${errorType})`,
-      `Type: ${errorType}; Message: ${detail}; Retryable: ${retryable}${statusCode ? `; Status: ${statusCode}` : ''}`);
+    return fail(
+      'model-request',
+      `Model request failed (${errorType})`,
+      `Type: ${errorType}; Message: ${detail}; Retryable: ${retryable}${statusCode ? `; Status: ${statusCode}` : ''}`,
+    );
   }
 }
 
@@ -203,8 +220,11 @@ export function checkPackageManager(): DiagnosticResult {
 export function checkConfiguredCommands(config: ProjectConfig): DiagnosticResult {
   const verification = config.verification;
   if (!verification || !verification.defaultCommand) {
-    return warn('configured-commands', 'No defaultVerificationCommand configured',
-      'Set verification.defaultCommand in .synax.toml to enable verification');
+    return warn(
+      'configured-commands',
+      'No defaultVerificationCommand configured',
+      'Set verification.defaultCommand in .synax.toml to enable verification',
+    );
   }
   const cmd = verification.defaultCommand;
   const shell = process.env.SHELL ?? '/bin/sh';
@@ -213,8 +233,7 @@ export function checkConfiguredCommands(config: ProjectConfig): DiagnosticResult
     return pass('configured-commands', `defaultVerificationCommand passed: ${cmd}`);
   }
   const stderr = (result.stderr as string)?.trim().slice(0, 500);
-  return fail('configured-commands', `defaultVerificationCommand failed: exit ${result.status}`,
-    `stderr: ${stderr}`);
+  return fail('configured-commands', `defaultVerificationCommand failed: exit ${result.status}`, `stderr: ${stderr}`);
 }
 
 // ---------------------------------------------------------------------------
@@ -224,16 +243,25 @@ export function checkConfiguredCommands(config: ProjectConfig): DiagnosticResult
 export function checkContextBudget(config: ProjectConfig): DiagnosticResult {
   const budget = config.contextBudgetTokens;
   if (!budget) {
-    return warn('context-budget', 'No contextBudgetTokens configured',
-      'Set contextBudgetTokens in .synax.toml to enable budget monitoring');
+    return warn(
+      'context-budget',
+      'No contextBudgetTokens configured',
+      'Set contextBudgetTokens in .synax.toml to enable budget monitoring',
+    );
   }
   if (budget < 4000) {
-    return warn('context-budget', `contextBudgetTokens is ${budget}, which is below the recommended minimum of 4000`,
-      'Low context budgets may cause early truncation during long tasks');
+    return warn(
+      'context-budget',
+      `contextBudgetTokens is ${budget}, which is below the recommended minimum of 4000`,
+      'Low context budgets may cause early truncation during long tasks',
+    );
   }
   if (budget > 128000) {
-    return warn('context-budget', `contextBudgetTokens is ${budget}, which is above typical local model limits`,
-      'Very high budgets may not be usable with local models');
+    return warn(
+      'context-budget',
+      `contextBudgetTokens is ${budget}, which is above typical local model limits`,
+      'Very high budgets may not be usable with local models',
+    );
   }
   return pass('context-budget', `contextBudgetTokens set to ${budget}`);
 }
@@ -256,11 +284,17 @@ async function checkRelayHealth(baseUrl: string): Promise<DiagnosticResult> {
       if (res.ok) {
         const data = (await res.json()) as { data?: Array<{ id?: string; object?: string }> };
         const models = data.data?.slice(0, 5).map((m) => m.id) ?? [];
-        return pass('relay-health', `Relay at ${baseUrl} is healthy (found ${data.data?.length || 0} models)`,
-          `Models: ${models.join(', ') || 'none listed'}`);
+        return pass(
+          'relay-health',
+          `Relay at ${baseUrl} is healthy (found ${data.data?.length || 0} models)`,
+          `Models: ${models.join(', ') || 'none listed'}`,
+        );
       }
-      return warn('relay-health', `Relay returned HTTP ${res.status}`,
-        `Status ${res.status} — relay may be running but not fully healthy`);
+      return warn(
+        'relay-health',
+        `Relay returned HTTP ${res.status}`,
+        `Status ${res.status} — relay may be running but not fully healthy`,
+      );
     } catch (err) {
       clearTimeout(timeout);
       const msg = err instanceof Error ? err.message : String(err);
@@ -300,9 +334,14 @@ async function runQuickDoctor(baseDir?: string): Promise<DoctorFullReport> {
   }
 
   return {
-    repo, config: cfg, providerReachability, modelRequest,
-    packageManager: pm, configuredCommands: commands,
-    contextBudget: budget, relayHealth,
+    repo,
+    config: cfg,
+    providerReachability,
+    modelRequest,
+    packageManager: pm,
+    configuredCommands: commands,
+    contextBudget: budget,
+    relayHealth,
   };
 }
 
@@ -327,10 +366,14 @@ export async function runDoctor(mode: DoctorMode = 'quick', baseDir?: string): P
 
 function statusIcon(status: DiagnosticResult['status']): string {
   switch (status) {
-    case 'pass': return '✓';
-    case 'fail': return '✗';
-    case 'warn': return '⚠';
-    case 'skip': return '-';
+    case 'pass':
+      return '✓';
+    case 'fail':
+      return '✗';
+    case 'warn':
+      return '⚠';
+    case 'skip':
+      return '-';
   }
 }
 
@@ -383,7 +426,7 @@ export async function handleDoctorCommand(mode: DoctorMode = 'quick', baseDir?: 
   console.log(output);
 
   const failCount = Object.values(report).filter(
-    (v) => typeof v === 'object' && 'status' in v && v.status === 'fail'
+    (v) => typeof v === 'object' && 'status' in v && v.status === 'fail',
   ).length;
 
   if (failCount > 0) {
