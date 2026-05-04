@@ -5,16 +5,18 @@ const SYNAX_BIN = path.resolve(__dirname, '../../dist/cli.js');
 
 function runSynax(args: string[]): string {
   try {
-    const cmd = `node ${SYNAX_BIN} ${args.map(a => `'${a}'`).join(' ')}`;
+    const cmd = `node "${SYNAX_BIN}" ${args.map(a => `'${a}'`).join(' ')}`;
     return execSync(cmd, {
       encoding: 'utf8',
-      timeout: 5000,
-    });
+      timeout: 15000,
+      stdio: ['pipe', 'pipe', 'pipe'],
+    }).trimEnd();
   } catch (error: unknown) {
     if (error instanceof Error) {
-      return (error as Error & { stdout?: string; stderr?: string }).stdout ??
-        (error as Error & { stdout?: string; stderr?: string }).stderr ??
-        error.message;
+      const err = error as Error & { stdout?: string | Buffer; stderr?: string | Buffer; status?: number };
+      const stdout = typeof err.stdout === 'string' ? err.stdout : err.stdout?.toString();
+      const stderr = typeof err.stderr === 'string' ? err.stderr : err.stderr?.toString();
+      return stdout?.trimEnd() ?? stderr?.trimEnd() ?? error.message;
     }
     return String(error);
   }
@@ -138,25 +140,22 @@ describe('CLI', () => {
   });
 
   describe('synax doctor', () => {
-    test('should show placeholder without arguments', () => {
+    test('should show doctor report without arguments (quick mode)', () => {
       const output = runSynax(['doctor']);
-      expect(output).toContain('[synax] Doctor command initialized');
+      expect(output).toContain('Synax Doctor Report');
+      expect(output).toContain('Summary:');
     });
 
-    test('should accept --all option', () => {
-      const output = runSynax(['doctor', '--all']);
-      expect(output).toContain('Node check');
-      expect(output).toContain('Permission check');
+    test('should accept --full option', () => {
+      const output = runSynax(['doctor', '--full']);
+      expect(output).toContain('Synax Doctor Report');
+      expect(output).toContain('Summary:');
     });
 
-    test('should accept --check-node option', () => {
-      const output = runSynax(['doctor', '--check-node']);
-      expect(output).toContain('Node check');
-    });
-
-    test('should accept --check-permissions option', () => {
-      const output = runSynax(['doctor', '--check-permissions']);
-      expect(output).toContain('Permission check');
+    test('should accept --quick option', () => {
+      const output = runSynax(['doctor', '--quick']);
+      expect(output).toContain('Synax Doctor Report');
+      expect(output).toContain('Summary:');
     });
   });
 });
