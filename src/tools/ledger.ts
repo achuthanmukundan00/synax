@@ -34,12 +34,12 @@ export function createInspectionLedger(): InspectionLedger {
     },
 
     hasInspectedFile(path: string): boolean {
-      return ranges.some(range => range.path === path);
+      return ranges.some((range) => range.path === path);
     },
 
     hasInspectedRange(path: string, startLine: number, endLine: number): boolean {
       const relevantRanges = ranges
-        .filter(range => range.path === path)
+        .filter((range) => range.path === path)
         .sort((left, right) => left.startLine - right.startLine);
       let coveredUntil = startLine - 1;
 
