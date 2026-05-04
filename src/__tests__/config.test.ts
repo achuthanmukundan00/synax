@@ -101,7 +101,7 @@ describe('loadProjectConfig', () => {
   });
 
   it('returns defaults when source is default', () => {
-    const result = loadProjectConfig('default');
+    const result = loadProjectConfig(TMP);
     expect(result.source).toBe('default');
     expect(result.config.baseUrl).toBe('http://127.0.0.1:1234/v1');
   });
@@ -109,7 +109,7 @@ describe('loadProjectConfig', () => {
   it('returns parsed config when file exists at explicit path', () => {
     const configPath = join(TMP, '.synax.toml');
     writeFileSync(configPath, 'model = "custom-model"\ncontextBudgetTokens = 4000', 'utf-8');
-    const result = loadProjectConfig('file', configPath);
+    const result = loadProjectConfig(configPath);
     expect(result.source).toBe('file');
     expect(result.config.model).toBe('custom-model');
     expect(result.config.contextBudgetTokens).toBe(4000);
@@ -121,9 +121,9 @@ describe('loadProjectConfig', () => {
 describe('generateDefaultConfig', () => {
   it('generates a valid TOML string', () => {
     const config = generateDefaultConfig();
-    expect(config).toContain('model =');
     expect(config).toContain('baseUrl =');
     expect(config).toContain('contextBudgetTokens =');
+    expect(config).toContain('kind =');
   });
 });
 
@@ -242,7 +242,7 @@ describe('runConfigCommand', () => {
     writeFileSync(configPath, 'model = "test-model"\ncontextBudgetTokens = 2000', 'utf-8');
 
     // Mock loadProjectConfig to use our test config
-    const result = loadProjectConfig('file', configPath);
+    const result = loadProjectConfig(configPath);
     expect(result.config.model).toBe('test-model');
     expect(result.config.contextBudgetTokens).toBe(2000);
   });
