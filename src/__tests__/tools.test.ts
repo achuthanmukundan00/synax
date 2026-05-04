@@ -49,7 +49,7 @@ describe('tool registry and inspection tools', () => {
   it('registers explicit read-only inspection tools', () => {
     const registry = createToolRegistry({ repoRoot: TMP });
 
-    expect(registry.list().map(tool => tool.name)).toEqual([
+    expect(registry.list().map((tool) => tool.name)).toEqual([
       'list_files',
       'read_file_range',
       'search_text',
