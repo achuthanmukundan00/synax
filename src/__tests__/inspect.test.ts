@@ -2,7 +2,7 @@
  * Tests for inspect command and project profile module.
  */
 
-import { mkdirSync, writeFileSync, rmSync, existsSync } from 'fs';
+import { mkdirSync, writeFileSync, rmSync, existsSync, readFileSync } from 'fs';
 import { join } from 'path';
 
 import {
@@ -15,7 +15,13 @@ import {
 } from '../config/profile';
 
 import { loadProjectConfig } from '../config/project';
-import { saveLedgerToDisk, loadLedgerFromDisk } from '../commands/inspect';
+import {
+  buildInspectConfigProfile,
+  saveLedgerToDisk,
+  loadLedgerFromDisk,
+  PROJECT_CONTEXT_PATH,
+  writeProjectContext,
+} from '../commands/inspect';
 import { createContextLedger } from '../tools';
 
 // ─── helpers ────────────────────────────────────────────────
@@ -194,6 +200,88 @@ describe('loadProjectConfig for inspect', () => {
     const result = loadProjectConfig(configPath);
     expect(result.source).toBe('file');
     expect(result.config.model).toBe('test-model');
+  });
+});
+
+// ─── inspect secret handling ────────────────────────────────
+
+describe('inspect secret handling', () => {
+  beforeEach(() => ensureTmp());
+  afterEach(() => {
+    if (existsSync(TMP)) rmSync(TMP, { recursive: true, force: true });
+  });
+
+  it('reports .synax.toml as skipped metadata without reading secret values', () => {
+    writeFileSync(
+      join(TMP, '.synax.toml'),
+      [
+        '[provider]',
+        'api_key = "sk-never-print-this"',
+        'base_url = "http://127.0.0.1:1234/v1"',
+        'model = "Qwen3.6-35B-A3B-UD-IQ3_XXS.gguf"',
+      ].join('\n'),
+      'utf-8',
+    );
+
+    const profile = buildInspectConfigProfile(TMP);
+    const output = formatTextProfile({
+      project: buildProjectProfile(TMP),
+      config: profile,
+    });
+
+    expect(output).not.toContain('sk-never-print-this');
+    expect(output).toContain('.synax.toml');
+    expect(output).toContain('skipped secret-bearing file');
+  });
+});
+
+// ─── inspect project context handoff ────────────────────────
+
+describe('inspect project context handoff', () => {
+  beforeEach(() => ensureTmp());
+  afterEach(() => {
+    if (existsSync(TMP)) rmSync(TMP, { recursive: true, force: true });
+  });
+
+  it('writes a safe project context file', () => {
+    const profile = {
+      project: buildProjectProfile(TMP),
+      config: buildInspectConfigProfile(TMP),
+    };
+
+    const contextPath = writeProjectContext(TMP, profile);
+
+    expect(contextPath).toBe(join(TMP, PROJECT_CONTEXT_PATH));
+    expect(existsSync(contextPath)).toBe(true);
+    const raw = readFileSync(contextPath, 'utf-8');
+    const parsed = JSON.parse(raw) as { profileText?: string; profile?: unknown };
+    expect(parsed.profileText).toContain('Synax Project Profile');
+    expect(parsed.profile).toEqual(profile);
+  });
+
+  it('does not write .synax.toml secret values to project context', () => {
+    writeFileSync(
+      join(TMP, '.synax.toml'),
+      [
+        '[provider]',
+        'api_key = "sk-never-write-this"',
+        'base_url = "http://127.0.0.1:1234/v1"',
+        'model = "secret-model-name"',
+      ].join('\n'),
+      'utf-8',
+    );
+    const profile = {
+      project: buildProjectProfile(TMP),
+      config: buildInspectConfigProfile(TMP),
+    };
+
+    const contextPath = writeProjectContext(TMP, profile);
+    const raw = readFileSync(contextPath, 'utf-8');
+
+    expect(raw).not.toContain('sk-never-write-this');
+    expect(raw).not.toContain('secret-model-name');
+    expect(raw).toContain('.synax.toml');
+    expect(raw).toContain('skipped secret-bearing file');
   });
 });
 
