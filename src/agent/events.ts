@@ -1,3 +1,5 @@
+import { type PatchPreview } from './patch';
+
 export type TerminalState =
   | 'completed'
   | 'blocked'
@@ -37,6 +39,12 @@ export type AgentEvent =
     })
   | (AgentEventBase & { type: 'model_step_started' })
   | ToolEvent
+  | (AgentEventBase &
+      PatchPreview & {
+        type: 'patch_preview';
+        toolCallId: string;
+        toolName: string;
+      })
   | (AgentEventBase & { type: 'assistant_message'; content: string })
   | (AgentEventBase & {
       type: 'task_finished';
@@ -54,4 +62,3 @@ export type AgentEvent =
 export function eventNow(): string {
   return new Date().toISOString();
 }
-

@@ -61,4 +61,3 @@ export function askCommand(program: Command): void {
     });
   program.addCommand(ask);
 }
-
