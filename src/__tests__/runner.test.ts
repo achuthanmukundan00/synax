@@ -218,6 +218,51 @@ describe('shared bounded agent runner', () => {
     expect(result.toolCalls).toHaveLength(0);
   });
 
+  it('accepts a short safe preamble before tool calls', async () => {
+    writeFileSync(join(TMP, 'README.md'), '# Synax\n', 'utf-8');
+    const client = fakeClient([
+      {
+        content: 'Let me inspect the repository.',
+        toolCalls: [{ id: 'call_1', name: 'read', arguments: { path: 'README.md' } }],
+      },
+      {
+        content: 'Inspected successfully.',
+        toolCalls: [],
+      },
+    ]);
+
+    const result = await runAgentTurn({
+      repoRoot: TMP,
+      task: 'Inspect the repo. Do not modify files.',
+      client,
+    });
+
+    expect(result.terminalState).toBe('completed');
+    expect(result.toolCalls).toEqual([{ name: 'read', success: true, error: undefined }]);
+    expect(result.finalAnswer).toBe('Inspected successfully.');
+  });
+
+  it('still fails closed on substantive mixed output before tool calls', async () => {
+    const client = fakeClient([
+      {
+        content: 'The answer is that the repo is safe.',
+        toolCalls: [{ id: 'call_1', name: 'read', arguments: { path: 'README.md' } }],
+      },
+    ]);
+
+    const result = await runAgentTurn({
+      repoRoot: TMP,
+      task: 'Inspect the repo. Do not modify files.',
+      client,
+    });
+
+    expect(result).toMatchObject({
+      terminalState: 'model_error',
+      error: 'model emitted ambiguous mixed output (tool calls plus final text)',
+    });
+    expect(result.toolCalls).toHaveLength(0);
+  });
+
   it('terminates deterministically at maxSteps', async () => {
     const client = fakeClient([
       { toolCalls: [{ id: '1', name: 'read', arguments: {} }] },
