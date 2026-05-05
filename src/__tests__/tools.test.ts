@@ -134,7 +134,17 @@ describe('tool registry and inspection tools', () => {
   });
 
   it('excludes heavy and generated paths from directory listings', async () => {
-    for (const directory of ['.git', 'node_modules', 'dist', 'coverage', '.next', '.vite', 'build', '.cache', 'cache']) {
+    for (const directory of [
+      '.git',
+      'node_modules',
+      'dist',
+      'coverage',
+      '.next',
+      '.vite',
+      'build',
+      '.cache',
+      'cache',
+    ]) {
       mkdirSync(join(TMP, directory), { recursive: true });
       writeFileSync(join(TMP, directory, 'ignored.txt'), 'ignored\n', 'utf-8');
     }
