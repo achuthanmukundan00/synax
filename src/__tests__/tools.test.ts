@@ -21,6 +21,12 @@ interface GitDiffOutput {
   truncated: boolean;
 }
 
+interface DirectoryListingOutput {
+  path: string;
+  entries: Array<{ name: string; type: 'file' | 'directory' }>;
+  truncated: boolean;
+}
+
 function resetTmp(): void {
   if (existsSync(TMP)) {
     rmSync(TMP, { recursive: true, force: true });
@@ -102,6 +108,44 @@ describe('tool registry and inspection tools', () => {
     });
     expect(ledger.hasInspectedFile('src.ts')).toBe(true);
     expect(ledger.hasInspectedRange('src.ts', 2, 3)).toBe(true);
+  });
+
+  it('reads the repository root as a bounded non-recursive directory listing', async () => {
+    mkdirSync(join(TMP, 'src'), { recursive: true });
+    mkdirSync(join(TMP, 'docs'), { recursive: true });
+    writeFileSync(join(TMP, 'package.json'), '{}\n', 'utf-8');
+    writeFileSync(join(TMP, 'src', 'nested.ts'), 'export {}\n', 'utf-8');
+    for (let index = 0; index < 100; index += 1) {
+      writeFileSync(join(TMP, `z-${index.toString().padStart(3, '0')}.txt`), 'extra\n', 'utf-8');
+    }
+    const registry = createToolRegistry({ repoRoot: TMP });
+
+    const result = await registry.execute('read_file_range', { path: '.' });
+
+    expect(result.success).toBe(true);
+    expect(result.output).toMatchObject({ path: '.', truncated: true });
+    const entries = (result.output as DirectoryListingOutput).entries;
+    expect(entries).toHaveLength(80);
+    expect(entries.slice(0, 3)).toEqual([
+      { name: 'docs', type: 'directory' },
+      { name: 'package.json', type: 'file' },
+      { name: 'src', type: 'directory' },
+    ]);
+  });
+
+  it('excludes heavy and generated paths from directory listings', async () => {
+    for (const directory of ['.git', 'node_modules', 'dist', 'coverage', '.next', '.vite', 'build', '.cache', 'cache']) {
+      mkdirSync(join(TMP, directory), { recursive: true });
+      writeFileSync(join(TMP, directory, 'ignored.txt'), 'ignored\n', 'utf-8');
+    }
+    writeFileSync(join(TMP, 'README.md'), '# Synax\n', 'utf-8');
+    const registry = createToolRegistry({ repoRoot: TMP });
+
+    const result = await registry.execute('read_file_range', { path: '.' });
+
+    expect(result.success).toBe(true);
+    const entries = (result.output as DirectoryListingOutput).entries.map((entry) => entry.name);
+    expect(entries).toEqual(['README.md']);
   });
 
   it('rejects unsafe paths before reading', async () => {

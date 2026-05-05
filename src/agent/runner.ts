@@ -62,6 +62,7 @@ export interface AgentTurnResult {
 
 const DEFAULT_MAX_STEPS = 32;
 const DEFAULT_MAX_TOOL_CALLS = 96;
+const MAX_CONSECUTIVE_RECOVERABLE_TOOL_ERRORS = 3;
 
 export function createAgentConversation(): AgentConversation {
   return {
@@ -84,6 +85,7 @@ export async function runAgentTurn(options: AgentRunnerOptions & { task: string 
   const maxToolCalls = options.maxToolCalls ?? DEFAULT_MAX_TOOL_CALLS;
   const changedFiles: string[] = [];
   const toolCalls: AgentTurnResult['toolCalls'] = [];
+  let consecutiveRecoverableToolErrors = 0;
 
   conversation.messages.push({ role: 'user', content: options.task });
 
@@ -187,7 +189,24 @@ export async function runAgentTurn(options: AgentRunnerOptions & { task: string 
       if (result.changedFile) changedFiles.push(result.changedFile);
       conversation.messages.push(toolResultMessage(call, JSON.stringify(result.toolResult)));
 
-      if (!result.success) {
+      if (result.success) {
+        consecutiveRecoverableToolErrors = 0;
+      } else if (isRecoverableToolError(call, result)) {
+        consecutiveRecoverableToolErrors += 1;
+        if (consecutiveRecoverableToolErrors < MAX_CONSECUTIVE_RECOVERABLE_TOOL_ERRORS) {
+          continue;
+        }
+
+        return {
+          terminalState: 'tool_error',
+          finalAnswer: response.content.trim(),
+          steps: step,
+          toolCalls,
+          changedFiles,
+          conversation,
+          error: `too many consecutive recoverable tool errors: ${MAX_CONSECUTIVE_RECOVERABLE_TOOL_ERRORS}`,
+        };
+      } else {
         return {
           terminalState: 'tool_error',
           finalAnswer: response.content.trim(),
@@ -462,6 +481,17 @@ function publicToolResult(
     toolResult: { ...result, toolName },
     error: result.error,
   };
+}
+
+function isRecoverableToolError(
+  call: ParsedToolCall,
+  result: { success: boolean; error?: string },
+): boolean {
+  return call.name === 'read' && !result.success && isEnoentError(result.error);
+}
+
+function isEnoentError(error: string | undefined): boolean {
+  return error !== undefined && /\bENOENT\b/.test(error);
 }
 
 function coercePatch(input: Record<string, unknown>): ReplaceInFilePatch | null {

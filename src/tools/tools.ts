@@ -12,6 +12,8 @@ const DEFAULT_MAX_FILES = 200;
 const DEFAULT_MAX_READ_LINES = 120;
 const DEFAULT_MAX_MATCHES = 50;
 const DEFAULT_MAX_GIT_LINES = 200;
+const DEFAULT_MAX_DIRECTORY_ENTRIES = 80;
+const SKIPPED_DIRECTORY_LISTING_NAMES = new Set(['cache']);
 
 interface ListFilesInput {
   path?: string;
@@ -43,6 +45,11 @@ interface SearchMatchOutput {
   path: string;
   lineNumber: number;
   line: string;
+}
+
+interface DirectoryEntryOutput {
+  name: string;
+  type: 'file' | 'directory';
 }
 
 export function createInspectionTools(): ToolDefinition[] {
@@ -110,7 +117,7 @@ const readFileRangeTool: ToolDefinition<ReadFileRangeInput> = {
     }
 
     const target = normalizeRepoPath(context.repoRoot, input.path);
-    if (!target.ok || !target.absolutePath || !target.path) {
+    if (!target.ok || !target.absolutePath || target.path === undefined) {
       return failure('read_file_range', target.reason ?? 'invalid path');
     }
 
@@ -123,6 +130,11 @@ const readFileRangeTool: ToolDefinition<ReadFileRangeInput> = {
     const endLine = Math.min(requestedEndLine, startLine + DEFAULT_MAX_READ_LINES - 1);
 
     try {
+      const targetStat = await stat(target.absolutePath);
+      if (targetStat.isDirectory()) {
+        return success('read_file_range', await listDirectory(context.repoRoot, target.path));
+      }
+
       const text = redactSecrets(await readFile(target.absolutePath, 'utf-8'));
       const lines = splitLines(text);
       const selected = lines.slice(startLine - 1, endLine).map<LineOutput>((line, index) => ({
@@ -284,6 +296,37 @@ async function collectFiles(repoRoot: string, relativeDir: string, files: string
       files.push(child);
     }
   }
+}
+
+async function listDirectory(
+  repoRoot: string,
+  relativeDir: string,
+): Promise<{ path: string; entries: DirectoryEntryOutput[]; truncated: boolean }> {
+  const entries = await readdir(join(repoRoot, relativeDir), { withFileTypes: true });
+  const safeEntries: DirectoryEntryOutput[] = [];
+
+  for (const entry of entries.sort((left, right) => left.name.localeCompare(right.name))) {
+    if (entry.isDirectory() && SKIPPED_DIRECTORY_LISTING_NAMES.has(entry.name)) {
+      continue;
+    }
+
+    const child = relativeDir ? `${relativeDir}/${entry.name}` : entry.name;
+    if (!normalizeRepoPath(repoRoot, child).ok) {
+      continue;
+    }
+
+    if (entry.isDirectory()) {
+      safeEntries.push({ name: entry.name, type: 'directory' });
+    } else if (entry.isFile()) {
+      safeEntries.push({ name: entry.name, type: 'file' });
+    }
+
+    if (safeEntries.length >= DEFAULT_MAX_DIRECTORY_ENTRIES) {
+      return { path: relativeDir || '.', entries: safeEntries, truncated: true };
+    }
+  }
+
+  return { path: relativeDir || '.', entries: safeEntries, truncated: false };
 }
 
 function boundedPositiveInteger(value: number | undefined, defaultValue: number, maxValue: number): number {
