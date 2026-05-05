@@ -6,18 +6,18 @@ Synax treats context as a budget and file edits as explicit local operations.
 
 The main budget controls are:
 
-| Setting | Default | Use |
-| --- | --- | --- |
+| Setting                       | Default  | Use                                                  |
+| ----------------------------- | -------- | ---------------------------------------------------- |
 | `agent.context_budget_tokens` | `131072` | Overall context target for local high-context models |
-| `agent.max_model_steps` | `32` | Maximum model turns per task |
-| `agent.max_tool_calls` | `96` | Maximum tool calls per task |
+| `agent.max_model_steps`       | `32`     | Maximum model turns per task                         |
+| `agent.max_tool_calls`        | `96`     | Maximum tool calls per task                          |
 
 Useful profiles:
 
-| Budget | Use |
-| --- | --- |
-| `16000` | Small or constrained local model |
-| `65536` | Normal local coding profile |
+| Budget   | Use                                                                                   |
+| -------- | ------------------------------------------------------------------------------------- |
+| `16000`  | Small or constrained local model                                                      |
+| `65536`  | Normal local coding profile                                                           |
 | `131072` | High-context local profile when the server was started with a matching context window |
 
 ## File Policy
@@ -31,8 +31,10 @@ Synax rejects unsafe file paths and generated outputs. It is designed to avoid r
 - env files
 - paths outside the repository
 
-Validated replacement edits emit a patch preview before the write is applied. This is currently a visible
-diagnostic, not an interactive approval prompt.
+Validated replacement edits emit a patch preview before Synax writes the file. In non-interactive
+`synax run --task` sessions, previewed replacement edits are rejected by default; pass `--yes` to accept them for that
+run. Direct runner callers can provide an approval callback.
+Replacement writes are atomic (temp file + rename), so failed writes do not leave partial file content.
 
 ## Bash Policy
 
@@ -61,6 +63,7 @@ Run it inside chat:
 ```
 
 `synax run --task` also reports verification state when a command is configured.
+Use `--verification-profile quick|full` and `--repair-attempts <n>` to control verification bounds.
 
 ## Dirty Working Trees
 
@@ -71,3 +74,9 @@ git status --short
 git diff --stat
 git diff
 ```
+
+For run/task safety artifacts, Synax records:
+
+- pre-run checkpoints under `.synax/checkpoints/`
+- bounded run logs under `.synax/runs/`
+- last Synax-owned edit metadata at `.synax/last-edit.json` for `/undo-last-edit`

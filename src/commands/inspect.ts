@@ -10,8 +10,17 @@
 
 import { join, resolve } from 'path';
 import { readFileSync, existsSync, writeFileSync, mkdirSync } from 'fs';
+import { execSync } from 'child_process';
 import { buildProjectProfile, formatTextProfile, FullProfile, type ConfigProfile } from '../config/profile';
 import { discoverConfigPath, loadProjectConfig } from '../config/project';
+import {
+  discoverLocalDocs,
+  readLocalDoc,
+  searchLocalDocs,
+  type LocalDocRead,
+  type LocalDocsDiscovery,
+  type LocalDocsSearchResult,
+} from '../context/local-docs';
 import { buildModelFacingTools } from '../agent/runner';
 import { createContextLedger, type ContextLedger, type ModelCallEntry } from '../tools';
 
@@ -33,6 +42,10 @@ export interface InspectCommandOptions {
   ledger?: boolean;
   context?: boolean;
   expanded?: boolean;
+  docs?: boolean;
+  doc?: string;
+  searchDocs?: string;
+  docsImpact?: boolean;
 }
 
 /**
@@ -52,7 +65,11 @@ export function runInspectCommand(program: any): void {
     .option('--ledger', 'Show the context ledger (from .synax-ledger.json)')
     .option('--context', 'Show the context ledger in expanded format')
     .option('-e, --expanded', 'Show expanded ledger output')
-    .action((options: any) => {
+    .option('--docs', 'List bounded local docs and specs available to Synax')
+    .option('--doc <path>', 'Read a bounded local docs/spec file')
+    .option('--search-docs <query>', 'Search bounded local docs/spec files')
+    .option('--docs-impact', 'Check whether current source changes likely require docs updates')
+    .action(async (options: any) => {
       const targetPath = options.path ? resolve(options.path) : cwd;
       const projectProfile = buildProjectProfile(targetPath);
       const configProfile = buildInspectConfigProfile(targetPath);
@@ -72,7 +89,21 @@ export function runInspectCommand(program: any): void {
         ledger: options.ledger,
         context: options.context,
         expanded: options.expanded,
+        docs: options.docs,
+        doc: options.doc,
+        searchDocs: options.searchDocs,
+        docsImpact: options.docsImpact,
       };
+
+      if (opts.docsImpact) {
+        await printDocsImpact(targetPath, opts);
+        return;
+      }
+
+      if (opts.docs || opts.doc || opts.searchDocs) {
+        await printLocalDocs(targetPath, opts);
+        return;
+      }
 
       // --ledger or --context: show the context ledger
       if (opts.ledger || opts.context) {
@@ -144,6 +175,121 @@ export function runInspectCommand(program: any): void {
         console.log(textProfile);
       }
     });
+}
+
+async function printLocalDocs(targetPath: string, opts: InspectCommandOptions): Promise<void> {
+  try {
+    if (opts.searchDocs) {
+      const search = await searchLocalDocs(targetPath, opts.searchDocs);
+      if (opts.json) {
+        console.log(JSON.stringify(search, null, 2));
+      } else {
+        console.log(formatLocalDocsSearch(search));
+      }
+      return;
+    }
+    if (opts.doc) {
+      const read = await readLocalDoc(targetPath, opts.doc);
+      if (opts.json) {
+        console.log(JSON.stringify(read, null, 2));
+      } else {
+        console.log(formatLocalDocRead(read));
+      }
+      return;
+    }
+
+    const discovery = await discoverLocalDocs(targetPath);
+    if (opts.json) {
+      console.log(JSON.stringify(discovery, null, 2));
+    } else {
+      console.log(formatLocalDocsDiscovery(discovery));
+    }
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(`[synax] Docs error: ${message}`);
+    process.exitCode = 1;
+  }
+}
+
+async function printDocsImpact(targetPath: string, opts: InspectCommandOptions): Promise<void> {
+  const changed = detectChangedFiles(targetPath);
+  const docsChanged = changed.some((file) => file.startsWith('docs/') || file === 'README.md');
+  const behaviorChanged = changed.some(
+    (file) => file.startsWith('src/commands/') || file.startsWith('src/agent/') || file.startsWith('src/config/'),
+  );
+  const needsDocs = behaviorChanged && !docsChanged;
+  const output = {
+    changedFiles: changed,
+    docsChanged,
+    behaviorChanged,
+    needsDocsUpdate: needsDocs,
+    message: needsDocs ? 'Public behavior likely changed without docs updates.' : 'No obvious docs-impact mismatch detected.',
+  };
+  if (opts.json) {
+    console.log(JSON.stringify(output, null, 2));
+    return;
+  }
+  console.log(
+    [
+      'Synax Docs Impact',
+      `changed files: ${changed.length}`,
+      `behavior-facing changes: ${behaviorChanged ? 'yes' : 'no'}`,
+      `docs changed: ${docsChanged ? 'yes' : 'no'}`,
+      `needs docs update: ${needsDocs ? 'yes' : 'no'}`,
+      output.message,
+    ].join('\n'),
+  );
+}
+
+function detectChangedFiles(targetPath: string): string[] {
+  try {
+    const out = execSync('git status --porcelain', {
+      cwd: targetPath,
+      encoding: 'utf-8',
+      stdio: ['pipe', 'pipe', 'ignore'],
+    });
+    return out
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .map((line) => line.slice(3).trim())
+      .filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+function formatLocalDocsDiscovery(discovery: LocalDocsDiscovery): string {
+  const lines = ['Synax Local Docs'];
+  if (discovery.files.length === 0) {
+    lines.push('(none found)');
+  } else {
+    lines.push(...discovery.files.map((file) => `- ${file}`));
+  }
+  if (discovery.truncated) {
+    lines.push('(truncated)');
+  }
+  return lines.join('\n');
+}
+
+function formatLocalDocRead(read: LocalDocRead): string {
+  const lines = [
+    `Synax Local Doc: ${read.path}`,
+    `Lines ${read.startLine}-${read.endLine} of ${read.totalLines}${read.truncated ? ' (truncated)' : ''}`,
+    ...read.lines.map((line) => `${line.lineNumber} | ${line.text}`),
+  ];
+  return lines.join('\n');
+}
+
+function formatLocalDocsSearch(search: LocalDocsSearchResult): string {
+  const lines = [`Synax Local Docs Search: ${search.query}`];
+  if (search.matches.length === 0) {
+    lines.push('(no matches)');
+  } else {
+    lines.push(...search.matches.map((m) => `- ${m.path}:${m.lineNumber} | ${m.line}`));
+  }
+  if (search.truncated) lines.push('(truncated)');
+  return lines.join('\n');
 }
 
 export function writeProjectContext(baseDir: string, profile: FullProfile): string {
