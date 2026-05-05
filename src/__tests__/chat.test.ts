@@ -21,7 +21,7 @@ jest.mock('../llm/client', () => ({
   }),
 }));
 
-import { createChatSession } from '../commands/chat';
+import { createChatSession, promptInteractiveLine } from '../commands/chat';
 
 function resetTmp(): void {
   if (existsSync(TMP)) rmSync(TMP, { recursive: true, force: true });
@@ -213,5 +213,29 @@ describe('chat session', () => {
     const report = await session.handleSlashCommand('/test-provider');
 
     expect(report.output).toContain('Status:      failed');
+  });
+
+  it('stops prompting cleanly when readline was already closed', async () => {
+    const rl = {
+      question: jest.fn(async () => {
+        const error = new Error('readline was closed') as Error & { code: string };
+        error.code = 'ERR_USE_AFTER_CLOSE';
+        throw error;
+      }),
+    };
+
+    await expect(promptInteractiveLine(rl)).resolves.toBeNull();
+    expect(rl.question).toHaveBeenCalledWith('synax> ');
+  });
+
+  it('rethrows unexpected readline prompt errors', async () => {
+    const error = new Error('boom');
+    const rl = {
+      question: jest.fn(async () => {
+        throw error;
+      }),
+    };
+
+    await expect(promptInteractiveLine(rl)).rejects.toThrow(error);
   });
 });
