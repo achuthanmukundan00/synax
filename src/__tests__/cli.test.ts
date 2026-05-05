@@ -1,6 +1,6 @@
 import { execFile, execSync } from 'child_process';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'http';
-import { mkdtempSync, rmSync, writeFileSync } from 'fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import path from 'path';
 
@@ -170,6 +170,129 @@ describe('CLI', () => {
         expect(result.status).toBe(0);
         expect(result.stdout).toBe('synax-ok');
         expect(result.stderr).toBe('');
+      } finally {
+        srv.close();
+        rmSync(cwd, { recursive: true, force: true });
+      }
+    });
+
+    test('should refuse repo-specific questions without loaded project context', async () => {
+      const cwd = mkdtempSync(path.join(tmpdir(), 'synax-cli-ask-no-context-'));
+      let requestCount = 0;
+      const srv = await createMockServer((_req, res) => {
+        requestCount += 1;
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(
+          JSON.stringify({
+            model: 'test-model',
+            choices: [{ message: { role: 'assistant', content: 'fabricated repo details' }, finish_reason: 'stop' }],
+          }),
+        );
+      });
+      try {
+        writeFileSync(
+          path.join(cwd, '.synax.toml'),
+          ['[provider]', 'kind = "openai-compatible"', `base_url = "${getServerUrl(srv)}/v1"`, 'model = "test-model"'].join(
+            '\n',
+          ),
+          'utf-8',
+        );
+        const result = await runSynaxDetailed(['ask', '--question', 'Inspect the project and summarize its files'], {
+          cwd,
+        });
+        expect(result.status).toBe(0);
+        expect(result.stdout).toBe('NO_CONTEXT: run `synax inspect` first or enable project context.');
+        expect(result.stderr).toBe('');
+        expect(requestCount).toBe(0);
+      } finally {
+        srv.close();
+        rmSync(cwd, { recursive: true, force: true });
+      }
+    });
+
+    test('should refuse validation-command questions without loaded project context', async () => {
+      const cwd = mkdtempSync(path.join(tmpdir(), 'synax-cli-ask-no-context-command-'));
+      let requestCount = 0;
+      const srv = await createMockServer((_req, res) => {
+        requestCount += 1;
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(
+          JSON.stringify({
+            model: 'test-model',
+            choices: [{ message: { role: 'assistant', content: 'run npm test' }, finish_reason: 'stop' }],
+          }),
+        );
+      });
+      try {
+        writeFileSync(
+          path.join(cwd, '.synax.toml'),
+          ['[provider]', 'kind = "openai-compatible"', `base_url = "${getServerUrl(srv)}/v1"`, 'model = "test-model"'].join(
+            '\n',
+          ),
+          'utf-8',
+        );
+        const result = await runSynaxDetailed(['ask', '--question', 'What validation command should I run for this repo?'], {
+          cwd,
+        });
+        expect(result.status).toBe(0);
+        expect(result.stdout).toBe('NO_CONTEXT: run `synax inspect` first or enable project context.');
+        expect(result.stderr).toBe('');
+        expect(requestCount).toBe(0);
+      } finally {
+        srv.close();
+        rmSync(cwd, { recursive: true, force: true });
+      }
+    });
+
+    test('should include inspect profile for repo-specific questions when context exists', async () => {
+      const cwd = mkdtempSync(path.join(tmpdir(), 'synax-cli-ask-context-'));
+      let requestBody = '';
+      const srv = await createMockServer((req, res) => {
+        requestBody = req.body;
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(
+          JSON.stringify({
+            model: 'test-model',
+            choices: [{ message: { role: 'assistant', content: 'profile-grounded answer' }, finish_reason: 'stop' }],
+          }),
+        );
+      });
+      try {
+        writeFileSync(
+          path.join(cwd, 'package.json'),
+          JSON.stringify({ scripts: { test: 'jest', build: 'tsc', synax: 'node dist/cli.js' } }),
+          'utf-8',
+        );
+        execSync('git init', { cwd, stdio: 'ignore' });
+        writeFileSync(
+          path.join(cwd, '.synax.toml'),
+          [
+            '[provider]',
+            'kind = "openai-compatible"',
+            `base_url = "${getServerUrl(srv)}/v1"`,
+            'model = "test-model"',
+            'api_key = "sk-context-secret"',
+          ].join('\n'),
+          'utf-8',
+        );
+        runSynax(['inspect'], { cwd });
+
+        const contextPath = path.join(cwd, '.synax', 'context.json');
+        expect(existsSync(contextPath)).toBe(true);
+        expect(readFileSync(contextPath, 'utf-8')).not.toContain('sk-context-secret');
+
+        const result = await runSynaxDetailed(['ask', '--question', 'Summarize this project in 5 bullets.'], { cwd });
+        expect(result.status).toBe(0);
+        expect(result.stdout).toBe('profile-grounded answer');
+        expect(result.stderr).toBe('');
+
+        const parsed = JSON.parse(requestBody) as { messages: Array<{ role: string; content: string }> };
+        expect(parsed.messages[0].role).toBe('system');
+        expect(parsed.messages[0].content).toContain('Synax Project Profile');
+        expect(parsed.messages[0].content).toContain('test: jest');
+        expect(parsed.messages[0].content).toContain('.synax.toml');
+        expect(parsed.messages[0].content).toContain('skipped secret-bearing file');
+        expect(parsed.messages[0].content).not.toContain('sk-context-secret');
       } finally {
         srv.close();
         rmSync(cwd, { recursive: true, force: true });

@@ -8,11 +8,20 @@
  * context ledger when it is available via a JSON file.
  */
 
-import { resolve } from 'path';
-import { readFileSync, existsSync, writeFileSync } from 'fs';
-import { buildProjectProfile, formatTextProfile, FullProfile } from '../config/profile';
-import { loadProjectConfig } from '../config/project';
+import { join, resolve } from 'path';
+import { readFileSync, existsSync, writeFileSync, mkdirSync } from 'fs';
+import { buildProjectProfile, formatTextProfile, FullProfile, type ConfigProfile } from '../config/profile';
+import { discoverConfigPath, loadProjectConfig } from '../config/project';
 import { createContextLedger, type ContextLedger, type ModelCallEntry } from '../tools';
+
+export const PROJECT_CONTEXT_PATH = join('.synax', 'context.json');
+
+export interface ProjectContextFile {
+  version: 1;
+  kind: 'inspect-profile';
+  profile: FullProfile;
+  profileText: string;
+}
 
 export interface InspectCommandOptions {
   json?: boolean;
@@ -45,16 +54,13 @@ export function runInspectCommand(program: any): void {
     .action((options: any) => {
       const targetPath = options.path ? resolve(options.path) : cwd;
       const projectProfile = buildProjectProfile(targetPath);
-      const parsedConfig = loadProjectConfig(options.path);
+      const configProfile = buildInspectConfigProfile(targetPath);
 
       const fullProfile: FullProfile = {
         project: projectProfile,
-        config: {
-          source: parsedConfig.source,
-          hasConfigFile: parsedConfig.source !== 'default',
-          configSummary: parsedConfig.config as Record<string, unknown>,
-        },
+        config: configProfile,
       };
+      writeProjectContext(targetPath, fullProfile);
 
       const opts: InspectCommandOptions = {
         json: options.json,
@@ -137,6 +143,40 @@ export function runInspectCommand(program: any): void {
         console.log(textProfile);
       }
     });
+}
+
+export function writeProjectContext(baseDir: string, profile: FullProfile): string {
+  const contextPath = join(baseDir, PROJECT_CONTEXT_PATH);
+  const context: ProjectContextFile = {
+    version: 1,
+    kind: 'inspect-profile',
+    profile,
+    profileText: formatTextProfile(profile),
+  };
+
+  mkdirSync(join(baseDir, '.synax'), { recursive: true });
+  writeFileSync(contextPath, `${JSON.stringify(context, null, 2)}\n`, 'utf-8');
+  return contextPath;
+}
+
+export function buildInspectConfigProfile(baseDir: string): ConfigProfile {
+  const configPath = discoverConfigPath(baseDir);
+  if (configPath) {
+    return {
+      source: 'file',
+      hasConfigFile: true,
+      configSummary: {
+        '.synax.toml': 'skipped secret-bearing file',
+      },
+    };
+  }
+
+  const parsedConfig = loadProjectConfig(baseDir);
+  return {
+    source: parsedConfig.source,
+    hasConfigFile: false,
+    configSummary: parsedConfig.config as Record<string, unknown>,
+  };
 }
 
 /**
