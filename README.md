@@ -81,6 +81,8 @@ Check Relay and the configured model:
 npm run synax -- doctor --full
 ```
 
+Compatibility claims should be recorded against an exact provider, model, and Synax version. Use `docs/guide/compatibility.md` for the current compatibility report format and matrix.
+
 ## Common Commands
 
 ```sh
