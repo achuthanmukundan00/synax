@@ -31,6 +31,9 @@ Synax rejects unsafe file paths and generated outputs. It is designed to avoid r
 - env files
 - paths outside the repository
 
+Validated replacement edits emit a patch preview before the write is applied. This is currently a visible
+diagnostic, not an interactive approval prompt.
+
 ## Bash Policy
 
 Bash is disabled by default:

@@ -24,6 +24,11 @@ export interface PatchValidationSuccess {
   after: string;
 }
 
+export interface PatchPreview {
+  path: string;
+  diff: string;
+}
+
 export interface PatchValidationFailure {
   ok: false;
   failureState: PatchFailureState;
@@ -86,6 +91,13 @@ export async function applyReplaceInFile(
 
   await writeFile(target.absolutePath, validation.after, 'utf-8');
   return validation;
+}
+
+export function createPatchPreview(validation: PatchValidationSuccess): PatchPreview {
+  return {
+    path: validation.path,
+    diff: createUnifiedDiff(validation.path, validation.before, validation.after),
+  };
 }
 
 export function createUnifiedDiff(path: string, before: string, after: string): string {
