@@ -112,15 +112,22 @@ export function chatCommand(program: Command): void {
       printBanner(repoRoot, provider.model);
 
       const rl = createInterface({ input, output, terminal: Boolean(output.isTTY) });
+      let exiting = false;
       rl.on('SIGINT', () => {
+        exiting = true;
         console.log('\n[synax] exiting');
         rl.close();
       });
 
       try {
         if (input.isTTY) {
-          while (true) {
-            const shouldExit = await handleInteractiveLine(await rl.question('synax> '), session);
+          while (!exiting) {
+            const line = await promptInteractiveLine(rl);
+            if (line === null) {
+              exiting = true;
+              break;
+            }
+            const shouldExit = await handleInteractiveLine(line, session);
             if (shouldExit) break;
           }
         } else {
@@ -130,10 +137,25 @@ export function chatCommand(program: Command): void {
           }
         }
       } finally {
-        rl.close();
+        if (!exiting) rl.close();
       }
     });
   program.addCommand(chat);
+}
+
+export async function promptInteractiveLine(
+  rl: Pick<ReturnType<typeof createInterface>, 'question'>,
+): Promise<string | null> {
+  try {
+    return await rl.question('synax> ');
+  } catch (error) {
+    if (isUseAfterCloseError(error)) return null;
+    throw error;
+  }
+}
+
+function isUseAfterCloseError(error: unknown): boolean {
+  return typeof error === 'object' && error !== null && 'code' in error && error.code === 'ERR_USE_AFTER_CLOSE';
 }
 
 async function handleInteractiveLine(line: string, session: ChatSession): Promise<boolean> {
