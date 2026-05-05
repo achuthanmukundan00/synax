@@ -34,7 +34,7 @@ Synax is not a general AI assistant, SaaS coding platform, IDE replacement, or a
 - **CLI-first design** — clean `commander` subcommand structure with predictable behavior
 - **Project inspection** — `synax inspect` detects git info, package manager, detected commands, and config summary
 - **Interactive chat** — `synax chat` and `synax ask` provide read-only and edit-capable task loops
-- **Doctor command** — `synax doctor` checks system health, Node.js version, and permissions
+- **Doctor command** — `synax doctor` checks project configuration and provider readiness
 - **OpenAI-compatible tool calls** — sends standard `tools` requests and accepts Qwen/Unsloth text fallback tool-call blocks
 - **Configuration** — `.synax.toml` project config with provider, context, commands, and policy sections
 - **Context budgeting** — conservative token limits for files, commands, instructions, and overall input
@@ -64,8 +64,8 @@ npm run build
 ## Quick Start
 
 ```sh
-# Check system health
-npx synax doctor --all
+# Check project and provider health
+npx synax doctor --full
 
 # Inspect the current project
 npx synax inspect
@@ -150,11 +150,11 @@ synax config init
 ### Doctor command
 
 ```sh
-# Run all checks
-synax doctor --all
+# Run fast local checks
+synax doctor
 
-# Check specific items
-synax doctor --check-node --check-permissions
+# Include provider endpoint and model request checks
+synax doctor --full
 ```
 
 ## Configuration

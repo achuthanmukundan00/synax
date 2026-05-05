@@ -15,6 +15,8 @@ export interface ProviderConfig {
   custom_headers?: Record<string, string>;
   timeoutSeconds?: number;
   timeout_seconds?: number;
+  timeoutMs?: number;
+  timeout_ms?: number;
 }
 
 export function normalizeProviderConfig(p: ProviderConfig): import('../llm/types').NormalizedProviderConfig {
@@ -23,7 +25,7 @@ export function normalizeProviderConfig(p: ProviderConfig): import('../llm/types
   const model = p.model ?? '';
   const apiKey = p.api_key ?? p.apiKey;
   const customHeaders = p.custom_headers ?? p.customHeaders;
-  const timeoutMs = (p.timeout_seconds ?? p.timeoutSeconds ?? 120) * 1000;
+  const timeoutMs = p.timeout_ms ?? p.timeoutMs ?? (p.timeout_seconds ?? p.timeoutSeconds ?? 120) * 1000;
   return { kind, baseUrl, model, apiKey, customHeaders, timeoutMs };
 }
 
@@ -211,7 +213,7 @@ export function validateConfig(config: ProjectConfig): ValidationError[] {
           }
         }
       }
-      for (const timeoutKey of ['timeoutSeconds', 'timeout_seconds'] as const) {
+      for (const timeoutKey of ['timeoutSeconds', 'timeout_seconds', 'timeoutMs', 'timeout_ms'] as const) {
         if (p[timeoutKey] !== undefined && typeof p[timeoutKey] !== 'number') {
           errors.push({ path: `provider.${timeoutKey}`, message: 'must be a number' });
         }

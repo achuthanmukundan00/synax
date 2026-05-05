@@ -204,6 +204,7 @@ export function createOpenAICompatibleClient(
         messages: opts.messages,
         temperature: opts.temperature ?? 0,
         stream: false,
+        ...(opts.maxTokens !== undefined ? { max_tokens: opts.maxTokens } : {}),
         ...(opts.tools && opts.tools.length > 0
           ? { tools: opts.tools.map(toOpenAIToolDefinition), tool_choice: 'auto' }
           : {}),

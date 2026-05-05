@@ -3,6 +3,7 @@
  */
 
 import { mkdirSync, writeFileSync, rmSync, existsSync } from 'fs';
+import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'http';
 import { join } from 'path';
 
 import {
@@ -24,6 +25,48 @@ function ensureTmp() {
     rmSync(TMP, { recursive: true, force: true });
   }
   mkdirSync(TMP, { recursive: true });
+}
+
+interface MockRequest {
+  method: string;
+  path: string;
+  headers: Record<string, string>;
+  body: string;
+}
+
+function createMockServer(handler: (req: MockRequest, res: ServerResponse<IncomingMessage>) => void): Promise<Server> {
+  const srv = createServer((req, res) => {
+    const chunks: string[] = [];
+    req.on('data', (c) => chunks.push(String(c)));
+    req.on('end', () => {
+      const headers: Record<string, string> = {};
+      for (const [k, v] of Object.entries(req.headers)) {
+        if (typeof v === 'string') headers[k] = v;
+      }
+      handler(
+        {
+          method: req.method ?? '',
+          path: new URL(req.url ?? '/', 'http://localhost').pathname,
+          headers,
+          body: chunks.join(''),
+        },
+        res,
+      );
+    });
+  });
+  return new Promise((resolve, reject) => {
+    srv.once('error', reject);
+    srv.listen(0, '127.0.0.1', () => {
+      srv.off('error', reject);
+      resolve(srv);
+    });
+  });
+}
+
+function getServerUrl(srv: Server): string {
+  const addr = srv.address();
+  if (addr && typeof addr === 'object' && 'port' in addr) return `http://127.0.0.1:${addr.port}`;
+  throw new Error('Could not get server port');
 }
 
 describe('checkGitRepository', () => {
@@ -140,6 +183,55 @@ describe('runDoctor', () => {
     expect(report.configuredCommands).toBeDefined();
     expect(report.contextBudget).toBeDefined();
     expect(report.relayHealth).toBeDefined();
+  });
+
+  it('does not treat unauthenticated base URL failures as final provider truth when chat works', async () => {
+    const srv = await createMockServer((req, res) => {
+      if (req.path === '/v1/models') {
+        expect(req.headers['x-cloudflare-access-client-id']).toBe('test-client');
+        res.writeHead(404, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: { message: 'models endpoint unavailable' } }));
+        return;
+      }
+
+      if (req.path === '/v1/chat/completions') {
+        expect(req.headers['x-cloudflare-access-client-id']).toBe('test-client');
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(
+          JSON.stringify({
+            model: 'test-model',
+            choices: [{ message: { role: 'assistant', content: 'OK' }, finish_reason: 'stop' }],
+          }),
+        );
+        return;
+      }
+
+      res.writeHead(403, { 'Content-Type': 'text/plain' });
+      res.end('forbidden');
+    });
+    try {
+      writeFileSync(
+        join(TMP, '.synax.toml'),
+        [
+          '[provider]',
+          'kind = "openai-compatible"',
+          `base_url = "${getServerUrl(srv)}/v1"`,
+          'model = "test-model"',
+          'timeout_seconds = 1',
+          '',
+          '[provider.custom_headers]',
+          '"X-Cloudflare-Access-Client-Id" = "test-client"',
+        ].join('\n'),
+        'utf-8',
+      );
+
+      const report = await runDoctor('full', TMP);
+      expect(report.modelRequest.status).toBe('pass');
+      expect(report.providerReachability.status).not.toBe('fail');
+      expect(report.providerReachability.message).not.toContain('403');
+    } finally {
+      srv.close();
+    }
   });
 });
 

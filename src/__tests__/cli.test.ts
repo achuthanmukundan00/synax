@@ -1,4 +1,5 @@
-import { execSync } from 'child_process';
+import { execFile, execSync } from 'child_process';
+import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'http';
 import { mkdtempSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import path from 'path';
@@ -23,6 +24,69 @@ function runSynax(args: string[], options: { cwd?: string; timeout?: number } = 
     }
     return String(error);
   }
+}
+
+function runSynaxDetailed(args: string[], options: { cwd?: string; timeout?: number } = {}) {
+  return new Promise<{ status: number; stdout: string; stderr: string }>((resolve) => {
+    execFile(
+      'node',
+      [SYNAX_BIN, ...args],
+      {
+        cwd: options.cwd,
+        encoding: 'utf8',
+        timeout: options.timeout ?? 15000,
+      },
+      (error, stdout, stderr) => {
+        resolve({
+          status: error && 'code' in error && typeof error.code === 'number' ? error.code : 0,
+          stdout: stdout.trimEnd(),
+          stderr: stderr.trimEnd(),
+        });
+      },
+    );
+  });
+}
+
+interface MockRequest {
+  method: string;
+  path: string;
+  headers: Record<string, string>;
+  body: string;
+}
+
+function createMockServer(handler: (req: MockRequest, res: ServerResponse<IncomingMessage>) => void): Promise<Server> {
+  const srv = createServer((req, res) => {
+    const chunks: string[] = [];
+    req.on('data', (c) => chunks.push(String(c)));
+    req.on('end', () => {
+      const headers: Record<string, string> = {};
+      for (const [k, v] of Object.entries(req.headers)) {
+        if (typeof v === 'string') headers[k] = v;
+      }
+      handler(
+        {
+          method: req.method ?? '',
+          path: new URL(req.url ?? '/', 'http://localhost').pathname,
+          headers,
+          body: chunks.join(''),
+        },
+        res,
+      );
+    });
+  });
+  return new Promise((resolve, reject) => {
+    srv.once('error', reject);
+    srv.listen(0, '127.0.0.1', () => {
+      srv.off('error', reject);
+      resolve(srv);
+    });
+  });
+}
+
+function getServerUrl(srv: Server): string {
+  const addr = srv.address();
+  if (addr && typeof addr === 'object' && 'port' in addr) return `http://127.0.0.1:${addr.port}`;
+  throw new Error('Could not get server port');
 }
 
 describe('CLI', () => {
@@ -73,10 +137,80 @@ describe('CLI', () => {
       expect(output).toContain('[synax] Ask command initialized');
     });
 
-    test('should accept --question option', () => {
-      const output = runSynax(['ask', '--question', 'what is synax?']);
-      expect(output).toContain('what is synax?');
-      expect(output).toContain('Placeholder');
+    test('should call the provider client and print returned content for --question', async () => {
+      const cwd = mkdtempSync(path.join(tmpdir(), 'synax-cli-ask-'));
+      const srv = await createMockServer((req, res) => {
+        expect(req.method).toBe('POST');
+        expect(req.path).toBe('/v1/chat/completions');
+        expect(req.headers['x-cloudflare-access-client-id']).toBe('test-client');
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(
+          JSON.stringify({
+            model: 'test-model',
+            choices: [{ message: { role: 'assistant', content: '  synax-ok  ' }, finish_reason: 'stop' }],
+          }),
+        );
+      });
+      try {
+        writeFileSync(
+          path.join(cwd, '.synax.toml'),
+          [
+            '[provider]',
+            'kind = "openai-compatible"',
+            `base_url = "${getServerUrl(srv)}/v1"`,
+            'model = "test-model"',
+            'timeout_seconds = 1',
+            '',
+            '[provider.custom_headers]',
+            '"X-Cloudflare-Access-Client-Id" = "test-client"',
+          ].join('\n'),
+          'utf-8',
+        );
+        const result = await runSynaxDetailed(['ask', '--question', 'Reply with exactly: synax-ok'], { cwd });
+        expect(result.status).toBe(0);
+        expect(result.stdout).toBe('synax-ok');
+        expect(result.stderr).toBe('');
+      } finally {
+        srv.close();
+        rmSync(cwd, { recursive: true, force: true });
+      }
+    });
+
+    test('should handle provider errors without leaking secrets', async () => {
+      const cwd = mkdtempSync(path.join(tmpdir(), 'synax-cli-ask-error-'));
+      const srv = await createMockServer((_req, res) => {
+        res.writeHead(403, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: { message: 'access denied' } }));
+      });
+      try {
+        writeFileSync(
+          path.join(cwd, '.synax.toml'),
+          [
+            '[provider]',
+            'kind = "openai-compatible"',
+            `base_url = "${getServerUrl(srv)}/v1"`,
+            'model = "test-model"',
+            'api_key = "secret-api-key"',
+            'timeout_seconds = 1',
+            '',
+            '[provider.custom_headers]',
+            '"CF-Access-Client-Secret" = "secret-cf-token"',
+          ].join('\n'),
+          'utf-8',
+        );
+        const result = await runSynaxDetailed(['ask', '--question', 'hello'], { cwd });
+        const combined = `${result.stdout}\n${result.stderr}`;
+        expect(result.status).not.toBe(0);
+        expect(combined).toContain('Provider request failed');
+        expect(combined).toContain('Type: auth');
+        expect(combined).toContain('Status: 403');
+        expect(combined).toContain('access denied');
+        expect(combined).not.toContain('secret-api-key');
+        expect(combined).not.toContain('secret-cf-token');
+      } finally {
+        srv.close();
+        rmSync(cwd, { recursive: true, force: true });
+      }
     });
   });
 
