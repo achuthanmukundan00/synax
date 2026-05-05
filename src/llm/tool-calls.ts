@@ -4,6 +4,20 @@ export interface ParsedToolCall {
   arguments: Record<string, unknown>;
 }
 
+export type ToolCallParseFailureReason = 'malformed-json';
+
+export type ToolCallParseResult =
+  | {
+      ok: true;
+      source: 'openai' | 'content' | 'none';
+      calls: ParsedToolCall[];
+    }
+  | {
+      ok: false;
+      reason: ToolCallParseFailureReason;
+      message: string;
+    };
+
 interface OpenAIToolCall {
   id?: string;
   type?: string;
@@ -29,12 +43,23 @@ export interface AnthropicToolDefinition {
 }
 
 export function parseToolCallsFromContent(content: string): ParsedToolCall[] {
+  const result = parseToolCallsFromContentResult(content);
+  return result.ok ? result.calls : [];
+}
+
+export function parseToolCallsFromContentResult(content: string): ToolCallParseResult {
   const calls: ParsedToolCall[] = [];
 
   for (const block of extractToolCallBlocks(content)) {
-    const parsed = parseJsonObject(block);
-    if (!parsed) continue;
-    calls.push(...toolCallsFromUnknown(parsed, calls.length));
+    const parsed = parseJsonObjectResult(block);
+    if (!parsed.ok) {
+      return {
+        ok: false,
+        reason: 'malformed-json',
+        message: 'tool_call block contained malformed JSON',
+      };
+    }
+    calls.push(...toolCallsFromUnknown(parsed.value, calls.length));
   }
 
   for (const block of extractJsonCodeBlocks(content)) {
@@ -50,15 +75,21 @@ export function parseToolCallsFromContent(content: string): ParsedToolCall[] {
     }
   }
 
-  return calls;
+  return { ok: true, source: calls.length > 0 ? 'content' : 'none', calls };
 }
 
 export function parseOpenAIToolCalls(toolCalls: unknown): ParsedToolCall[] {
-  if (!Array.isArray(toolCalls)) return [];
-  return toolCalls.flatMap((call, index) => {
+  const result = parseOpenAIToolCallsResult(toolCalls);
+  return result.ok ? result.calls : [];
+}
+
+export function parseOpenAIToolCallsResult(toolCalls: unknown): ToolCallParseResult {
+  if (!Array.isArray(toolCalls)) return { ok: true, source: 'none', calls: [] };
+  const calls = toolCalls.flatMap((call, index) => {
     const parsed = parseOpenAIToolCall(call as OpenAIToolCall, index);
     return parsed ? [parsed] : [];
   });
+  return { ok: true, source: calls.length > 0 ? 'openai' : 'none', calls };
 }
 
 export function toOpenAIToolDefinition(tool: {
@@ -97,10 +128,15 @@ function extractJsonCodeBlocks(content: string): string[] {
 }
 
 function parseJsonObject(raw: string): unknown | null {
+  const result = parseJsonObjectResult(raw);
+  return result.ok ? result.value : null;
+}
+
+function parseJsonObjectResult(raw: string): { ok: true; value: unknown } | { ok: false } {
   try {
-    return JSON.parse(raw);
+    return { ok: true, value: JSON.parse(raw) };
   } catch {
-    return null;
+    return { ok: false };
   }
 }
 
