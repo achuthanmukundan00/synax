@@ -106,6 +106,99 @@ describe('shared bounded agent runner', () => {
     );
   });
 
+  it('does not end in tool_error when the model reads the repository root', async () => {
+    writeFileSync(join(TMP, 'README.md'), '# Synax\n', 'utf-8');
+    writeFileSync(join(TMP, 'package.json'), '{"scripts":{"synax":"node dist/cli.js"}}\n', 'utf-8');
+    const client = fakeClient([
+      { toolCalls: [{ id: 'call_1', name: 'read', arguments: { path: '.' } }] },
+      { content: 'Available CLI commands are documented in the repository.' },
+    ]);
+
+    const result = await runAgentTurn({
+      repoRoot: TMP,
+      task: 'Inspect the repository and summarize the available CLI commands. Do not modify files.',
+      client,
+    });
+
+    expect(result.terminalState).toBe('completed');
+    expect(result.error).toBeUndefined();
+    expect(result.toolCalls).toEqual([{ name: 'read', success: true, error: undefined }]);
+  });
+
+  it('continues after a missing read path so the model can recover with another read', async () => {
+    mkdirSync(join(TMP, 'src'), { recursive: true });
+    writeFileSync(join(TMP, 'src', 'cli.ts'), 'export const cli = true;\n', 'utf-8');
+    const client = fakeClient([
+      { toolCalls: [{ id: 'call_1', name: 'read', arguments: { path: 'src/cli' } }] },
+      { toolCalls: [{ id: 'call_2', name: 'read', arguments: { path: 'src/cli.ts' } }] },
+      { content: 'Recovered by reading src/cli.ts.' },
+    ]);
+
+    const result = await runAgentTurn({
+      repoRoot: TMP,
+      task: 'Inspect the repository and summarize the available CLI commands. Do not modify files.',
+      client,
+    });
+
+    expect(result).toMatchObject({
+      terminalState: 'completed',
+      finalAnswer: 'Recovered by reading src/cli.ts.',
+      changedFiles: [],
+    });
+    expect(result.toolCalls).toEqual([
+      { name: 'read', success: false, error: expect.stringContaining('ENOENT') },
+      { name: 'read', success: true, error: undefined },
+    ]);
+    expect(client.requests).toHaveLength(3);
+    expect(client.requests[1].messages).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          role: 'tool',
+          tool_call_id: 'call_1',
+          name: 'read',
+          content: expect.stringContaining('ENOENT'),
+        }),
+      ]),
+    );
+  });
+
+  it('terminates clearly after repeated recoverable read errors', async () => {
+    const client = fakeClient([
+      { toolCalls: [{ id: 'call_1', name: 'read', arguments: { path: 'missing-1.ts' } }] },
+      { toolCalls: [{ id: 'call_2', name: 'read', arguments: { path: 'missing-2.ts' } }] },
+      { toolCalls: [{ id: 'call_3', name: 'read', arguments: { path: 'missing-3.ts' } }] },
+      { content: 'should not be reached' },
+    ]);
+
+    const result = await runAgentTurn({ repoRoot: TMP, task: 'inspect missing files', client });
+
+    expect(result).toMatchObject({
+      terminalState: 'tool_error',
+      error: 'too many consecutive recoverable tool errors: 3',
+    });
+    expect(result.toolCalls).toHaveLength(3);
+    expect(result.toolCalls.every((call) => call.success === false)).toBe(true);
+    expect(client.requests).toHaveLength(3);
+  });
+
+  it('terminates immediately on unsafe read paths', async () => {
+    const client = fakeClient([
+      { toolCalls: [{ id: 'call_1', name: 'read', arguments: { path: '../outside.ts' } }] },
+      { content: 'should not be reached' },
+    ]);
+
+    const result = await runAgentTurn({ repoRoot: TMP, task: 'read outside repo', client });
+
+    expect(result).toMatchObject({
+      terminalState: 'tool_error',
+      error: 'paths must stay inside the repository',
+    });
+    expect(result.toolCalls).toEqual([
+      { name: 'read', success: false, error: 'paths must stay inside the repository' },
+    ]);
+    expect(client.requests).toHaveLength(1);
+  });
+
   it('stops when assistant returns no tool calls', async () => {
     const client = fakeClient([{ content: 'final answer' }]);
 
