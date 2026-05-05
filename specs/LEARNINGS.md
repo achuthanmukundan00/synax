@@ -29,8 +29,16 @@ Use this file to capture facts learned while testing Synax against local models,
 
 ## 2026-05-05
 
+- For non-interactive edit-capable runs, "preview before write" needs an explicit decision policy. Using `--yes` as the accept signal lets `synax run --task` fail closed on replacement edits without adding a prompt loop or changing the model-facing tool shape.
+
+- Planning checklists are easier to keep truthful when completed slices are separated from release-gating verification. Prior successful test runs should stay in `PROGRESS.md` as historical evidence, while unfinished specs should keep final verification boxes open until the milestone is complete.
+
 - The v0.6 extension surface can start as TypeScript contracts only. Keeping MCP bridge concepts policy-shaped before adding runtime behavior helps avoid accidental plugin-marketplace or unrestricted-tool assumptions.
 
 - Self-hosting docs access can stay small and deterministic by using an explicit docs/spec/config-example allowlist plus the existing unsafe-path policy, rather than introducing embeddings or broad repository crawling.
 
+- Exposing local docs through `synax inspect` keeps the first self-hosting surface deterministic and inspectable. Listing recognized docs first, then reading a single bounded docs/spec file, is enough for useful spec navigation without adding embeddings or model-facing tool expansion yet.
+
 - Synax's existing fallback parser silently ignored malformed `<tool_call>` JSON blocks by returning no parsed calls. v0.4 needs explicit parser failure results so that later agent/client code can distinguish "no tool call" from "model attempted a malformed tool call."
+
+- Native OpenAI-compatible `message.tool_calls` can fail in the same way as text-shaped local-model calls when `function.arguments` is malformed. The LLM client needs to consume typed parser failures directly; otherwise a `finish_reason: "tool_calls"` response can degrade into a normal final answer with zero parsed calls.

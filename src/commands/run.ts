@@ -7,14 +7,24 @@ export function runCommand(program: Command): void {
     .description('Run one bounded Synax agent task')
     .option('-t, --task <task>', 'Task description to execute')
     .option('-p, --plan <plan>', 'Path to a plan file')
-    .option('-y, --yes', 'Accepted for compatibility; v0.2 safe tools run without prompting')
-    .action(async (options: { task?: string; plan?: string; yes?: boolean }) => {
+    .option('-y, --yes', 'Accept previewed replacement edits in non-interactive runs')
+    .option('--verification-profile <profile>', 'Verification profile: quick or full')
+    .option('--repair-attempts <count>', 'Bounded verification repair attempts')
+    .action(async (options: {
+      task?: string;
+      plan?: string;
+      yes?: boolean;
+      verificationProfile?: 'quick' | 'full';
+      repairAttempts?: string;
+    }) => {
       if (options.task) {
         try {
           const report = await runAgentTask({
             repoRoot: process.cwd(),
             task: options.task,
             yes: options.yes,
+            verificationProfile: options.verificationProfile,
+            repairAttempts: options.repairAttempts ? Number.parseInt(options.repairAttempts, 10) : undefined,
             onActivity(activity) {
               console.log(`[synax] ${activity.kind}: ${activity.message}`);
             },

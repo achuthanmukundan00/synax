@@ -41,6 +41,8 @@ Synax sends standard OpenAI-compatible `tools` with automatic tool choice. It ac
 
 This makes Synax usable with local Qwen-style tool-call formats that some Relay-backed models emit.
 
+Tool-call `arguments` may be JSON objects or stringified JSON objects. Malformed tool-call JSON is rejected before execution and surfaces as a `model_error` instead of being treated as a final answer.
+
 ## Loop Limits
 
 Defaults:

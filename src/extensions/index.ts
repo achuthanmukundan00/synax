@@ -1,3 +1,6 @@
+export { createBuiltinExtensions } from './builtins';
+export type { BuiltinExtensions, BuiltinRendererKind } from './builtins';
+
 export type {
   ContextProvider,
   ContextProviderInput,

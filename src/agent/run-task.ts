@@ -3,11 +3,15 @@ import { createOpenAICompatibleClient } from '../llm/client';
 import { buildModelFacingTools, runAgentTurn, type AgentActivity, type AgentTerminalState } from './runner';
 import { runVerification, type VerificationResult } from './verification';
 import { eventNow, type AgentEvent } from './events';
+import { createSafetyCheckpoint, detectDirtyTree, writeRunLog } from './safety';
 
 export interface RunTaskOptions {
   repoRoot: string;
   task: string;
   yes?: boolean;
+  verificationProfile?: 'quick' | 'full';
+  repairAttempts?: number;
+  recordRunArtifacts?: boolean;
   onActivity?: (activity: AgentActivity) => void;
   onEvent?: (event: AgentEvent) => void;
 }
@@ -56,6 +60,8 @@ export async function runAgentTask(options: RunTaskOptions): Promise<RunTaskRepo
   }
 
   const client = createOpenAICompatibleClient(providerConfig);
+  const dirtyTree = await detectDirtyTree(options.repoRoot);
+  const checkpoint = options.recordRunArtifacts === false ? null : await createSafetyCheckpoint(options.repoRoot);
   const tools = buildModelFacingTools({ bashEnabled: projectConfig.config.tools?.bash?.enabled }).map(
     (tool) => tool.name,
   );
@@ -81,6 +87,7 @@ export async function runAgentTask(options: RunTaskOptions): Promise<RunTaskRepo
     tools: { bashEnabled: projectConfig.config.tools?.bash?.enabled },
     onActivity: options.onActivity,
     onEvent: options.onEvent,
+    approvePatch: () => (options.yes ? 'accept' : 'reject'),
   });
 
   let verification: VerificationResult = { state: 'skipped', stdout: '', stderr: '' };
@@ -88,10 +95,39 @@ export async function runAgentTask(options: RunTaskOptions): Promise<RunTaskRepo
     verification = await runVerification({
       repoRoot: options.repoRoot,
       command: projectConfig.config.verification?.defaultCommand,
+      timeoutMs: options.verificationProfile === 'full' ? 120000 : 30000,
+      maxOutputChars: options.verificationProfile === 'full' ? 12000 : 4000,
     });
   }
+  let repairedTurn = turn;
+  const maxRepairAttempts = options.repairAttempts ?? 1;
+  if (verification.state === 'failed' && maxRepairAttempts > 0) {
+    for (let attempt = 1; attempt <= maxRepairAttempts; attempt += 1) {
+      const repair = await runAgentTurn({
+        repoRoot: options.repoRoot,
+        task: `Verification failed. Fix the changed files and make verification pass. Failure output:\n${verification.stderr.slice(0, 1000)}`,
+        client,
+        maxSteps: Math.max(4, Math.floor((projectConfig.config.maxModelSteps ?? 32) / 2)),
+        maxToolCalls: Math.max(8, Math.floor((projectConfig.config.maxToolCalls ?? 96) / 2)),
+        tools: { bashEnabled: projectConfig.config.tools?.bash?.enabled },
+        onActivity: options.onActivity,
+        onEvent: options.onEvent,
+        approvePatch: () => (options.yes ? 'accept' : 'reject'),
+      });
+      repairedTurn = repair;
+      if (repair.changedFiles.length > 0) {
+        verification = await runVerification({
+          repoRoot: options.repoRoot,
+          command: projectConfig.config.verification?.defaultCommand,
+          timeoutMs: options.verificationProfile === 'full' ? 120000 : 30000,
+          maxOutputChars: options.verificationProfile === 'full' ? 12000 : 4000,
+        });
+      }
+      if (verification.state === 'passed') break;
+    }
+  }
   let terminalState = turn.terminalState;
-  if (turn.terminalState === 'completed' && verification.state === 'failed') {
+  if (repairedTurn.terminalState === 'completed' && verification.state === 'failed') {
     terminalState = 'failed_verification';
   }
   options.onEvent?.({
@@ -116,16 +152,28 @@ export async function runAgentTask(options: RunTaskOptions): Promise<RunTaskRepo
           : 'not run',
     error: turn.error,
   });
+  if (options.recordRunArtifacts !== false) {
+    await writeRunLog(options.repoRoot, {
+      task: options.task,
+      terminalState,
+      changedFiles: unique([...turn.changedFiles, ...repairedTurn.changedFiles]),
+      verification: verification.state,
+      error: turn.error,
+    });
+  }
 
   return {
     task: options.task,
     terminalState,
     finalAnswer: turn.finalAnswer,
-    filesChanged: unique(turn.changedFiles),
+    filesChanged: unique([...turn.changedFiles, ...repairedTurn.changedFiles]),
     verification,
-    steps: turn.steps,
-    toolCalls: turn.toolCalls,
-    messages: [],
+    steps: turn.steps + (repairedTurn === turn ? 0 : repairedTurn.steps),
+    toolCalls: [...turn.toolCalls, ...(repairedTurn === turn ? [] : repairedTurn.toolCalls)],
+    messages: [
+      ...(dirtyTree.dirty ? ['working tree was dirty before run', ...dirtyTree.summary] : []),
+      ...(checkpoint ? [`checkpoint: ${checkpoint.id}`] : []),
+    ],
     error: turn.error,
   };
 }
