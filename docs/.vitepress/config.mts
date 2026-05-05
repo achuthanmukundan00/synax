@@ -10,6 +10,7 @@ export default defineConfig({
       { text: 'Guide', link: '/guide/getting-started' },
       { text: 'Relay', link: '/guide/relay' },
       { text: 'Commands', link: '/guide/commands' },
+      { text: 'Compatibility', link: '/guide/compatibility' },
       { text: 'GitHub', link: 'https://github.com/achuthanmukundan00/synax' },
     ],
     sidebar: [
@@ -23,6 +24,7 @@ export default defineConfig({
           { text: 'Commands', link: '/guide/commands' },
           { text: 'Agent Loop and Tools', link: '/guide/agent-loop' },
           { text: 'Safety and Context', link: '/guide/safety-context' },
+          { text: 'Compatibility Reports', link: '/guide/compatibility' },
           { text: 'Development', link: '/guide/development' },
         ],
       },
