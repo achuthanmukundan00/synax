@@ -52,3 +52,17 @@ Keep changes small and local:
 - Update docs when behavior changes.
 - Add targeted tests for CLI, config, provider, and tool behavior.
 - Run the narrowest useful verification before claiming a change works.
+
+## Extension Interfaces
+
+Synax keeps extension seams internal and explicit. The stable interface definitions live in `src/extensions/` and cover:
+
+- tool-call parsing and bounded repair
+- reasoning/thinking sanitization
+- provider adapters
+- context and docs providers
+- verification runners
+- event renderers
+- guarded MCP bridge groundwork
+
+These interfaces are maintainer contracts, not a plugin marketplace. Runtime wiring should stay explicit, testable without network access, and unable to bypass tool policy, verification policy, approval/checkpoint policy, or context budgets.
