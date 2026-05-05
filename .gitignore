@@ -9,3 +9,4 @@ package-lock.json
 *.tgz
 .env
 .env.*
+.synax.toml

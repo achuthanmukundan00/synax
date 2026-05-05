@@ -1,0 +1,29 @@
+# Synax project configuration
+# See https://synax.dev/docs/config for full options
+
+# Context budget in tokens
+contextBudgetTokens = 16000
+
+# Subagent configuration
+[subagents]
+enabled = false
+mode = "sequential"
+
+# Verification
+[verification]
+defaultCommand = "npm run typecheck"
+
+# Inference provider
+[provider]
+kind = "openai-compatible"
+base_url = "https://ai.watchyourtemper.com/v1"
+model = "Qwen3.6-35B-A3B-UD-IQ3_XXS.gguf"
+api_key = "sk-no-key-required"
+timeout_ms = 120000
+
+[provider.custom_headers]
+# e.g. 
+# Cf_Access_Client_Id="..."
+# Cf_Access_Client_Secret="..."
+[verification]
+defaultCommand = "npm run typecheck"
