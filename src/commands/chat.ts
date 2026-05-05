@@ -1,138 +1,217 @@
 import { Command } from 'commander';
-import { createOpenAICompatibleClient, type BudgetPolicy } from '../llm/client';
-import { normalizeProviderConfig, loadProjectConfig } from '../config/project';
-import { createContextLedger } from '../tools';
-import { saveLedgerToDisk } from './inspect';
+import { createInterface } from 'node:readline/promises';
+import { stdin as input, stdout as output } from 'node:process';
 
-/**
- * `synax chat` — interactive agent loop with full ledger wiring.
- *
- * Every model call:
- * 1. Sets task, budget, instruction sources, files, commands on the ledger.
- * 2. Sends the request through the LLM client.
- * 3. Records token usage from the response (handled by the client).
- * 4. Prints the compact ledger after each call.
- * 5. Persists the ledger to `.synax-ledger.json` on session end.
- *
- * Budget enforcement is handled by the client (warn / hard-stop).
- */
+import { loadProjectConfig, normalizeProviderConfig, type ProjectConfig } from '../config/project';
+import { createOpenAICompatibleClient } from '../llm/client';
+import {
+  createAgentConversation,
+  resetAgentConversation,
+  runAgentTurn,
+  type AgentConversation,
+  type AgentTerminalState,
+} from '../agent/runner';
+import { runVerification, type VerificationResult } from '../agent/verification';
+import { buildProjectProfile, formatTextProfile } from '../config/profile';
+import { buildInspectConfigProfile } from './inspect';
+
+export interface ChatSession {
+  conversation: AgentConversation;
+  handleUserMessage(message: string): Promise<ChatTurnReport>;
+  handleSlashCommand(command: string): Promise<SlashCommandReport>;
+}
+
+export interface ChatTurnReport {
+  terminalState: AgentTerminalState;
+  finalAnswer: string;
+  changedFiles: string[];
+  steps: number;
+  error?: string;
+}
+
+export interface SlashCommandReport {
+  handled: boolean;
+  exit?: boolean;
+  output: string;
+  verification?: VerificationResult;
+}
+
+export function createChatSession(options: { repoRoot: string; config: ProjectConfig }): ChatSession {
+  const providerConfig = normalizeProviderConfig(options.config.provider ?? {});
+  const client = createOpenAICompatibleClient(providerConfig);
+  const conversation = createAgentConversation();
+
+  return {
+    conversation,
+    async handleUserMessage(message: string): Promise<ChatTurnReport> {
+      const result = await runAgentTurn({
+        repoRoot: options.repoRoot,
+        task: message,
+        client,
+        conversation,
+        onActivity(activity) {
+          console.log(`[synax] ${activity.kind}: ${activity.message}`);
+        },
+      });
+      return {
+        terminalState: result.terminalState,
+        finalAnswer: result.finalAnswer,
+        changedFiles: result.changedFiles,
+        steps: result.steps,
+        error: result.error,
+      };
+    },
+    async handleSlashCommand(command: string): Promise<SlashCommandReport> {
+      return handleSlashCommand(command, {
+        repoRoot: options.repoRoot,
+        config: options.config,
+        conversation,
+      });
+    },
+  };
+}
+
 export function chatCommand(program: Command): void {
   const chat = new Command('chat');
   chat
-    .description('Chat with the Synax agent in an interactive session')
-    .option('-m, --message <message>', 'Single-shot message mode')
-    .option('-y, --yes', 'Auto-accept without prompts')
-    .action(async (options: { message?: string; yes?: boolean }) => {
-      const cwd = process.cwd();
-
-      // Load config and build provider config
-      const parsedConfig = loadProjectConfig(cwd);
-      const configAny = parsedConfig.config as Record<string, unknown>;
-      const providerCfg = normalizeProviderConfig((configAny.provider ?? {}) as any);
-      const budget = (configAny.contextBudgetTokens ?? 16000) as number;
-
-      // Create the context ledger for this session.
-      const ledger = createContextLedger();
-      ledger.setBudget(budget);
-
-      // Create the LLM client with ledger wiring and budget policy.
-      const budgetPolicy: BudgetPolicy = {
-        warnThreshold: Math.floor(budget * 0.1), // warn at 10% remaining
-        hardStopThreshold: Math.floor(budget * 0.05), // hard-stop at 5% remaining
-      };
-
-      const client = createOpenAICompatibleClient(providerCfg, { ledger, budgetPolicy });
-
-      // Build instruction sources for the ledger.
-      ledger.recordInstructionSource('system', { included: true, approximateTokens: 500 });
-      ledger.recordInstructionSource('task', { included: true, approximateTokens: 200 });
-
-      // Single-shot mode: send one message and exit.
-      if (options.message) {
-        await executeSingleChat(client, ledger, options.message);
-        saveLedgerToDisk(ledger, getLedgerPath(cwd));
+    .description('Start an interactive Synax agent shell')
+    .option('-m, --message <message>', 'Run one chat turn and exit')
+    .action(async (options: { message?: string }) => {
+      const repoRoot = process.cwd();
+      const loaded = loadProjectConfig(repoRoot);
+      if (loaded.errors.length > 0) {
+        console.error(`[synax] Config error:\n${loaded.errors.map((e) => `${e.path}: ${e.message}`).join('\n')}`);
+        process.exitCode = 1;
         return;
       }
 
-      // Interactive mode: read messages from stdin.
-      console.log('[synax] Chat initialized. Type a message and press Enter. Ctrl+D to exit.');
-      console.log('[synax] Run `synax inspect --ledger` to view the session ledger.');
-      console.log('');
+      const provider = normalizeProviderConfig(loaded.config.provider ?? {});
+      if (!provider.model.trim()) {
+        console.error('[synax] Config error: provider.model is required for chat.');
+        process.exitCode = 1;
+        return;
+      }
 
-      const readline = await import('readline');
-      const rl = readline.createInterface({
-        input: process.stdin,
-        output: process.stdout,
+      const session = createChatSession({ repoRoot, config: loaded.config });
+      if (options.message) {
+        const report = await session.handleUserMessage(options.message);
+        console.log(options.message);
+        if (report.finalAnswer) console.log(report.finalAnswer);
+        console.log(`[synax] terminal state: ${report.terminalState}`);
+        if (report.terminalState !== 'completed') process.exitCode = 1;
+        return;
+      }
+
+      console.log('[synax] Chat initialized');
+      printBanner(repoRoot, provider.model);
+
+      const rl = createInterface({ input, output, terminal: Boolean(output.isTTY) });
+      rl.on('SIGINT', () => {
+        console.log('\n[synax] exiting');
+        rl.close();
       });
 
-      const question = (prompt: string): Promise<string> =>
-        new Promise<string>((resolve) => {
-          rl.question(prompt, (answer) => resolve(answer));
-        });
-
       try {
-        // eslint-disable-next-line no-constant-condition
-        while (true) {
-          const input = await question('\nYou: ');
-          if (!input || input.trim().length === 0) continue;
-          await executeSingleChat(client, ledger, input.trim());
-        }
-      } catch (err) {
-        // Only show ledger and handle budget errors; rethrow everything else
-        if (err instanceof Error && err.message.includes('Context budget')) {
-          console.error(`\n[synax] ❌ ${err.message}`);
-          console.log(`\n[synax] Session ledger:\n${ledger.getCompact()}`);
+        if (input.isTTY) {
+          while (true) {
+            const shouldExit = await handleInteractiveLine(await rl.question('synax> '), session);
+            if (shouldExit) break;
+          }
         } else {
-          throw err;
+          for await (const line of rl) {
+            const shouldExit = await handleInteractiveLine(line, session);
+            if (shouldExit) break;
+          }
         }
       } finally {
-        saveLedgerToDisk(ledger, getLedgerPath(cwd));
         rl.close();
       }
     });
   program.addCommand(chat);
 }
 
-/**
- * Get the ledger file path for a project directory.
- */
-function getLedgerPath(cwd: string): string {
-  // Use template literal with trailing slash to avoid path dependency
-  const normalized = cwd.endsWith('/') ? cwd : `${cwd}/`;
-  return `${normalized}.synax-ledger.json`;
+async function handleInteractiveLine(line: string, session: ChatSession): Promise<boolean> {
+  const trimmed = line.trim();
+  if (!trimmed) return false;
+
+  if (trimmed.startsWith('/')) {
+    const report = await session.handleSlashCommand(trimmed);
+    if (report.output) console.log(report.output);
+    return Boolean(report.exit);
+  }
+
+  const report = await session.handleUserMessage(trimmed);
+  if (report.finalAnswer) console.log(report.finalAnswer);
+  if (report.error) console.log(`[synax] ${report.error}`);
+  console.log(`[synax] terminal state: ${report.terminalState}`);
+  if (report.changedFiles.length > 0) {
+    console.log(`[synax] changed files: ${unique(report.changedFiles).join(', ')}`);
+  }
+  return false;
 }
 
-/**
- * Execute a single chat turn: set task on ledger, call LLM, record usage.
- */
-async function executeSingleChat(
-  client: ReturnType<typeof createOpenAICompatibleClient>,
-  ledger: ReturnType<typeof createContextLedger>,
-  userMessage: string,
-): Promise<void> {
-  // Reset ledger for the new call, then set task + budget.
-  ledger.reset();
-  ledger.setTask(userMessage);
-  ledger.setBudget(ledger.getExpanded().budget.total); // restore budget from saved total
+async function handleSlashCommand(
+  rawCommand: string,
+  context: { repoRoot: string; config: ProjectConfig; conversation: AgentConversation },
+): Promise<SlashCommandReport> {
+  const command = rawCommand.trim().toLowerCase();
+  if (command === '/exit' || command === '/quit') {
+    return { handled: true, exit: true, output: '[synax] bye' };
+  }
+  if (command === '/help') {
+    return { handled: true, output: 'Commands: /help /inspect /verify /clear /status /exit /quit' };
+  }
+  if (command === '/clear') {
+    resetAgentConversation(context.conversation);
+    return { handled: true, output: '[synax] conversation cleared' };
+  }
+  if (command === '/inspect') {
+    const profile = buildProjectProfile(context.repoRoot);
+    return {
+      handled: true,
+      output: formatTextProfile({ project: profile, config: buildInspectConfigProfile(context.repoRoot) }),
+    };
+  }
+  if (command === '/status') {
+    const profile = buildProjectProfile(context.repoRoot);
+    const git = profile.git;
+    if (!git) return { handled: true, output: '[synax] git status unavailable' };
+    return {
+      handled: true,
+      output: [`Repo: ${git.root}`, `Branch: ${git.branch}`, `Dirty: ${git.isDirty ? 'yes' : 'no'}`].join('\n'),
+    };
+  }
+  if (command === '/verify') {
+    const verification = await runVerification({
+      repoRoot: context.repoRoot,
+      command: context.config.verification?.defaultCommand,
+    });
+    return {
+      handled: true,
+      verification,
+      output: formatVerification(verification),
+    };
+  }
+  return { handled: false, output: `[synax] unknown command: ${rawCommand}` };
+}
 
-  // Record instruction sources for this call.
-  ledger.recordInstructionSource('system', { included: true, approximateTokens: 500 });
-  ledger.recordInstructionSource('task', { included: true, approximateTokens: 200 });
-
-  // Build messages.
-  const messages = [
-    { role: 'system', content: 'You are a helpful coding assistant. Be precise and concise.' },
-    { role: 'user', content: userMessage },
-  ];
-
-  console.log(`\n[synax] → ${userMessage}`);
-
-  const response = await client.chat({ messages, temperature: 0 });
-
-  // Record the assistant response.
-  ledger.recordInstructionSource('assistant', { included: true });
-
-  console.log(`\n[synax] ← ${response.content.slice(0, 500)}${response.content.length > 500 ? '...' : ''}`);
+function printBanner(repoRoot: string, model: string): void {
+  console.log('Synax v0.2 local agent');
+  console.log(`Repo: ${repoRoot}`);
+  console.log(`Model: ${model}`);
+  console.log('Commands: /help /inspect /verify /clear /status /exit');
   console.log('');
-  console.log(`[synax] ${ledger.getCompact()}`);
+}
+
+function formatVerification(result: VerificationResult): string {
+  const lines = [`[synax] verification: ${result.state}`];
+  if (result.command) lines.push(`command: ${result.command}`);
+  if (result.exitCode !== undefined) lines.push(`exit code: ${result.exitCode}`);
+  if (result.stdout.trim()) lines.push(result.stdout.trim());
+  if (result.stderr.trim()) lines.push(result.stderr.trim());
+  return lines.join('\n');
+}
+
+function unique(values: string[]): string[] {
+  return [...new Set(values)];
 }

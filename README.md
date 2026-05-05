@@ -13,6 +13,7 @@ Synax makes every model-visible instruction, file range, command output, and pat
 - [Requirements](#requirements)
 - [Installation](#installation)
 - [Quick Start](#quick-start)
+- [v0.2 Local Agent Usage](#v02-local-agent-usage)
 - [CLI Commands](#cli-commands)
 - [Configuration](#configuration)
 - [Context Budgeting](#context-budgeting)
@@ -80,6 +81,84 @@ npx synax ask --question "Trace how streaming responses work"
 npx synax run --task "Fix the failing auth test"
 ```
 
+## v0.2 Local Agent Usage
+
+Synax v0.2 is a lean local code-editing agent for OpenAI-compatible local providers such as Relay, llama.cpp-compatible servers, or LM Studio-style endpoints.
+
+Prerequisites:
+
+- Node.js 18 or newer
+- A local OpenAI-compatible `/v1/chat/completions` server
+- A configured model name in `.synax.toml`
+
+Example `.synax.toml`:
+
+```toml
+contextBudgetTokens = 16000
+
+[provider]
+kind = "openai-compatible"
+base_url = "http://127.0.0.1:1234/v1"
+model = "qwen3.6-local"
+api_key = "local"
+timeout_seconds = 120
+
+[verification]
+defaultCommand = "npm test"
+```
+
+Typical local flow:
+
+```sh
+npm run build
+npm run synax -- doctor --full
+npm run synax -- inspect
+npm run synax -- ask --question "Summarize this project in 5 bullets."
+npm run synax -- run --task "Create docs/agent-demo.md explaining Synax in 5 bullets."
+npm run synax -- chat
+```
+
+`synax run --task "<task>"` starts a fresh conversation, sends tool schemas to the model, executes safe repo-local tool calls, appends tool results back into the conversation, stops when the model returns a normal assistant answer, then runs `[verification].defaultCommand` when configured.
+
+`synax chat` starts a persistent interactive shell:
+
+```txt
+Synax v0.2 local agent
+Repo: /path/to/repo
+Model: qwen3.6-local
+Commands: /help /inspect /verify /clear /status /exit
+
+synax> summarize the project
+synax> create docs/agent-demo.md with 5 bullets
+synax> /verify
+synax> /exit
+```
+
+Slash commands:
+
+| Command | Behavior |
+| --- | --- |
+| `/help` | Show chat commands |
+| `/inspect` | Print the current inspect profile |
+| `/verify` | Run the configured verification command |
+| `/clear` | Reset the chat conversation |
+| `/status` | Show a compact git status summary |
+| `/exit`, `/quit` | Exit cleanly |
+
+Safety notes:
+
+- File tools reject unsafe paths, generated directories, env files, and path traversal.
+- `replace_in_file` requires the file to have been read first and `oldStr` to match exactly once.
+- `create_file` only creates new repo-local text files and fails when the file already exists.
+- Synax does not expose unrestricted shell execution. Verification runs only from configured verification.
+
+Current limitations:
+
+- Tool-call reliability depends on the local model/server.
+- Streaming is not polished in v0.2; non-streaming correctness is the priority.
+- `synax run --plan` remains a placeholder.
+- Native Anthropic support, browser UI, IDE integration, and parallel agents are out of scope.
+
 ## CLI Commands
 
 | Command | Description |
@@ -112,14 +191,14 @@ synax ask --question "Find where this behavior is implemented"
 ### Run command
 
 ```sh
-# Execute a task
-synax run --task "Fix the failing test" --yes
+# Execute a one-shot task
+synax run --task "Fix the failing test"
 
 # Execute from a plan file
 synax run --plan plan.md
 ```
 
-`synax run` uses a bounded tool loop. It inspects files with read-only tools, allows only `replace_in_file` edits to inspected files, applies at most the proposed patch, then runs one configured verification command.
+`synax run` uses the same bounded tool loop as `synax chat`. It inspects files with read-only tools, allows exact `replace_in_file` edits to inspected files, supports safe new-file creation, then runs one configured verification command.
 
 ### Inspect command
 

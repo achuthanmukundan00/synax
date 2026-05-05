@@ -107,6 +107,7 @@ describe('CLI', () => {
     test('should initialize chat mode', () => {
       const output = runSynax(['chat']);
       expect(output).toContain('[synax] Chat initialized');
+      expect(output).toContain('Synax v0.2 local agent');
     });
 
     test('should accept --message option', () => {
@@ -192,9 +193,12 @@ describe('CLI', () => {
       try {
         writeFileSync(
           path.join(cwd, '.synax.toml'),
-          ['[provider]', 'kind = "openai-compatible"', `base_url = "${getServerUrl(srv)}/v1"`, 'model = "test-model"'].join(
-            '\n',
-          ),
+          [
+            '[provider]',
+            'kind = "openai-compatible"',
+            `base_url = "${getServerUrl(srv)}/v1"`,
+            'model = "test-model"',
+          ].join('\n'),
           'utf-8',
         );
         const result = await runSynaxDetailed(['ask', '--question', 'Inspect the project and summarize its files'], {
@@ -226,14 +230,20 @@ describe('CLI', () => {
       try {
         writeFileSync(
           path.join(cwd, '.synax.toml'),
-          ['[provider]', 'kind = "openai-compatible"', `base_url = "${getServerUrl(srv)}/v1"`, 'model = "test-model"'].join(
-            '\n',
-          ),
+          [
+            '[provider]',
+            'kind = "openai-compatible"',
+            `base_url = "${getServerUrl(srv)}/v1"`,
+            'model = "test-model"',
+          ].join('\n'),
           'utf-8',
         );
-        const result = await runSynaxDetailed(['ask', '--question', 'What validation command should I run for this repo?'], {
-          cwd,
-        });
+        const result = await runSynaxDetailed(
+          ['ask', '--question', 'What validation command should I run for this repo?'],
+          {
+            cwd,
+          },
+        );
         expect(result.status).toBe(0);
         expect(result.stdout).toBe('NO_CONTEXT: run `synax inspect` first or enable project context.');
         expect(result.stderr).toBe('');
@@ -346,7 +356,7 @@ describe('CLI', () => {
     test('should accept --task option', () => {
       const output = runSynax(['run', '--task', 'test task']);
       expect(output).toContain('test task');
-      expect(output).toContain('Placeholder');
+      expect(output).toContain('Synax run report');
     });
 
     test('should accept --plan option', () => {

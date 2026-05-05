@@ -1,0 +1,109 @@
+import { existsSync, mkdirSync, rmSync, writeFileSync, readFileSync } from 'fs';
+import { join } from 'path';
+
+import { createAgentConversation, runAgentTurn, type AgentClient } from '../agent/runner';
+
+const TMP = join(process.cwd(), 'tmp', 'synax-runner-tests');
+
+function resetTmp(): void {
+  if (existsSync(TMP)) rmSync(TMP, { recursive: true, force: true });
+  mkdirSync(TMP, { recursive: true });
+}
+
+function fakeClient(responses: Array<{ content?: string; toolCalls?: any[] }>): AgentClient & { requests: any[] } {
+  const requests: any[] = [];
+  return {
+    requests,
+    async chat(options) {
+      requests.push(options);
+      const next = responses.shift() ?? { content: 'done', toolCalls: [] };
+      return {
+        content: next.content ?? '',
+        model: 'fake',
+        finishReason: 'stop',
+        toolCalls: next.toolCalls ?? [],
+        usage: null,
+      };
+    },
+  };
+}
+
+describe('shared bounded agent runner', () => {
+  beforeEach(() => resetTmp());
+  afterEach(() => rmSync(TMP, { recursive: true, force: true }));
+
+  it('sends model requests with available tools', async () => {
+    const client = fakeClient([{ content: 'done' }]);
+
+    const result = await runAgentTurn({ repoRoot: TMP, task: 'hello', client });
+
+    expect(result.terminalState).toBe('completed');
+    expect(client.requests[0].tools.map((tool: { name: string }) => tool.name)).toEqual(
+      expect.arrayContaining(['list_files', 'read_file_range', 'replace_in_file', 'create_file']),
+    );
+  });
+
+  it('executes a requested tool, appends the result, then continues', async () => {
+    writeFileSync(join(TMP, 'a.txt'), 'hello\n', 'utf-8');
+    const client = fakeClient([
+      { toolCalls: [{ id: 'call_1', name: 'read_file_range', arguments: { path: 'a.txt' } }] },
+      { content: 'read it' },
+    ]);
+
+    const result = await runAgentTurn({ repoRoot: TMP, task: 'read a.txt', client });
+
+    expect(result.terminalState).toBe('completed');
+    expect(client.requests).toHaveLength(2);
+    expect(client.requests[1].messages).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ role: 'tool', tool_call_id: 'call_1', name: 'read_file_range' }),
+      ]),
+    );
+  });
+
+  it('stops when assistant returns no tool calls', async () => {
+    const client = fakeClient([{ content: 'final answer' }]);
+
+    const result = await runAgentTurn({ repoRoot: TMP, task: 'answer', client });
+
+    expect(result).toMatchObject({ terminalState: 'completed', finalAnswer: 'final answer', steps: 1 });
+  });
+
+  it('terminates deterministically at maxSteps', async () => {
+    const client = fakeClient([
+      { toolCalls: [{ id: '1', name: 'list_files', arguments: {} }] },
+      { toolCalls: [{ id: '2', name: 'list_files', arguments: {} }] },
+    ]);
+
+    const result = await runAgentTurn({ repoRoot: TMP, task: 'loop', client, maxSteps: 1 });
+
+    expect(result).toMatchObject({ terminalState: 'budgetExhausted', error: 'max steps exceeded: 1' });
+  });
+
+  it('creates a new repo-local file through the agent tool', async () => {
+    const client = fakeClient([
+      {
+        toolCalls: [{ id: 'call_1', name: 'create_file', arguments: { path: 'docs/demo.md', content: '# Demo\n' } }],
+      },
+      { content: 'created' },
+    ]);
+
+    const result = await runAgentTurn({ repoRoot: TMP, task: 'create docs/demo.md', client });
+
+    expect(result.terminalState).toBe('completed');
+    expect(result.changedFiles).toEqual(['docs/demo.md']);
+    expect(readFileSync(join(TMP, 'docs', 'demo.md'), 'utf-8')).toBe('# Demo\n');
+  });
+
+  it('preserves conversation across turns', async () => {
+    const conversation = createAgentConversation();
+    const client = fakeClient([{ content: 'first' }, { content: 'second' }]);
+
+    await runAgentTurn({ repoRoot: TMP, task: 'one', client, conversation });
+    await runAgentTurn({ repoRoot: TMP, task: 'two', client, conversation });
+
+    expect(
+      conversation.messages.filter((message) => message.role === 'user').map((message) => message.content),
+    ).toEqual(['one', 'two']);
+  });
+});

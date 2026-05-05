@@ -33,8 +33,10 @@ function asksForProjectContext(question: string): boolean {
   const normalized = question.toLowerCase();
   const currentProjectPattern = /\b(this|current|the|my|our)\s+(project|repo|repository|codebase|workspace)\b/;
   const repoSubjectPattern = /\b(project|repo|repository|codebase|workspace)\b/;
-  const repoObjectPattern = /\b(files?|config|configuration|tests?|test suite|commands?|scripts?|package\.json|tsconfig|readme)\b/;
-  const inspectionPattern = /\b(inspect|summari[sz]e|explain|trace|analy[sz]e)\b.*\b(project|repo|repository|codebase|workspace|files?)\b/;
+  const repoObjectPattern =
+    /\b(files?|config|configuration|tests?|test suite|commands?|scripts?|package\.json|tsconfig|readme)\b/;
+  const inspectionPattern =
+    /\b(inspect|summari[sz]e|explain|trace|analy[sz]e)\b.*\b(project|repo|repository|codebase|workspace|files?)\b/;
   const validationPattern = /\b(validation|verify|verification|test|build)\s+commands?\b/;
 
   return (
