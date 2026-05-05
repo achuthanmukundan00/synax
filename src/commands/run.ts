@@ -18,6 +18,12 @@ export function runCommand(program: Command): void {
             onActivity(activity) {
               console.log(`[synax] ${activity.kind}: ${activity.message}`);
             },
+            onEvent(event) {
+              if (event.type === 'patch_preview') {
+                console.log(`[synax] patch preview: ${event.path}`);
+                console.log(event.diff || '(no changes)');
+              }
+            },
           });
           printReport(report);
           if (report.terminalState !== 'completed') {

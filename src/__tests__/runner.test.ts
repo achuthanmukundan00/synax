@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, rmSync, writeFileSync, readFileSync } from 'fs';
 import { join } from 'path';
 
+import { type AgentEvent } from '../agent/events';
 import { buildModelFacingTools, createAgentConversation, runAgentTurn, type AgentClient } from '../agent/runner';
 
 const TMP = join(process.cwd(), 'tmp', 'synax-runner-tests');
@@ -302,6 +303,39 @@ describe('shared bounded agent runner', () => {
     expect(result.terminalState).toBe('completed');
     expect(result.changedFiles).toEqual(['docs/demo.md']);
     expect(readFileSync(join(TMP, 'docs', 'demo.md'), 'utf-8')).toBe('# Demo\n');
+  });
+
+  it('emits a patch preview before applying an edit', async () => {
+    writeFileSync(join(TMP, 'a.txt'), 'hello\n', 'utf-8');
+    const events: AgentEvent[] = [];
+    const client = fakeClient([
+      { toolCalls: [{ id: 'call_1', name: 'read', arguments: { path: 'a.txt' } }] },
+      { toolCalls: [{ id: 'call_2', name: 'edit', arguments: { path: 'a.txt', oldStr: 'hello', newStr: 'hi' } }] },
+      { content: 'edited' },
+    ]);
+
+    const result = await runAgentTurn({
+      repoRoot: TMP,
+      task: 'edit a.txt',
+      client,
+      onEvent: (event) => events.push(event),
+    });
+
+    expect(result.terminalState).toBe('completed');
+    expect(readFileSync(join(TMP, 'a.txt'), 'utf-8')).toBe('hi\n');
+    expect(events.map((event) => event.type)).toEqual([
+      'tool_started',
+      'tool_finished',
+      'tool_started',
+      'patch_preview',
+      'tool_finished',
+    ]);
+    expect(events[3]).toMatchObject({
+      type: 'patch_preview',
+      toolCallId: 'call_2',
+      path: 'a.txt',
+      diff: '--- a.txt\n+++ a.txt\n-hello\n+hi',
+    });
   });
 
   it('preserves conversation across turns', async () => {
