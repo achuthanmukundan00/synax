@@ -166,6 +166,9 @@ export function buildInspectConfigProfile(baseDir: string): ConfigProfile {
     contextBudgetTokens: parsedConfig.config.contextBudgetTokens,
     maxModelSteps: parsedConfig.config.maxModelSteps,
     maxToolCalls: parsedConfig.config.maxToolCalls,
+    tools: parsedConfig.config.tools?.exposed ?? ['read', 'write', 'edit', 'bash', 'git'],
+    shell: parsedConfig.config.tools?.shell ?? 'zsh',
+    providerPreset: parsedConfig.config.provider?.preset ?? 'relay-local',
   };
 
   if (configPath) {

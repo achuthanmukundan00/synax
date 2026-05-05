@@ -167,6 +167,14 @@ describe('loadProjectConfig', () => {
       restoreEnv('SYNAX_MAX_TOOL_CALLS', previousTools);
     }
   });
+
+  it('supports restricting exposed tool list', () => {
+    const configPath = join(TMP, '.synax.toml');
+    writeFileSync(configPath, ['[tools]', 'exposed = ["read","write","edit","bash","git"]', 'shell = "zsh"'].join('\n'));
+    const result = loadProjectConfig(TMP);
+    expect(result.errors).toHaveLength(0);
+    expect(result.config.tools?.exposed).toEqual(['read', 'write', 'edit', 'bash', 'git']);
+  });
 });
 
 // ─── generateDefaultConfig ──────────────────────────────────

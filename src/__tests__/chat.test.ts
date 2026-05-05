@@ -32,7 +32,10 @@ function resetTmp(): void {
 
 describe('chat session', () => {
   beforeEach(() => resetTmp());
-  afterEach(() => rmSync(TMP, { recursive: true, force: true }));
+  afterEach(() => {
+    jest.restoreAllMocks();
+    rmSync(TMP, { recursive: true, force: true });
+  });
 
   it('uses the shared runner and preserves conversation across turns', async () => {
     responses = [{ content: 'first' }, { content: 'second' }];
@@ -79,5 +82,136 @@ describe('chat session', () => {
 
     expect(report.verification?.state).toBe('passed');
     expect(report.output).toContain('node verify.js');
+  });
+
+  it('/settings renders readable panel', async () => {
+    const session = createChatSession({
+      repoRoot: TMP,
+      config: {
+        provider: { kind: 'openai-compatible', base_url: 'http://localhost/v1', model: 'fake', preset: 'relay-local' },
+        contextBudgetTokens: 131072,
+        maxModelSteps: 32,
+        maxToolCalls: 96,
+      },
+    });
+    const report = await session.handleSlashCommand('/settings');
+    expect(report.output).toContain('Settings');
+    expect(report.output).toContain('Provider');
+    expect(report.output).toContain('Tools');
+  });
+
+  it('/settings set mutates current session config and redacts secret headers', async () => {
+    const session = createChatSession({
+      repoRoot: TMP,
+      config: { provider: { kind: 'openai-compatible', base_url: 'http://localhost/v1', model: 'fake' } },
+    });
+
+    await expect(session.handleSlashCommand('/settings set agent.max_tool_calls 12')).resolves.toMatchObject({
+      output: expect.stringContaining('current session only'),
+    });
+    const header = await session.handleSlashCommand('/settings set provider.header.Authorization Bearer secret-token');
+    const budget = await session.handleSlashCommand('/budget');
+    const settings = await session.handleSlashCommand('/settings');
+
+    expect(budget.output).toContain('Max tool calls: 12');
+    expect(header.output).toContain('provider.header.Authorization updated');
+    expect(header.output).not.toContain('secret-token');
+    expect(settings.output).not.toContain('secret-token');
+  });
+
+  it('/settings set rejects invalid paths and numeric values without mutation', async () => {
+    const session = createChatSession({
+      repoRoot: TMP,
+      config: {
+        provider: { kind: 'openai-compatible', base_url: 'http://localhost/v1', model: 'fake' },
+        maxModelSteps: 32,
+      },
+    });
+
+    const badPath = await session.handleSlashCommand('/settings set provider.unknown value');
+    const badNumber = await session.handleSlashCommand('/settings set agent.max_model_steps nope');
+    const budget = await session.handleSlashCommand('/budget');
+
+    expect(badPath.output).toContain('Invalid settings path');
+    expect(badPath.output).toContain('provider.endpoint');
+    expect(badNumber.output).toContain('must be a positive integer');
+    expect(budget.output).toContain('Max model steps: 32');
+  });
+
+  it('/test-provider reports ready when models and chat work', async () => {
+    jest.spyOn(global, 'fetch').mockImplementation(async (url) => {
+      const target = String(url);
+      if (target.endsWith('/models')) {
+        return new Response(JSON.stringify({ data: [{ id: 'fake' }] }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ choices: [{ message: { content: 'OK' }, finish_reason: 'stop' }] }), {
+        status: 200,
+      });
+    });
+    const session = createChatSession({
+      repoRoot: TMP,
+      config: { provider: { kind: 'openai-compatible', base_url: 'http://localhost/v1?token=secret', model: 'fake' } },
+    });
+
+    const report = await session.handleSlashCommand('/test-provider');
+
+    expect(report.output).toContain('Status:      ready');
+    expect(report.output).toContain('Endpoint:    http://localhost/v1');
+    expect(report.output).not.toContain('secret');
+  });
+
+  it('/test-provider reports degraded when model listing is unavailable but chat works', async () => {
+    jest.spyOn(global, 'fetch').mockImplementation(async (url) => {
+      const target = String(url);
+      if (target.endsWith('/models')) {
+        return new Response('not found', { status: 404 });
+      }
+      return new Response(JSON.stringify({ choices: [{ message: { content: 'OK' }, finish_reason: 'stop' }] }), {
+        status: 200,
+      });
+    });
+    const session = createChatSession({
+      repoRoot: TMP,
+      config: { provider: { kind: 'openai-compatible', base_url: 'http://localhost/v1', model: 'fake' } },
+    });
+
+    const report = await session.handleSlashCommand('/test-provider');
+
+    expect(report.output).toContain('Status:      degraded');
+  });
+
+  it('/test-provider reports blocked for missing config or auth errors', async () => {
+    const missing = createChatSession({
+      repoRoot: TMP,
+      config: { provider: { kind: 'openai-compatible', base_url: '' } },
+    });
+    const missingReport = await missing.handleSlashCommand('/test-provider');
+    expect(missingReport.output).toContain('Status:      blocked');
+
+    jest.spyOn(global, 'fetch').mockResolvedValue(new Response('unauthorized', { status: 401 }));
+    const auth = createChatSession({
+      repoRoot: TMP,
+      config: { provider: { kind: 'openai-compatible', base_url: 'http://localhost/v1', model: 'fake' } },
+    });
+    const authReport = await auth.handleSlashCommand('/test-provider');
+    expect(authReport.output).toContain('Status:      blocked');
+  });
+
+  it('/test-provider reports failed when chat smoke fails for non-auth reasons', async () => {
+    jest.spyOn(global, 'fetch').mockImplementation(async (url) => {
+      const target = String(url);
+      if (target.endsWith('/models')) {
+        return new Response(JSON.stringify({ data: [{ id: 'fake' }] }), { status: 200 });
+      }
+      return new Response('server error', { status: 500 });
+    });
+    const session = createChatSession({
+      repoRoot: TMP,
+      config: { provider: { kind: 'openai-compatible', base_url: 'http://localhost/v1', model: 'fake' } },
+    });
+
+    const report = await session.handleSlashCommand('/test-provider');
+
+    expect(report.output).toContain('Status:      failed');
   });
 });
