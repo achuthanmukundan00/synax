@@ -1,404 +1,210 @@
 # Synax
 
-A local-first coding agent for consumer-GPU developers.
+Synax is a TypeScript-first local coding agent for developers running local LLMs through Relay or another OpenAI-compatible gateway.
 
-Synax makes every model-visible instruction, file range, command output, and patch decision **explicit, bounded, and inspectable**. It is designed for developers running local LLMs on constrained hardware who want practical coding assistance without depending on proprietary cloud models.
+It is CLI-first, local-first, and built for constrained local models. Synax keeps model-visible context, tool calls, command output, and file edits bounded and inspectable.
 
-<!-- omit in toc -->
+## What Synax Is
 
-## Table of Contents
+- A local CLI coding agent.
+- A Relay-compatible OpenAI-style chat client.
+- A bounded file inspection, edit, and verification loop.
+- A small TypeScript project intended to stay understandable.
 
-- [Positioning](#positioning)
-- [Features](#features)
-- [Requirements](#requirements)
-- [Installation](#installation)
-- [Quick Start](#quick-start)
-- [v0.2 Local Agent Usage](#v02-local-agent-usage)
-- [CLI Commands](#cli-commands)
-- [Configuration](#configuration)
-- [Context Budgeting](#context-budgeting)
-- [Safety Model](#safety-model)
-- [Failure Behavior](#failure-behavior)
-- [Project Structure](#project-structure)
-- [Development](#development)
-- [Non-Goals](#non-goals)
-- [License](#license)
+## What Synax Is Not
 
-## Positioning
-
-Most coding agents assume frontier cloud models with large context windows and strong tool-call reliability. Synax assumes the opposite: local models that need stricter scaffolding, smaller loops, visible context, minimal diffs, and bounded verification.
-
-Synax is not a general AI assistant, SaaS coding platform, IDE replacement, or autonomous software engineer. It is a disciplined CLI-first coding agent.
-
-## Features
-
-- **CLI-first design** — clean `commander` subcommand structure with predictable behavior
-- **Project inspection** — `synax inspect` detects git info, package manager, detected commands, and config summary
-- **Interactive chat** — `synax chat` and `synax ask` provide read-only and edit-capable task loops
-- **Doctor command** — `synax doctor` checks project configuration and provider readiness
-- **OpenAI-compatible tool calls** — sends standard `tools` requests and accepts Qwen/Unsloth text fallback tool-call blocks
-- **Configuration** — `.synax.toml` project config with provider, context, commands, and policy sections
-- **Context budgeting** — conservative token limits for files, commands, instructions, and overall input
-- **Safety policies** — command safety tiers, patch confirmation, and file edit restrictions
-- **Structured logging** — deterministic execution traces with visible context ledgers
-- **TypeScript-first** — strict TypeScript with ESLint and Prettier
+Synax is not a cloud agent platform, SaaS product, IDE, web dashboard, daemon, database-backed memory system, or parallel-agent framework.
 
 ## Requirements
 
-- **Node.js** ≥ 18.0.0
-- **npm** (or your preferred package manager)
+- Node.js 18 or newer.
+- npm.
+- Git.
+- Relay or another OpenAI-compatible `/v1/chat/completions` server.
 
-## Installation
+## Install
 
 ```sh
-# Clone the repository
 git clone git@github.com:achuthanmukundan00/synax.git
 cd synax
-
-# Install dependencies
 npm install
-
-# Build the CLI
 npm run build
 ```
 
-## Quick Start
+Run the local built CLI through npm:
 
 ```sh
-# Check project and provider health
-npx synax doctor --full
-
-# Inspect the current project
-npx synax inspect
-
-# Start interactive chat
-npx synax
-
-# Ask a read-only question
-npx synax ask --question "Trace how streaming responses work"
-
-# Run an edit-capable task
-npx synax run --task "Fix the failing auth test"
+npm run synax -- --help
 ```
 
-## v0.2 Local Agent Usage
-
-Synax v0.2 is a lean local code-editing agent for OpenAI-compatible local providers such as Relay, llama.cpp-compatible servers, or LM Studio-style endpoints.
-
-Prerequisites:
-
-- Node.js 18 or newer
-- A local OpenAI-compatible `/v1/chat/completions` server
-- A configured model name in `.synax.toml`
-
-Example `.synax.toml`:
-
-```toml
-[agent]
-# 16000 is minimal/safe, 65536 is normal, and 131072 is a high-context
-# local profile for capable llama.cpp setups.
-context_budget_tokens = 131072
-max_model_steps = 32
-max_tool_calls = 96
-
-[provider]
-kind = "openai-compatible"
-base_url = "http://127.0.0.1:1234/v1"
-model = "qwen3.6-local"
-api_key = "local"
-timeout_seconds = 120
-
-[verification]
-defaultCommand = "npm test"
-```
-
-The agent budget can also be overridden with `SYNAX_CONTEXT_BUDGET_TOKENS`,
-`SYNAX_MAX_MODEL_STEPS`, and `SYNAX_MAX_TOOL_CALLS`.
-
-Typical local flow:
+After package linking or publishing, the command name is:
 
 ```sh
-npm run build
-npm run synax -- doctor --full
-npm run synax -- inspect
-npm run synax -- ask --question "Summarize this project in 5 bullets."
-npm run synax -- run --task "Create docs/agent-demo.md explaining Synax in 5 bullets."
-npm run synax -- chat
+synax
 ```
 
-`synax run --task "<task>"` starts a fresh conversation, sends tool schemas to the model, executes safe repo-local tool calls, appends tool results back into the conversation, stops when the model returns a normal assistant answer, then runs `[verification].defaultCommand` when configured.
+## Relay Quick Start
 
-`synax chat` starts a persistent interactive shell:
+Start Relay with a model exposed through an OpenAI-compatible endpoint. Synax defaults to:
 
 ```txt
-Synax v0.2 local agent
-Repo: /path/to/repo
-Model: qwen3.6-local
-Commands: /help /inspect /verify /clear /status /exit
-
-synax> summarize the project
-synax> create docs/agent-demo.md with 5 bullets
-synax> /verify
-synax> /exit
+http://127.0.0.1:1234/v1
 ```
 
-Slash commands:
-
-| Command | Behavior |
-| --- | --- |
-| `/help` | Show chat commands |
-| `/inspect` | Print the current inspect profile |
-| `/verify` | Run the configured verification command |
-| `/clear` | Reset the chat conversation |
-| `/status` | Show a compact git status summary |
-| `/exit`, `/quit` | Exit cleanly |
-
-Safety notes:
-
-- File tools reject unsafe paths, generated directories, env files, and path traversal.
-- `replace_in_file` requires the file to have been read first and `oldStr` to match exactly once.
-- `create_file` only creates new repo-local text files and fails when the file already exists.
-- Synax does not expose unrestricted shell execution. Verification runs only from configured verification.
-
-Current limitations:
-
-- Tool-call reliability depends on the local model/server.
-- Streaming is not polished in v0.2; non-streaming correctness is the priority.
-- `synax run --plan` remains a placeholder.
-- Native Anthropic support, browser UI, IDE integration, and parallel agents are out of scope.
-
-## CLI Commands
-
-| Command | Description |
-| --- | --- |
-| `synax` | Start interactive mode and show help |
-| `synax chat` | Interactive coding agent session |
-| `synax ask` | Ask a read-only question (no file edits) |
-| `synax run` | Execute a task with edit capabilities |
-| `synax inspect` | Inspect project metadata and configuration |
-| `synax config` | Manage `.synax.toml` configuration |
-| `synax doctor` | Check system health and configuration |
-
-### Chat command
+Create a project config:
 
 ```sh
-# Interactive mode
-synax chat
-
-# Single-shot message mode
-synax chat --message "Explain the route handling in this codebase"
+cp .synax.toml.example .synax.toml
 ```
 
-### Ask command
+Set the provider model to the exact model ID Relay lists from `/models`:
 
-```sh
-# Read-only inspection
-synax ask --question "Find where this behavior is implemented"
+```toml
+[provider]
+preset = "relay-local"
+kind = "openai-compatible"
+base_url = "http://127.0.0.1:1234/v1"
+model = "Qwen3.6-35B-A3B-UD-IQ3_XXS.gguf"
+api_key = "sk-no-key-required"
+timeout_seconds = 120
 ```
 
-### Run command
+Check local setup:
 
 ```sh
-# Execute a one-shot task
-synax run --task "Fix the failing test"
-
-# Execute from a plan file
-synax run --plan plan.md
+npm run synax -- doctor
 ```
 
-`synax run` uses the same bounded tool loop as `synax chat`. It inspects files with read-only tools, allows exact `replace_in_file` edits to inspected files, supports safe new-file creation, then runs one configured verification command.
-
-### Inspect command
+Check Relay and the configured model:
 
 ```sh
-# Default output
-synax inspect
-
-# JSON output
-synax inspect --json
-
-# Specific sections
-synax inspect --section git --section packageManager
-
-# Show full project profile
-synax inspect --profile
-
-# Brief summary
-synax inspect --brief
+npm run synax -- doctor --full
 ```
 
-### Config command
+## Common Commands
 
 ```sh
-# Initialize configuration
-synax config init
+# Inspect repository and config context
+npm run synax -- inspect
+
+# Ask one bounded question
+npm run synax -- ask --question "Where is provider config normalized?"
+
+# Start an interactive coding session
+npm run synax -- chat
+
+# Run one bounded edit-capable task
+npm run synax -- run --task "Fix the failing test"
+
+# Show config
+npm run synax -- config show
 ```
 
-### Doctor command
+Inside `synax chat`:
 
-```sh
-# Run fast local checks
-synax doctor
+```txt
+/help
+/settings
+/tools
+/budget
+/test-provider
+/inspect
+/verify
+/clear
+/status
+/exit
+```
 
-# Include provider endpoint and model request checks
-synax doctor --full
+Session-only settings changes are available:
+
+```txt
+/settings set provider.endpoint http://127.0.0.1:1234/v1
+/settings set provider.model Qwen3.6-35B-A3B-UD-IQ3_XXS.gguf
+/settings set agent.context_budget_tokens 65536
+/settings set agent.max_model_steps 24
+/settings set agent.max_tool_calls 64
 ```
 
 ## Configuration
 
-Synax uses `.synax.toml` for project-level configuration. The config file is optional — the CLI works with sensible defaults.
+Synax loads configuration from built-in defaults, optional global config at `~/.config/synax/config.toml`, and the nearest project `.synax.toml`.
+
+Useful project config:
 
 ```toml
+[agent]
+context_budget_tokens = 131072
+max_model_steps = 32
+max_tool_calls = 96
+
+[subagents]
+enabled = false
+mode = "sequential"
+
+[verification]
+defaultCommand = "npm run typecheck"
+
 [provider]
+preset = "relay-local"
 kind = "openai-compatible"
 base_url = "http://127.0.0.1:1234/v1"
-model = "qwen3.6-35b-a3b"
-api_key = ""
-
-[context]
-max_input_tokens = 64000
-preferred_working_tokens = 32000
-max_file_tokens = 8000
-max_command_output_tokens = 6000
-max_instruction_tokens = 4000
-
-[commands]
-test = "npm test"
-typecheck = "npm run typecheck"
-lint = "npm run lint"
-
-[policy]
-confirm_patches = true
-allow_network_commands = false
-allow_install_commands = false
-allow_env_file_edits = false
-```
-
-## Context Budgeting
-
-Synax treats context as a budget, not a landfill. The default conservative limits are:
-
-| Budget | Default | Purpose |
-| --- | --- | --- |
-| `max_input_tokens` | 64,000 | Total input to the model |
-| `preferred_working_tokens` | 32,000 | Target working budget |
-| `max_file_tokens` | 8,000 | Per-file token limit |
-| `max_command_output_tokens` | 6,000 | Per-command output limit |
-| `max_instruction_tokens` | 4,000 | Instruction file limit |
-
-Synax prefers selected file ranges over full files, search results over repo dumps, and summaries for large instruction files.
-
-## Safety Model
-
-Synax classifies shell commands into safety tiers:
-
-| Tier | Commands | Approval |
-| --- | --- | --- |
-| **Always Allowed** | `git status`, `git diff`, `ls`, `find` | None |
-| **Confirmation Required** | `npm test`, `npm run typecheck`, `pytest` | User |
-| **Blocked By Default** | `rm`, `npm install`, `curl`, `ssh` | Policy + User |
-
-Patches are also subject to safety rules:
-
-- Target files must have been inspected before editing
-- Patches must only touch inspected files
-- User confirmation is required by default
-- Formatting churn and unrelated cleanup are prohibited
-
-## Local Qwen / Unsloth Tool Calling
-
-Synax targets OpenAI-compatible Chat Completions first. For local Unsloth Qwen3.6 GGUFs, run a compatible local server and configure:
-
-```toml
-[provider]
-kind = "openai-compatible"
-base_url = "http://127.0.0.1:1234/v1"
-model = "qwen3.6-local"
+model = "Qwen3.6-35B-A3B-UD-IQ3_XXS.gguf"
 api_key = "sk-no-key-required"
+timeout_seconds = 120
+
+[tools]
+exposed = ["read", "write", "edit", "git"]
+shell = "zsh"
+unsafe = false
+
+[tools.bash]
+enabled = false
 ```
 
-Synax sends `tools` with `tool_choice = "auto"`. It accepts standard `message.tool_calls` and Qwen-style fallback blocks such as:
+Environment overrides:
 
-```txt
-<tool_call>{"name":"read_file_range","arguments":{"path":"src/math.ts"}}</tool_call>
+```sh
+SYNAX_CONTEXT_BUDGET_TOKENS=65536
+SYNAX_MAX_MODEL_STEPS=24
+SYNAX_MAX_TOOL_CALLS=64
 ```
 
-See `docs/acceptance-demo.md` for the fixture and demo flow.
+## Agent Loop
 
-## Failure Behavior
+Synax sends a compact OpenAI-compatible tool surface to the model:
 
-Synax fails safely and predictably:
-
-| Scenario | Behavior |
+| Tool | Purpose |
 | --- | --- |
-| **Malformed model output** | One repair prompt, then stop with explanation |
-| **Patch touches unread files** | Reject with list of unread files |
-| **replace\_in\_file match failure** | Reject, ask for more specific replacement |
-| **Verification fails** | Show output, mark partial/fail, one diagnosis pass |
-| **Context budget exceeded** | Truncate with visible markers, report omissions |
-| **Ambiguous task** | Narrow to read-only inspection or ask for clarification |
-| **Dirty working tree** | Warn, continue only after confirmation |
+| `read` | List files, read bounded ranges, or search text |
+| `edit` | Exact `replace_in_file` edits |
+| `write` | Create new repo-local text files |
+| `git` | Show bounded git status or diff |
+| `bash` | Hidden unless explicitly enabled |
 
-## Project Structure
+The model loop stops when the model returns a final answer, hits the configured model-step limit, hits the configured tool-call limit, or encounters a tool/provider error.
 
+`synax run --plan plan.md` is currently a placeholder. Native Anthropic protocol support, browser UI, IDE integration, databases, Docker infrastructure, and parallel agents are out of scope.
+
+## Docs Site
+
+The formatted documentation lives in `docs/` and is built with VitePress:
+
+```sh
+npm run docs:dev
+npm run docs:build
+npm run docs:preview
 ```
-synax/
-├── src/
-│   ├── cli.ts            # CLI entrypoint and command registration
-│   ├── commands/         # Command implementations
-│   │   ├── ask.ts        # Read-only question command
-│   │   ├── chat.ts       # Interactive chat command
-│   │   ├── config.ts     # Configuration management
-│   │   ├── doctor.ts     # System health check
-│   │   ├── inspect.ts    # Project metadata inspection
-│   │   └── run.ts        # Task execution command
-│   ├── config/           # Configuration loading and parsing
-│   │   ├── profile.ts    # Project profile builder
-│   │   └── project.ts    # Project config loader
-│   ├── __tests__/        # Test files
-│   └── llm/              # LLM provider integration (planned)
-├── docs/
-│   ├── specs/            # Specification documents
-│   └── synax-requirements-v1.2.md
-├── package.json
-├── tsconfig.json
-├── .synax.toml           # Project configuration
-└── .eslintrc.cjs         # ESLint configuration
-```
+
+GitHub Pages deployment is configured in `.github/workflows/pages.yml`. In the GitHub repository settings, set Pages source to GitHub Actions.
 
 ## Development
 
 ```sh
-# Type check
 npm run typecheck
-
-# Lint
 npm run lint
-
-# Lint with auto-fix
-npm run lint:fix
-
-# Format
-npm run format
-
-# Run tests
 npm test
+npm run build
 ```
-
-## Non-Goals
-
-Synax v0.1 explicitly does **not**:
-
-- Replace your IDE or editor
-- Connect to proprietary cloud-only models
-- Run as a daemon or background service
-- Persist state in a database
-- Provide a web UI or dashboard
-- Implement parallel agents
-- Add Rust, Python, or Docker infrastructure
-- Add cloud-hosted APIs
-
-See `AGENTS.md` for the full product constraints and design philosophy.
 
 ## License
 
