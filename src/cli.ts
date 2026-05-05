@@ -9,7 +9,7 @@ import { doctorCommand } from './commands/doctor.js';
 
 const program = new Command();
 
-program.name('synax').description('A local-first coding agent for consumer-GPU developers').version('0.1.0');
+program.name('synax').description('A local-first coding agent for consumer-GPU developers').version('0.2.0');
 
 // Default command: shows help
 program
@@ -42,4 +42,4 @@ if (process.argv.length === 2) {
 }
 
 // Parse command line arguments
-program.parse(process.argv);
+void program.parseAsync(process.argv);

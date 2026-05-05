@@ -68,6 +68,19 @@ describe('replace_in_file patch validation', () => {
     expect(result).toMatchObject({ ok: false, failureState: 'replacement-match-failure' });
   });
 
+  it('rejects replacements that do not match', async () => {
+    writeFileSync(join(TMP, 'a.ts'), 'const value = 1;\n', 'utf-8');
+    const ledger = createInspectionLedger();
+    ledger.recordFileRange('a.ts', 1, 1);
+
+    const result = await validateReplaceInFile(
+      { path: 'a.ts', oldStr: 'value = 2', newStr: 'value = 3' },
+      { repoRoot: TMP, ledger },
+    );
+
+    expect(result).toMatchObject({ ok: false, failureState: 'replacement-match-failure' });
+  });
+
   it('applies one exact replacement to an inspected file', async () => {
     writeFileSync(join(TMP, 'a.ts'), 'const value = 1;\n', 'utf-8');
     const ledger = createInspectionLedger();

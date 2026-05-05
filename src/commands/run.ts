@@ -4,23 +4,23 @@ import { runAgentTask } from '../agent/run-task';
 export function runCommand(program: Command): void {
   const run = new Command('run');
   run
-    .description('Execute a task or plan provided by the agent')
+    .description('Run one bounded Synax agent task')
     .option('-t, --task <task>', 'Task description to execute')
     .option('-p, --plan <plan>', 'Path to a plan file')
-    .option('-y, --yes', 'Apply proposed patch without an interactive confirmation prompt')
+    .option('-y, --yes', 'Accepted for compatibility; v0.2 safe tools run without prompting')
     .action(async (options: { task?: string; plan?: string; yes?: boolean }) => {
       if (options.task) {
-        if (!options.yes) {
-          console.log(`[synax] Run task received: "${options.task}"`);
-          console.log(
-            '[synax] Placeholder: Confirmation required before edit-capable execution. Re-run with --yes to proceed.',
-          );
-          return;
-        }
         try {
-          const report = await runAgentTask({ repoRoot: process.cwd(), task: options.task, yes: options.yes });
+          const report = await runAgentTask({
+            repoRoot: process.cwd(),
+            task: options.task,
+            yes: options.yes,
+            onActivity(activity) {
+              console.log(`[synax] ${activity.kind}: ${activity.message}`);
+            },
+          });
           printReport(report);
-          if (report.state === 'failed') {
+          if (report.terminalState !== 'completed') {
             process.exitCode = 1;
           }
         } catch (error) {
@@ -39,11 +39,20 @@ export function runCommand(program: Command): void {
 }
 
 function printReport(report: Awaited<ReturnType<typeof runAgentTask>>): void {
-  console.log('Synax Task Report');
-  console.log(`State: ${report.state}`);
-  if (report.failureState) console.log(`Failure state: ${report.failureState}`);
+  console.log('Synax run report');
+  console.log(`Task: ${report.task}`);
+  console.log(`Terminal state: ${report.terminalState}`);
+  if (report.error) console.log(`Error: ${report.error}`);
+  console.log(`Steps: ${report.steps}`);
+  if (report.toolCalls.length > 0) {
+    console.log('Tool activity:');
+    for (const call of report.toolCalls) {
+      console.log(`- ${call.name}: ${call.success ? 'ok' : (call.error ?? 'failed')}`);
+    }
+  }
+  console.log('Final answer:');
+  console.log(report.finalAnswer || '(none)');
   console.log(`Files changed: ${report.filesChanged.length > 0 ? report.filesChanged.join(', ') : 'none'}`);
-  console.log(`Context: ${report.contextReport}`);
   console.log(`Verification: ${report.verification.state}`);
   if (report.verification.command) {
     console.log(`Verification command: ${report.verification.command}`);
