@@ -10,6 +10,7 @@ import type {
   Verifier,
 } from '../extensions';
 import type { AgentEvent } from '../agent/events';
+import { createBuiltinExtensions } from '../extensions';
 import { parseToolCallsFromContentResult } from '../llm/tool-calls';
 
 describe('extension interfaces', () => {
@@ -81,5 +82,69 @@ describe('extension interfaces', () => {
       ok: false,
       reason: 'policy-rejected',
     });
+  });
+
+  it('wires built-in implementations through a single internal registry', async () => {
+    const builtins = createBuiltinExtensions();
+
+    expect(
+      builtins.toolCallParser.parseContent('<tool_call>{"name":"read","arguments":{"path":"README.md"}}</tool_call>'),
+    ).toMatchObject({
+      ok: true,
+      source: 'content',
+      calls: [{ name: 'read', arguments: { path: 'README.md' } }],
+    });
+    expect(builtins.toolCallParser.parseNative).toBeDefined();
+    expect(
+      builtins.toolCallParser.parseNative?.([
+        { id: 'call_abc', type: 'function', function: { name: 'read', arguments: '{"path":"README.md"}' } },
+      ]),
+    ).toMatchObject({
+      ok: true,
+      source: 'openai',
+      calls: [{ id: 'call_abc', name: 'read', arguments: { path: 'README.md' } }],
+    });
+
+    await expect(builtins.docsProvider.discover({ repoRoot: process.cwd() })).resolves.toMatchObject({
+      files: expect.arrayContaining(['README.md']),
+    });
+    await expect(
+      builtins.docsProvider.read({ repoRoot: process.cwd(), path: 'README.md', options: { maxLines: 1 } }),
+    ).resolves.toMatchObject({
+      path: 'README.md',
+      startLine: 1,
+      endLine: 1,
+    });
+    await expect(builtins.verifier.verify({ repoRoot: process.cwd() })).resolves.toMatchObject({ state: 'skipped' });
+
+    expect(
+      builtins.createProviderAdapter({
+        kind: 'openai-compatible',
+        baseUrl: 'http://127.0.0.1:1234/v1',
+        model: 'local',
+      }),
+    ).toMatchObject({ kind: 'openai-compatible' });
+    expect(builtins.createRenderer('jsonl')).toHaveProperty('onEvent');
+    expect(builtins.createModelTools({ bashEnabled: false }).map((tool) => tool.name)).toEqual([
+      'read',
+      'write',
+      'edit',
+      'git',
+    ]);
+
+    await expect(
+      builtins.mcpBridge.importTool({
+        name: 'unsafe_shell',
+        inputSchema: { type: 'object' },
+        policy: { readOnly: false, rejectsUnsafePaths: false, boundedOutput: false },
+      }),
+    ).resolves.toEqual({ ok: false, reason: 'policy-rejected' });
+    await expect(
+      builtins.mcpBridge.importTool({
+        name: 'safe_read',
+        inputSchema: { type: 'object' },
+        policy: { readOnly: true, rejectsUnsafePaths: true, boundedOutput: true },
+      }),
+    ).resolves.toEqual({ ok: false, reason: 'unsupported' });
   });
 });

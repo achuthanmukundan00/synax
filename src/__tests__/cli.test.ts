@@ -426,6 +426,29 @@ describe('CLI', () => {
       const output = runSynax(['inspect', '--path', './src']);
       expect(output).toContain('Synax Project Profile');
     });
+
+    test('should expose local docs listing and bounded reads', () => {
+      const cwd = mkdtempSync(path.join(tmpdir(), 'synax-cli-inspect-docs-'));
+      try {
+        writeFileSync(
+          path.join(cwd, 'README.md'),
+          ['# Example', 'Authorization: Bearer sk-test-secret'].join('\n'),
+          'utf-8',
+        );
+
+        const docsOutput = runSynax(['inspect', '--docs'], { cwd });
+        expect(docsOutput).toContain('Synax Local Docs');
+        expect(docsOutput).toContain('- README.md');
+
+        const docOutput = runSynax(['inspect', '--doc', 'README.md'], { cwd });
+        expect(docOutput).toContain('Synax Local Doc: README.md');
+        expect(docOutput).toContain('1 | # Example');
+        expect(docOutput).toContain('2 | Authorization: Bearer [REDACTED]');
+        expect(docOutput).not.toContain('sk-test-secret');
+      } finally {
+        rmSync(cwd, { recursive: true, force: true });
+      }
+    });
   });
 
   describe('synax config', () => {

@@ -7,7 +7,12 @@
 
 import { type NormalizedProviderConfig, type ChatOptions, type ChatResponse, type LlmError } from './types';
 import { type ContextLedger } from '../tools';
-import { parseOpenAIToolCalls, parseToolCallsFromContent, toOpenAIToolDefinition } from './tool-calls';
+import {
+  parseOpenAIToolCallsResult,
+  parseToolCallsFromContentResult,
+  sanitizeReasoningTags,
+  toOpenAIToolDefinition,
+} from './tool-calls';
 
 // ---------------------------------------------------------------------------
 // Error helpers
@@ -126,16 +131,26 @@ function parseSuccessResponse(bodyText: string): ChatResponse {
   };
 
   const choice = json.choices?.[0];
-  const content = choice?.message?.content ?? '';
+  const rawContent = choice?.message?.content ?? '';
+  const content = sanitizeReasoningTags(rawContent);
   const finishReason = choice?.finish_reason ?? null;
-  const standardToolCalls = parseOpenAIToolCalls(choice?.message?.tool_calls);
-  const fallbackToolCalls = standardToolCalls.length > 0 ? [] : parseToolCallsFromContent(content);
+  const standardToolCallResult = parseOpenAIToolCallsResult(choice?.message?.tool_calls);
+  if (!standardToolCallResult.ok) {
+    throw modelToolCallParseError(standardToolCallResult.message);
+  }
+  const fallbackToolCallResult =
+    standardToolCallResult.calls.length > 0
+      ? ({ ok: true, source: 'none', calls: [] } as const)
+      : parseToolCallsFromContentResult(content);
+  if (!fallbackToolCallResult.ok) {
+    throw modelToolCallParseError(fallbackToolCallResult.message);
+  }
 
   return {
     content,
     model: json.model ?? '',
     finishReason: finishReason ?? 'stop',
-    toolCalls: [...standardToolCalls, ...fallbackToolCalls],
+    toolCalls: [...standardToolCallResult.calls, ...fallbackToolCallResult.calls],
     usage: json.usage
       ? {
           promptTokens: json.usage.prompt_tokens ?? 0,
@@ -144,6 +159,12 @@ function parseSuccessResponse(bodyText: string): ChatResponse {
         }
       : null,
   };
+}
+
+function modelToolCallParseError(message: string): Error {
+  const error = new Error(`model emitted malformed tool call output: ${message}`);
+  error.name = 'ModelToolCallParseError';
+  return error;
 }
 
 // ---------------------------------------------------------------------------

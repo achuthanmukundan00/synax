@@ -1,4 +1,4 @@
-import { parseToolCallsFromContentResult, parseOpenAIToolCallsResult } from '../llm/tool-calls';
+import { parseToolCallsFromContentResult, parseOpenAIToolCallsResult, sanitizeReasoningTags } from '../llm/tool-calls';
 
 describe('tool-call parser result API', () => {
   it('returns a typed success result for native OpenAI tool calls', () => {
@@ -28,5 +28,17 @@ describe('tool-call parser result API', () => {
       reason: 'malformed-json',
       message: 'tool_call block contained malformed JSON',
     });
+  });
+
+  it('sanitizes leaked think tags before parsing', () => {
+    const result = parseToolCallsFromContentResult(
+      '<think>hidden</think><tool_call>{"name":"read","arguments":{"path":"README.md"}}</tool_call>',
+    );
+    expect(result).toEqual({
+      ok: true,
+      source: 'content',
+      calls: [{ id: 'call_1', name: 'read', arguments: { path: 'README.md' } }],
+    });
+    expect(sanitizeReasoningTags('<thinking>x</thinking>final')).toBe('final');
   });
 });

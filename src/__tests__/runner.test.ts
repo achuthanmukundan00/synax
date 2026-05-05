@@ -208,6 +208,16 @@ describe('shared bounded agent runner', () => {
     expect(result).toMatchObject({ terminalState: 'completed', finalAnswer: 'final answer', steps: 1 });
   });
 
+  it('fails closed on ambiguous mixed output with tool calls and final text', async () => {
+    const client = fakeClient([{ content: 'I will do it now', toolCalls: [{ id: '1', name: 'read', arguments: {} }] }]);
+    const result = await runAgentTurn({ repoRoot: TMP, task: 'read', client });
+    expect(result).toMatchObject({
+      terminalState: 'model_error',
+      error: 'model emitted ambiguous mixed output (tool calls plus final text)',
+    });
+    expect(result.toolCalls).toHaveLength(0);
+  });
+
   it('terminates deterministically at maxSteps', async () => {
     const client = fakeClient([
       { toolCalls: [{ id: '1', name: 'read', arguments: {} }] },
@@ -336,6 +346,39 @@ describe('shared bounded agent runner', () => {
       path: 'a.txt',
       diff: '--- a.txt\n+++ a.txt\n-hello\n+hi',
     });
+  });
+
+  it('rejects a previewed edit when patch approval rejects it', async () => {
+    writeFileSync(join(TMP, 'a.txt'), 'hello\n', 'utf-8');
+    const events: AgentEvent[] = [];
+    const client = fakeClient([
+      { toolCalls: [{ id: 'call_1', name: 'read', arguments: { path: 'a.txt' } }] },
+      { toolCalls: [{ id: 'call_2', name: 'edit', arguments: { path: 'a.txt', oldStr: 'hello', newStr: 'hi' } }] },
+      { content: 'should not be reached' },
+    ]);
+
+    const result = await runAgentTurn({
+      repoRoot: TMP,
+      task: 'edit a.txt',
+      client,
+      onEvent: (event) => events.push(event),
+      approvePatch: () => 'reject',
+    });
+
+    expect(result).toMatchObject({
+      terminalState: 'user_input_required',
+      changedFiles: [],
+      error: 'patch rejected for a.txt',
+    });
+    expect(readFileSync(join(TMP, 'a.txt'), 'utf-8')).toBe('hello\n');
+    expect(events.map((event) => event.type)).toEqual([
+      'tool_started',
+      'tool_finished',
+      'tool_started',
+      'patch_preview',
+      'tool_finished',
+    ]);
+    expect(client.requests).toHaveLength(2);
   });
 
   it('preserves conversation across turns', async () => {

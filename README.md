@@ -89,14 +89,18 @@ Compatibility claims should be recorded against an exact provider, model, and Sy
 # Inspect repository and config context
 npm run synax -- inspect
 
+# List or read bounded local docs/spec context
+npm run synax -- inspect --docs
+npm run synax -- inspect --doc specs/PRD.md
+
 # Ask one bounded question
 npm run synax -- ask --question "Where is provider config normalized?"
 
 # Start an interactive coding session
 npm run synax -- chat
 
-# Run one bounded edit-capable task
-npm run synax -- run --task "Fix the failing test"
+# Run one bounded edit-capable task; --yes accepts previewed replacement edits
+npm run synax -- run --task "Fix the failing test" --yes
 
 # Show config
 npm run synax -- config show
@@ -112,6 +116,8 @@ Inside `synax chat`:
 /test-provider
 /inspect
 /verify
+/diff
+/undo-last-edit
 /clear
 /status
 /exit
@@ -175,13 +181,13 @@ SYNAX_MAX_TOOL_CALLS=64
 
 Synax sends a compact OpenAI-compatible tool surface to the model:
 
-| Tool | Purpose |
-| --- | --- |
-| `read` | List files, read bounded ranges, or search text |
-| `edit` | Exact `replace_in_file` edits |
-| `write` | Create new repo-local text files |
-| `git` | Show bounded git status or diff |
-| `bash` | Hidden unless explicitly enabled |
+| Tool    | Purpose                                         |
+| ------- | ----------------------------------------------- |
+| `read`  | List files, read bounded ranges, or search text |
+| `edit`  | Exact `replace_in_file` edits                   |
+| `write` | Create new repo-local text files                |
+| `git`   | Show bounded git status or diff                 |
+| `bash`  | Hidden unless explicitly enabled                |
 
 The model loop stops when the model returns a final answer, hits the configured model-step limit, hits the configured tool-call limit, or encounters a tool/provider error.
 

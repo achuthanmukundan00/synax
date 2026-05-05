@@ -35,6 +35,18 @@ export interface LocalDocRead {
   truncated: boolean;
 }
 
+export interface LocalDocsSearchMatch {
+  path: string;
+  lineNumber: number;
+  line: string;
+}
+
+export interface LocalDocsSearchResult {
+  query: string;
+  matches: LocalDocsSearchMatch[];
+  truncated: boolean;
+}
+
 export async function discoverLocalDocs(
   repoRoot: string,
   maxFiles = DEFAULT_MAX_DOC_FILES,
@@ -84,6 +96,32 @@ export async function readLocalDoc(
     lines: selected,
     truncated: requestedEndLine > endLine,
   };
+}
+
+export async function searchLocalDocs(
+  repoRoot: string,
+  query: string,
+  maxMatches = 80,
+): Promise<LocalDocsSearchResult> {
+  const discovery = await discoverLocalDocs(repoRoot);
+  const matches: LocalDocsSearchMatch[] = [];
+  const needle = query.trim().toLowerCase();
+  if (!needle) return { query, matches, truncated: false };
+
+  for (const path of discovery.files) {
+    const target = normalizeRepoPath(repoRoot, path);
+    if (!target.ok || !target.absolutePath) continue;
+    const lines = splitLines(redactSecrets(await readFile(target.absolutePath, 'utf-8')));
+    for (let i = 0; i < lines.length; i += 1) {
+      if (!lines[i].toLowerCase().includes(needle)) continue;
+      matches.push({ path, lineNumber: i + 1, line: lines[i] });
+      if (matches.length >= maxMatches) {
+        return { query, matches, truncated: true };
+      }
+    }
+  }
+
+  return { query, matches, truncated: false };
 }
 
 async function collectLocalDocs(

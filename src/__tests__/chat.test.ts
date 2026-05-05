@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, rmSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, rmSync, writeFileSync, readFileSync } from 'fs';
 import { join } from 'path';
 
 const TMP = join(process.cwd(), 'tmp', 'synax-chat-tests');
@@ -84,6 +84,23 @@ describe('chat session', () => {
     expect(report.output).toContain('node verify.js');
   });
 
+  it('/undo-last-edit restores last Synax-owned edit marker', async () => {
+    mkdirSync(join(TMP, '.synax'), { recursive: true });
+    writeFileSync(join(TMP, 'a.txt'), 'after\n', 'utf-8');
+    writeFileSync(
+      join(TMP, '.synax', 'last-edit.json'),
+      JSON.stringify({ path: 'a.txt', before: 'before\n', after: 'after\n', timestamp: new Date().toISOString() }),
+      'utf-8',
+    );
+    const session = createChatSession({
+      repoRoot: TMP,
+      config: { provider: { kind: 'openai-compatible', base_url: 'http://localhost/v1', model: 'fake' } },
+    });
+    const report = await session.handleSlashCommand('/undo-last-edit');
+    expect(report.output).toContain('restored a.txt');
+    expect(readFileSync(join(TMP, 'a.txt'), 'utf-8')).toBe('before\n');
+  });
+
   it('/settings renders readable panel', async () => {
     const session = createChatSession({
       repoRoot: TMP,
@@ -98,6 +115,21 @@ describe('chat session', () => {
     expect(report.output).toContain('Settings');
     expect(report.output).toContain('Provider');
     expect(report.output).toContain('Tools');
+  });
+
+  it('/help renders command descriptions and session-setting examples', async () => {
+    const session = createChatSession({
+      repoRoot: TMP,
+      config: { provider: { kind: 'openai-compatible', base_url: 'http://localhost/v1', model: 'fake' } },
+    });
+
+    const report = await session.handleSlashCommand('/help');
+
+    expect(report.output).toContain('Chat Commands');
+    expect(report.output).toContain('/settings set <path> <value>');
+    expect(report.output).toContain('Change a supported setting for the current session');
+    expect(report.output).toContain('/settings set provider.endpoint http://127.0.0.1:1234/v1');
+    expect(report.output).toContain('/exit, /quit');
   });
 
   it('/settings set mutates current session config and redacts secret headers', async () => {

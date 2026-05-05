@@ -97,6 +97,22 @@ describe('LLM client — basic chat', () => {
     expect(resp.usage).toEqual({ promptTokens: 10, completionTokens: 5, totalTokens: 15 });
   });
 
+  test('sanitizes leaked reasoning tags in assistant content', async () => {
+    srv.close();
+    srv = await createMockServer((_req, res) => {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(
+        JSON.stringify({
+          model: 'test-model',
+          choices: [{ message: { role: 'assistant', content: '<think>secret</think>Hello' }, finish_reason: 'stop' }],
+        }),
+      );
+    });
+    const client = createOpenAICompatibleClient(makeConfig({ baseUrl: getServerUrl(srv) }));
+    const resp = await client.chat({ messages: [{ role: 'user', content: 'hi' }] });
+    expect(resp.content).toBe('Hello');
+  });
+
   test('sends tools and parses OpenAI-compatible tool calls', async () => {
     srv.close();
     srv = await createMockServer((_req, res) => {
@@ -149,6 +165,39 @@ describe('LLM client — basic chat', () => {
     ]);
     expect(body.tool_choice).toBe('auto');
     expect(resp.toolCalls).toEqual([{ id: 'call_read', name: 'read_file_range', arguments: { path: 'src/a.ts' } }]);
+  });
+
+  test('rejects malformed OpenAI-compatible tool call arguments', async () => {
+    srv.close();
+    srv = await createMockServer((_req, res) => {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(
+        JSON.stringify({
+          model: 'test-model',
+          choices: [
+            {
+              message: {
+                role: 'assistant',
+                content: 'I should read the file.',
+                tool_calls: [
+                  {
+                    id: 'call_read',
+                    type: 'function',
+                    function: { name: 'read_file_range', arguments: '{"path":' },
+                  },
+                ],
+              },
+              finish_reason: 'tool_calls',
+            },
+          ],
+        }),
+      );
+    });
+    const client = createOpenAICompatibleClient(makeConfig({ baseUrl: getServerUrl(srv) }));
+
+    await expect(client.chat({ messages: [{ role: 'user', content: 'read a file' }] })).rejects.toThrow(
+      'model emitted malformed tool call output: OpenAI tool call arguments contained malformed JSON',
+    );
   });
 });
 

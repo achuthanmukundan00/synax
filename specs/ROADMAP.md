@@ -2,6 +2,16 @@
 
 This roadmap is planning material. It describes intended work and must not be read as implemented behavior.
 
+## Execution Snapshot
+
+As of 2026-05-05, all five numbered specs are in progress rather than untouched drafts:
+
+- v0.4 has an initial typed parser result surface and malformed `<tool_call>` diagnostics. The remaining work is full parser survival: reasoning sanitization, unknown/ambiguous rejection, broader fixtures, runtime-wide failure handling, docs, and diagnostics.
+- v0.5 has bounded internal docs/spec discovery and reads. The remaining work is exposing that context through CLI/model paths, deterministic docs search, docs-impact checks, and self-hosting workflow docs.
+- v0.6 has internal TypeScript extension interfaces and documented MCP groundwork. The remaining work is minimal built-in wiring/registry tests and concrete MCP policy-boundary tests.
+- v0.7 has visible patch previews before validated replacement edits. The remaining work is accept/reject, atomicity proof, rollback, checkpoints, dirty-tree handling, optional worktree mode, run logs, verification profiles, and bounded repair loops.
+- v1.0 has a public compatibility report format. The release remains blocked on finishing or explicitly descoping the remaining v0.4-v0.7 work and recording a concrete local Relay-compatible smoke result or skip rationale.
+
 ## v0.4 Tool-Call Survival
 
 Detailed spec: [001-v0.4-tool-call-survival.md](001-v0.4-tool-call-survival.md)
