@@ -19,6 +19,15 @@ export interface ProviderConfig {
   timeout_ms?: number;
 }
 
+export interface AgentBudgetConfig {
+  contextBudgetTokens?: number;
+  context_budget_tokens?: number;
+  maxModelSteps?: number;
+  max_model_steps?: number;
+  maxToolCalls?: number;
+  max_tool_calls?: number;
+}
+
 export function normalizeProviderConfig(p: ProviderConfig): import('../llm/types').NormalizedProviderConfig {
   const kind = p.kind ?? 'openai-compatible';
   const baseUrl = p.base_url ?? p.baseUrl ?? 'http://127.0.0.1:1234/v1';
@@ -32,7 +41,13 @@ export function normalizeProviderConfig(p: ProviderConfig): import('../llm/types
 export interface ProjectConfig {
   model?: string;
   baseUrl?: string;
+  context_budget_tokens?: number;
   contextBudgetTokens?: number;
+  maxModelSteps?: number;
+  max_model_steps?: number;
+  maxToolCalls?: number;
+  max_tool_calls?: number;
+  agent?: AgentBudgetConfig;
   subagents?: { enabled?: boolean; mode?: 'sequential' | 'parallel' };
   verification?: { defaultCommand?: string };
   provider?: ProviderConfig;
@@ -55,7 +70,9 @@ export interface LoadProjectConfigResult {
 const DEFAULTS: ProjectConfig = {
   model: undefined,
   baseUrl: 'http://127.0.0.1:1234/v1',
-  contextBudgetTokens: 16000,
+  contextBudgetTokens: 131072,
+  maxModelSteps: 32,
+  maxToolCalls: 96,
   subagents: { enabled: false, mode: 'sequential' },
   verification: { defaultCommand: undefined },
   provider: {
@@ -98,7 +115,12 @@ export function generateDefaultConfig(): string {
     '# Synax project configuration',
     '',
     'baseUrl = "http://127.0.0.1:1234/v1"',
-    'contextBudgetTokens = 16000',
+    '',
+    '[agent]',
+    '# 16000 is minimal/safe, 65536 is normal, 131072 is a high-context local profile.',
+    'context_budget_tokens = 131072',
+    'max_model_steps = 32',
+    'max_tool_calls = 96',
     '',
     '[subagents]',
     'enabled = false',
@@ -133,7 +155,20 @@ export function writeConfigFile(
 
 export function validateConfig(config: ProjectConfig): ValidationError[] {
   const errors: ValidationError[] = [];
-  const allowed = new Set(['model', 'baseUrl', 'contextBudgetTokens', 'subagents', 'verification', 'provider']);
+  const allowed = new Set([
+    'model',
+    'baseUrl',
+    'contextBudgetTokens',
+    'context_budget_tokens',
+    'maxModelSteps',
+    'max_model_steps',
+    'maxToolCalls',
+    'max_tool_calls',
+    'agent',
+    'subagents',
+    'verification',
+    'provider',
+  ]);
   for (const key of Object.keys(config)) {
     if (!allowed.has(key)) {
       errors.push({ path: key, message: `Unknown config key: ${key}` });
@@ -145,11 +180,22 @@ export function validateConfig(config: ProjectConfig): ValidationError[] {
   if (config.baseUrl !== undefined && typeof config.baseUrl !== 'string') {
     errors.push({ path: 'baseUrl', message: 'baseUrl must be a string' });
   }
-  if (config.contextBudgetTokens !== undefined) {
-    if (typeof config.contextBudgetTokens !== 'number') {
-      errors.push({ path: 'contextBudgetTokens', message: 'must be a number' });
-    } else if (config.contextBudgetTokens <= 0 || !Number.isInteger(config.contextBudgetTokens)) {
-      errors.push({ path: 'contextBudgetTokens', message: 'must be a positive integer' });
+  validatePositiveInteger(errors, 'contextBudgetTokens', config.contextBudgetTokens);
+  validatePositiveInteger(errors, 'context_budget_tokens', config.context_budget_tokens);
+  validatePositiveInteger(errors, 'maxModelSteps', config.maxModelSteps);
+  validatePositiveInteger(errors, 'max_model_steps', config.max_model_steps);
+  validatePositiveInteger(errors, 'maxToolCalls', config.maxToolCalls);
+  validatePositiveInteger(errors, 'max_tool_calls', config.max_tool_calls);
+  if (config.agent !== undefined) {
+    if (typeof config.agent !== 'object') {
+      errors.push({ path: 'agent', message: 'must be an object' });
+    } else {
+      validatePositiveInteger(errors, 'agent.contextBudgetTokens', config.agent.contextBudgetTokens);
+      validatePositiveInteger(errors, 'agent.context_budget_tokens', config.agent.context_budget_tokens);
+      validatePositiveInteger(errors, 'agent.maxModelSteps', config.agent.maxModelSteps);
+      validatePositiveInteger(errors, 'agent.max_model_steps', config.agent.max_model_steps);
+      validatePositiveInteger(errors, 'agent.maxToolCalls', config.agent.maxToolCalls);
+      validatePositiveInteger(errors, 'agent.max_tool_calls', config.agent.max_tool_calls);
     }
   }
   if (config.subagents !== undefined) {
@@ -223,20 +269,64 @@ export function validateConfig(config: ProjectConfig): ValidationError[] {
   return errors;
 }
 
+function validatePositiveInteger(errors: ValidationError[], path: string, value: number | undefined): void {
+  if (value === undefined) return;
+  if (typeof value !== 'number') {
+    errors.push({ path, message: 'must be a number' });
+  } else if (value <= 0 || !Number.isInteger(value)) {
+    errors.push({ path, message: 'must be a positive integer' });
+  }
+}
+
 function configFromParsedToml(parsed: Record<string, unknown>): ProjectConfig {
   const config: ProjectConfig = {};
+  const agent = parsed.agent && typeof parsed.agent === 'object' ? (parsed.agent as AgentBudgetConfig) : undefined;
   if (parsed.provider && typeof parsed.provider === 'object') {
     config.provider = parsed.provider as ProviderConfig;
   }
   if (parsed.model !== undefined) config.model = parsed.model as string;
   if (parsed.baseUrl !== undefined) config.baseUrl = parsed.baseUrl as string;
   if (parsed.base_url !== undefined) config.baseUrl = parsed.base_url as string;
+  if (agent !== undefined) config.agent = agent;
   if (parsed.contextBudgetTokens !== undefined) config.contextBudgetTokens = parsed.contextBudgetTokens as number;
+  if (parsed.context_budget_tokens !== undefined) config.contextBudgetTokens = parsed.context_budget_tokens as number;
+  if (agent?.contextBudgetTokens !== undefined) config.contextBudgetTokens = agent.contextBudgetTokens;
+  if (agent?.context_budget_tokens !== undefined) config.contextBudgetTokens = agent.context_budget_tokens;
+  if (parsed.maxModelSteps !== undefined) config.maxModelSteps = parsed.maxModelSteps as number;
+  if (parsed.max_model_steps !== undefined) config.maxModelSteps = parsed.max_model_steps as number;
+  if (agent?.maxModelSteps !== undefined) config.maxModelSteps = agent.maxModelSteps;
+  if (agent?.max_model_steps !== undefined) config.maxModelSteps = agent.max_model_steps;
+  if (parsed.maxToolCalls !== undefined) config.maxToolCalls = parsed.maxToolCalls as number;
+  if (parsed.max_tool_calls !== undefined) config.maxToolCalls = parsed.max_tool_calls as number;
+  if (agent?.maxToolCalls !== undefined) config.maxToolCalls = agent.maxToolCalls;
+  if (agent?.max_tool_calls !== undefined) config.maxToolCalls = agent.max_tool_calls;
   if (parsed.subagents !== undefined && typeof parsed.subagents === 'object')
     config.subagents = parsed.subagents as { enabled?: boolean; mode?: 'sequential' | 'parallel' };
   if (parsed.verification !== undefined && typeof parsed.verification === 'object')
     config.verification = parsed.verification as { defaultCommand?: string };
   return config;
+}
+
+function applyEnvOverrides(config: ProjectConfig, errors: ValidationError[]): ProjectConfig {
+  const overrides: ProjectConfig = {};
+  const contextBudgetTokens = readEnvPositiveInteger('SYNAX_CONTEXT_BUDGET_TOKENS', errors);
+  const maxModelSteps = readEnvPositiveInteger('SYNAX_MAX_MODEL_STEPS', errors);
+  const maxToolCalls = readEnvPositiveInteger('SYNAX_MAX_TOOL_CALLS', errors);
+  if (contextBudgetTokens !== undefined) overrides.contextBudgetTokens = contextBudgetTokens;
+  if (maxModelSteps !== undefined) overrides.maxModelSteps = maxModelSteps;
+  if (maxToolCalls !== undefined) overrides.maxToolCalls = maxToolCalls;
+  return { ...config, ...overrides };
+}
+
+function readEnvPositiveInteger(name: string, errors: ValidationError[]): number | undefined {
+  const raw = process.env[name];
+  if (raw === undefined || raw.trim().length === 0) return undefined;
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value <= 0) {
+    errors.push({ path: name, message: 'must be a positive integer' });
+    return undefined;
+  }
+  return value;
 }
 
 export function loadProjectConfig(baseDir?: string): LoadProjectConfigResult {
@@ -260,11 +350,14 @@ export function loadProjectConfig(baseDir?: string): LoadProjectConfigResult {
     model: config.provider?.model ?? config.model ?? DEFAULTS.provider?.model,
     baseUrl: config.provider?.baseUrl ?? config.provider?.base_url ?? config.baseUrl ?? DEFAULTS.provider?.baseUrl,
   };
-  const mergedConfig: ProjectConfig = {
-    ...DEFAULTS,
-    ...config,
-    provider,
-  };
+  const mergedConfig = applyEnvOverrides(
+    {
+      ...DEFAULTS,
+      ...config,
+      provider,
+    },
+    errors,
+  );
   const validationErrors = validateConfig(mergedConfig);
   errors.push(...validationErrors);
   return {

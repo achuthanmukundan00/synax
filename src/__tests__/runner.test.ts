@@ -80,6 +80,77 @@ describe('shared bounded agent runner', () => {
     expect(result).toMatchObject({ terminalState: 'budgetExhausted', error: 'max steps exceeded: 1' });
   });
 
+  it('terminates deterministically at maxToolCalls', async () => {
+    const client = fakeClient([
+      { toolCalls: [{ id: '1', name: 'list_files', arguments: {} }] },
+      { toolCalls: [{ id: '2', name: 'list_files', arguments: {} }] },
+    ]);
+
+    const result = await runAgentTurn({ repoRoot: TMP, task: 'loop', client, maxSteps: 4, maxToolCalls: 1 });
+
+    expect(result).toMatchObject({ terminalState: 'budgetExhausted', error: 'max tool calls exceeded: 1' });
+    expect(result.toolCalls).toHaveLength(1);
+  });
+
+  it('asks for a final answer on the final allowed model step', async () => {
+    writeFileSync(join(TMP, 'package.json'), '{}\n', 'utf-8');
+    const client = fakeClient([
+      { toolCalls: [{ id: '1', name: 'read_file_range', arguments: { path: 'package.json' } }] },
+      { content: 'final from inspected context' },
+    ]);
+
+    const result = await runAgentTurn({ repoRoot: TMP, task: 'explain package', client, maxSteps: 2 });
+    const finalRequest = client.requests[1];
+
+    expect(result).toMatchObject({
+      terminalState: 'completed',
+      finalAnswer: 'final from inspected context',
+      steps: 2,
+    });
+    expect(finalRequest.messages.at(-1)).toMatchObject({
+      role: 'system',
+      content: expect.stringContaining('Do not call tools'),
+    });
+  });
+
+  it('does not execute tool calls requested on the final allowed model step', async () => {
+    writeFileSync(join(TMP, 'a.txt'), 'hello\n', 'utf-8');
+    const client = fakeClient([
+      { toolCalls: [{ id: '1', name: 'read_file_range', arguments: { path: 'a.txt' } }] },
+      { content: '', toolCalls: [{ id: '2', name: 'list_files', arguments: {} }] },
+    ]);
+
+    const result = await runAgentTurn({ repoRoot: TMP, task: 'loop', client, maxSteps: 2 });
+
+    expect(result).toMatchObject({
+      terminalState: 'budgetExhausted',
+      error: 'max steps exceeded: 2',
+    });
+    expect(result.toolCalls.map((call) => call.name)).toEqual(['read_file_range']);
+  });
+
+  it('finalizes before exceeding budget after a bounded inspection sequence', async () => {
+    writeFileSync(join(TMP, 'package.json'), '{"scripts":{"synax":"node dist/cli.js"}}\n', 'utf-8');
+    mkdirSync(join(TMP, 'src', 'commands'), { recursive: true });
+    writeFileSync(join(TMP, 'src', 'cli.ts'), 'cli\n', 'utf-8');
+    writeFileSync(join(TMP, 'src', 'commands', 'chat.ts'), 'chat\n', 'utf-8');
+    const client = fakeClient([
+      { toolCalls: [{ id: '1', name: 'read_file_range', arguments: { path: 'package.json' } }] },
+      { toolCalls: [{ id: '2', name: 'read_file_range', arguments: { path: 'src/cli.ts' } }] },
+      { toolCalls: [{ id: '3', name: 'read_file_range', arguments: { path: 'src/commands/chat.ts' } }] },
+      { content: 'npm run synax invokes the CLI, which dispatches chat.' },
+    ]);
+
+    const result = await runAgentTurn({ repoRoot: TMP, task: 'explain flow', client, maxSteps: 4 });
+
+    expect(result).toMatchObject({
+      terminalState: 'completed',
+      finalAnswer: 'npm run synax invokes the CLI, which dispatches chat.',
+      steps: 4,
+    });
+    expect(result.toolCalls).toHaveLength(3);
+  });
+
   it('creates a new repo-local file through the agent tool', async () => {
     const client = fakeClient([
       {

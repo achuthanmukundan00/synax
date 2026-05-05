@@ -70,7 +70,7 @@ const listFilesTool: ToolDefinition<ListFilesInput> = {
   ledgerBehavior: 'records-file-list',
   async execute(input: ListFilesInput, context: ToolContext): Promise<ToolResult> {
     const maxFiles = boundedPositiveInteger(input.maxFiles, DEFAULT_MAX_FILES, DEFAULT_MAX_FILES);
-    const target = normalizeRepoPath(context.repoRoot, input.path ?? '.');
+    const target = normalizeRepoPath(context.repoRoot, repoRootPath(input.path));
     if (!target.ok || !target.absolutePath || target.path === undefined) {
       return failure('list_files', target.reason ?? 'invalid path');
     }
@@ -166,7 +166,7 @@ const searchTextTool: ToolDefinition<SearchTextInput> = {
       return failure('search_text', 'query is required');
     }
 
-    const target = normalizeRepoPath(context.repoRoot, input.path ?? '.');
+    const target = normalizeRepoPath(context.repoRoot, repoRootPath(input.path));
     if (!target.ok || target.path === undefined) {
       return failure('search_text', target.reason ?? 'invalid path');
     }
@@ -296,6 +296,10 @@ function boundedPositiveInteger(value: number | undefined, defaultValue: number,
   }
 
   return Math.min(value, maxValue);
+}
+
+function repoRootPath(value: string | undefined): string {
+  return value === undefined || value.trim().length === 0 ? '.' : value;
 }
 
 function splitLines(text: string): string[] {

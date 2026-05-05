@@ -215,6 +215,11 @@ describe('inspect secret handling', () => {
     writeFileSync(
       join(TMP, '.synax.toml'),
       [
+        '[agent]',
+        'context_budget_tokens = 131072',
+        'max_model_steps = 32',
+        'max_tool_calls = 96',
+        '',
         '[provider]',
         'api_key = "sk-never-print-this"',
         'base_url = "http://127.0.0.1:1234/v1"',
@@ -232,6 +237,9 @@ describe('inspect secret handling', () => {
     expect(output).not.toContain('sk-never-print-this');
     expect(output).toContain('.synax.toml');
     expect(output).toContain('skipped secret-bearing file');
+    expect(output).toContain('contextBudgetTokens: 131072');
+    expect(output).toContain('maxModelSteps: 32');
+    expect(output).toContain('maxToolCalls: 96');
   });
 });
 

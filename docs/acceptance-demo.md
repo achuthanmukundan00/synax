@@ -22,7 +22,13 @@ Example `.synax.toml`:
 ```toml
 model = "qwen3.6-local"
 baseUrl = "http://127.0.0.1:1234/v1"
-contextBudgetTokens = 16000
+
+[agent]
+# 16000 is minimal/safe, 65536 is normal, and 131072 is a high-context
+# local profile for capable llama.cpp setups.
+context_budget_tokens = 131072
+max_model_steps = 32
+max_tool_calls = 96
 
 [verification]
 defaultCommand = "npm test"

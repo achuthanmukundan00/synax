@@ -94,7 +94,12 @@ Prerequisites:
 Example `.synax.toml`:
 
 ```toml
-contextBudgetTokens = 16000
+[agent]
+# 16000 is minimal/safe, 65536 is normal, and 131072 is a high-context
+# local profile for capable llama.cpp setups.
+context_budget_tokens = 131072
+max_model_steps = 32
+max_tool_calls = 96
 
 [provider]
 kind = "openai-compatible"
@@ -106,6 +111,9 @@ timeout_seconds = 120
 [verification]
 defaultCommand = "npm test"
 ```
+
+The agent budget can also be overridden with `SYNAX_CONTEXT_BUDGET_TOKENS`,
+`SYNAX_MAX_MODEL_STEPS`, and `SYNAX_MAX_TOOL_CALLS`.
 
 Typical local flow:
 

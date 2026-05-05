@@ -199,6 +199,37 @@ describe('tool registry and inspection tools', () => {
     expect((result.output as ListFilesOutput).files).toEqual(['src/tool.ts']);
   });
 
+  it('treats empty and whitespace list_files paths as the repository root', async () => {
+    writeFileSync(join(TMP, 'root.txt'), 'root\n', 'utf-8');
+    const registry = createToolRegistry({ repoRoot: TMP });
+
+    await expect(registry.execute('list_files', { path: '', maxFiles: 50 })).resolves.toMatchObject({
+      success: true,
+      output: { files: ['root.txt'], truncated: false },
+    });
+    await expect(registry.execute('list_files', { path: '   ', maxFiles: 50 })).resolves.toMatchObject({
+      success: true,
+      output: { files: ['root.txt'], truncated: false },
+    });
+    await expect(registry.execute('list_files', { path: '.', maxFiles: 50 })).resolves.toMatchObject({
+      success: true,
+      output: { files: ['root.txt'], truncated: false },
+    });
+  });
+
+  it('continues to reject unsafe list_files paths', async () => {
+    const registry = createToolRegistry({ repoRoot: TMP });
+
+    await expect(registry.execute('list_files', { path: '/tmp' })).resolves.toMatchObject({
+      success: false,
+      error: 'absolute paths are not allowed',
+    });
+    await expect(registry.execute('list_files', { path: '../outside' })).resolves.toMatchObject({
+      success: false,
+      error: 'paths must stay inside the repository',
+    });
+  });
+
   it('returns bounded read-only git status and diff results visible to the ledger', async () => {
     initGitRepo();
     writeFileSync(join(TMP, 'tracked.txt'), 'before\nafter\n', 'utf-8');
