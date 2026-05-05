@@ -37,5 +37,9 @@ doctorCommand(program);
 // Inspect command (options registered in runInspectCommand)
 runInspectCommand(program);
 
+if (process.argv.length === 2) {
+  process.argv.push('chat');
+}
+
 // Parse command line arguments
 program.parse(process.argv);

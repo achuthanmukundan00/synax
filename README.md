@@ -35,6 +35,7 @@ Synax is not a general AI assistant, SaaS coding platform, IDE replacement, or a
 - **Project inspection** — `synax inspect` detects git info, package manager, detected commands, and config summary
 - **Interactive chat** — `synax chat` and `synax ask` provide read-only and edit-capable task loops
 - **Doctor command** — `synax doctor` checks system health, Node.js version, and permissions
+- **OpenAI-compatible tool calls** — sends standard `tools` requests and accepts Qwen/Unsloth text fallback tool-call blocks
 - **Configuration** — `.synax.toml` project config with provider, context, commands, and policy sections
 - **Context budgeting** — conservative token limits for files, commands, instructions, and overall input
 - **Safety policies** — command safety tiers, patch confirmation, and file edit restrictions
@@ -112,11 +113,13 @@ synax ask --question "Find where this behavior is implemented"
 
 ```sh
 # Execute a task
-synax run --task "Fix the failing test"
+synax run --task "Fix the failing test" --yes
 
 # Execute from a plan file
 synax run --plan plan.md
 ```
+
+`synax run` uses a bounded tool loop. It inspects files with read-only tools, allows only `replace_in_file` edits to inspected files, applies at most the proposed patch, then runs one configured verification command.
 
 ### Inspect command
 
@@ -214,6 +217,26 @@ Patches are also subject to safety rules:
 - Patches must only touch inspected files
 - User confirmation is required by default
 - Formatting churn and unrelated cleanup are prohibited
+
+## Local Qwen / Unsloth Tool Calling
+
+Synax targets OpenAI-compatible Chat Completions first. For local Unsloth Qwen3.6 GGUFs, run a compatible local server and configure:
+
+```toml
+[provider]
+kind = "openai-compatible"
+base_url = "http://127.0.0.1:1234/v1"
+model = "qwen3.6-local"
+api_key = "sk-no-key-required"
+```
+
+Synax sends `tools` with `tool_choice = "auto"`. It accepts standard `message.tool_calls` and Qwen-style fallback blocks such as:
+
+```txt
+<tool_call>{"name":"read_file_range","arguments":{"path":"src/math.ts"}}</tool_call>
+```
+
+See `docs/acceptance-demo.md` for the fixture and demo flow.
 
 ## Failure Behavior
 

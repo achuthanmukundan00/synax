@@ -12,7 +12,7 @@ module.exports = {
     'plugin:@typescript-eslint/recommended',
     'prettier',
   ],
-  ignorePatterns: ['dist/', 'node_modules/'],
+  ignorePatterns: ['dist/', 'node_modules/', 'fixtures/'],
   env: {
     node: true,
     es2020: true,

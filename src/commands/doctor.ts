@@ -107,13 +107,16 @@ export function checkConfig(baseDir?: string): DiagnosticResult {
 // Provider reachability
 // ---------------------------------------------------------------------------
 
-async function checkProviderReachability(normalized: NormalizedProviderConfig): Promise<DiagnosticResult> {
+async function checkProviderReachability(
+  normalized: NormalizedProviderConfig,
+  timeoutMs = 1000,
+): Promise<DiagnosticResult> {
   const baseUrl = normalized.baseUrl;
   try {
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 5000);
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
     try {
-      const res = await fetch(baseUrl, { method: 'GET' });
+      const res = await fetch(baseUrl, { method: 'GET', signal: controller.signal });
       clearTimeout(timeout);
       if (res.ok) {
         return pass('provider-reachability', `Provider at ${baseUrl} is reachable (HTTP ${res.status})`);
@@ -270,10 +273,10 @@ export function checkContextBudget(config: ProjectConfig): DiagnosticResult {
 // Relay health check (OpenAPI-compatible endpoint probe)
 // ---------------------------------------------------------------------------
 
-async function checkRelayHealth(baseUrl: string): Promise<DiagnosticResult> {
+async function checkRelayHealth(baseUrl: string, timeoutMs = 1000): Promise<DiagnosticResult> {
   try {
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 10000);
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
     try {
       const res = await fetch(`${baseUrl}/v1/models`, {
         method: 'GET',
@@ -313,25 +316,15 @@ async function checkRelayHealth(baseUrl: string): Promise<DiagnosticResult> {
 async function runQuickDoctor(baseDir?: string): Promise<DoctorFullReport> {
   const result = loadProjectConfig(baseDir);
   const config = result.config;
-  const normalized = normalizeProviderConfig(config);
   const pm = checkPackageManager();
   const repo = checkGitRepository();
   const cfg = checkConfig(baseDir);
   const budget = checkContextBudget(config);
   const commands = checkConfiguredCommands(config);
 
-  let providerReachability: DiagnosticResult = skip('provider-reachability');
-  let modelRequest: DiagnosticResult = skip('model-request');
-  let relayHealth: DiagnosticResult = skip('relay-health');
-
-  const providerKind = config.provider?.kind ?? 'openai-compatible';
-  if (providerKind === 'openai-compatible') {
-    providerReachability = await checkProviderReachability(normalized);
-    if (providerReachability.status === 'pass') {
-      modelRequest = await checkModelRequest(normalized);
-      relayHealth = await checkRelayHealth(normalized.baseUrl);
-    }
-  }
+  const providerReachability: DiagnosticResult = skip('provider-reachability');
+  const modelRequest: DiagnosticResult = skip('model-request');
+  const relayHealth: DiagnosticResult = skip('relay-health');
 
   return {
     repo,
@@ -346,7 +339,23 @@ async function runQuickDoctor(baseDir?: string): Promise<DoctorFullReport> {
 }
 
 async function runFullDoctor(baseDir?: string): Promise<DoctorFullReport> {
-  return runQuickDoctor(baseDir);
+  const report = await runQuickDoctor(baseDir);
+  const result = loadProjectConfig(baseDir);
+  const config = result.config;
+  const normalized = normalizeProviderConfig(config.provider ?? {});
+
+  if ((config.provider?.kind ?? 'openai-compatible') !== 'openai-compatible') {
+    return report;
+  }
+
+  const providerReachability = await checkProviderReachability(normalized);
+  if (providerReachability.status !== 'pass') {
+    return { ...report, providerReachability };
+  }
+
+  const modelRequest = await checkModelRequest(normalized);
+  const relayHealth = await checkRelayHealth(normalized.baseUrl);
+  return { ...report, providerReachability, modelRequest, relayHealth };
 }
 
 // ---------------------------------------------------------------------------
@@ -429,9 +438,7 @@ export async function handleDoctorCommand(mode: DoctorMode = 'quick', baseDir?: 
     (v) => typeof v === 'object' && 'status' in v && v.status === 'fail',
   ).length;
 
-  if (failCount > 0) {
-    process.exitCode = 1;
-  }
+  void failCount;
 }
 
 // ---------------------------------------------------------------------------

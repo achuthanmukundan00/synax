@@ -1,14 +1,17 @@
 import { execSync } from 'child_process';
+import { mkdtempSync, rmSync, writeFileSync } from 'fs';
+import { tmpdir } from 'os';
 import path from 'path';
 
 const SYNAX_BIN = path.resolve(__dirname, '../../dist/cli.js');
 
-function runSynax(args: string[]): string {
+function runSynax(args: string[], options: { cwd?: string; timeout?: number } = {}): string {
   try {
     const cmd = `node "${SYNAX_BIN}" ${args.map((a) => `'${a}'`).join(' ')}`;
     return execSync(cmd, {
+      cwd: options.cwd,
       encoding: 'utf8',
-      timeout: 15000,
+      timeout: options.timeout ?? 15000,
       stdio: ['pipe', 'pipe', 'pipe'],
     }).trimEnd();
   } catch (error: unknown) {
@@ -43,8 +46,24 @@ describe('CLI', () => {
     });
 
     test('should accept --message option', () => {
-      const output = runSynax(['chat', '--message', 'hello']);
-      expect(output).toContain('hello');
+      const cwd = mkdtempSync(path.join(tmpdir(), 'synax-cli-chat-'));
+      try {
+        writeFileSync(
+          path.join(cwd, '.synax.toml'),
+          [
+            '[provider]',
+            'kind = "openai-compatible"',
+            'base_url = "http://127.0.0.1:9/v1"',
+            'model = "test-model"',
+            'timeout_seconds = 1',
+          ].join('\n'),
+          'utf-8',
+        );
+        const output = runSynax(['chat', '--message', 'hello'], { cwd, timeout: 5000 });
+        expect(output).toContain('hello');
+      } finally {
+        rmSync(cwd, { recursive: true, force: true });
+      }
     });
   });
 

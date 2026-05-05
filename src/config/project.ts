@@ -252,10 +252,11 @@ export function loadProjectConfig(baseDir?: string): LoadProjectConfigResult {
       errors.push({ path: discoveredPath, message: `Failed to parse TOML: ${(err as Error).message}` });
     }
   }
-  const provider = config.provider ?? {
+  const provider = {
     ...DEFAULTS.provider,
-    model: config.model ?? DEFAULTS.provider?.model,
-    baseUrl: config.baseUrl ?? DEFAULTS.provider?.baseUrl,
+    ...config.provider,
+    model: config.provider?.model ?? config.model ?? DEFAULTS.provider?.model,
+    baseUrl: config.provider?.baseUrl ?? config.provider?.base_url ?? config.baseUrl ?? DEFAULTS.provider?.baseUrl,
   };
   const mergedConfig: ProjectConfig = {
     ...DEFAULTS,
