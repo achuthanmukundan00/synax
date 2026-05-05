@@ -15,6 +15,9 @@
     "format:check": "prettier --check \"src/**/*.ts\"",
     "test": "jest",
     "test:verbose": "jest --verbose",
+    "docs:dev": "vitepress dev docs",
+    "docs:build": "vitepress build docs",
+    "docs:preview": "vitepress preview docs",
     "synax": "node dist/cli.js"
   },
   "keywords": [],
@@ -37,7 +40,8 @@
     "jest-extended": "^4.0.2",
     "prettier": "^3.5.3",
     "ts-jest": "^29.2.6",
-    "typescript": "^5.8.2"
+    "typescript": "^5.8.2",
+    "vitepress": "^1.6.4"
   },
   "engines": {
     "node": ">=18.0.0"
