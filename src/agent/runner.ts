@@ -39,6 +39,7 @@ export interface AgentRunnerOptions {
   repoRoot: string;
   client: AgentClient;
   maxSteps?: number;
+  maxToolCalls?: number;
   conversation?: AgentConversation;
   registry?: ToolRegistry;
   onActivity?: (activity: AgentActivity) => void;
@@ -59,7 +60,8 @@ export interface AgentTurnResult {
   error?: string;
 }
 
-const DEFAULT_MAX_STEPS = 8;
+const DEFAULT_MAX_STEPS = 32;
+const DEFAULT_MAX_TOOL_CALLS = 96;
 
 export function createAgentConversation(): AgentConversation {
   return {
@@ -79,6 +81,7 @@ export async function runAgentTurn(options: AgentRunnerOptions & { task: string 
     options.registry ?? createToolRegistry({ repoRoot: options.repoRoot, ledger: conversation.inspectionLedger });
   const tools = [...registry.list(), replaceInFileTool(), createFileTool()];
   const maxSteps = options.maxSteps ?? DEFAULT_MAX_STEPS;
+  const maxToolCalls = options.maxToolCalls ?? DEFAULT_MAX_TOOL_CALLS;
   const changedFiles: string[] = [];
   const toolCalls: AgentTurnResult['toolCalls'] = [];
 
@@ -86,9 +89,15 @@ export async function runAgentTurn(options: AgentRunnerOptions & { task: string 
 
   for (let step = 1; step <= maxSteps; step += 1) {
     let response: ChatResponse;
+    const isFinalStep = step === maxSteps;
     try {
       options.onActivity?.({ kind: 'model', message: `model step ${step}` });
-      response = await options.client.chat({ messages: conversation.messages, tools, temperature: 0, maxTokens: 2048 });
+      response = await options.client.chat({
+        messages: isFinalStep ? [...conversation.messages, finalAnswerNowMessage()] : conversation.messages,
+        tools,
+        temperature: 0,
+        maxTokens: 2048,
+      });
     } catch (error) {
       const message = errorMessage(error);
       return {
@@ -103,6 +112,18 @@ export async function runAgentTurn(options: AgentRunnerOptions & { task: string 
     }
 
     conversation.messages.push(assistantMessage(response));
+
+    if (isFinalStep && response.toolCalls.length > 0) {
+      return {
+        terminalState: 'budgetExhausted',
+        finalAnswer: response.content.trim(),
+        steps: step,
+        toolCalls,
+        changedFiles,
+        conversation,
+        error: `max steps exceeded: ${maxSteps}`,
+      };
+    }
 
     if (response.toolCalls.length === 0 && response.content.includes('<tool_call')) {
       return {
@@ -128,6 +149,17 @@ export async function runAgentTurn(options: AgentRunnerOptions & { task: string 
     }
 
     for (const call of response.toolCalls) {
+      if (toolCalls.length >= maxToolCalls) {
+        return {
+          terminalState: 'budgetExhausted',
+          finalAnswer: response.content.trim(),
+          steps: step,
+          toolCalls,
+          changedFiles,
+          conversation,
+          error: `max tool calls exceeded: ${maxToolCalls}`,
+        };
+      }
       options.onActivity?.({ kind: 'tool', message: `${call.name}(${JSON.stringify(call.arguments)})` });
       const result = await executeAgentTool(call, {
         repoRoot: options.repoRoot,
@@ -322,6 +354,17 @@ function toolFailure(toolName: string, error: string): { success: false; toolRes
   };
 }
 
+function finalAnswerNowMessage(): AgentMessage {
+  return {
+    role: 'system',
+    content: [
+      'Final step: answer now using only the context already gathered.',
+      'Do not call tools, inspect more files, or request more information.',
+      'If the context is incomplete, give the best concise answer possible and state the uncertainty.',
+    ].join('\n'),
+  };
+}
+
 function systemPrompt(): string {
   return [
     'You are Synax, a local code-editing agent working inside a git repository.',
@@ -330,6 +373,8 @@ function systemPrompt(): string {
     'Do not invent file contents.',
     'Use exact replacement edits only with text copied from prior file reads.',
     'Use create_file only for small new repo-local text files.',
+    'Honor explicit user limits on tool calls.',
+    'Once you have enough context, stop inspecting and answer.',
     'When finished, summarize changed files, what changed, and verification status.',
   ].join('\n');
 }

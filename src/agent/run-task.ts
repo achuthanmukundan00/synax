@@ -58,6 +58,8 @@ export async function runAgentTask(options: RunTaskOptions): Promise<RunTaskRepo
     repoRoot: options.repoRoot,
     task: options.task,
     client,
+    maxSteps: projectConfig.config.maxModelSteps,
+    maxToolCalls: projectConfig.config.maxToolCalls,
     onActivity: options.onActivity,
   });
 

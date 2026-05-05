@@ -1,29 +1,25 @@
 # Synax project configuration
-# See https://synax.dev/docs/config for full options
+# 16000 is minimal/safe, 65536 is normal, and 131072 is a high-context
+# local profile for capable llama.cpp setups started with a matching ctx size.
 
-# Context budget in tokens
-contextBudgetTokens = 16000
+[agent]
+context_budget_tokens = 131072
+max_model_steps = 32
+max_tool_calls = 96
 
-# Subagent configuration
 [subagents]
 enabled = false
 mode = "sequential"
 
-# Verification
 [verification]
 defaultCommand = "npm run typecheck"
 
-# Inference provider
 [provider]
 kind = "openai-compatible"
-base_url = "https://ai.watchyourtemper.com/v1"
+base_url = "http://127.0.0.1:1234/v1"
 model = "Qwen3.6-35B-A3B-UD-IQ3_XXS.gguf"
 api_key = "sk-no-key-required"
-timeout_ms = 120000
+timeout_seconds = 120
 
 [provider.custom_headers]
-# e.g. 
-# Cf_Access_Client_Id="..."
-# Cf_Access_Client_Secret="..."
-[verification]
-defaultCommand = "npm run typecheck"
+# "X-Example-Header" = "value"

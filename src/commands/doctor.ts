@@ -272,13 +272,28 @@ export function checkContextBudget(config: ProjectConfig): DiagnosticResult {
     );
   }
   if (budget > 128000) {
+    if (budget <= 131072) {
+      return pass(
+        'context-budget',
+        formatBudgetMessage(config),
+        'High-context local profile; verify the loaded llama.cpp server was started with a matching context window',
+      );
+    }
     return warn(
       'context-budget',
       `contextBudgetTokens is ${budget}, which is above typical local model limits`,
       'Very high budgets may not be usable with local models',
     );
   }
-  return pass('context-budget', `contextBudgetTokens set to ${budget}`);
+  return pass('context-budget', formatBudgetMessage(config));
+}
+
+function formatBudgetMessage(config: ProjectConfig): string {
+  return [
+    `contextBudgetTokens set to ${config.contextBudgetTokens}`,
+    `maxModelSteps set to ${config.maxModelSteps ?? 'not configured'}`,
+    `maxToolCalls set to ${config.maxToolCalls ?? 'not configured'}`,
+  ].join('; ');
 }
 
 // ---------------------------------------------------------------------------

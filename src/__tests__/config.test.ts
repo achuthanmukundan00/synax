@@ -104,6 +104,18 @@ describe('parseTomlString', () => {
     expect(result.config.contextBudgetTokens).toBe(8000);
   });
 
+  it('parses agent snake_case budget settings', () => {
+    const toml = ['[agent]', 'context_budget_tokens = 131072', 'max_model_steps = 32', 'max_tool_calls = 96'].join(
+      '\n',
+    );
+    const result = parseTomlString(toml);
+
+    expect(result.errors).toHaveLength(0);
+    expect(result.config.contextBudgetTokens).toBe(131072);
+    expect(result.config.maxModelSteps).toBe(32);
+    expect(result.config.maxToolCalls).toBe(96);
+  });
+
   it('returns errors for invalid TOML', () => {
     const result = parseTomlString('invalid toml {{{');
     expect(result.errors.length).toBeGreaterThan(0);
@@ -122,6 +134,9 @@ describe('loadProjectConfig', () => {
     const result = loadProjectConfig(TMP);
     expect(result.source).toBe('default');
     expect(result.config.baseUrl).toBe('http://127.0.0.1:1234/v1');
+    expect(result.config.contextBudgetTokens).toBe(131072);
+    expect(result.config.maxModelSteps).toBe(32);
+    expect(result.config.maxToolCalls).toBe(96);
   });
 
   it('returns parsed config when file exists at explicit path', () => {
@@ -132,6 +147,26 @@ describe('loadProjectConfig', () => {
     expect(result.config.model).toBe('custom-model');
     expect(result.config.contextBudgetTokens).toBe(4000);
   });
+
+  it('applies budget environment overrides', () => {
+    const previousContext = process.env.SYNAX_CONTEXT_BUDGET_TOKENS;
+    const previousSteps = process.env.SYNAX_MAX_MODEL_STEPS;
+    const previousTools = process.env.SYNAX_MAX_TOOL_CALLS;
+    process.env.SYNAX_CONTEXT_BUDGET_TOKENS = '64000';
+    process.env.SYNAX_MAX_MODEL_STEPS = '12';
+    process.env.SYNAX_MAX_TOOL_CALLS = '24';
+    try {
+      const result = loadProjectConfig(TMP);
+      expect(result.errors).toHaveLength(0);
+      expect(result.config.contextBudgetTokens).toBe(64000);
+      expect(result.config.maxModelSteps).toBe(12);
+      expect(result.config.maxToolCalls).toBe(24);
+    } finally {
+      restoreEnv('SYNAX_CONTEXT_BUDGET_TOKENS', previousContext);
+      restoreEnv('SYNAX_MAX_MODEL_STEPS', previousSteps);
+      restoreEnv('SYNAX_MAX_TOOL_CALLS', previousTools);
+    }
+  });
 });
 
 // ─── generateDefaultConfig ──────────────────────────────────
@@ -140,7 +175,10 @@ describe('generateDefaultConfig', () => {
   it('generates a valid TOML string', () => {
     const config = generateDefaultConfig();
     expect(config).toContain('baseUrl =');
-    expect(config).toContain('contextBudgetTokens =');
+    expect(config).toContain('[agent]');
+    expect(config).toContain('context_budget_tokens = 131072');
+    expect(config).toContain('max_model_steps = 32');
+    expect(config).toContain('max_tool_calls = 96');
     expect(config).toContain('kind =');
   });
 });
@@ -289,3 +327,11 @@ describe('formatTextProfile', () => {
     expect(formatted).toContain('Project Profile');
   });
 });
+
+function restoreEnv(name: string, value: string | undefined): void {
+  if (value === undefined) {
+    delete process.env[name];
+  } else {
+    process.env[name] = value;
+  }
+}

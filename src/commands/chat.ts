@@ -49,6 +49,8 @@ export function createChatSession(options: { repoRoot: string; config: ProjectCo
         task: message,
         client,
         conversation,
+        maxSteps: options.config.maxModelSteps,
+        maxToolCalls: options.config.maxToolCalls,
         onActivity(activity) {
           console.log(`[synax] ${activity.kind}: ${activity.message}`);
         },
@@ -178,7 +180,14 @@ async function handleSlashCommand(
     if (!git) return { handled: true, output: '[synax] git status unavailable' };
     return {
       handled: true,
-      output: [`Repo: ${git.root}`, `Branch: ${git.branch}`, `Dirty: ${git.isDirty ? 'yes' : 'no'}`].join('\n'),
+      output: [
+        `Repo: ${git.root}`,
+        `Branch: ${git.branch}`,
+        `Dirty: ${git.isDirty ? 'yes' : 'no'}`,
+        `Context budget tokens: ${context.config.contextBudgetTokens ?? 'not configured'}`,
+        `Max model steps: ${context.config.maxModelSteps ?? 'not configured'}`,
+        `Max tool calls: ${context.config.maxToolCalls ?? 'not configured'}`,
+      ].join('\n'),
     };
   }
   if (command === '/verify') {

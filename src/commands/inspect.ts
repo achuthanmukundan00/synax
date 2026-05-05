@@ -161,17 +161,24 @@ export function writeProjectContext(baseDir: string, profile: FullProfile): stri
 
 export function buildInspectConfigProfile(baseDir: string): ConfigProfile {
   const configPath = discoverConfigPath(baseDir);
+  const parsedConfig = loadProjectConfig(baseDir);
+  const budgetSummary = {
+    contextBudgetTokens: parsedConfig.config.contextBudgetTokens,
+    maxModelSteps: parsedConfig.config.maxModelSteps,
+    maxToolCalls: parsedConfig.config.maxToolCalls,
+  };
+
   if (configPath) {
     return {
       source: 'file',
       hasConfigFile: true,
       configSummary: {
         '.synax.toml': 'skipped secret-bearing file',
+        ...budgetSummary,
       },
     };
   }
 
-  const parsedConfig = loadProjectConfig(baseDir);
   return {
     source: parsedConfig.source,
     hasConfigFile: false,
