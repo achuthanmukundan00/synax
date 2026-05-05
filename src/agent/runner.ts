@@ -158,15 +158,22 @@ export async function runAgentTurn(options: AgentRunnerOptions & { task: string 
     }
 
     if (response.toolCalls.length > 0 && response.content.trim().length > 0) {
-      return {
-        terminalState: 'model_error',
-        finalAnswer: response.content.trim(),
-        steps: step,
-        toolCalls,
-        changedFiles,
-        conversation,
-        error: 'model emitted ambiguous mixed output (tool calls plus final text)',
-      };
+      if (!isSafeToolPreamble(response.content)) {
+        return {
+          terminalState: 'model_error',
+          finalAnswer: response.content.trim(),
+          steps: step,
+          toolCalls,
+          changedFiles,
+          conversation,
+          error: 'model emitted ambiguous mixed output (tool calls plus final text)',
+        };
+      }
+
+      conversation.messages[conversation.messages.length - 1] = assistantMessage({
+        ...response,
+        content: '',
+      });
     }
 
     if (response.toolCalls.length === 0) {
@@ -583,6 +590,52 @@ function toolFailure(toolName: string, error: string): { success: false; toolRes
   };
 }
 
+function isSafeToolPreamble(text: string): boolean {
+  const normalized = text
+    .replace(/<think>[\s\S]*?<\/think>/gi, '')
+    .replace(/<thinking>[\s\S]*?<\/thinking>/gi, '')
+    .trim();
+
+  if (!normalized) return true;
+  if (normalized.length > 140) return false;
+
+  const lines = normalized
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  if (lines.length > 2) return false;
+
+  const joined = lines.join(' ').toLowerCase();
+
+  const forbiddenPhrases = [
+    'answer is',
+    'final answer',
+    'therefore',
+    'in summary',
+    'done',
+    'completed',
+    'i found',
+    'the result',
+    'conclusion',
+  ];
+
+  if (forbiddenPhrases.some((phrase) => joined.includes(phrase))) {
+    return false;
+  }
+
+  const allowedPatterns = [
+    /^let me (inspect|check|read|look|open|review)\b.*\.?$/,
+    /^i'?ll (inspect|check|read|look|open|review)\b.*\.?$/,
+    /^i will (inspect|check|read|look|open|review)\b.*\.?$/,
+    /^checking\b.*\.?$/,
+    /^reading\b.*\.?$/,
+    /^inspecting\b.*\.?$/,
+  ];
+
+  return allowedPatterns.some((pattern) => pattern.test(joined));
+}
+
 function finalAnswerNowMessage(): AgentMessage {
   return {
     role: 'system',
@@ -596,15 +649,19 @@ function finalAnswerNowMessage(): AgentMessage {
 
 function systemPrompt(): string {
   return [
-    'You are Synax, a local code-editing agent working inside a git repository.',
+    'You are Synax, an expert code assistant.',
     'Inspect files before editing.',
     'Make minimal, targeted changes.',
     'Do not invent file contents.',
-    'Use exact replacement edits only with text copied from prior read calls.',
-    'Use write only for small new repo-local text files.',
-    'Honor explicit user limits on tool calls.',
-    'Once you have enough context, stop inspecting and answer.',
-    'When finished, summarize changed files, what changed, and verification status.',
+    'Edit only using text from prior reads.',
+    'Write only small repo-local text files.',
+    'Respect tool-call and step budgets.',
+    'For tool calls, emit tool calls only.',
+    'Do not include preambles around tool calls.',
+    'For Synax questions, inspect README.md, docs/, and specs/ first.',
+    'Keep documentation consistent with code.',
+    'Stop inspecting once you have enough context.',
+    'When finished, verify requirements and summarize changes.',
   ].join('\n');
 }
 
