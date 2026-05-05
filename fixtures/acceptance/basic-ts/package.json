@@ -1,0 +1,9 @@
+{
+  "name": "synax-acceptance-basic-ts",
+  "version": "0.0.0",
+  "private": true,
+  "type": "commonjs",
+  "scripts": {
+    "test": "node test.js"
+  }
+}

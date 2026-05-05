@@ -95,6 +95,60 @@ describe('LLM client — basic chat', () => {
     expect(resp.finishReason).toBe('stop');
     expect(resp.usage).toEqual({ promptTokens: 10, completionTokens: 5, totalTokens: 15 });
   });
+
+  test('sends tools and parses OpenAI-compatible tool calls', async () => {
+    srv.close();
+    srv = await createMockServer((_req, res) => {
+      captured = _req;
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(
+        JSON.stringify({
+          model: 'test-model',
+          choices: [
+            {
+              message: {
+                role: 'assistant',
+                content: '',
+                tool_calls: [
+                  {
+                    id: 'call_read',
+                    type: 'function',
+                    function: { name: 'read_file_range', arguments: '{"path":"src/a.ts"}' },
+                  },
+                ],
+              },
+              finish_reason: 'tool_calls',
+            },
+          ],
+        }),
+      );
+    });
+    const client = createOpenAICompatibleClient(makeConfig({ baseUrl: getServerUrl(srv) }));
+    const resp = await client.chat({
+      messages: [{ role: 'user', content: 'read a file' }],
+      tools: [
+        {
+          name: 'read_file_range',
+          description: 'Read file',
+          inputSchema: { type: 'object', properties: { path: { type: 'string' } } },
+        },
+      ],
+    });
+    const body = JSON.parse(captured!.body) as Record<string, unknown>;
+
+    expect(body.tools).toEqual([
+      {
+        type: 'function',
+        function: {
+          name: 'read_file_range',
+          description: 'Read file',
+          parameters: { type: 'object', properties: { path: { type: 'string' } } },
+        },
+      },
+    ]);
+    expect(body.tool_choice).toBe('auto');
+    expect(resp.toolCalls).toEqual([{ id: 'call_read', name: 'read_file_range', arguments: { path: 'src/a.ts' } }]);
+  });
 });
 
 // Test 2: Empty API key
@@ -278,6 +332,7 @@ describe('LLM client — ledger records token usage', () => {
   });
 
   test('records no usage when response has no usage data', async () => {
+    srv.close();
     srv = await createMockServer((_req, res) => {
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(

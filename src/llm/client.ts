@@ -7,6 +7,7 @@
 
 import { type NormalizedProviderConfig, type ChatOptions, type ChatResponse, type LlmError } from './types';
 import { type ContextLedger } from '../tools';
+import { parseOpenAIToolCalls, parseToolCallsFromContent, toOpenAIToolDefinition } from './tool-calls';
 
 // ---------------------------------------------------------------------------
 // Error helpers
@@ -117,18 +118,24 @@ function parseErrorResponse(status: number, bodyText: string): LlmError {
 function parseSuccessResponse(bodyText: string): ChatResponse {
   const json = JSON.parse(bodyText) as {
     model?: string;
-    choices?: Array<{ message?: { content?: string; role?: string }; finish_reason?: string | null }>;
+    choices?: Array<{
+      message?: { content?: string; role?: string; tool_calls?: unknown };
+      finish_reason?: string | null;
+    }>;
     usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number };
   };
 
   const choice = json.choices?.[0];
   const content = choice?.message?.content ?? '';
   const finishReason = choice?.finish_reason ?? null;
+  const standardToolCalls = parseOpenAIToolCalls(choice?.message?.tool_calls);
+  const fallbackToolCalls = standardToolCalls.length > 0 ? [] : parseToolCallsFromContent(content);
 
   return {
     content,
     model: json.model ?? '',
     finishReason: finishReason ?? 'stop',
+    toolCalls: [...standardToolCalls, ...fallbackToolCalls],
     usage: json.usage
       ? {
           promptTokens: json.usage.prompt_tokens ?? 0,
@@ -197,6 +204,9 @@ export function createOpenAICompatibleClient(
         messages: opts.messages,
         temperature: opts.temperature ?? 0,
         stream: false,
+        ...(opts.tools && opts.tools.length > 0
+          ? { tools: opts.tools.map(toOpenAIToolDefinition), tool_choice: 'auto' }
+          : {}),
       };
 
       const result = await dispatchRequest(endpoint, body, headers, timeoutMs);

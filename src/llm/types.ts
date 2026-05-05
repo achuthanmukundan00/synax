@@ -87,6 +87,11 @@ export interface ChatResponse {
   content: string;
   model: string;
   finishReason: string;
+  toolCalls: Array<{
+    id: string;
+    name: string;
+    arguments: Record<string, unknown>;
+  }>;
   usage: {
     promptTokens?: number;
     completionTokens?: number;
@@ -95,7 +100,12 @@ export interface ChatResponse {
 }
 
 export interface ChatOptions {
-  messages: Array<{ role: string; content: string }>;
+  messages: Array<{ role: string; content: string; tool_call_id?: string; name?: string; tool_calls?: unknown }>;
+  tools?: Array<{
+    name: string;
+    description: string;
+    inputSchema: Record<string, unknown>;
+  }>;
   temperature?: number;
   maxTokens?: number;
   signal?: AbortSignal;
