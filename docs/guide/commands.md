@@ -64,7 +64,8 @@ Runs one bounded edit-capable agent task:
 npm run synax -- run --task "Fix the failing auth test"
 ```
 
-`--yes` is accepted for compatibility. v0.3 safe tools run without interactive patch prompting.
+`--yes` is accepted for compatibility. Safe edit tools print a patch preview before applying a validated
+replacement, but interactive accept/reject prompting is not implemented yet.
 
 Plan files are not implemented yet:
 

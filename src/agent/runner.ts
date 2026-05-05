@@ -7,7 +7,13 @@ import { type ParsedToolCall } from '../llm/tool-calls';
 import { createInspectionLedger, createToolRegistry, type InspectionLedger } from '../tools';
 import { normalizeRepoPath } from '../tools/policy';
 import { type ToolDefinition, type ToolRegistry, type ToolResult } from '../tools/types';
-import { applyReplaceInFile, createUnifiedDiff, validateReplaceInFile, type ReplaceInFilePatch } from './patch';
+import {
+  applyReplaceInFile,
+  createPatchPreview,
+  validateReplaceInFile,
+  type PatchPreview,
+  type ReplaceInFilePatch,
+} from './patch';
 import { eventNow, type AgentEvent, type TerminalState } from './events';
 
 export type AgentTerminalState = TerminalState;
@@ -175,6 +181,16 @@ export async function runAgentTurn(options: AgentRunnerOptions & { task: string 
         repoRoot: options.repoRoot,
         registry,
         ledger: conversation.inspectionLedger,
+        onPatchPreview: (preview) => {
+          options.onEvent?.({
+            type: 'patch_preview',
+            timestamp: eventNow(),
+            stepIndex: step,
+            toolCallId: call.id,
+            toolName: call.name,
+            ...preview,
+          });
+        },
       });
       toolCalls.push({ name: call.name, success: result.success, error: result.error });
       options.onEvent?.({
@@ -245,7 +261,12 @@ function assistantMessage(response: ChatResponse): AgentMessage {
 
 async function executeAgentTool(
   call: ParsedToolCall,
-  context: { repoRoot: string; registry: ToolRegistry; ledger: InspectionLedger },
+  context: {
+    repoRoot: string;
+    registry: ToolRegistry;
+    ledger: InspectionLedger;
+    onPatchPreview?: (preview: PatchPreview) => void;
+  },
 ): Promise<{ success: boolean; toolResult: ToolResult; changedFile?: string; error?: string }> {
   if (call.name === 'read') {
     return executeReadTool(call.arguments, context.registry);
@@ -304,7 +325,7 @@ async function executeGitTool(
 
 async function executeReplaceInFile(
   input: Record<string, unknown>,
-  context: { repoRoot: string; ledger: InspectionLedger },
+  context: { repoRoot: string; ledger: InspectionLedger; onPatchPreview?: (preview: PatchPreview) => void },
   toolName = 'replace_in_file',
 ): Promise<{ success: boolean; toolResult: ToolResult; changedFile?: string; error?: string }> {
   const patch = coercePatch(input);
@@ -316,6 +337,9 @@ async function executeReplaceInFile(
   if (!validation.ok) {
     return toolFailure(toolName, validation.message);
   }
+
+  const preview = createPatchPreview(validation);
+  context.onPatchPreview?.(preview);
 
   const applied = await applyReplaceInFile(patch, { repoRoot: context.repoRoot, ledger: context.ledger });
   if (!applied.ok) {
@@ -330,7 +354,7 @@ async function executeReplaceInFile(
       toolName,
       output: {
         path: applied.path,
-        diff: createUnifiedDiff(applied.path, validation.before, validation.after),
+        diff: preview.diff,
       },
     },
   };
@@ -483,10 +507,7 @@ function publicToolResult(
   };
 }
 
-function isRecoverableToolError(
-  call: ParsedToolCall,
-  result: { success: boolean; error?: string },
-): boolean {
+function isRecoverableToolError(call: ParsedToolCall, result: { success: boolean; error?: string }): boolean {
   return call.name === 'read' && !result.success && isEnoentError(result.error);
 }
 
