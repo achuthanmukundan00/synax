@@ -12,6 +12,7 @@ import {
   loadProjectConfig,
   generateDefaultConfig,
   writeConfigFile,
+  normalizeProviderConfig,
 } from '../config/project';
 
 import {
@@ -72,6 +73,23 @@ describe('validateConfig', () => {
       contextBudgetTokens: -1,
     } as never);
     expect(errors.some((e) => e.path === 'contextBudgetTokens')).toBe(true);
+  });
+});
+
+describe('normalizeProviderConfig', () => {
+  it('preserves custom headers', () => {
+    const normalized = normalizeProviderConfig({
+      kind: 'openai-compatible',
+      base_url: 'http://127.0.0.1:1234/v1',
+      model: 'test-model',
+      custom_headers: { 'CF-Access-Client-Id': 'client-id' },
+    });
+    expect(normalized.customHeaders).toEqual({ 'CF-Access-Client-Id': 'client-id' });
+  });
+
+  it('supports timeout_ms and timeoutMs aliases', () => {
+    expect(normalizeProviderConfig({ timeout_ms: 2500 }).timeoutMs).toBe(2500);
+    expect(normalizeProviderConfig({ timeoutMs: 3000 }).timeoutMs).toBe(3000);
   });
 });
 

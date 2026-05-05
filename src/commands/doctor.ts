@@ -111,28 +111,39 @@ async function checkProviderReachability(
   normalized: NormalizedProviderConfig,
   timeoutMs = 1000,
 ): Promise<DiagnosticResult> {
-  const baseUrl = normalized.baseUrl;
+  const baseUrl = normalized.baseUrl.replace(/\/+$/, '');
+  const headers: Record<string, string> = {
+    Accept: 'application/json',
+    'User-Agent': 'synax-doctor/0.1.0',
+  };
+  if (normalized.apiKey && normalized.apiKey.length > 0) {
+    headers.Authorization = `Bearer ${normalized.apiKey}`;
+  }
+  for (const [key, value] of Object.entries(normalized.customHeaders ?? {})) {
+    headers[key] = value;
+  }
+
   try {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), timeoutMs);
     try {
-      const res = await fetch(baseUrl, { method: 'GET', signal: controller.signal });
+      const res = await fetch(`${baseUrl}/models`, { method: 'GET', headers, signal: controller.signal });
       clearTimeout(timeout);
       if (res.ok) {
-        return pass('provider-reachability', `Provider at ${baseUrl} is reachable (HTTP ${res.status})`);
+        return pass('provider-reachability', `Provider models endpoint is reachable (HTTP ${res.status})`);
       }
       return warn(
         'provider-reachability',
-        `Provider at ${baseUrl} returned HTTP ${res.status}`,
-        `Status ${res.status} — provider may be running but not fully healthy`,
+        `Provider models endpoint returned HTTP ${res.status}`,
+        'Model Request is the authoritative end-to-end provider check in full mode',
       );
     } catch (err) {
       clearTimeout(timeout);
       const msg = err instanceof Error ? err.message : String(err);
       if (msg.includes('ECONNREFUSED') || msg.includes('ENOTFOUND')) {
-        return fail('provider-reachability', `Provider at ${baseUrl} is unreachable: ${msg}`);
+        return fail('provider-reachability', `Provider models endpoint is unreachable: ${msg}`);
       }
-      return fail('provider-reachability', `Provider at ${baseUrl} check failed: ${msg}`);
+      return fail('provider-reachability', `Provider models endpoint check failed: ${msg}`);
     }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -154,6 +165,7 @@ async function checkModelRequest(normalized: NormalizedProviderConfig): Promise<
         { role: 'user', content: 'Say OK.' },
       ],
       temperature: 0,
+      maxTokens: 16,
     });
     const latencyMs = Math.round(performance.now() - start);
     const content = (response.content || '').trim().slice(0, 200);
@@ -273,14 +285,26 @@ export function checkContextBudget(config: ProjectConfig): DiagnosticResult {
 // Relay health check (OpenAPI-compatible endpoint probe)
 // ---------------------------------------------------------------------------
 
-async function checkRelayHealth(baseUrl: string, timeoutMs = 1000): Promise<DiagnosticResult> {
+async function checkRelayHealth(normalized: NormalizedProviderConfig, timeoutMs = 1000): Promise<DiagnosticResult> {
+  const baseUrl = normalized.baseUrl.replace(/\/+$/, '');
+  const headers: Record<string, string> = {
+    Accept: 'application/json',
+    'User-Agent': 'synax-doctor/0.1.0',
+  };
+  if (normalized.apiKey && normalized.apiKey.length > 0) {
+    headers.Authorization = `Bearer ${normalized.apiKey}`;
+  }
+  for (const [key, value] of Object.entries(normalized.customHeaders ?? {})) {
+    headers[key] = value;
+  }
+
   try {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), timeoutMs);
     try {
-      const res = await fetch(`${baseUrl}/v1/models`, {
+      const res = await fetch(`${baseUrl}/models`, {
         method: 'GET',
-        headers: { 'User-Agent': 'synax-doctor/0.1.0' },
+        headers,
         signal: controller.signal,
       });
       clearTimeout(timeout);
@@ -289,23 +313,23 @@ async function checkRelayHealth(baseUrl: string, timeoutMs = 1000): Promise<Diag
         const models = data.data?.slice(0, 5).map((m) => m.id) ?? [];
         return pass(
           'relay-health',
-          `Relay at ${baseUrl} is healthy (found ${data.data?.length || 0} models)`,
+          `Provider models endpoint is healthy (found ${data.data?.length || 0} models)`,
           `Models: ${models.join(', ') || 'none listed'}`,
         );
       }
       return warn(
         'relay-health',
-        `Relay returned HTTP ${res.status}`,
-        `Status ${res.status} — relay may be running but not fully healthy`,
+        `Provider models endpoint returned HTTP ${res.status}`,
+        'Some OpenAI-compatible providers do not expose /models; Model Request is authoritative',
       );
     } catch (err) {
       clearTimeout(timeout);
       const msg = err instanceof Error ? err.message : String(err);
-      return fail('relay-health', `Relay health check failed: ${msg}`);
+      return fail('relay-health', `Provider models endpoint check failed: ${msg}`);
     }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    return fail('relay-health', `Relay health check failed: ${msg}`);
+    return fail('relay-health', `Provider models endpoint check failed: ${msg}`);
   }
 }
 
@@ -344,17 +368,13 @@ async function runFullDoctor(baseDir?: string): Promise<DoctorFullReport> {
   const config = result.config;
   const normalized = normalizeProviderConfig(config.provider ?? {});
 
-  if ((config.provider?.kind ?? 'openai-compatible') !== 'openai-compatible') {
+  if (result.errors.length > 0 || (config.provider?.kind ?? 'openai-compatible') !== 'openai-compatible') {
     return report;
   }
 
   const providerReachability = await checkProviderReachability(normalized);
-  if (providerReachability.status !== 'pass') {
-    return { ...report, providerReachability };
-  }
-
   const modelRequest = await checkModelRequest(normalized);
-  const relayHealth = await checkRelayHealth(normalized.baseUrl);
+  const relayHealth = await checkRelayHealth(normalized);
   return { ...report, providerReachability, modelRequest, relayHealth };
 }
 

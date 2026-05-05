@@ -87,9 +87,10 @@ describe('LLM client — basic chat', () => {
 
   test('POSTs to /chat/completions and returns content', async () => {
     const client = createOpenAICompatibleClient(makeConfig({ baseUrl: getServerUrl(srv) }));
-    const resp = await client.chat({ messages: [{ role: 'user', content: 'hi' }] });
+    const resp = await client.chat({ messages: [{ role: 'user', content: 'hi' }], maxTokens: 32 });
     expect(captured!.method).toBe('POST');
     expect(captured!.path).toBe('/chat/completions');
+    expect(JSON.parse(captured!.body).max_tokens).toBe(32);
     expect(resp.content).toBe('Hello');
     expect(resp.model).toBe('test-model');
     expect(resp.finishReason).toBe('stop');
