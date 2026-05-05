@@ -6,10 +6,11 @@ import { runCommand } from './commands/run.js';
 import { runInspectCommand } from './commands/inspect.js';
 import { runConfigCommand } from './commands/config.js';
 import { doctorCommand } from './commands/doctor.js';
+import pkg from '../package.json';
 
 const program = new Command();
 
-program.name('synax').description('A local-first coding agent for consumer-GPU developers').version('0.2.0');
+program.name('synax').description('A local-first coding agent for consumer-GPU developers').version(pkg.version);
 
 // Default command: shows help
 program
