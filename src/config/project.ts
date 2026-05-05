@@ -125,7 +125,14 @@ export interface ProjectConfig {
   subagents?: { enabled?: boolean; mode?: 'sequential' | 'parallel' };
   verification?: { defaultCommand?: string };
   provider?: ProviderConfig;
-  tools?: { exposed?: string[]; shell?: 'bash' | 'zsh'; unsafe?: boolean };
+  tools?: ToolSurfaceConfig;
+}
+
+export interface ToolSurfaceConfig {
+  exposed?: string[];
+  shell?: 'bash' | 'zsh';
+  unsafe?: boolean;
+  bash?: { enabled?: boolean };
 }
 
 export interface ValidationError {
@@ -160,7 +167,7 @@ const DEFAULTS: ProjectConfig = {
     customHeaders: undefined,
     timeoutSeconds: 120,
   },
-  tools: { exposed: ['read', 'write', 'edit', 'bash', 'git'], shell: 'zsh', unsafe: false },
+  tools: { exposed: ['read', 'write', 'edit', 'git'], shell: 'zsh', unsafe: false, bash: { enabled: false } },
 };
 
 export function discoverConfigPath(baseDir?: string): string | null {
@@ -206,6 +213,14 @@ export function generateDefaultConfig(): string {
     '',
     '[verification]',
     'defaultCommand = ""',
+    '',
+    '[tools]',
+    'exposed = ["read", "write", "edit", "git"]',
+    'shell = "zsh"',
+    'unsafe = false',
+    '',
+    '[tools.bash]',
+    'enabled = false',
     '',
     '[provider]',
     'kind = "openai-compatible"',
@@ -342,6 +357,17 @@ export function validateConfig(config: ProjectConfig): ValidationError[] {
       }
     }
   }
+  if (config.tools !== undefined) {
+    if (typeof config.tools !== 'object') {
+      errors.push({ path: 'tools', message: 'must be an object' });
+    } else if (config.tools.bash !== undefined) {
+      if (typeof config.tools.bash !== 'object') {
+        errors.push({ path: 'tools.bash', message: 'must be an object' });
+      } else if (config.tools.bash.enabled !== undefined && typeof config.tools.bash.enabled !== 'boolean') {
+        errors.push({ path: 'tools.bash.enabled', message: 'must be a boolean' });
+      }
+    }
+  }
   return errors;
 }
 
@@ -382,8 +408,7 @@ function configFromParsedToml(parsed: Record<string, unknown>): ProjectConfig {
     config.subagents = parsed.subagents as { enabled?: boolean; mode?: 'sequential' | 'parallel' };
   if (parsed.verification !== undefined && typeof parsed.verification === 'object')
     config.verification = parsed.verification as { defaultCommand?: string };
-  if (parsed.tools !== undefined && typeof parsed.tools === 'object')
-    config.tools = parsed.tools as { exposed?: string[]; shell?: 'bash' | 'zsh'; unsafe?: boolean };
+  if (parsed.tools !== undefined && typeof parsed.tools === 'object') config.tools = parsed.tools as ToolSurfaceConfig;
   return config;
 }
 
@@ -463,7 +488,12 @@ export function loadProjectConfig(baseDir?: string): LoadProjectConfigResult {
       ...userConfig,
       ...config,
       provider,
-      tools: { ...DEFAULTS.tools, ...userConfig.tools, ...config.tools },
+      tools: {
+        ...DEFAULTS.tools,
+        ...userConfig.tools,
+        ...config.tools,
+        bash: { ...DEFAULTS.tools?.bash, ...userConfig.tools?.bash, ...config.tools?.bash },
+      },
     },
     errors,
   );

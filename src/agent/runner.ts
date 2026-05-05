@@ -34,10 +34,15 @@ export interface AgentRunnerOptions {
   client: AgentClient;
   maxSteps?: number;
   maxToolCalls?: number;
+  tools?: ModelToolSurfaceOptions;
   conversation?: AgentConversation;
   registry?: ToolRegistry;
   onActivity?: (activity: AgentActivity) => void;
   onEvent?: (event: AgentEvent) => void;
+}
+
+export interface ModelToolSurfaceOptions {
+  bashEnabled?: boolean;
 }
 
 export interface AgentActivity {
@@ -74,7 +79,7 @@ export async function runAgentTurn(options: AgentRunnerOptions & { task: string 
   const conversation = options.conversation ?? createAgentConversation();
   const registry =
     options.registry ?? createToolRegistry({ repoRoot: options.repoRoot, ledger: conversation.inspectionLedger });
-  const tools = modelFacingTools();
+  const tools = buildModelFacingTools(options.tools);
   const maxSteps = options.maxSteps ?? DEFAULT_MAX_STEPS;
   const maxToolCalls = options.maxToolCalls ?? DEFAULT_MAX_TOOL_CALLS;
   const changedFiles: string[] = [];
@@ -343,8 +348,9 @@ async function executeCreateFile(
   };
 }
 
-function modelFacingTools(): ToolDefinition[] {
-  return [
+export function buildModelFacingTools(options: ModelToolSurfaceOptions = {}): ToolDefinition[] {
+  const bashEnabled = options.bashEnabled ?? false;
+  const tools: ToolDefinition[] = [
     {
       name: 'read',
       description:
@@ -406,23 +412,6 @@ function modelFacingTools(): ToolDefinition[] {
       },
     },
     {
-      name: 'bash',
-      description:
-        'Reserved shell execution surface. This v0.3 scaffold exposes the name but keeps execution disabled.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          command: { type: 'string', description: 'Shell command to run when enabled.' },
-        },
-        additionalProperties: false,
-      },
-      safetyPolicy: { readOnly: false, rejectsUnsafePaths: true, boundedOutput: true },
-      ledgerBehavior: 'none',
-      async execute() {
-        return { success: false, toolName: 'bash', error: 'handled by the agent runner' };
-      },
-    },
-    {
       name: 'git',
       description: 'Inspect bounded git status or diff. Pass action "diff" for diff; defaults to status.',
       inputSchema: {
@@ -440,6 +429,28 @@ function modelFacingTools(): ToolDefinition[] {
       },
     },
   ];
+
+  if (bashEnabled) {
+    tools.splice(3, 0, {
+      name: 'bash',
+      description:
+        'Reserved shell execution surface. This v0.3 scaffold exposes the name only when shell execution policy enables it.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          command: { type: 'string', description: 'Shell command to run when enabled.' },
+        },
+        additionalProperties: false,
+      },
+      safetyPolicy: { readOnly: false, rejectsUnsafePaths: true, boundedOutput: true },
+      ledgerBehavior: 'none',
+      async execute() {
+        return { success: false, toolName: 'bash', error: 'handled by the agent runner' };
+      },
+    });
+  }
+
+  return tools;
 }
 
 function publicToolResult(
