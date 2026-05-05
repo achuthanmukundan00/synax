@@ -170,10 +170,28 @@ describe('loadProjectConfig', () => {
 
   it('supports restricting exposed tool list', () => {
     const configPath = join(TMP, '.synax.toml');
-    writeFileSync(configPath, ['[tools]', 'exposed = ["read","write","edit","bash","git"]', 'shell = "zsh"'].join('\n'));
+    writeFileSync(
+      configPath,
+      ['[tools]', 'exposed = ["read","write","edit","bash","git"]', 'shell = "zsh"'].join('\n'),
+    );
     const result = loadProjectConfig(TMP);
     expect(result.errors).toHaveLength(0);
     expect(result.config.tools?.exposed).toEqual(['read', 'write', 'edit', 'bash', 'git']);
+  });
+
+  it('defaults bash tool execution to disabled', () => {
+    const result = loadProjectConfig(TMP);
+    expect(result.errors).toHaveLength(0);
+    expect(result.config.tools?.exposed).toEqual(['read', 'write', 'edit', 'git']);
+    expect(result.config.tools?.bash?.enabled).toBe(false);
+  });
+
+  it('supports explicitly enabling bash in tool config', () => {
+    const configPath = join(TMP, '.synax.toml');
+    writeFileSync(configPath, ['[tools.bash]', 'enabled = true'].join('\n'));
+    const result = loadProjectConfig(TMP);
+    expect(result.errors).toHaveLength(0);
+    expect(result.config.tools?.bash?.enabled).toBe(true);
   });
 });
 

@@ -6,6 +6,7 @@ import { loadProjectConfig, normalizeProviderConfig, type ProjectConfig } from '
 import { createOpenAICompatibleClient } from '../llm/client';
 import {
   createAgentConversation,
+  buildModelFacingTools,
   resetAgentConversation,
   runAgentTurn,
   type AgentConversation,
@@ -53,6 +54,7 @@ export function createChatSession(options: { repoRoot: string; config: ProjectCo
         conversation,
         maxSteps: options.config.maxModelSteps,
         maxToolCalls: options.config.maxToolCalls,
+        tools: { bashEnabled: options.config.tools?.bash?.enabled },
         onActivity(activity) {
           console.log(`[synax] ${activity.kind}: ${activity.message}`);
         },
@@ -180,10 +182,12 @@ async function handleSlashCommand(
     return { handled: true, output: applySettingsSet(trimmedCommand, context.config) };
   }
   if (command === '/tools') {
-    const exposed = context.config.tools?.exposed ?? ['read', 'write', 'edit', 'bash', 'git'];
+    const exposed = buildModelFacingTools({ bashEnabled: context.config.tools?.bash?.enabled }).map(
+      (tool) => tool.name,
+    );
     return {
       handled: true,
-      output: `Tools\n-----\nExposed: ${exposed.join(', ')}\nShell: ${context.config.tools?.shell ?? 'zsh'}\nUnsafe: ${(context.config.tools?.unsafe ?? false) ? 'enabled' : 'disabled'}`,
+      output: `Tools\n-----\nExposed: ${exposed.join(', ')}\nShell: ${context.config.tools?.shell ?? 'zsh'}\nBash: ${(context.config.tools?.bash?.enabled ?? false) ? 'enabled' : 'disabled'}\nUnsafe: ${(context.config.tools?.unsafe ?? false) ? 'enabled' : 'disabled'}`,
     };
   }
   if (command === '/budget') {
@@ -454,7 +458,7 @@ function renderSettingsPanel(repoRoot: string, config: ProjectConfig): string {
   const provider = normalizeProvider(config.provider ?? {});
   const headers = Object.keys(config.provider?.custom_headers ?? config.provider?.customHeaders ?? {});
   const configPath = discoverConfigPath(repoRoot) ?? '(defaults)';
-  const exposed = config.tools?.exposed ?? ['read', 'write', 'edit', 'bash', 'git'];
+  const exposed = buildModelFacingTools({ bashEnabled: config.tools?.bash?.enabled }).map((tool) => tool.name);
   return [
     'Settings',
     '--------',
@@ -476,6 +480,7 @@ function renderSettingsPanel(repoRoot: string, config: ProjectConfig): string {
     'Tools',
     `  exposed:      ${exposed.join(', ')}`,
     `  shell:        ${config.tools?.shell ?? 'zsh'}`,
+    `  bash:         ${(config.tools?.bash?.enabled ?? false) ? 'enabled' : 'disabled'}`,
     `  unsafe:       ${(config.tools?.unsafe ?? false) ? 'enabled' : 'disabled'}`,
     '',
     'Verification',

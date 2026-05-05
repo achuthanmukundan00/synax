@@ -1,6 +1,6 @@
 import { loadProjectConfig, normalizeProviderConfig } from '../config/project';
 import { createOpenAICompatibleClient } from '../llm/client';
-import { runAgentTurn, type AgentActivity, type AgentTerminalState } from './runner';
+import { buildModelFacingTools, runAgentTurn, type AgentActivity, type AgentTerminalState } from './runner';
 import { runVerification, type VerificationResult } from './verification';
 import { eventNow, type AgentEvent } from './events';
 
@@ -56,6 +56,9 @@ export async function runAgentTask(options: RunTaskOptions): Promise<RunTaskRepo
   }
 
   const client = createOpenAICompatibleClient(providerConfig);
+  const tools = buildModelFacingTools({ bashEnabled: projectConfig.config.tools?.bash?.enabled }).map(
+    (tool) => tool.name,
+  );
   options.onEvent?.({
     type: 'task_started',
     timestamp: eventNow(),
@@ -66,7 +69,7 @@ export async function runAgentTask(options: RunTaskOptions): Promise<RunTaskRepo
     contextBudgetTokens: projectConfig.config.contextBudgetTokens ?? 131072,
     maxModelSteps: projectConfig.config.maxModelSteps ?? 32,
     maxToolCalls: projectConfig.config.maxToolCalls ?? 96,
-    tools: projectConfig.config.tools?.exposed ?? ['read', 'write', 'edit', 'bash', 'git'],
+    tools,
     task: options.task,
   });
   const turn = await runAgentTurn({
@@ -75,6 +78,7 @@ export async function runAgentTask(options: RunTaskOptions): Promise<RunTaskRepo
     client,
     maxSteps: projectConfig.config.maxModelSteps,
     maxToolCalls: projectConfig.config.maxToolCalls,
+    tools: { bashEnabled: projectConfig.config.tools?.bash?.enabled },
     onActivity: options.onActivity,
     onEvent: options.onEvent,
   });

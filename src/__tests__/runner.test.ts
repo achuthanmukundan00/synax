@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, rmSync, writeFileSync, readFileSync } from 'fs';
 import { join } from 'path';
 
-import { createAgentConversation, runAgentTurn, type AgentClient } from '../agent/runner';
+import { buildModelFacingTools, createAgentConversation, runAgentTurn, type AgentClient } from '../agent/runner';
 
 const TMP = join(process.cwd(), 'tmp', 'synax-runner-tests');
 
@@ -42,8 +42,51 @@ describe('shared bounded agent runner', () => {
       'read',
       'write',
       'edit',
+      'git',
+    ]);
+  });
+
+  it('includes bash in model-facing tools only when explicitly enabled', async () => {
+    expect(buildModelFacingTools({ bashEnabled: false }).map((tool) => tool.name)).toEqual([
+      'read',
+      'write',
+      'edit',
+      'git',
+    ]);
+    expect(buildModelFacingTools({ bashEnabled: true }).map((tool) => tool.name)).toEqual([
+      'read',
+      'write',
+      'edit',
       'bash',
       'git',
+    ]);
+  });
+
+  it('sends bash to the model when session policy explicitly enables it', async () => {
+    const client = fakeClient([{ content: 'done' }]);
+
+    await runAgentTurn({ repoRoot: TMP, task: 'hello', client, tools: { bashEnabled: true } });
+
+    expect(client.requests[0].tools.map((tool: { name: string }) => tool.name)).toEqual([
+      'read',
+      'write',
+      'edit',
+      'bash',
+      'git',
+    ]);
+  });
+
+  it('still returns a clear tool error when disabled bash is called directly', async () => {
+    const client = fakeClient([{ toolCalls: [{ id: 'call_1', name: 'bash', arguments: { command: 'npm test' } }] }]);
+
+    const result = await runAgentTurn({ repoRoot: TMP, task: 'run tests', client });
+
+    expect(result).toMatchObject({
+      terminalState: 'tool_error',
+      error: 'bash tool is not enabled in this scaffold',
+    });
+    expect(result.toolCalls).toEqual([
+      { name: 'bash', success: false, error: 'bash tool is not enabled in this scaffold' },
     ]);
   });
 

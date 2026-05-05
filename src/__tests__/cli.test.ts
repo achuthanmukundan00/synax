@@ -171,7 +171,7 @@ describe('CLI', () => {
         const result = await runSynaxDetailed(['ask', '--question', 'Reply with exactly: synax-ok'], { cwd });
         expect(result.status).toBe(0);
         expect(result.stdout).toContain('Synax Task');
-        expect(result.stdout).toContain('Tools:       read, write, edit, bash, git');
+        expect(result.stdout).toContain('Tools:       read, write, edit, git');
         expect(result.stdout).toContain('synax-ok');
         expect(result.stderr).toBe('');
       } finally {
@@ -305,7 +305,7 @@ describe('CLI', () => {
         };
         expect(parsed.messages[0].role).toBe('system');
         expect(parsed.messages[0].content).toContain('You are Synax');
-        expect(parsed.tools.map((tool) => tool.function.name)).toEqual(['read', 'write', 'edit', 'bash', 'git']);
+        expect(parsed.tools.map((tool) => tool.function.name)).toEqual(['read', 'write', 'edit', 'git']);
         expect(parsed.messages[0].content).not.toContain('sk-context-secret');
       } finally {
         srv.close();
@@ -356,10 +356,45 @@ describe('CLI', () => {
       expect(output).toContain('[synax] Run command initialized');
     });
 
-    test('should accept --task option', () => {
-      const output = runSynax(['run', '--task', 'test task']);
-      expect(output).toContain('test task');
-      expect(output).toContain('Synax run report');
+    test('should accept --task option without advertising disabled bash', async () => {
+      const cwd = mkdtempSync(path.join(tmpdir(), 'synax-cli-run-task-'));
+      let requestBody = '';
+      const srv = await createMockServer((req, res) => {
+        requestBody = req.body;
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(
+          JSON.stringify({
+            model: 'test-model',
+            choices: [{ message: { role: 'assistant', content: 'run complete' }, finish_reason: 'stop' }],
+          }),
+        );
+      });
+      try {
+        writeFileSync(
+          path.join(cwd, '.synax.toml'),
+          [
+            '[provider]',
+            'kind = "openai-compatible"',
+            `base_url = "${getServerUrl(srv)}/v1"`,
+            'model = "test-model"',
+            'timeout_seconds = 1',
+          ].join('\n'),
+          'utf-8',
+        );
+        const result = await runSynaxDetailed(['run', '--task', 'test task'], { cwd });
+        expect(result.status).toBe(0);
+        expect(result.stdout).toContain('test task');
+        expect(result.stdout).toContain('Synax run report');
+        expect(result.stdout).toContain('run complete');
+
+        const parsed = JSON.parse(requestBody) as {
+          tools: Array<{ function: { name: string } }>;
+        };
+        expect(parsed.tools.map((tool) => tool.function.name)).toEqual(['read', 'write', 'edit', 'git']);
+      } finally {
+        srv.close();
+        rmSync(cwd, { recursive: true, force: true });
+      }
     });
 
     test('should accept --plan option', () => {

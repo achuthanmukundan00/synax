@@ -12,6 +12,7 @@ import { join, resolve } from 'path';
 import { readFileSync, existsSync, writeFileSync, mkdirSync } from 'fs';
 import { buildProjectProfile, formatTextProfile, FullProfile, type ConfigProfile } from '../config/profile';
 import { discoverConfigPath, loadProjectConfig } from '../config/project';
+import { buildModelFacingTools } from '../agent/runner';
 import { createContextLedger, type ContextLedger, type ModelCallEntry } from '../tools';
 
 export const PROJECT_CONTEXT_PATH = join('.synax', 'context.json');
@@ -166,8 +167,9 @@ export function buildInspectConfigProfile(baseDir: string): ConfigProfile {
     contextBudgetTokens: parsedConfig.config.contextBudgetTokens,
     maxModelSteps: parsedConfig.config.maxModelSteps,
     maxToolCalls: parsedConfig.config.maxToolCalls,
-    tools: parsedConfig.config.tools?.exposed ?? ['read', 'write', 'edit', 'bash', 'git'],
+    tools: buildModelFacingTools({ bashEnabled: parsedConfig.config.tools?.bash?.enabled }).map((tool) => tool.name),
     shell: parsedConfig.config.tools?.shell ?? 'zsh',
+    bash: parsedConfig.config.tools?.bash?.enabled ?? false,
     providerPreset: parsedConfig.config.provider?.preset ?? 'relay-local',
   };
 
