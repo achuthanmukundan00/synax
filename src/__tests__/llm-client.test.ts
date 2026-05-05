@@ -276,9 +276,9 @@ describe('LLM client — provider error plain text', () => {
 
 // Test 6: Config validation — missing provider kind
 describe('Config validation — missing kind', () => {
-  test('missing provider.kind produces error', () => {
+  test('missing provider.kind is allowed and inferred by preset/defaults', () => {
     const errors = validateConfig({ provider: {} as any });
-    expect(errors.some((e) => e.path === 'provider.kind')).toBeTruthy();
+    expect(errors.some((e) => e.path === 'provider.kind')).toBeFalsy();
   });
 });
 

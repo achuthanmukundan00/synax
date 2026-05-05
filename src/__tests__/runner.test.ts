@@ -38,15 +38,19 @@ describe('shared bounded agent runner', () => {
     const result = await runAgentTurn({ repoRoot: TMP, task: 'hello', client });
 
     expect(result.terminalState).toBe('completed');
-    expect(client.requests[0].tools.map((tool: { name: string }) => tool.name)).toEqual(
-      expect.arrayContaining(['list_files', 'read_file_range', 'replace_in_file', 'create_file']),
-    );
+    expect(client.requests[0].tools.map((tool: { name: string }) => tool.name)).toEqual([
+      'read',
+      'write',
+      'edit',
+      'bash',
+      'git',
+    ]);
   });
 
   it('executes a requested tool, appends the result, then continues', async () => {
     writeFileSync(join(TMP, 'a.txt'), 'hello\n', 'utf-8');
     const client = fakeClient([
-      { toolCalls: [{ id: 'call_1', name: 'read_file_range', arguments: { path: 'a.txt' } }] },
+      { toolCalls: [{ id: 'call_1', name: 'read', arguments: { path: 'a.txt' } }] },
       { content: 'read it' },
     ]);
 
@@ -55,9 +59,7 @@ describe('shared bounded agent runner', () => {
     expect(result.terminalState).toBe('completed');
     expect(client.requests).toHaveLength(2);
     expect(client.requests[1].messages).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ role: 'tool', tool_call_id: 'call_1', name: 'read_file_range' }),
-      ]),
+      expect.arrayContaining([expect.objectContaining({ role: 'tool', tool_call_id: 'call_1', name: 'read' })]),
     );
   });
 
@@ -71,31 +73,31 @@ describe('shared bounded agent runner', () => {
 
   it('terminates deterministically at maxSteps', async () => {
     const client = fakeClient([
-      { toolCalls: [{ id: '1', name: 'list_files', arguments: {} }] },
-      { toolCalls: [{ id: '2', name: 'list_files', arguments: {} }] },
+      { toolCalls: [{ id: '1', name: 'read', arguments: {} }] },
+      { toolCalls: [{ id: '2', name: 'read', arguments: {} }] },
     ]);
 
     const result = await runAgentTurn({ repoRoot: TMP, task: 'loop', client, maxSteps: 1 });
 
-    expect(result).toMatchObject({ terminalState: 'budgetExhausted', error: 'max steps exceeded: 1' });
+    expect(result).toMatchObject({ terminalState: 'budget_exhausted', error: 'max steps exceeded: 1' });
   });
 
   it('terminates deterministically at maxToolCalls', async () => {
     const client = fakeClient([
-      { toolCalls: [{ id: '1', name: 'list_files', arguments: {} }] },
-      { toolCalls: [{ id: '2', name: 'list_files', arguments: {} }] },
+      { toolCalls: [{ id: '1', name: 'read', arguments: {} }] },
+      { toolCalls: [{ id: '2', name: 'read', arguments: {} }] },
     ]);
 
     const result = await runAgentTurn({ repoRoot: TMP, task: 'loop', client, maxSteps: 4, maxToolCalls: 1 });
 
-    expect(result).toMatchObject({ terminalState: 'budgetExhausted', error: 'max tool calls exceeded: 1' });
+    expect(result).toMatchObject({ terminalState: 'budget_exhausted', error: 'max tool calls exceeded: 1' });
     expect(result.toolCalls).toHaveLength(1);
   });
 
   it('asks for a final answer on the final allowed model step', async () => {
     writeFileSync(join(TMP, 'package.json'), '{}\n', 'utf-8');
     const client = fakeClient([
-      { toolCalls: [{ id: '1', name: 'read_file_range', arguments: { path: 'package.json' } }] },
+      { toolCalls: [{ id: '1', name: 'read', arguments: { path: 'package.json' } }] },
       { content: 'final from inspected context' },
     ]);
 
@@ -116,17 +118,17 @@ describe('shared bounded agent runner', () => {
   it('does not execute tool calls requested on the final allowed model step', async () => {
     writeFileSync(join(TMP, 'a.txt'), 'hello\n', 'utf-8');
     const client = fakeClient([
-      { toolCalls: [{ id: '1', name: 'read_file_range', arguments: { path: 'a.txt' } }] },
-      { content: '', toolCalls: [{ id: '2', name: 'list_files', arguments: {} }] },
+      { toolCalls: [{ id: '1', name: 'read', arguments: { path: 'a.txt' } }] },
+      { content: '', toolCalls: [{ id: '2', name: 'read', arguments: {} }] },
     ]);
 
     const result = await runAgentTurn({ repoRoot: TMP, task: 'loop', client, maxSteps: 2 });
 
     expect(result).toMatchObject({
-      terminalState: 'budgetExhausted',
+      terminalState: 'budget_exhausted',
       error: 'max steps exceeded: 2',
     });
-    expect(result.toolCalls.map((call) => call.name)).toEqual(['read_file_range']);
+    expect(result.toolCalls.map((call) => call.name)).toEqual(['read']);
   });
 
   it('finalizes before exceeding budget after a bounded inspection sequence', async () => {
@@ -135,9 +137,9 @@ describe('shared bounded agent runner', () => {
     writeFileSync(join(TMP, 'src', 'cli.ts'), 'cli\n', 'utf-8');
     writeFileSync(join(TMP, 'src', 'commands', 'chat.ts'), 'chat\n', 'utf-8');
     const client = fakeClient([
-      { toolCalls: [{ id: '1', name: 'read_file_range', arguments: { path: 'package.json' } }] },
-      { toolCalls: [{ id: '2', name: 'read_file_range', arguments: { path: 'src/cli.ts' } }] },
-      { toolCalls: [{ id: '3', name: 'read_file_range', arguments: { path: 'src/commands/chat.ts' } }] },
+      { toolCalls: [{ id: '1', name: 'read', arguments: { path: 'package.json' } }] },
+      { toolCalls: [{ id: '2', name: 'read', arguments: { path: 'src/cli.ts' } }] },
+      { toolCalls: [{ id: '3', name: 'read', arguments: { path: 'src/commands/chat.ts' } }] },
       { content: 'npm run synax invokes the CLI, which dispatches chat.' },
     ]);
 
@@ -154,7 +156,7 @@ describe('shared bounded agent runner', () => {
   it('creates a new repo-local file through the agent tool', async () => {
     const client = fakeClient([
       {
-        toolCalls: [{ id: 'call_1', name: 'create_file', arguments: { path: 'docs/demo.md', content: '# Demo\n' } }],
+        toolCalls: [{ id: 'call_1', name: 'write', arguments: { path: 'docs/demo.md', content: '# Demo\n' } }],
       },
       { content: 'created' },
     ]);

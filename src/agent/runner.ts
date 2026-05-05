@@ -8,15 +8,9 @@ import { createInspectionLedger, createToolRegistry, type InspectionLedger } fro
 import { normalizeRepoPath } from '../tools/policy';
 import { type ToolDefinition, type ToolRegistry, type ToolResult } from '../tools/types';
 import { applyReplaceInFile, createUnifiedDiff, validateReplaceInFile, type ReplaceInFilePatch } from './patch';
+import { eventNow, type AgentEvent, type TerminalState } from './events';
 
-export type AgentTerminalState =
-  | 'completed'
-  | 'failedValidation'
-  | 'failedTests'
-  | 'modelError'
-  | 'budgetExhausted'
-  | 'toolError'
-  | 'failedVerification';
+export type AgentTerminalState = TerminalState;
 
 export interface AgentMessage {
   role: string;
@@ -43,6 +37,7 @@ export interface AgentRunnerOptions {
   conversation?: AgentConversation;
   registry?: ToolRegistry;
   onActivity?: (activity: AgentActivity) => void;
+  onEvent?: (event: AgentEvent) => void;
 }
 
 export interface AgentActivity {
@@ -79,7 +74,7 @@ export async function runAgentTurn(options: AgentRunnerOptions & { task: string 
   const conversation = options.conversation ?? createAgentConversation();
   const registry =
     options.registry ?? createToolRegistry({ repoRoot: options.repoRoot, ledger: conversation.inspectionLedger });
-  const tools = [...registry.list(), replaceInFileTool(), createFileTool()];
+  const tools = modelFacingTools();
   const maxSteps = options.maxSteps ?? DEFAULT_MAX_STEPS;
   const maxToolCalls = options.maxToolCalls ?? DEFAULT_MAX_TOOL_CALLS;
   const changedFiles: string[] = [];
@@ -101,7 +96,7 @@ export async function runAgentTurn(options: AgentRunnerOptions & { task: string 
     } catch (error) {
       const message = errorMessage(error);
       return {
-        terminalState: message.toLowerCase().includes('context budget') ? 'budgetExhausted' : 'modelError',
+        terminalState: message.toLowerCase().includes('context budget') ? 'budget_exhausted' : 'model_error',
         finalAnswer: '',
         steps: step,
         toolCalls,
@@ -115,7 +110,7 @@ export async function runAgentTurn(options: AgentRunnerOptions & { task: string 
 
     if (isFinalStep && response.toolCalls.length > 0) {
       return {
-        terminalState: 'budgetExhausted',
+        terminalState: 'budget_exhausted',
         finalAnswer: response.content.trim(),
         steps: step,
         toolCalls,
@@ -127,7 +122,7 @@ export async function runAgentTurn(options: AgentRunnerOptions & { task: string 
 
     if (response.toolCalls.length === 0 && response.content.includes('<tool_call')) {
       return {
-        terminalState: 'modelError',
+        terminalState: 'model_error',
         finalAnswer: response.content.trim(),
         steps: step,
         toolCalls,
@@ -151,7 +146,7 @@ export async function runAgentTurn(options: AgentRunnerOptions & { task: string 
     for (const call of response.toolCalls) {
       if (toolCalls.length >= maxToolCalls) {
         return {
-          terminalState: 'budgetExhausted',
+          terminalState: 'budget_exhausted',
           finalAnswer: response.content.trim(),
           steps: step,
           toolCalls,
@@ -161,18 +156,35 @@ export async function runAgentTurn(options: AgentRunnerOptions & { task: string 
         };
       }
       options.onActivity?.({ kind: 'tool', message: `${call.name}(${JSON.stringify(call.arguments)})` });
+      options.onEvent?.({
+        type: 'tool_started',
+        timestamp: eventNow(),
+        stepIndex: step,
+        toolCallId: call.id,
+        toolName: call.name,
+        summary: JSON.stringify(call.arguments).slice(0, 180),
+      });
       const result = await executeAgentTool(call, {
         repoRoot: options.repoRoot,
         registry,
         ledger: conversation.inspectionLedger,
       });
       toolCalls.push({ name: call.name, success: result.success, error: result.error });
+      options.onEvent?.({
+        type: 'tool_finished',
+        timestamp: eventNow(),
+        stepIndex: step,
+        toolCallId: call.id,
+        toolName: call.name,
+        status: result.success ? 'ok' : 'error',
+        summary: result.success ? 'completed' : (result.error ?? 'failed'),
+      });
       if (result.changedFile) changedFiles.push(result.changedFile);
       conversation.messages.push(toolResultMessage(call, JSON.stringify(result.toolResult)));
 
       if (!result.success) {
         return {
-          terminalState: 'toolError',
+          terminalState: 'tool_error',
           finalAnswer: response.content.trim(),
           steps: step,
           toolCalls,
@@ -185,7 +197,7 @@ export async function runAgentTurn(options: AgentRunnerOptions & { task: string 
   }
 
   return {
-    terminalState: 'budgetExhausted',
+    terminalState: 'budget_exhausted',
     finalAnswer: '',
     steps: maxSteps,
     toolCalls,
@@ -211,12 +223,24 @@ async function executeAgentTool(
   call: ParsedToolCall,
   context: { repoRoot: string; registry: ToolRegistry; ledger: InspectionLedger },
 ): Promise<{ success: boolean; toolResult: ToolResult; changedFile?: string; error?: string }> {
-  if (call.name === 'replace_in_file') {
-    return executeReplaceInFile(call.arguments, context);
+  if (call.name === 'read') {
+    return executeReadTool(call.arguments, context.registry);
   }
 
-  if (call.name === 'create_file') {
-    return executeCreateFile(call.arguments, context.repoRoot);
+  if (call.name === 'git') {
+    return executeGitTool(call.arguments, context.registry);
+  }
+
+  if (call.name === 'edit' || call.name === 'replace_in_file') {
+    return executeReplaceInFile(call.arguments, context, call.name);
+  }
+
+  if (call.name === 'write' || call.name === 'create_file') {
+    return executeCreateFile(call.arguments, context.repoRoot, call.name);
+  }
+
+  if (call.name === 'bash') {
+    return toolFailure('bash', 'bash tool is not enabled in this scaffold');
   }
 
   const toolResult = await context.registry.execute(call.name, call.arguments);
@@ -227,23 +251,51 @@ async function executeAgentTool(
   };
 }
 
+async function executeReadTool(
+  input: Record<string, unknown>,
+  registry: ToolRegistry,
+): Promise<{ success: boolean; toolResult: ToolResult; error?: string }> {
+  if (typeof input.query === 'string' && input.query.trim().length > 0) {
+    const result = await registry.execute('search_text', input);
+    return publicToolResult('read', result);
+  }
+  if (typeof input.path === 'string' && input.path.trim().length > 0) {
+    const result = await registry.execute('read_file_range', input);
+    return publicToolResult('read', result);
+  }
+  const result = await registry.execute('list_files', input);
+  return publicToolResult('read', result);
+}
+
+async function executeGitTool(
+  input: Record<string, unknown>,
+  registry: ToolRegistry,
+): Promise<{ success: boolean; toolResult: ToolResult; error?: string }> {
+  const action =
+    typeof input.action === 'string' ? input.action : typeof input.operation === 'string' ? input.operation : 'status';
+  const result =
+    action === 'diff' ? await registry.execute('show_git_diff', input) : await registry.execute('show_git_status', {});
+  return publicToolResult('git', result);
+}
+
 async function executeReplaceInFile(
   input: Record<string, unknown>,
   context: { repoRoot: string; ledger: InspectionLedger },
+  toolName = 'replace_in_file',
 ): Promise<{ success: boolean; toolResult: ToolResult; changedFile?: string; error?: string }> {
   const patch = coercePatch(input);
   if (!patch) {
-    return toolFailure('replace_in_file', 'path, oldStr, and newStr are required');
+    return toolFailure(toolName, 'path, oldStr, and newStr are required');
   }
 
   const validation = await validateReplaceInFile(patch, { repoRoot: context.repoRoot, ledger: context.ledger });
   if (!validation.ok) {
-    return toolFailure('replace_in_file', validation.message);
+    return toolFailure(toolName, validation.message);
   }
 
   const applied = await applyReplaceInFile(patch, { repoRoot: context.repoRoot, ledger: context.ledger });
   if (!applied.ok) {
-    return toolFailure('replace_in_file', applied.message);
+    return toolFailure(toolName, applied.message);
   }
 
   return {
@@ -251,7 +303,7 @@ async function executeReplaceInFile(
     changedFile: applied.path,
     toolResult: {
       success: true,
-      toolName: 'replace_in_file',
+      toolName,
       output: {
         path: applied.path,
         diff: createUnifiedDiff(applied.path, validation.before, validation.after),
@@ -263,17 +315,18 @@ async function executeReplaceInFile(
 async function executeCreateFile(
   input: Record<string, unknown>,
   repoRoot: string,
+  toolName = 'create_file',
 ): Promise<{ success: boolean; toolResult: ToolResult; changedFile?: string; error?: string }> {
   if (typeof input.path !== 'string' || typeof input.content !== 'string') {
-    return toolFailure('create_file', 'path and content are required');
+    return toolFailure(toolName, 'path and content are required');
   }
 
   const target = normalizeRepoPath(repoRoot, input.path);
   if (!target.ok || !target.absolutePath || target.path === undefined) {
-    return toolFailure('create_file', target.reason ?? 'invalid path');
+    return toolFailure(toolName, target.reason ?? 'invalid path');
   }
   if (existsSync(target.absolutePath)) {
-    return toolFailure('create_file', `file already exists: ${target.path}`);
+    return toolFailure(toolName, `file already exists: ${target.path}`);
   }
 
   await mkdir(dirname(target.absolutePath), { recursive: true });
@@ -284,54 +337,119 @@ async function executeCreateFile(
     changedFile: target.path,
     toolResult: {
       success: true,
-      toolName: 'create_file',
+      toolName,
       output: { path: target.path, bytes: Buffer.byteLength(written, 'utf-8') },
     },
   };
 }
 
-function replaceInFileTool(): ToolDefinition {
-  return {
-    name: 'replace_in_file',
-    description:
-      'Replace exactly one string in one repo-local file. The target file must already have been read with read_file_range. oldStr must match exactly once.',
-    inputSchema: {
-      type: 'object',
-      required: ['path', 'oldStr', 'newStr'],
-      properties: {
-        path: { type: 'string', description: 'Repo-relative file path.' },
-        oldStr: { type: 'string', description: 'Exact text copied from a prior file read.' },
-        newStr: { type: 'string', description: 'Replacement text.' },
+function modelFacingTools(): ToolDefinition[] {
+  return [
+    {
+      name: 'read',
+      description:
+        'Inspect repository files with bounded output. Omit path to list files, pass path to read a file range, or pass query to search text.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: 'Optional repo-relative file or directory path.' },
+          startLine: { type: 'number', description: '1-based first line for file reads.' },
+          endLine: { type: 'number', description: '1-based final line for file reads.' },
+          query: { type: 'string', description: 'Literal text to search for.' },
+          maxFiles: { type: 'number', description: 'Maximum listed files.' },
+          maxMatches: { type: 'number', description: 'Maximum search matches.' },
+        },
+        additionalProperties: false,
       },
-      additionalProperties: false,
+      safetyPolicy: { readOnly: true, rejectsUnsafePaths: true, boundedOutput: true },
+      ledgerBehavior: 'records-file-range',
+      async execute() {
+        return { success: false, toolName: 'read', error: 'handled by the agent runner' };
+      },
     },
-    safetyPolicy: { readOnly: false, rejectsUnsafePaths: true, boundedOutput: true },
-    ledgerBehavior: 'none',
-    async execute() {
-      return { success: false, toolName: 'replace_in_file', error: 'handled by the agent runner' };
+    {
+      name: 'write',
+      description: 'Create one new repo-local text file. Fails if the file already exists.',
+      inputSchema: {
+        type: 'object',
+        required: ['path', 'content'],
+        properties: {
+          path: { type: 'string', description: 'Repo-relative path for the new file.' },
+          content: { type: 'string', description: 'Full file content to write.' },
+        },
+        additionalProperties: false,
+      },
+      safetyPolicy: { readOnly: false, rejectsUnsafePaths: true, boundedOutput: true },
+      ledgerBehavior: 'none',
+      async execute() {
+        return { success: false, toolName: 'write', error: 'handled by the agent runner' };
+      },
     },
-  };
+    {
+      name: 'edit',
+      description:
+        'Replace exactly one string in one repo-local file. The target file must already have been read. oldStr must match exactly once.',
+      inputSchema: {
+        type: 'object',
+        required: ['path', 'oldStr', 'newStr'],
+        properties: {
+          path: { type: 'string', description: 'Repo-relative file path.' },
+          oldStr: { type: 'string', description: 'Exact text copied from a prior file read.' },
+          newStr: { type: 'string', description: 'Replacement text.' },
+        },
+        additionalProperties: false,
+      },
+      safetyPolicy: { readOnly: false, rejectsUnsafePaths: true, boundedOutput: true },
+      ledgerBehavior: 'none',
+      async execute() {
+        return { success: false, toolName: 'edit', error: 'handled by the agent runner' };
+      },
+    },
+    {
+      name: 'bash',
+      description:
+        'Reserved shell execution surface. This v0.3 scaffold exposes the name but keeps execution disabled.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          command: { type: 'string', description: 'Shell command to run when enabled.' },
+        },
+        additionalProperties: false,
+      },
+      safetyPolicy: { readOnly: false, rejectsUnsafePaths: true, boundedOutput: true },
+      ledgerBehavior: 'none',
+      async execute() {
+        return { success: false, toolName: 'bash', error: 'handled by the agent runner' };
+      },
+    },
+    {
+      name: 'git',
+      description: 'Inspect bounded git status or diff. Pass action "diff" for diff; defaults to status.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          action: { type: 'string', enum: ['status', 'diff'], description: 'Git inspection action.' },
+          maxLines: { type: 'number', description: 'Maximum diff lines for action=diff.' },
+        },
+        additionalProperties: false,
+      },
+      safetyPolicy: { readOnly: true, rejectsUnsafePaths: true, boundedOutput: true },
+      ledgerBehavior: 'records-git-status',
+      async execute() {
+        return { success: false, toolName: 'git', error: 'handled by the agent runner' };
+      },
+    },
+  ];
 }
 
-function createFileTool(): ToolDefinition {
+function publicToolResult(
+  toolName: string,
+  result: ToolResult,
+): { success: boolean; toolResult: ToolResult; error?: string } {
   return {
-    name: 'create_file',
-    description:
-      'Create one new repo-local text file. Fails if the file already exists. Use for new docs or small new source files only.',
-    inputSchema: {
-      type: 'object',
-      required: ['path', 'content'],
-      properties: {
-        path: { type: 'string', description: 'Repo-relative path for the new file.' },
-        content: { type: 'string', description: 'Full file content to write.' },
-      },
-      additionalProperties: false,
-    },
-    safetyPolicy: { readOnly: false, rejectsUnsafePaths: true, boundedOutput: true },
-    ledgerBehavior: 'none',
-    async execute() {
-      return { success: false, toolName: 'create_file', error: 'handled by the agent runner' };
-    },
+    success: result.success,
+    toolResult: { ...result, toolName },
+    error: result.error,
   };
 }
 
@@ -371,8 +489,8 @@ function systemPrompt(): string {
     'Inspect files before editing.',
     'Make minimal, targeted changes.',
     'Do not invent file contents.',
-    'Use exact replacement edits only with text copied from prior file reads.',
-    'Use create_file only for small new repo-local text files.',
+    'Use exact replacement edits only with text copied from prior read calls.',
+    'Use write only for small new repo-local text files.',
     'Honor explicit user limits on tool calls.',
     'Once you have enough context, stop inspecting and answer.',
     'When finished, summarize changed files, what changed, and verification status.',

@@ -3,8 +3,16 @@ import { basename, dirname, join } from 'path';
 import { parse as parseToml } from 'toml';
 
 export type ProviderKind = 'openai-compatible';
+export type ProviderPreset =
+  | 'relay-local'
+  | 'relay-cloudflare'
+  | 'openai'
+  | 'anthropic'
+  | 'openrouter'
+  | 'custom-openai-compatible';
 
 export interface ProviderConfig {
+  preset?: ProviderPreset;
   kind?: ProviderKind;
   baseUrl?: string;
   base_url?: string;
@@ -17,6 +25,8 @@ export interface ProviderConfig {
   timeout_seconds?: number;
   timeoutMs?: number;
   timeout_ms?: number;
+  api_key_env?: string;
+  apiKeyEnv?: string;
 }
 
 export interface AgentBudgetConfig {
@@ -28,17 +38,81 @@ export interface AgentBudgetConfig {
   max_tool_calls?: number;
 }
 
+function providerPresetDefaults(preset: ProviderPreset): ProviderConfig {
+  switch (preset) {
+    case 'relay-cloudflare':
+      return {
+        preset,
+        kind: 'openai-compatible',
+        base_url: 'https://ai.watchyourtemper.com/v1',
+        model: 'Qwen3.6-35B-A3B-UD-IQ3_XXS.gguf',
+        custom_headers: {
+          'CF-Access-Client-Id': '$SYNAX_CF_ACCESS_CLIENT_ID',
+          'CF-Access-Client-Secret': '$SYNAX_CF_ACCESS_CLIENT_SECRET',
+        },
+      };
+    case 'openai':
+      return {
+        preset,
+        kind: 'openai-compatible',
+        base_url: 'https://api.openai.com/v1',
+        model: 'gpt-4.1',
+        api_key_env: 'OPENAI_API_KEY',
+      };
+    case 'anthropic':
+      return {
+        preset,
+        kind: 'openai-compatible',
+        base_url: 'https://api.anthropic.com',
+        model: 'claude-sonnet-4-5',
+        api_key_env: 'ANTHROPIC_API_KEY',
+      };
+    case 'openrouter':
+      return {
+        preset,
+        kind: 'openai-compatible',
+        base_url: 'https://openrouter.ai/api/v1',
+        model: '',
+        api_key_env: 'OPENROUTER_API_KEY',
+      };
+    case 'custom-openai-compatible':
+      return { preset, kind: 'openai-compatible', base_url: '', model: '', api_key_env: '' };
+    case 'relay-local':
+    default:
+      return {
+        preset: 'relay-local',
+        kind: 'openai-compatible',
+        base_url: 'http://127.0.0.1:1234/v1',
+        model: 'Qwen3.6-35B-A3B-UD-IQ3_XXS.gguf',
+        api_key_env: '',
+      };
+  }
+}
+
 export function normalizeProviderConfig(p: ProviderConfig): import('../llm/types').NormalizedProviderConfig {
-  const kind = p.kind ?? 'openai-compatible';
-  const baseUrl = p.base_url ?? p.baseUrl ?? 'http://127.0.0.1:1234/v1';
-  const model = p.model ?? '';
-  const apiKey = p.api_key ?? p.apiKey;
-  const customHeaders = p.custom_headers ?? p.customHeaders;
+  const presetDefaults = providerPresetDefaults(p.preset ?? 'relay-local');
+  const headersInput = p.custom_headers ?? p.customHeaders ?? presetDefaults.custom_headers;
+  const customHeaders: Record<string, string> = {};
+  for (const [name, value] of Object.entries(headersInput ?? {})) {
+    if (value.startsWith('$')) {
+      const envName = value.slice(1);
+      const resolved = process.env[envName];
+      if (resolved) customHeaders[name] = resolved;
+      continue;
+    }
+    customHeaders[name] = value;
+  }
+  const apiKeyEnv = p.api_key_env ?? p.apiKeyEnv ?? presetDefaults.api_key_env;
+  const apiKey = p.api_key ?? p.apiKey ?? (apiKeyEnv ? process.env[apiKeyEnv] : undefined);
+  const kind = p.kind ?? presetDefaults.kind ?? 'openai-compatible';
+  const baseUrl = p.base_url ?? p.baseUrl ?? presetDefaults.base_url ?? 'http://127.0.0.1:1234/v1';
+  const model = p.model ?? presetDefaults.model ?? '';
   const timeoutMs = p.timeout_ms ?? p.timeoutMs ?? (p.timeout_seconds ?? p.timeoutSeconds ?? 120) * 1000;
   return { kind, baseUrl, model, apiKey, customHeaders, timeoutMs };
 }
 
 export interface ProjectConfig {
+  activeProfile?: string;
   model?: string;
   baseUrl?: string;
   context_budget_tokens?: number;
@@ -51,6 +125,7 @@ export interface ProjectConfig {
   subagents?: { enabled?: boolean; mode?: 'sequential' | 'parallel' };
   verification?: { defaultCommand?: string };
   provider?: ProviderConfig;
+  tools?: { exposed?: string[]; shell?: 'bash' | 'zsh'; unsafe?: boolean };
 }
 
 export interface ValidationError {
@@ -68,6 +143,7 @@ export interface LoadProjectConfigResult {
 }
 
 const DEFAULTS: ProjectConfig = {
+  activeProfile: 'default',
   model: undefined,
   baseUrl: 'http://127.0.0.1:1234/v1',
   contextBudgetTokens: 131072,
@@ -76,6 +152,7 @@ const DEFAULTS: ProjectConfig = {
   subagents: { enabled: false, mode: 'sequential' },
   verification: { defaultCommand: undefined },
   provider: {
+    preset: 'relay-local',
     kind: 'openai-compatible',
     baseUrl: 'http://127.0.0.1:1234/v1',
     model: undefined,
@@ -83,6 +160,7 @@ const DEFAULTS: ProjectConfig = {
     customHeaders: undefined,
     timeoutSeconds: 120,
   },
+  tools: { exposed: ['read', 'write', 'edit', 'bash', 'git'], shell: 'zsh', unsafe: false },
 };
 
 export function discoverConfigPath(baseDir?: string): string | null {
@@ -156,6 +234,7 @@ export function writeConfigFile(
 export function validateConfig(config: ProjectConfig): ValidationError[] {
   const errors: ValidationError[] = [];
   const allowed = new Set([
+    'activeProfile',
     'model',
     'baseUrl',
     'contextBudgetTokens',
@@ -168,6 +247,7 @@ export function validateConfig(config: ProjectConfig): ValidationError[] {
     'subagents',
     'verification',
     'provider',
+    'tools',
   ]);
   for (const key of Object.keys(config)) {
     if (!allowed.has(key)) {
@@ -226,18 +306,14 @@ export function validateConfig(config: ProjectConfig): ValidationError[] {
     } else {
       const p = config.provider;
       const kind = p.kind;
-      if (kind === undefined) {
-        errors.push({ path: 'provider.kind', message: 'missing required field: provider.kind is required' });
-      } else if (kind !== 'openai-compatible') {
+      if (kind !== undefined && kind !== 'openai-compatible') {
         errors.push({
           path: 'provider.kind',
           message: `unsupported-provider: kind="${kind}" is not supported in v0.1. Use "openai-compatible". Native Anthropic provider support is not available.`,
         });
       }
       const resolvedBaseUrl = p.base_url ?? p.baseUrl;
-      if (resolvedBaseUrl === undefined) {
-        errors.push({ path: 'provider.base_url', message: 'missing required field: provider.base_url is required' });
-      } else if (typeof resolvedBaseUrl !== 'string') {
+      if (resolvedBaseUrl !== undefined && typeof resolvedBaseUrl !== 'string') {
         errors.push({ path: 'provider.base_url', message: 'base_url must be a string' });
       }
       if (p.model !== undefined && typeof p.model !== 'string') {
@@ -280,6 +356,8 @@ function validatePositiveInteger(errors: ValidationError[], path: string, value:
 
 function configFromParsedToml(parsed: Record<string, unknown>): ProjectConfig {
   const config: ProjectConfig = {};
+  if (parsed.active_profile !== undefined) config.activeProfile = parsed.active_profile as string;
+  if (parsed.activeProfile !== undefined) config.activeProfile = parsed.activeProfile as string;
   const agent = parsed.agent && typeof parsed.agent === 'object' ? (parsed.agent as AgentBudgetConfig) : undefined;
   if (parsed.provider && typeof parsed.provider === 'object') {
     config.provider = parsed.provider as ProviderConfig;
@@ -304,6 +382,8 @@ function configFromParsedToml(parsed: Record<string, unknown>): ProjectConfig {
     config.subagents = parsed.subagents as { enabled?: boolean; mode?: 'sequential' | 'parallel' };
   if (parsed.verification !== undefined && typeof parsed.verification === 'object')
     config.verification = parsed.verification as { defaultCommand?: string };
+  if (parsed.tools !== undefined && typeof parsed.tools === 'object')
+    config.tools = parsed.tools as { exposed?: string[]; shell?: 'bash' | 'zsh'; unsafe?: boolean };
   return config;
 }
 
@@ -333,6 +413,15 @@ export function loadProjectConfig(baseDir?: string): LoadProjectConfigResult {
   let config: ProjectConfig = {};
   let path: string | null = null;
   const errors: ValidationError[] = [];
+  const userConfigPath = process.env.HOME ? join(process.env.HOME, '.config', 'synax', 'config.toml') : null;
+  let userConfig: ProjectConfig = {};
+  if (userConfigPath && existsSync(userConfigPath)) {
+    try {
+      userConfig = configFromParsedToml(parseToml(readFileSync(userConfigPath, 'utf-8')) as Record<string, unknown>);
+    } catch {
+      userConfig = {};
+    }
+  }
   const discoveredPath = discoverConfigPath(baseDir);
   if (discoveredPath !== null) {
     path = discoveredPath;
@@ -344,17 +433,37 @@ export function loadProjectConfig(baseDir?: string): LoadProjectConfigResult {
       errors.push({ path: discoveredPath, message: `Failed to parse TOML: ${(err as Error).message}` });
     }
   }
+  const activeProviderPreset = (config.provider?.preset ??
+    userConfig.provider?.preset ??
+    DEFAULTS.provider?.preset ??
+    'relay-local') as ProviderPreset;
   const provider = {
     ...DEFAULTS.provider,
+    ...providerPresetDefaults(activeProviderPreset),
+    ...userConfig.provider,
     ...config.provider,
-    model: config.provider?.model ?? config.model ?? DEFAULTS.provider?.model,
-    baseUrl: config.provider?.baseUrl ?? config.provider?.base_url ?? config.baseUrl ?? DEFAULTS.provider?.baseUrl,
+    model:
+      config.provider?.model ??
+      userConfig.provider?.model ??
+      config.model ??
+      userConfig.model ??
+      DEFAULTS.provider?.model,
+    baseUrl:
+      config.provider?.baseUrl ??
+      config.provider?.base_url ??
+      userConfig.provider?.baseUrl ??
+      userConfig.provider?.base_url ??
+      config.baseUrl ??
+      userConfig.baseUrl ??
+      DEFAULTS.provider?.baseUrl,
   };
   const mergedConfig = applyEnvOverrides(
     {
       ...DEFAULTS,
+      ...userConfig,
       ...config,
       provider,
+      tools: { ...DEFAULTS.tools, ...userConfig.tools, ...config.tools },
     },
     errors,
   );

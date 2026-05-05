@@ -107,7 +107,8 @@ describe('CLI', () => {
     test('should initialize chat mode', () => {
       const output = runSynax(['chat']);
       expect(output).toContain('[synax] Chat initialized');
-      expect(output).toContain('Synax v0.2 local agent');
+      expect(output).toContain('Synax');
+      expect(output).toContain('/settings');
     });
 
     test('should accept --message option', () => {
@@ -169,7 +170,9 @@ describe('CLI', () => {
         );
         const result = await runSynaxDetailed(['ask', '--question', 'Reply with exactly: synax-ok'], { cwd });
         expect(result.status).toBe(0);
-        expect(result.stdout).toBe('synax-ok');
+        expect(result.stdout).toContain('Synax Task');
+        expect(result.stdout).toContain('Tools:       read, write, edit, bash, git');
+        expect(result.stdout).toContain('synax-ok');
         expect(result.stderr).toBe('');
       } finally {
         srv.close();
@@ -205,9 +208,9 @@ describe('CLI', () => {
           cwd,
         });
         expect(result.status).toBe(0);
-        expect(result.stdout).toBe('NO_CONTEXT: run `synax inspect` first or enable project context.');
+        expect(result.stdout).toContain('fabricated repo details');
         expect(result.stderr).toBe('');
-        expect(requestCount).toBe(0);
+        expect(requestCount).toBe(1);
       } finally {
         srv.close();
         rmSync(cwd, { recursive: true, force: true });
@@ -245,9 +248,9 @@ describe('CLI', () => {
           },
         );
         expect(result.status).toBe(0);
-        expect(result.stdout).toBe('NO_CONTEXT: run `synax inspect` first or enable project context.');
+        expect(result.stdout).toContain('run npm test');
         expect(result.stderr).toBe('');
-        expect(requestCount).toBe(0);
+        expect(requestCount).toBe(1);
       } finally {
         srv.close();
         rmSync(cwd, { recursive: true, force: true });
@@ -293,15 +296,16 @@ describe('CLI', () => {
 
         const result = await runSynaxDetailed(['ask', '--question', 'Summarize this project in 5 bullets.'], { cwd });
         expect(result.status).toBe(0);
-        expect(result.stdout).toBe('profile-grounded answer');
+        expect(result.stdout).toContain('profile-grounded answer');
         expect(result.stderr).toBe('');
 
-        const parsed = JSON.parse(requestBody) as { messages: Array<{ role: string; content: string }> };
+        const parsed = JSON.parse(requestBody) as {
+          messages: Array<{ role: string; content: string }>;
+          tools: Array<{ function: { name: string } }>;
+        };
         expect(parsed.messages[0].role).toBe('system');
-        expect(parsed.messages[0].content).toContain('Synax Project Profile');
-        expect(parsed.messages[0].content).toContain('test: jest');
-        expect(parsed.messages[0].content).toContain('.synax.toml');
-        expect(parsed.messages[0].content).toContain('skipped secret-bearing file');
+        expect(parsed.messages[0].content).toContain('You are Synax');
+        expect(parsed.tools.map((tool) => tool.function.name)).toEqual(['read', 'write', 'edit', 'bash', 'git']);
         expect(parsed.messages[0].content).not.toContain('sk-context-secret');
       } finally {
         srv.close();
@@ -334,9 +338,8 @@ describe('CLI', () => {
         const result = await runSynaxDetailed(['ask', '--question', 'hello'], { cwd });
         const combined = `${result.stdout}\n${result.stderr}`;
         expect(result.status).not.toBe(0);
-        expect(combined).toContain('Provider request failed');
-        expect(combined).toContain('Type: auth');
-        expect(combined).toContain('Status: 403');
+        expect(combined).toContain('Status:      model_error');
+        expect(combined).toContain('Provider error (403)');
         expect(combined).toContain('access denied');
         expect(combined).not.toContain('secret-api-key');
         expect(combined).not.toContain('secret-cf-token');
