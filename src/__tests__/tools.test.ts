@@ -107,6 +107,7 @@ describe('tool registry and inspection tools', () => {
   it('rejects unsafe paths before reading', async () => {
     mkdirSync(join(TMP, 'node_modules'), { recursive: true });
     writeFileSync(join(TMP, '.env'), 'TOKEN=secret\n', 'utf-8');
+    writeFileSync(join(TMP, '.synax.toml'), 'api_key = "sk-never-print-this"\n', 'utf-8');
     writeFileSync(join(TMP, 'node_modules', 'pkg.js'), 'module.exports = 1\n', 'utf-8');
     const registry = createToolRegistry({ repoRoot: TMP });
 
@@ -114,10 +115,49 @@ describe('tool registry and inspection tools', () => {
       success: false,
       error: expect.stringContaining('unsafe path'),
     });
+    await expect(registry.execute('read_file_range', { path: '.synax.toml' })).resolves.toMatchObject({
+      success: false,
+      error: expect.stringContaining('unsafe path'),
+    });
     await expect(registry.execute('read_file_range', { path: 'node_modules/pkg.js' })).resolves.toMatchObject({
       success: false,
       error: expect.stringContaining('unsafe path'),
     });
+  });
+
+  it('applies the default secret-file denylist and keeps .synax.toml.example inspectable', async () => {
+    for (const file of [
+      '.env',
+      '.env.local',
+      '.synax.toml',
+      'cert.pem',
+      'deploy.key',
+      'identity.p12',
+      'server.crt',
+      'id_rsa',
+      'id_ed25519',
+    ]) {
+      writeFileSync(join(TMP, file), 'secret\n', 'utf-8');
+    }
+    writeFileSync(join(TMP, '.synax.toml.example'), 'model = "example"\n', 'utf-8');
+    const registry = createToolRegistry({ repoRoot: TMP });
+
+    const result = await registry.execute('list_files', {});
+
+    expect(result.success).toBe(true);
+    const files = (result.output as ListFilesOutput).files;
+    expect(files).toEqual(['.synax.toml.example']);
+  });
+
+  it('redacts inline secrets from allowed file reads', async () => {
+    writeFileSync(join(TMP, 'request.txt'), 'Authorization: Bearer bearer-never-print-this\n', 'utf-8');
+    const registry = createToolRegistry({ repoRoot: TMP });
+
+    const result = await registry.execute('read_file_range', { path: 'request.txt' });
+
+    expect(result.success).toBe(true);
+    expect(JSON.stringify(result.output)).not.toContain('bearer-never-print-this');
+    expect(JSON.stringify(result.output)).toContain('[REDACTED]');
   });
 
   it('searches text with bounded repo-relative matches and ledger entries', async () => {

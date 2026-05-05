@@ -4,6 +4,7 @@ import { join } from 'path';
 import { promisify } from 'util';
 
 import { normalizeRepoPath } from './policy';
+import { redactSecrets } from './secrets';
 import { ToolContext, ToolDefinition, ToolResult } from './types';
 
 const execFileAsync = promisify(execFile);
@@ -122,7 +123,7 @@ const readFileRangeTool: ToolDefinition<ReadFileRangeInput> = {
     const endLine = Math.min(requestedEndLine, startLine + DEFAULT_MAX_READ_LINES - 1);
 
     try {
-      const text = await readFile(target.absolutePath, 'utf-8');
+      const text = redactSecrets(await readFile(target.absolutePath, 'utf-8'));
       const lines = splitLines(text);
       const selected = lines.slice(startLine - 1, endLine).map<LineOutput>((line, index) => ({
         lineNumber: startLine + index,
@@ -178,7 +179,7 @@ const searchTextTool: ToolDefinition<SearchTextInput> = {
       await collectFiles(context.repoRoot, target.path, files, DEFAULT_MAX_FILES);
       files.sort();
       for (const file of files) {
-        const text = await readFile(join(context.repoRoot, file), 'utf-8');
+        const text = redactSecrets(await readFile(join(context.repoRoot, file), 'utf-8'));
         const lines = splitLines(text);
         for (let index = 0; index < lines.length; index += 1) {
           if (!lines[index].includes(input.query)) {

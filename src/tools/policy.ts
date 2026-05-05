@@ -1,4 +1,5 @@
 import { extname, isAbsolute, normalize, relative, resolve, sep } from 'path';
+import { shouldSkipSecretFile } from './secrets';
 
 const BLOCKED_SEGMENTS = new Set(['.git', 'node_modules', 'dist', 'build', 'coverage', '.next', '.cache', '.vite']);
 const BLOCKED_BASENAMES = new Set(['package-lock.json', 'pnpm-lock.yaml', 'yarn.lock']);
@@ -44,7 +45,7 @@ export function normalizeRepoPath(repoRoot: string, inputPath: string): PathPoli
   if (
     segments.some((segment) => BLOCKED_SEGMENTS.has(segment)) ||
     BLOCKED_BASENAMES.has(basename) ||
-    isEnvFile(basename)
+    shouldSkipSecretFile(basename)
   ) {
     return { ok: false, reason: `unsafe path rejected: ${normalized}` };
   }
@@ -64,8 +65,4 @@ export function normalizeRepoPath(repoRoot: string, inputPath: string): PathPoli
 
 export function isSafeRepoPath(repoRoot: string, inputPath: string): boolean {
   return normalizeRepoPath(repoRoot, inputPath).ok;
-}
-
-function isEnvFile(basename: string): boolean {
-  return basename === '.env' || basename.startsWith('.env.');
 }
