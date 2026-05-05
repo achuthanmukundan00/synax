@@ -11,3 +11,9 @@ package-lock.json
 .env.*
 .synax.toml
 .synax/
+
+# wrangler files
+.wrangler
+.dev.vars*
+!.dev.vars.example
+!.env.example
