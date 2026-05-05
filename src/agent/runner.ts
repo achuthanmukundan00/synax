@@ -14,6 +14,7 @@ import {
   type PatchPreview,
   type ReplaceInFilePatch,
 } from './patch';
+import { writeLastEditRecord } from './safety';
 import { eventNow, type AgentEvent, type TerminalState } from './events';
 
 export type AgentTerminalState = TerminalState;
@@ -45,6 +46,7 @@ export interface AgentRunnerOptions {
   registry?: ToolRegistry;
   onActivity?: (activity: AgentActivity) => void;
   onEvent?: (event: AgentEvent) => void;
+  approvePatch?: (preview: PatchPreview) => PatchApprovalDecision | Promise<PatchApprovalDecision>;
 }
 
 export interface ModelToolSurfaceOptions {
@@ -55,6 +57,8 @@ export interface AgentActivity {
   kind: 'model' | 'tool';
   message: string;
 }
+
+export type PatchApprovalDecision = 'accept' | 'reject';
 
 export interface AgentTurnResult {
   terminalState: AgentTerminalState;
@@ -69,6 +73,14 @@ export interface AgentTurnResult {
 const DEFAULT_MAX_STEPS = 32;
 const DEFAULT_MAX_TOOL_CALLS = 96;
 const MAX_CONSECUTIVE_RECOVERABLE_TOOL_ERRORS = 3;
+
+interface AgentToolExecutionResult {
+  success: boolean;
+  toolResult: ToolResult;
+  changedFile?: string;
+  error?: string;
+  terminalState?: AgentTerminalState;
+}
 
 export function createAgentConversation(): AgentConversation {
   return {
@@ -145,6 +157,18 @@ export async function runAgentTurn(options: AgentRunnerOptions & { task: string 
       };
     }
 
+    if (response.toolCalls.length > 0 && response.content.trim().length > 0) {
+      return {
+        terminalState: 'model_error',
+        finalAnswer: response.content.trim(),
+        steps: step,
+        toolCalls,
+        changedFiles,
+        conversation,
+        error: 'model emitted ambiguous mixed output (tool calls plus final text)',
+      };
+    }
+
     if (response.toolCalls.length === 0) {
       return {
         terminalState: 'completed',
@@ -181,6 +205,7 @@ export async function runAgentTurn(options: AgentRunnerOptions & { task: string 
         repoRoot: options.repoRoot,
         registry,
         ledger: conversation.inspectionLedger,
+        approvePatch: options.approvePatch,
         onPatchPreview: (preview) => {
           options.onEvent?.({
             type: 'patch_preview',
@@ -224,7 +249,7 @@ export async function runAgentTurn(options: AgentRunnerOptions & { task: string 
         };
       } else {
         return {
-          terminalState: 'tool_error',
+          terminalState: result.terminalState ?? 'tool_error',
           finalAnswer: response.content.trim(),
           steps: step,
           toolCalls,
@@ -265,9 +290,10 @@ async function executeAgentTool(
     repoRoot: string;
     registry: ToolRegistry;
     ledger: InspectionLedger;
+    approvePatch?: (preview: PatchPreview) => PatchApprovalDecision | Promise<PatchApprovalDecision>;
     onPatchPreview?: (preview: PatchPreview) => void;
   },
-): Promise<{ success: boolean; toolResult: ToolResult; changedFile?: string; error?: string }> {
+): Promise<AgentToolExecutionResult> {
   if (call.name === 'read') {
     return executeReadTool(call.arguments, context.registry);
   }
@@ -299,7 +325,7 @@ async function executeAgentTool(
 async function executeReadTool(
   input: Record<string, unknown>,
   registry: ToolRegistry,
-): Promise<{ success: boolean; toolResult: ToolResult; error?: string }> {
+): Promise<AgentToolExecutionResult> {
   if (typeof input.query === 'string' && input.query.trim().length > 0) {
     const result = await registry.execute('search_text', input);
     return publicToolResult('read', result);
@@ -315,7 +341,7 @@ async function executeReadTool(
 async function executeGitTool(
   input: Record<string, unknown>,
   registry: ToolRegistry,
-): Promise<{ success: boolean; toolResult: ToolResult; error?: string }> {
+): Promise<AgentToolExecutionResult> {
   const action =
     typeof input.action === 'string' ? input.action : typeof input.operation === 'string' ? input.operation : 'status';
   const result =
@@ -325,9 +351,14 @@ async function executeGitTool(
 
 async function executeReplaceInFile(
   input: Record<string, unknown>,
-  context: { repoRoot: string; ledger: InspectionLedger; onPatchPreview?: (preview: PatchPreview) => void },
+  context: {
+    repoRoot: string;
+    ledger: InspectionLedger;
+    approvePatch?: (preview: PatchPreview) => PatchApprovalDecision | Promise<PatchApprovalDecision>;
+    onPatchPreview?: (preview: PatchPreview) => void;
+  },
   toolName = 'replace_in_file',
-): Promise<{ success: boolean; toolResult: ToolResult; changedFile?: string; error?: string }> {
+): Promise<AgentToolExecutionResult> {
   const patch = coercePatch(input);
   if (!patch) {
     return toolFailure(toolName, 'path, oldStr, and newStr are required');
@@ -340,11 +371,32 @@ async function executeReplaceInFile(
 
   const preview = createPatchPreview(validation);
   context.onPatchPreview?.(preview);
+  const decision = context.approvePatch ? await context.approvePatch(preview) : 'accept';
+  if (decision === 'reject') {
+    const error = `patch rejected for ${preview.path}`;
+    return {
+      success: false,
+      error,
+      terminalState: 'user_input_required',
+      toolResult: {
+        success: false,
+        toolName,
+        error,
+        output: { path: preview.path, diff: preview.diff, decision },
+      },
+    };
+  }
 
   const applied = await applyReplaceInFile(patch, { repoRoot: context.repoRoot, ledger: context.ledger });
   if (!applied.ok) {
     return toolFailure(toolName, applied.message);
   }
+  await writeLastEditRecord(context.repoRoot, {
+    path: applied.path,
+    before: applied.before,
+    after: applied.after,
+    timestamp: new Date().toISOString(),
+  });
 
   return {
     success: true,
@@ -364,7 +416,7 @@ async function executeCreateFile(
   input: Record<string, unknown>,
   repoRoot: string,
   toolName = 'create_file',
-): Promise<{ success: boolean; toolResult: ToolResult; changedFile?: string; error?: string }> {
+): Promise<AgentToolExecutionResult> {
   if (typeof input.path !== 'string' || typeof input.content !== 'string') {
     return toolFailure(toolName, 'path and content are required');
   }
@@ -496,10 +548,7 @@ export function buildModelFacingTools(options: ModelToolSurfaceOptions = {}): To
   return tools;
 }
 
-function publicToolResult(
-  toolName: string,
-  result: ToolResult,
-): { success: boolean; toolResult: ToolResult; error?: string } {
+function publicToolResult(toolName: string, result: ToolResult): AgentToolExecutionResult {
   return {
     success: result.success,
     toolResult: { ...result, toolName },

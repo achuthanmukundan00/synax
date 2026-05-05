@@ -38,6 +38,8 @@ export async function handleAskCommand(options: AskOptions): Promise<void> {
   const report = await runAgentTask({
     repoRoot: process.cwd(),
     task: options.question,
+    repairAttempts: 0,
+    recordRunArtifacts: false,
     onEvent(event) {
       renderer.onEvent(event);
     },

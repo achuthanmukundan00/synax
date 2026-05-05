@@ -1,7 +1,8 @@
-import { readFile, writeFile } from 'fs/promises';
+import { readFile } from 'fs/promises';
 
 import { type InspectionLedger } from '../tools/ledger';
 import { normalizeRepoPath } from '../tools/policy';
+import { atomicWriteFile } from './safety';
 
 export type PatchFailureState = 'invalid-patch' | 'unread-file-patch' | 'replacement-match-failure' | 'unsafe-path';
 
@@ -89,7 +90,7 @@ export async function applyReplaceInFile(
     return { ok: false, failureState: 'unsafe-path', message: target.reason ?? 'invalid path' };
   }
 
-  await writeFile(target.absolutePath, validation.after, 'utf-8');
+  await atomicWriteFile(target.absolutePath, validation.after);
   return validation;
 }
 

@@ -1,6 +1,8 @@
 import { Command } from 'commander';
 import { createInterface } from 'node:readline/promises';
 import { stdin as input, stdout as output } from 'node:process';
+import { execFile } from 'child_process';
+import { promisify } from 'util';
 
 import { loadProjectConfig, normalizeProviderConfig, type ProjectConfig } from '../config/project';
 import { createOpenAICompatibleClient } from '../llm/client';
@@ -17,6 +19,9 @@ import { buildProjectProfile, formatTextProfile } from '../config/profile';
 import { buildInspectConfigProfile } from './inspect';
 import { discoverConfigPath, normalizeProviderConfig as normalizeProvider } from '../config/project';
 import type { NormalizedProviderConfig } from '../llm/types';
+import { undoLastEdit } from '../agent/safety';
+
+const execFileAsync = promisify(execFile);
 
 export interface ChatSession {
   conversation: AgentConversation;
@@ -190,7 +195,7 @@ async function handleSlashCommand(
   if (command === '/help') {
     return {
       handled: true,
-      output: 'Commands: /help /settings /tools /budget /test-provider /inspect /verify /clear /status /exit /quit',
+      output: renderHelpPanel(),
     };
   }
   if (command === '/clear') {
@@ -255,7 +260,25 @@ async function handleSlashCommand(
       output: formatVerification(verification),
     };
   }
+  if (command === '/diff') {
+    return { handled: true, output: await renderGitDiff(context.repoRoot) };
+  }
+  if (command === '/undo-last-edit') {
+    const undone = await undoLastEdit(context.repoRoot);
+    return { handled: true, output: undone.ok ? `[synax] ${undone.message}` : `[synax] ${undone.message}` };
+  }
   return { handled: false, output: `[synax] unknown command: ${rawCommand}` };
+}
+
+async function renderGitDiff(repoRoot: string): Promise<string> {
+  try {
+    const { stdout } = await execFileAsync('git', ['diff', '--no-ext-diff'], { cwd: repoRoot, maxBuffer: 256 * 1024 });
+    const lines = stdout.split(/\r?\n/);
+    const bounded = lines.slice(0, 200).join('\n').trim();
+    return bounded || '[synax] no unstaged diff';
+  } catch (error) {
+    return `[synax] diff unavailable: ${error instanceof Error ? error.message : String(error)}`;
+  }
 }
 
 function applySettingsSet(rawCommand: string, config: ProjectConfig): string {
@@ -472,8 +495,38 @@ function printBanner(repoRoot: string, model: string): void {
   console.log('-----');
   console.log(`Repo: ${repoRoot}`);
   console.log(`Model: ${model}`);
-  console.log('Commands: /help /settings /tools /budget /test-provider /inspect /verify /clear /status /exit');
+  console.log('Commands: /help /settings /tools /budget /test-provider /inspect /verify /diff /undo-last-edit /clear /status /exit');
   console.log('');
+}
+
+function renderHelpPanel(): string {
+  return [
+    'Chat Commands',
+    '-------------',
+    '/help                      Show this help panel',
+    '/settings                  Show provider, agent, tool, and verification settings',
+    '/settings set <path> <value>',
+    '                           Change a supported setting for the current session',
+    '/tools                     Show model-facing tools',
+    '/budget                    Show context and loop limits',
+    '/test-provider             Probe provider models and chat endpoints',
+    '/inspect                   Show project profile',
+    '/verify                    Run configured verification command',
+    '/diff                      Show bounded git diff',
+    '/undo-last-edit            Revert last Synax-owned edit when unchanged',
+    '/clear                     Reset the conversation',
+    '/status                    Show git and budget status',
+    '/exit, /quit               Exit chat',
+    '',
+    'Session Settings',
+    '----------------',
+    '/settings set provider.endpoint http://127.0.0.1:1234/v1',
+    '/settings set provider.model Qwen3.6-35B-A3B-UD-IQ3_XXS.gguf',
+    '/settings set provider.header.Authorization Bearer <token>',
+    '/settings set agent.context_budget_tokens 65536',
+    '/settings set agent.max_model_steps 24',
+    '/settings set agent.max_tool_calls 64',
+  ].join('\n');
 }
 
 function renderSettingsPanel(repoRoot: string, config: ProjectConfig): string {

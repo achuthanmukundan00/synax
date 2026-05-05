@@ -66,3 +66,5 @@ Synax keeps extension seams internal and explicit. The stable interface definiti
 - guarded MCP bridge groundwork
 
 These interfaces are maintainer contracts, not a plugin marketplace. Runtime wiring should stay explicit, testable without network access, and unable to bypass tool policy, verification policy, approval/checkpoint policy, or context budgets.
+
+Built-in extension wiring lives in `src/extensions/builtins.ts`. It is an internal registry for current built-ins only: tool-call parsing, no-op repair/sanitization placeholders, OpenAI-compatible provider construction, local docs, verification, CLI renderers, model-facing tools, and guarded MCP bridge groundwork. The MCP import path deliberately rejects unsafe policies and otherwise reports unsupported until a real runtime bridge exists.

@@ -24,19 +24,19 @@ npm run synax -- chat --message "Explain the test layout."
 
 Slash commands:
 
-| Command | Behavior |
-| --- | --- |
-| `/help` | Show available chat commands |
-| `/settings` | Show provider, agent, tool, and verification settings |
-| `/settings set <path> <value>` | Change a supported setting for the current session |
-| `/tools` | Show model-facing tool surface |
-| `/budget` | Show context and loop limits |
-| `/test-provider` | Probe provider models and chat endpoints |
-| `/inspect` | Show project profile |
-| `/verify` | Run configured verification command |
-| `/clear` | Reset the chat conversation and inspection ledger |
-| `/status` | Show git and budget status |
-| `/exit`, `/quit` | Exit chat |
+| Command                        | Behavior                                              |
+| ------------------------------ | ----------------------------------------------------- |
+| `/help`                        | Show available chat commands                          |
+| `/settings`                    | Show provider, agent, tool, and verification settings |
+| `/settings set <path> <value>` | Change a supported setting for the current session    |
+| `/tools`                       | Show model-facing tool surface                        |
+| `/budget`                      | Show context and loop limits                          |
+| `/test-provider`               | Probe provider models and chat endpoints              |
+| `/inspect`                     | Show project profile                                  |
+| `/verify`                      | Run configured verification command                   |
+| `/clear`                       | Reset the chat conversation and inspection ledger     |
+| `/status`                      | Show git and budget status                            |
+| `/exit`, `/quit`               | Exit chat                                             |
 
 ## `synax ask`
 
@@ -64,8 +64,13 @@ Runs one bounded edit-capable agent task:
 npm run synax -- run --task "Fix the failing auth test"
 ```
 
-`--yes` is accepted for compatibility. Safe edit tools print a patch preview before applying a validated
-replacement, but interactive accept/reject prompting is not implemented yet.
+Replacement edits print a patch preview before writing. Because `run` is non-interactive, previewed replacement
+edits are rejected by default. Pass `--yes` to accept previewed replacement edits during that run:
+
+```sh
+npm run synax -- run --task "Fix the failing auth test" --yes
+npm run synax -- run --task "Fix the failing auth test" --yes --verification-profile full --repair-attempts 1
+```
 
 Plan files are not implemented yet:
 
@@ -83,7 +88,16 @@ npm run synax -- inspect --json
 npm run synax -- inspect --profile
 npm run synax -- inspect --brief
 npm run synax -- inspect --section git --section packageManager
+npm run synax -- inspect --docs
+npm run synax -- inspect --doc specs/PRD.md
+npm run synax -- inspect --search-docs "relay"
+npm run synax -- inspect --docs-impact
 ```
+
+`--docs` lists the bounded local docs/spec files Synax recognizes. `--doc <path>` reads one recognized
+docs/spec file with line numbers and the same secret redaction used by the local docs provider.
+`--search-docs <query>` performs deterministic bounded text search across recognized docs.
+`--docs-impact` reports when behavior-facing source changes likely need docs updates.
 
 ## `synax config`
 
