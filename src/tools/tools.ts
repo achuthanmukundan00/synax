@@ -8,11 +8,13 @@ import { redactSecrets } from './secrets';
 import { ToolContext, ToolDefinition, ToolResult } from './types';
 
 const execFileAsync = promisify(execFile);
-const DEFAULT_MAX_FILES = 200;
-const DEFAULT_MAX_READ_LINES = 120;
-const DEFAULT_MAX_MATCHES = 50;
-const DEFAULT_MAX_GIT_LINES = 200;
-const DEFAULT_MAX_DIRECTORY_ENTRIES = 80;
+
+const DEFAULT_MAX_FILES = 300;
+const DEFAULT_MAX_READ_LINES = 1000;
+const DEFAULT_MAX_MATCHES = 80;
+const DEFAULT_MAX_GIT_LINES = 1000;
+const DEFAULT_MAX_DIRECTORY_ENTRIES = 160;
+
 const SKIPPED_DIRECTORY_LISTING_NAMES = new Set(['cache']);
 
 interface ListFilesInput {
