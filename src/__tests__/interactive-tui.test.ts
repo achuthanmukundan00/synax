@@ -3,7 +3,7 @@ import { createInitialRunStateSnapshot } from '../agent/tui-state';
 import { CORE_HEIGHT, CORE_WIDTH, modeColor, renderAiCore, renderDottedCore } from '../tui/ai-core';
 import { DiffRenderer } from '../tui/diff-renderer';
 import { runInteractiveTui } from '../tui/interactive-tui';
-import { renderLayout } from '../tui/layout';
+import { maxHistoryScrollOffset, renderLayout } from '../tui/layout';
 import { parseInputChunk } from '../tui/input';
 import { createTerminalSession } from '../tui/terminal';
 import { PassThrough, Writable } from 'stream';
@@ -507,6 +507,64 @@ describe('interactive layout visual agreements', () => {
     expect(plain).toContain('I will check git status.');
     expect(plain).toContain('$ git status --short');
     expect(plain).toContain('M src/tui/layout.ts');
+  });
+
+  it('clamps transcript scroll offsets at the oldest and newest entries', () => {
+    const run = {
+      ...createInitialRunStateSnapshot(0),
+      phase: 'thinking' as const,
+      debugHistory: Array.from({ length: 16 }, (_, index) => ({
+        atMs: index,
+        kind: 'model' as const,
+        summary: `model event ${index}`,
+        detail: `model event ${index}`,
+      })),
+    };
+
+    const oldestPlain = renderLayout(
+      {
+        run,
+        objectiveInput: '',
+        coreMode: 'thinking',
+        nowMs: 2000,
+        historyScrollOffset: 999,
+      },
+      90,
+      16,
+    )
+      .map((line) => stripAnsi(line))
+      .join('\n');
+    const newestPlain = renderLayout(
+      {
+        run,
+        objectiveInput: '',
+        coreMode: 'thinking',
+        nowMs: 2000,
+        historyScrollOffset: -999,
+      },
+      90,
+      16,
+    )
+      .map((line) => stripAnsi(line))
+      .join('\n');
+
+    expect(oldestPlain).toContain('model event 0');
+    expect(oldestPlain).toContain('model event 8');
+    expect(oldestPlain).not.toContain('model event 15');
+    expect(newestPlain).toContain('model event 15');
+    expect(newestPlain).not.toContain('model event 0');
+    expect(
+      maxHistoryScrollOffset(
+        {
+          run,
+          objectiveInput: '',
+          coreMode: 'thinking',
+          nowMs: 2000,
+        },
+        90,
+        16,
+      ),
+    ).toBe(7);
   });
 });
 
