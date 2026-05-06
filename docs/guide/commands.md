@@ -39,6 +39,17 @@ Slash commands:
 | `/clear`                       | Reset the chat conversation and inspection ledger     |
 | `/exit`, `/quit`               | Exit chat                                             |
 
+For large pasted prompts, use terminal bracketed paste. Synax detects paste boundaries and renders the
+paste as an inline attachment chip:
+
+```txt
+synax> take a look at this [pasted: 84 lines, 12.4k chars] and modify the twelfth line
+```
+
+The full pasted body is held locally until Enter is pressed, then Synax submits a single canonical
+message that preserves the typed text before and after the paste. Typed slash commands still execute as
+commands, but a slash command inside a paste is treated as literal content.
+
 ## `synax ask`
 
 Runs one bounded question or task and exits:

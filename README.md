@@ -89,6 +89,12 @@ Compatibility claims should be recorded against an exact provider, model, and Sy
 # Inspect repository and config context
 npm run synax -- inspect
 
+# Show context budget configuration
+npm run synax -- inspect --budget
+
+# Show current working context state (after a chat session)
+npm run synax -- inspect --ledger
+
 # List or read bounded local docs/spec context
 npm run synax -- inspect --docs
 npm run synax -- inspect --doc specs/PRD.md
@@ -139,6 +145,12 @@ Session-only settings changes are available:
 /settings set agent.max_tool_calls 64
 ```
 
+For large pasted prompts, use bracketed paste in the terminal. Synax detects the paste boundary,
+shows a compact inline chip such as `[pasted: 84 lines, 12.4k chars]`, and submits the full pasted body
+only when you press Enter.
+
+Typed slash commands still execute normally. A pasted slash command is treated as literal content.
+
 ## Configuration
 
 Synax loads configuration from built-in defaults, optional global config at `~/.config/synax/config.toml`, and the nearest project `.synax.toml`.
@@ -184,6 +196,22 @@ SYNAX_MAX_TOOL_CALLS=64
 ```
 
 ## Agent Loop
+
+Synax manages context as a runtime discipline, not just a model instruction:
+
+- **Budget model**: Approximate token estimation (chars/3.5). Compaction triggers at ~60% of effective limit.
+- **Working context orientation**: After each read, the model receives a compact block listing inspected files, editable-from-memory files, truncated files needing reread, and git inspection state.
+- **Progressive loop resistance**: Duplicate reads escalate: cached return → warning with guidance → hard failure with orientation summary.
+- **Tool result compaction**: Large reads are truncated at per-read and per-turn caps. Repeated results are cached. Omitted reads return zero-token guidance instead of partial content.
+- **Edit safety**: Exact-text edits require a prior complete (non-truncated) read of that file region.
+- **Deterministic compaction**: When context exceeds budget, older messages are compacted into structured summaries without LLM calls.
+
+View context state:
+
+```sh
+synax inspect --budget    # budget configuration
+synax inspect --ledger    # working context state from last session
+```
 
 Synax sends a compact OpenAI-compatible tool surface to the model:
 
