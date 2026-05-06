@@ -55,10 +55,40 @@ describe('replace_in_file patch validation', () => {
     expect(result).toMatchObject({ ok: false, failureState: 'unread-file-patch' });
   });
 
+  it('rejects invalid and unsafe edit paths', async () => {
+    const ledger = createInspectionLedger();
+    const invalid = await validateReplaceInFile(
+      { path: '', oldStr: 'before', newStr: 'after' },
+      { repoRoot: TMP, ledger },
+    );
+    const outside = await validateReplaceInFile(
+      { path: '../outside.ts', oldStr: 'before', newStr: 'after' },
+      { repoRoot: TMP, ledger },
+    );
+
+    expect(invalid).toMatchObject({ ok: false, failureState: 'invalid-patch' });
+    expect(outside).toMatchObject({ ok: false, failureState: 'unsafe-path' });
+  });
+
+  it('requires an exact prior read before allowing a replacement', async () => {
+    writeFileSync(join(TMP, 'a.ts'), 'const value = 1;\n', 'utf-8');
+    const ledger = createInspectionLedger();
+    ledger.recordFileRead('a.ts', 1, 1, 'const value = 1;');
+
+    const result = await validateReplaceInFile(
+      { path: 'a.ts', oldStr: 'const value = 1;', newStr: 'const value = 2;' },
+      { repoRoot: TMP, ledger },
+    );
+
+    expect(result).toMatchObject({ ok: true });
+  });
+
   it('rejects replacements that match more than once', async () => {
     writeFileSync(join(TMP, 'a.ts'), 'same\nsame\n', 'utf-8');
     const ledger = createInspectionLedger();
-    ledger.recordFileRange('a.ts', 1, 2);
+    ledger.recordFileRead('a.ts', 1, 2, 'same\nsame');
+    ledger.recordFileRead('a.ts', 1, 1, 'same');
+    ledger.recordFileRead('a.ts', 2, 2, 'same');
 
     const result = await validateReplaceInFile(
       { path: 'a.ts', oldStr: 'same', newStr: 'changed' },
@@ -71,23 +101,37 @@ describe('replace_in_file patch validation', () => {
   it('rejects replacements that do not match', async () => {
     writeFileSync(join(TMP, 'a.ts'), 'const value = 1;\n', 'utf-8');
     const ledger = createInspectionLedger();
-    ledger.recordFileRange('a.ts', 1, 1);
+    ledger.recordFileRead('a.ts', 1, 1, 'const value = 1;');
 
     const result = await validateReplaceInFile(
       { path: 'a.ts', oldStr: 'value = 2', newStr: 'value = 3' },
       { repoRoot: TMP, ledger },
     );
 
-    expect(result).toMatchObject({ ok: false, failureState: 'replacement-match-failure' });
+    expect(result).toMatchObject({ ok: false, failureState: 'stale-read' });
+  });
+
+  it('rejects stale reads when the file no longer contains the prior text', async () => {
+    writeFileSync(join(TMP, 'a.ts'), 'const value = 1;\n', 'utf-8');
+    const ledger = createInspectionLedger();
+    ledger.recordFileRead('a.ts', 1, 1, 'const value = 1;');
+    writeFileSync(join(TMP, 'a.ts'), 'const value = 2;\n', 'utf-8');
+
+    const result = await validateReplaceInFile(
+      { path: 'a.ts', oldStr: 'const value = 1;', newStr: 'const value = 3;' },
+      { repoRoot: TMP, ledger },
+    );
+
+    expect(result).toMatchObject({ ok: false, failureState: 'stale-read' });
   });
 
   it('applies one exact replacement to an inspected file', async () => {
     writeFileSync(join(TMP, 'a.ts'), 'const value = 1;\n', 'utf-8');
     const ledger = createInspectionLedger();
-    ledger.recordFileRange('a.ts', 1, 1);
+    ledger.recordFileRead('a.ts', 1, 1, 'const value = 1;');
 
     const result = await applyReplaceInFile(
-      { path: 'a.ts', oldStr: 'value = 1', newStr: 'value = 2' },
+      { path: 'a.ts', oldStr: 'const value = 1;', newStr: 'const value = 2;' },
       { repoRoot: TMP, ledger },
     );
 

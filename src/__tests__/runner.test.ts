@@ -47,6 +47,17 @@ describe('shared bounded agent runner', () => {
     ]);
   });
 
+  it('constrains read-only and verify modes to read and git tools only', async () => {
+    expect(buildModelFacingTools({ mode: 'read-only', bashEnabled: true }).map((tool) => tool.name)).toEqual([
+      'read',
+      'git',
+    ]);
+    expect(buildModelFacingTools({ mode: 'verify', bashEnabled: true }).map((tool) => tool.name)).toEqual([
+      'read',
+      'git',
+    ]);
+  });
+
   it('includes bash in model-facing tools only when explicitly enabled', async () => {
     expect(buildModelFacingTools({ bashEnabled: false }).map((tool) => tool.name)).toEqual([
       'read',
@@ -75,6 +86,51 @@ describe('shared bounded agent runner', () => {
       'bash',
       'git',
     ]);
+  });
+
+  it('blocks writes and edits in read-only mode before mutating files', async () => {
+    const client = fakeClient([
+      { toolCalls: [{ id: 'call_1', name: 'write', arguments: { path: 'docs/demo.md', content: '# Demo\n' } }] },
+      { content: 'should not be reached' },
+    ]);
+
+    const result = await runAgentTurn({ repoRoot: TMP, task: 'create docs/demo.md', client, mode: 'read-only' });
+
+    expect(result).toMatchObject({
+      terminalState: 'tool_error',
+      error: 'read-only mode does not allow writes',
+    });
+    expect(existsSync(join(TMP, 'docs', 'demo.md'))).toBe(false);
+  });
+
+  it('blocks writes to non-doc paths in docs mode', async () => {
+    const client = fakeClient([
+      { toolCalls: [{ id: 'call_1', name: 'write', arguments: { path: 'src/demo.md', content: '# Demo\n' } }] },
+      { content: 'should not be reached' },
+    ]);
+
+    const result = await runAgentTurn({ repoRoot: TMP, task: 'create src/demo.md', client, mode: 'docs' });
+
+    expect(result).toMatchObject({
+      terminalState: 'tool_error',
+      error: 'docs mode only allows documentation files: src/demo.md',
+    });
+    expect(existsSync(join(TMP, 'src', 'demo.md'))).toBe(false);
+  });
+
+  it('rejects broad self-development prompts instead of executing them', async () => {
+    const client = fakeClient([{ content: 'should not be reached' }]);
+
+    const result = await runAgentTurn({
+      repoRoot: TMP,
+      task: 'implement all of v1',
+      client,
+    });
+
+    expect(result.terminalState).toBe('blocked');
+    expect(result.error).toContain('Task is too broad');
+    expect(result.finalAnswer).toContain('Suggested first step');
+    expect(client.requests).toHaveLength(0);
   });
 
   it('still returns a clear tool error when disabled bash is called directly', async () => {
@@ -353,7 +409,7 @@ describe('shared bounded agent runner', () => {
       { content: 'created' },
     ]);
 
-    const result = await runAgentTurn({ repoRoot: TMP, task: 'create docs/demo.md', client });
+    const result = await runAgentTurn({ repoRoot: TMP, task: 'create docs/demo.md', client, mode: 'docs' });
 
     expect(result.terminalState).toBe('completed');
     expect(result.changedFiles).toEqual(['docs/demo.md']);
@@ -373,6 +429,7 @@ describe('shared bounded agent runner', () => {
       repoRoot: TMP,
       task: 'edit a.txt',
       client,
+      mode: 'patch',
       onEvent: (event) => events.push(event),
     });
 
@@ -406,6 +463,7 @@ describe('shared bounded agent runner', () => {
       repoRoot: TMP,
       task: 'edit a.txt',
       client,
+      mode: 'patch',
       onEvent: (event) => events.push(event),
       approvePatch: () => 'reject',
     });
