@@ -64,55 +64,51 @@ describe('diff renderer', () => {
 });
 
 describe('ai core renderer', () => {
-  it('renders a compact boxed circular core with consistent footprint', () => {
+  it('renders an unboxed containment field with consistent footprint', () => {
     const idle = renderAiCore('idle', 0);
     const thinking = renderAiCore('thinking', 0.25);
+    const tool = renderAiCore('tool_execution', 0.4);
     const verifying = renderAiCore('verifying', 0.5);
     const failure = renderAiCore('failure', 0.75);
 
-    expect(CORE_WIDTH).toBeGreaterThanOrEqual(14);
-    expect(CORE_WIDTH).toBeLessThanOrEqual(18);
-    expect(CORE_HEIGHT).toBeGreaterThanOrEqual(6);
-    expect(CORE_HEIGHT).toBeLessThanOrEqual(8);
+    expect(CORE_WIDTH).toBeGreaterThanOrEqual(24);
+    expect(CORE_WIDTH).toBeLessThanOrEqual(34);
+    expect(CORE_HEIGHT).toBeGreaterThanOrEqual(10);
+    expect(CORE_HEIGHT).toBeLessThanOrEqual(14);
 
     expect(idle).toHaveLength(CORE_HEIGHT);
     expect(idle.every((line) => stripAnsi(line).length === CORE_WIDTH)).toBe(true);
     expect(thinking.every((line) => stripAnsi(line).length === CORE_WIDTH)).toBe(true);
+    expect(tool.every((line) => stripAnsi(line).length === CORE_WIDTH)).toBe(true);
     expect(verifying.every((line) => stripAnsi(line).length === CORE_WIDTH)).toBe(true);
     expect(failure.every((line) => stripAnsi(line).length === CORE_WIDTH)).toBe(true);
 
-    expect(stripAnsi(idle[0])).toMatch(/^┌─+┐$/);
-    expect(stripAnsi(idle[idle.length - 1])).toMatch(/^└─+┘$/);
-    expect(stripAnsi(idle.join('\n'))).toMatch(/[.·•x×]/);
-    expect(stripAnsi(idle.join('\n'))).not.toContain('╭───┬────┬───╮');
-    expect(idle.join('\n')).not.toContain('\u001b[38;2;');
+    expect(stripAnsi(idle[0])).not.toMatch(/^┌─+┐$/);
+    expect(stripAnsi(idle[idle.length - 1])).not.toMatch(/^└─+┘$/);
+    expect(stripAnsi(idle.join('\n'))).toMatch(/[.·•○◎╱╲─│]/);
+    expect(idle.join('\n')).toContain('\u001b[38;2;');
 
     expect(thinking.join('\n')).not.toEqual(idle.join('\n'));
-    expect(stripAnsi(verifying.join('\n'))).toMatch(/[•×]/);
-    expect(stripAnsi(failure.join('\n'))).toContain('×');
+    expect(stripAnsi(tool.join('\n'))).toMatch(/[◆◈]/);
+    expect(stripAnsi(verifying.join('\n'))).toMatch(/[━╋]/);
+    expect(stripAnsi(failure.join('\n'))).toMatch(/[×╳]/);
   });
 
-  it('keeps state color selection stable', () => {
+  it('keeps material state color selection stable', () => {
     expect(modeColor('blocked')).toBe('\u001b[33m');
     expect(modeColor('failure')).toBe('\u001b[31m');
-    expect(modeColor('verifying')).toBe('\u001b[32m');
+    expect(modeColor('verifying')).toBe('\u001b[33m');
+    expect(modeColor('completed')).toBe('\u001b[32m');
     expect(modeColor('planning')).toBe('\u001b[34m');
   });
 
-  it('uses one uniform color inside each boxed core state', () => {
-    const states = [
-      ['idle', '34'],
-      ['thinking', '34'],
-      ['completed', '32'],
-      ['blocked', '33'],
-      ['failure', '31'],
-    ] as const;
+  it('uses restrained truecolor inside the containment field', () => {
+    const core = renderAiCore('thinking', 1).join('');
+    const colors = Array.from(core.matchAll(/\u001b\[38;2;(\d+);(\d+);(\d+)m/g));
 
-    for (const [mode, color] of states) {
-      const core = renderAiCore(mode, 1).join('');
-      const colors = Array.from(core.matchAll(/\u001b\[(\d+)m/g), (match) => match[1]).filter((value) => value !== '0');
-      expect(new Set(colors)).toEqual(new Set([color]));
-    }
+    expect(colors.length).toBeGreaterThan(6);
+    expect(core).not.toContain('\u001b[35m');
+    expect(core).not.toContain('\u001b[36m\u001b[33m');
   });
 
   it('changes deterministic animation frames over time', () => {
@@ -136,7 +132,7 @@ describe('ai core renderer', () => {
 });
 
 describe('interactive layout visual agreements', () => {
-  it('keeps a stable right-edge core region and full-width lines', () => {
+  it('anchors the composition around a dominant central core field', () => {
     const run = createInitialRunStateSnapshot(0);
     const lines = renderLayout(
       {
@@ -153,12 +149,15 @@ describe('interactive layout visual agreements', () => {
     for (const line of lines) {
       expect(stripAnsi(line).length).toBe(80);
     }
-    expect(stripAnsi(lines[0])).toContain('┌');
-    expect(stripAnsi(lines[0])).toContain('┐');
-    expect(stripAnsi(lines[1])).toMatch(/[.·•x×]/);
+    const plain = lines.map((line) => stripAnsi(line)).join('\n');
+    expect(plain).toContain('Synax');
+    expect(plain).toContain('Field');
+    expect(plain).toMatch(/[.·•○◎╱╲]/);
+    expect(plain).not.toContain('Files touched:');
+    expect(plain).not.toContain('History');
   });
 
-  it('renders a framed directive panel and hides raw model output chatter', () => {
+  it('renders an integrated directive dock and hides raw model output chatter', () => {
     const run = createInitialRunStateSnapshot(0);
     const lines = renderLayout(
       {
@@ -173,12 +172,12 @@ describe('interactive layout visual agreements', () => {
     );
     const plain = lines.map((line) => stripAnsi(line)).join('\n');
     expect(plain).toContain('Directive');
-    expect(plain).toContain('┌');
+    expect(plain).toContain('▁');
     expect(plain).not.toContain('Model output');
     expect(plain).not.toContain('raw parser chatter');
   });
 
-  it('surfaces model notes and completion summaries from run state', () => {
+  it('surfaces compact operational summaries without model transcript text', () => {
     const run = {
       ...createInitialRunStateSnapshot(0),
       phase: 'completed' as const,
@@ -197,8 +196,8 @@ describe('interactive layout visual agreements', () => {
     );
     const plain = lines.map((line) => stripAnsi(line)).join('\n');
 
-    expect(plain).toContain('Summary: completed: 2 model steps, 1 tool call, 1 file changed');
-    expect(plain).toContain('Model: Updated the TUI state and verified the focused tests.');
+    expect(plain).toContain('Completed · 2 model steps, 1 tool call, 1 file changed');
+    expect(plain).not.toContain('Updated the TUI state and verified the focused tests.');
   });
 
   it('surfaces patch preview diffs from run state', () => {
@@ -228,7 +227,7 @@ describe('interactive layout visual agreements', () => {
     expect(plain).toContain('+new');
   });
 
-  it('renders scrollable debug history with model and tool details', () => {
+  it('keeps scrollable debug history off the primary visual surface', () => {
     const run = {
       ...createInitialRunStateSnapshot(0),
       debugHistory: [
@@ -260,12 +259,12 @@ describe('interactive layout visual agreements', () => {
     );
     const plain = lines.map((line) => stripAnsi(line)).join('\n');
 
-    expect(plain).toContain('History');
-    expect(plain).toContain('Model: I will check git status.');
-    expect(plain).toContain('Tool call: bash');
-    expect(plain).toContain('git status --short');
-    expect(plain).toContain('Tool result: stdout:');
-    expect(plain).toContain('M src/tui/layout.ts');
+    expect(plain).not.toContain('History');
+    expect(plain).not.toContain('Model: I will check git status.');
+    expect(plain).not.toContain('Tool call: bash');
+    expect(plain).not.toContain('git status --short');
+    expect(plain).not.toContain('Tool result: stdout:');
+    expect(plain).not.toContain('M src/tui/layout.ts');
   });
 });
 
