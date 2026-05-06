@@ -41,12 +41,12 @@ export function renderLayout(state: InteractiveViewState, cols: number, rows: nu
     `\u001b[1;37mSynax\u001b[0m ${modeColor(state.coreMode)}${phaseLabel(state.run.phase)}\u001b[0m ${elapsed(state.run.startedAtMs, state.nowMs)}`,
     width,
   );
-  put(lines, 1, 2, dim('contained local intelligence runtime'), width);
   if (state.run.phase === 'completed' && state.run.statusNote) {
-    put(lines, 3, 2, activitySummary(state.run), width);
+    put(lines, 2, 2, activitySummary(state.run), width);
   }
   putBlock(lines, coreY, coreX, core, width);
   putTelemetry(lines, telemetryY, telemetryX, telemetryWidth, state);
+  putLatestReply(lines, bodyHeight, width, state);
 
   if (state.run.patchPreview && bodyHeight > coreY + CORE_HEIGHT + 5) {
     putPatchPreview(lines, Math.min(bodyHeight - 6, coreY + CORE_HEIGHT + 2), 2, Math.min(width - 4, 78), state.run);
@@ -185,28 +185,28 @@ function activitySummary(run: RunStateSnapshot): string {
 }
 
 function renderDirectivePanel(objectiveInput: string, width: number, modelLabel?: string): string[] {
-  const inner = Math.max(8, width - 4);
+  const inner = Math.max(8, width - 2);
   const wrapped = wrapText(objectiveInput.trim() || 'Awaiting objective', inner - 2);
   const body = wrapped.slice(0, 2);
   while (body.length < 2) body.push('');
 
-  const label = modelLabel ? truncateModelLabel(modelLabel, Math.max(4, inner - 6)) : 'Directive';
-  const topFill = Math.max(0, inner - label.length - 3);
+  const label = modelLabel ? ` ${truncateModelLabel(modelLabel, Math.max(4, inner - 6))} ` : '';
+  const topFill = Math.max(0, inner - label.length);
   const helpText = 'Enter submit | Ctrl+C exit | Ctrl+L redraw | /help';
-  const bottomFill = Math.max(0, inner - helpText.length - 1);
+  const bottomFill = Math.max(0, inner - helpText.length - 2);
 
   return [
-    ` ${dim('▁'.repeat(topFill))} ${label} `,
-    ` ${clip(body[0], inner - 2).padEnd(inner - 2, ' ')} `,
-    ` ${clip(body[1], inner - 2).padEnd(inner - 2, ' ')} `,
-    ` ${dim(helpText)}${dim('▔'.repeat(bottomFill))}`,
+    `┌${'─'.repeat(topFill)}${label}┐`,
+    `│ ${clip(body[0], inner - 2).padEnd(inner - 2, ' ')} │`,
+    `│ ${clip(body[1], inner - 2).padEnd(inner - 2, ' ')} │`,
+    `└ ${helpText} ${'─'.repeat(bottomFill)}┘`,
   ];
 }
 
 function putTelemetry(lines: string[], y: number, x: number, width: number, state: InteractiveViewState): void {
   const run = state.run;
   const items = [
-    `${dim('Field')} ${modeColor(state.coreMode)}${phaseLabel(run.phase)}\u001b[0m`,
+    `${modeColor(state.coreMode)}${phaseLabel(run.phase)}\u001b[0m`,
     activitySummary(run),
     `Objective · ${run.objective.label || 'Awaiting objective'}`,
     `Next · ${run.objective.nextCheckpoint}`,
@@ -217,6 +217,27 @@ function putTelemetry(lines: string[], y: number, x: number, width: number, stat
   for (let i = 0; i < items.length; i += 1) {
     put(lines, y + i, x, clip(items[i], width), x + width);
   }
+}
+
+function putLatestReply(lines: string[], bodyHeight: number, width: number, state: InteractiveViewState): void {
+  const reply = cleanModelOutput(state.run.lastModelOutput || state.lastModelOutput || latestModelHistory(state.run));
+  if (!reply) return;
+
+  const maxWidth = Math.min(width - 4, 110);
+  const wrapped = wrapText(reply, maxWidth).slice(0, 3);
+  const y = Math.max(3, bodyHeight - wrapped.length - 2);
+  put(lines, y, 2, `${dim('Reply ·')} ${clip(wrapped[0] ?? '', maxWidth - 8)}`, width);
+  for (let i = 1; i < wrapped.length; i += 1) {
+    put(lines, y + i, 2, clip(wrapped[i], maxWidth), width);
+  }
+}
+
+function latestModelHistory(run: RunStateSnapshot): string {
+  for (let i = run.debugHistory.length - 1; i >= 0; i -= 1) {
+    const item = run.debugHistory[i];
+    if (item?.kind === 'model') return item.detail;
+  }
+  return '';
 }
 
 function putPatchPreview(lines: string[], y: number, x: number, width: number, run: RunStateSnapshot): void {
@@ -275,6 +296,15 @@ function compactStatus(statusNote: string): string {
   if (statusNote.startsWith('passed: ')) return `Verification · passed`;
   if (statusNote.startsWith('failed: ')) return `Verification · failed`;
   return statusNote;
+}
+
+function cleanModelOutput(output: string): string {
+  return output
+    .replace(/<think>[\s\S]*?<\/think>/gi, '')
+    .replace(/<thinking>[\s\S]*?<\/thinking>/gi, '')
+    .replace(/<tool_call>[\s\S]*?<\/tool_call>/gi, '')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
 function dim(text: string): string {
