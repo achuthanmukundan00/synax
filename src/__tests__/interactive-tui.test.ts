@@ -1,6 +1,6 @@
 import { createChatSession, shouldUseInteractiveTui, type ChatSession } from '../commands/chat';
 import { createInitialRunStateSnapshot } from '../agent/tui-state';
-import { renderAiCore } from '../tui/ai-core';
+import { CORE_HEIGHT, CORE_WIDTH, modeColor, renderAiCore, renderDottedCore } from '../tui/ai-core';
 import { DiffRenderer } from '../tui/diff-renderer';
 import { runInteractiveTui } from '../tui/interactive-tui';
 import { renderLayout } from '../tui/layout';
@@ -38,6 +38,11 @@ describe('tui input parser', () => {
     const events = parseInputChunk('a\x7f\n\u0003\u000c');
     expect(events.map((e) => e.type)).toEqual(['text', 'backspace', 'submit', 'exit', 'redraw']);
   });
+
+  it('parses history scroll keys', () => {
+    const events = parseInputChunk('\x1b[5~\x1b[6~');
+    expect(events).toEqual([{ type: 'scroll_history_up' }, { type: 'scroll_history_down' }]);
+  });
 });
 
 describe('diff renderer', () => {
@@ -59,18 +64,74 @@ describe('diff renderer', () => {
 });
 
 describe('ai core renderer', () => {
-  it('renders a stable amp-inspired matrix with consistent footprint', () => {
+  it('renders a compact boxed circular core with consistent footprint', () => {
     const idle = renderAiCore('idle', 0);
     const thinking = renderAiCore('thinking', 0.25);
     const verifying = renderAiCore('verifying', 0.5);
+    const failure = renderAiCore('failure', 0.75);
 
-    expect(idle).toHaveLength(6);
-    expect(idle.every((line) => line.length === 14)).toBe(true);
-    expect(idle.join('\n')).toContain('╭────────────╮');
-    expect(idle.join('\n')).toContain('⟐');
+    expect(CORE_WIDTH).toBeGreaterThanOrEqual(14);
+    expect(CORE_WIDTH).toBeLessThanOrEqual(18);
+    expect(CORE_HEIGHT).toBeGreaterThanOrEqual(6);
+    expect(CORE_HEIGHT).toBeLessThanOrEqual(8);
+
+    expect(idle).toHaveLength(CORE_HEIGHT);
+    expect(idle.every((line) => stripAnsi(line).length === CORE_WIDTH)).toBe(true);
+    expect(thinking.every((line) => stripAnsi(line).length === CORE_WIDTH)).toBe(true);
+    expect(verifying.every((line) => stripAnsi(line).length === CORE_WIDTH)).toBe(true);
+    expect(failure.every((line) => stripAnsi(line).length === CORE_WIDTH)).toBe(true);
+
+    expect(stripAnsi(idle[0])).toMatch(/^┌─+┐$/);
+    expect(stripAnsi(idle[idle.length - 1])).toMatch(/^└─+┘$/);
+    expect(stripAnsi(idle.join('\n'))).toMatch(/[.·•x×]/);
+    expect(stripAnsi(idle.join('\n'))).not.toContain('╭───┬────┬───╮');
+    expect(idle.join('\n')).not.toContain('\u001b[38;2;');
 
     expect(thinking.join('\n')).not.toEqual(idle.join('\n'));
-    expect(verifying.join('\n')).toContain('┼');
+    expect(stripAnsi(verifying.join('\n'))).toMatch(/[•×]/);
+    expect(stripAnsi(failure.join('\n'))).toContain('×');
+  });
+
+  it('keeps state color selection stable', () => {
+    expect(modeColor('blocked')).toBe('\u001b[33m');
+    expect(modeColor('failure')).toBe('\u001b[31m');
+    expect(modeColor('verifying')).toBe('\u001b[32m');
+    expect(modeColor('planning')).toBe('\u001b[34m');
+  });
+
+  it('uses one uniform color inside each boxed core state', () => {
+    const states = [
+      ['idle', '34'],
+      ['thinking', '34'],
+      ['completed', '32'],
+      ['blocked', '33'],
+      ['failure', '31'],
+    ] as const;
+
+    for (const [mode, color] of states) {
+      const core = renderAiCore(mode, 1).join('');
+      const colors = Array.from(core.matchAll(/\u001b\[(\d+)m/g), (match) => match[1]).filter((value) => value !== '0');
+      expect(new Set(colors)).toEqual(new Set([color]));
+    }
+  });
+
+  it('changes deterministic animation frames over time', () => {
+    const first = renderAiCore('thinking', 1).map(stripAnsi);
+    const second = renderAiCore('thinking', 1.5).map(stripAnsi);
+
+    expect(second).not.toEqual(first);
+    expect(second).toHaveLength(first.length);
+    expect(second.every((line) => line.length === CORE_WIDTH)).toBe(true);
+  });
+
+  it('falls back to ascii-safe dotted marks', () => {
+    const fallback = renderDottedCore({ mode: 'thinking', frame: 3, width: 18, height: 8, unicode: false });
+    const plain = fallback.map(stripAnsi).join('');
+
+    expect(fallback).toHaveLength(8);
+    expect(fallback.every((line) => stripAnsi(line).length === 18)).toBe(true);
+    expect(plain).toMatch(/[.ox]/);
+    expect(plain).not.toMatch(/[·•×]/);
   });
 });
 
@@ -92,8 +153,9 @@ describe('interactive layout visual agreements', () => {
     for (const line of lines) {
       expect(stripAnsi(line).length).toBe(80);
     }
-    expect(stripAnsi(lines[0])).toContain('╭────────────╮');
-    expect(stripAnsi(lines[0]).endsWith('╮')).toBe(true);
+    expect(stripAnsi(lines[0])).toContain('┌');
+    expect(stripAnsi(lines[0])).toContain('┐');
+    expect(stripAnsi(lines[1])).toMatch(/[.·•x×]/);
   });
 
   it('renders a framed directive panel and hides raw model output chatter', () => {
@@ -114,6 +176,96 @@ describe('interactive layout visual agreements', () => {
     expect(plain).toContain('┌');
     expect(plain).not.toContain('Model output');
     expect(plain).not.toContain('raw parser chatter');
+  });
+
+  it('surfaces model notes and completion summaries from run state', () => {
+    const run = {
+      ...createInitialRunStateSnapshot(0),
+      phase: 'completed' as const,
+      statusNote: 'completed: 2 model steps, 1 tool call, 1 file changed',
+      lastModelOutput: 'Updated the TUI state and verified the focused tests.',
+    };
+    const lines = renderLayout(
+      {
+        run,
+        objectiveInput: '',
+        coreMode: 'completed',
+        nowMs: 2000,
+      },
+      100,
+      28,
+    );
+    const plain = lines.map((line) => stripAnsi(line)).join('\n');
+
+    expect(plain).toContain('Summary: completed: 2 model steps, 1 tool call, 1 file changed');
+    expect(plain).toContain('Model: Updated the TUI state and verified the focused tests.');
+  });
+
+  it('surfaces patch preview diffs from run state', () => {
+    const run = {
+      ...createInitialRunStateSnapshot(0),
+      patchPreview: {
+        path: 'src/tui/layout.ts',
+        diff: '--- src/tui/layout.ts\n+++ src/tui/layout.ts\n-old\n+new',
+      },
+    };
+    const lines = renderLayout(
+      {
+        run,
+        objectiveInput: '',
+        coreMode: 'thinking',
+        nowMs: 2000,
+      },
+      100,
+      32,
+    );
+    const plain = lines.map((line) => stripAnsi(line)).join('\n');
+
+    expect(plain).toContain('Diff preview: src/tui/layout.ts');
+    expect(plain).toContain('--- src/tui/layout.ts');
+    expect(plain).toContain('+++ src/tui/layout.ts');
+    expect(plain).toContain('-old');
+    expect(plain).toContain('+new');
+  });
+
+  it('renders scrollable debug history with model and tool details', () => {
+    const run = {
+      ...createInitialRunStateSnapshot(0),
+      debugHistory: [
+        { atMs: 1, kind: 'model' as const, summary: 'model response', detail: 'I will check git status.' },
+        {
+          atMs: 2,
+          kind: 'tool_call' as const,
+          summary: 'bash call',
+          detail: 'bash\n{"command":"git status --short"}',
+        },
+        {
+          atMs: 3,
+          kind: 'tool_result' as const,
+          summary: 'bash ok',
+          detail: 'stdout:\n M src/tui/layout.ts',
+        },
+      ],
+    };
+    const lines = renderLayout(
+      {
+        run,
+        objectiveInput: '',
+        coreMode: 'thinking',
+        nowMs: 2000,
+        historyScrollOffset: 0,
+      },
+      100,
+      36,
+    );
+    const plain = lines.map((line) => stripAnsi(line)).join('\n');
+
+    expect(plain).toContain('History');
+    expect(plain).toContain('Model: I will check git status.');
+    expect(plain).toContain('Tool call: bash');
+    expect(plain).toContain('git status --short');
+    expect(plain).toContain('Tool result: stdout:');
+    expect(plain).toContain('M src/tui/layout.ts');
   });
 });
 

@@ -24,6 +24,15 @@ export interface TuiChangeItem {
   op: ChangeOp;
 }
 
+export type TuiDebugKind = 'model' | 'tool_call' | 'tool_result';
+
+export interface TuiDebugHistoryItem {
+  atMs: number;
+  kind: TuiDebugKind;
+  summary: string;
+  detail: string;
+}
+
 export interface TuiVerificationState {
   state: 'planned' | 'running' | 'passed' | 'failed' | 'skipped';
   checksPlanned: number;
@@ -59,6 +68,13 @@ export interface RunStateSnapshot {
   terminal: 'running' | 'completed' | 'failed' | 'blocked';
   /** Last model response text for observability in the TUI overlay. */
   lastModelOutput: string;
+  /** Last validated edit preview, shown before/after file writes for inspectability. */
+  patchPreview?: {
+    path: string;
+    diff: string;
+  };
+  /** Scrollable transcript/debug history for model output, tool calls, and tool results. */
+  debugHistory: TuiDebugHistoryItem[];
 }
 
 const MAX_TIMELINE_ITEMS = 10;
@@ -96,6 +112,7 @@ export function createInitialRunStateSnapshot(nowMs: number): RunStateSnapshot {
     severity: 'S0',
     terminal: 'running',
     lastModelOutput: '',
+    debugHistory: [],
   };
 }
 
@@ -135,21 +152,64 @@ export function applyEventToRunState(state: RunStateSnapshot, event: AgentEvent,
     }
     case 'model_step_started': {
       next = withPhase(next, 'thinking', 'model step');
-      return withTimeline(next, 'thinking', 'model reasoning step', 'S0');
+      return withTimeline(next, 'thinking', `model step ${event.stepIndex ?? next.timeline.length + 1} started`, 'S0');
+    }
+    case 'assistant_message': {
+      const note = summarizeModelOutput(event.content);
+      next = withDebugHistory(next, {
+        atMs: nowMs,
+        kind: 'model',
+        summary: note || 'model response',
+        detail: event.content,
+      });
+      if (!note) return next;
+      next = {
+        ...next,
+        lastModelOutput: note,
+      };
+      return withTimeline(next, next.phase, `model: ${note}`, 'S0');
     }
     case 'tool_started': {
       next = withPhase(next, 'tool_execution', `tool ${event.toolName}`);
       next = withStatus(next, `tool: ${event.toolName}`, 'S0');
       trackChangeFromToolStart(next, event.toolName, event.summary);
+      next = withDebugHistory(next, {
+        atMs: nowMs,
+        kind: 'tool_call',
+        summary: `${event.toolName} call`,
+        detail: `${event.toolName}\n${event.detail ?? event.summary}`,
+      });
       return withTimeline(next, 'tool_execution', `${event.toolName} started`, 'S0');
     }
     case 'tool_finished': {
       const severity = event.status === 'error' ? 'S1' : 'S0';
       next = withPhase(next, event.status === 'error' ? 'error' : 'thinking', `tool ${event.toolName} finished`);
+      next = withDebugHistory(next, {
+        atMs: nowMs,
+        kind: 'tool_result',
+        summary: `${event.toolName} ${event.status === 'ok' ? 'ok' : 'error'}`,
+        detail: event.detail ?? event.summary,
+      });
       if (event.status === 'error') {
         next = withStatus(next, `${event.toolName} recovered with turbulence`, severity);
       }
       return withTimeline(next, next.phase, `${event.toolName} ${event.status === 'ok' ? 'ok' : 'error'}`, severity);
+    }
+    case 'patch_preview': {
+      const compressed = compressChanges([
+        ...next.changes.items,
+        { path: event.path, op: classifyTool(event.toolName) },
+      ]);
+      next = {
+        ...next,
+        changes: compressed,
+        patchPreview: {
+          path: event.path,
+          diff: clipPatchPreview(event.diff),
+        },
+      };
+      next = withStatus(next, `previewing edit: ${event.path}`, 'S0');
+      return withTimeline(next, 'tool_execution', `patch preview: ${event.path}`, 'S0');
     }
     case 'verification_planned': {
       next = applyVerificationPlanned(next, event.checkId, event.checkLabel, event.summary);
@@ -217,6 +277,13 @@ export function applyEventToRunState(state: RunStateSnapshot, event: AgentEvent,
       };
       if (event.error) {
         next = withRisk(next, `terminal issue: ${event.error}`, 'S3');
+      }
+      if (event.status === 'completed') {
+        const summary = completionSummary(event.modelSteps, event.toolCalls, event.changedFiles.length);
+        next = {
+          ...withStatus(next, summary, 'S0'),
+          lastModelOutput: next.lastModelOutput || summary,
+        };
       }
       return withTimeline(next, phase, `run ${event.status}`, next.severity);
     }
@@ -306,6 +373,11 @@ function withPhase(state: RunStateSnapshot, phase: TuiPhase, note: string): RunS
 
 function withStatus(state: RunStateSnapshot, statusNote: string, severity: TuiSeverity): RunStateSnapshot {
   return { ...state, statusNote: clipText(statusNote, 120), severity: maxSeverity(state.severity, severity) };
+}
+
+function withDebugHistory(state: RunStateSnapshot, item: TuiDebugHistoryItem): RunStateSnapshot {
+  const debugHistory = [...state.debugHistory, { ...item, detail: clipText(item.detail, 6000) }];
+  return { ...state, debugHistory: debugHistory.slice(Math.max(0, debugHistory.length - 120)) };
 }
 
 function withRisk(state: RunStateSnapshot, riskLine: string, severity: TuiSeverity): RunStateSnapshot {
@@ -447,7 +519,7 @@ function trackChangeFromToolStart(state: RunStateSnapshot, toolName: string, sum
 }
 
 function classifyTool(toolName: string): ChangeOp {
-  if (toolName === 'write' || toolName === 'replace_in_file') return 'edit';
+  if (toolName === 'write' || toolName === 'replace_in_file' || toolName === 'edit') return 'edit';
   if (toolName === 'read') return 'read';
   if (toolName.includes('test') || toolName === 'run_verification') return 'test';
   return 'other';
@@ -477,4 +549,34 @@ function maxSeverity(current: TuiSeverity, incoming: TuiSeverity): TuiSeverity {
 function clipText(value: string, max: number): string {
   if (value.length <= max) return value;
   return `${value.slice(0, Math.max(0, max - 3))}...`;
+}
+
+function summarizeModelOutput(content: string): string {
+  const normalized = content
+    .replace(/<think>[\s\S]*?<\/think>/gi, '')
+    .replace(/<thinking>[\s\S]*?<\/thinking>/gi, '')
+    .replace(/<tool_call>[\s\S]*?<\/tool_call>/gi, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return clipText(normalized, 120);
+}
+
+function clipPatchPreview(diff: string): string {
+  return diff
+    .split('\n')
+    .slice(0, 20)
+    .map((line) => clipText(line, 160))
+    .join('\n');
+}
+
+function completionSummary(modelSteps: number, toolCalls: number, changedFiles: number): string {
+  return `completed: ${[
+    plural(modelSteps, 'model step'),
+    plural(toolCalls, 'tool call'),
+    plural(changedFiles, 'file changed', 'files changed'),
+  ].join(', ')}`;
+}
+
+function plural(count: number, singular: string, pluralText = `${singular}s`): string {
+  return `${count} ${count === 1 ? singular : pluralText}`;
 }

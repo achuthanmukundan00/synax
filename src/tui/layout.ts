@@ -14,6 +14,8 @@ export interface InteractiveViewState {
   modelLabel?: string;
   /** Active endpoint for state display. */
   endpointLabel?: string;
+  /** Number of wrapped history lines hidden below the viewport. */
+  historyScrollOffset?: number;
 }
 
 export function renderLayout(state: InteractiveViewState, cols: number, rows: number): string[] {
@@ -53,6 +55,16 @@ export function renderLayout(state: InteractiveViewState, cols: number, rows: nu
   else for (const file of files) lines.push(`  ${file.op.padEnd(6)} ${clip(file.path, contentWidth - 10)}`);
   lines.push('');
   lines.push(`Verification: ${state.run.verification.state} (${state.run.verification.summary || 'not run yet'})`);
+  if (state.run.statusNote) lines.push(`Summary: ${clip(state.run.statusNote, contentWidth - 9)}`);
+  if (state.run.lastModelOutput) lines.push(`Model: ${clip(state.run.lastModelOutput, contentWidth - 7)}`);
+  if (state.run.patchPreview) {
+    lines.push('');
+    lines.push(`Diff preview: ${clip(state.run.patchPreview.path, contentWidth - 14)}`);
+    for (const diffLine of state.run.patchPreview.diff.split('\n').slice(0, 6)) {
+      lines.push(`  ${clip(diffLine, contentWidth - 4)}`);
+    }
+  }
+  renderHistory(lines, state.run, contentWidth, state.historyScrollOffset ?? 0);
   if (state.blockedMessage) lines.push(`\u001b[33mBlocked: ${clip(state.blockedMessage, contentWidth - 9)}\u001b[0m`);
   lines.push('');
 
@@ -193,6 +205,39 @@ function activitySummary(run: RunStateSnapshot): string {
   if (run.statusNote) return run.statusNote;
   if (run.phase === 'idle') return 'waiting for run start';
   return run.objective.nextCheckpoint;
+}
+
+function renderHistory(lines: string[], run: RunStateSnapshot, contentWidth: number, scrollOffset: number): void {
+  if (run.debugHistory.length === 0) return;
+  const wrapped: string[] = [];
+  for (const item of run.debugHistory.slice(-30)) {
+    const title = historyTitle(item.kind);
+    const detailLines = item.detail.split('\n');
+    const first = `${title}: ${detailLines[0] ?? item.summary}`;
+    wrapped.push(...wrapText(first, contentWidth - 2).map((line, index) => (index === 0 ? line : `  ${line}`)));
+    for (const detailLine of detailLines.slice(1, 8)) {
+      wrapped.push(...wrapText(`  ${detailLine}`, contentWidth - 2));
+    }
+  }
+
+  const visibleCount = 8;
+  const maxOffset = Math.max(0, wrapped.length - visibleCount);
+  const offset = Math.max(0, Math.min(scrollOffset, maxOffset));
+  const start = Math.max(0, wrapped.length - visibleCount - offset);
+  const visible = wrapped.slice(start, start + visibleCount);
+  const position = maxOffset > 0 ? ` (${start + 1}-${start + visible.length}/${wrapped.length})` : '';
+
+  lines.push('');
+  lines.push(`History${position}`);
+  for (const line of visible) {
+    lines.push(`  ${clip(line, contentWidth - 4)}`);
+  }
+}
+
+function historyTitle(kind: string): string {
+  if (kind === 'tool_call') return 'Tool call';
+  if (kind === 'tool_result') return 'Tool result';
+  return 'Model';
 }
 
 function renderDirectivePanel(objectiveInput: string, width: number, modelLabel?: string): string[] {

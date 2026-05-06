@@ -118,6 +118,13 @@ export function createChatSession(options: {
         },
         onActivity(activity) {
           options.onActivity?.(activity);
+          if (options.tui && activity.kind === 'model_response' && activity.message.trim().length > 0) {
+            eventSink?.({
+              type: 'assistant_message',
+              timestamp: new Date().toISOString(),
+              content: activity.message,
+            });
+          }
           if (!options.tui) {
             if (activity.kind === 'model_response') {
               const label = `[synax] model step resp`;
@@ -680,8 +687,8 @@ async function handleSlashCommand(
         '------',
         `Context window:  ${context.config.contextBudgetTokens ?? 131072}`,
         `Reserved output:  ${context.config.reservedOutputTokens ?? 8192}`,
-        `Max model steps:  ${context.config.maxModelSteps ?? 32}`,
-        `Max tool calls:   ${context.config.maxToolCalls ?? 96}`,
+        `Max model steps:  ${context.config.maxModelSteps ?? 64}`,
+        `Max tool calls:   ${context.config.maxToolCalls ?? 192}`,
         `Max single read:  ${context.config.maxSingleReadResultTokens ?? 12000}`,
         `Max total reads:  ${context.config.maxTotalReadResultTokensPerTurn ?? 40000}`,
         `Keep recent:      ${context.config.keepRecentTokens ?? 20000}`,
@@ -837,8 +844,8 @@ function invalidSettingsPath(): string {
     '  /settings set provider.model Qwen3.6-35B-A3B-UD-IQ3_XXS.gguf',
     '  /settings set provider.header.Authorization Bearer <token>',
     '  /settings set agent.context_budget_tokens 16000',
-    '  /settings set agent.max_model_steps 32',
-    '  /settings set agent.max_tool_calls 96',
+    '  /settings set agent.max_model_steps 64',
+    '  /settings set agent.max_tool_calls 192',
   ].join('\n');
 }
 
@@ -1047,8 +1054,8 @@ function renderSettingsPanel(repoRoot: string, config: ProjectConfig): string {
     '',
     'Agent',
     `  context:      ${config.contextBudgetTokens ?? 131072}`,
-    `  max_steps:    ${config.maxModelSteps ?? 32}`,
-    `  max_tools:    ${config.maxToolCalls ?? 96}`,
+    `  max_steps:    ${config.maxModelSteps ?? 64}`,
+    `  max_tools:    ${config.maxToolCalls ?? 192}`,
     '',
     'Tools',
     `  exposed:      ${exposed.join(', ')}`,

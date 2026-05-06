@@ -171,7 +171,7 @@ describe('CLI', () => {
         const result = await runSynaxDetailed(['ask', '--question', 'Reply with exactly: synax-ok'], { cwd });
         expect(result.status).toBe(0);
         expect(result.stdout).toContain('Synax Task');
-        expect(result.stdout).toContain('Tools:       read, write, edit, git');
+        expect(result.stdout).toContain('Tools:       read, write, edit, bash');
         expect(result.stdout).toContain('synax-ok');
         expect(result.stderr).toBe('');
       } finally {
@@ -305,7 +305,7 @@ describe('CLI', () => {
         };
         expect(parsed.messages[0].role).toBe('system');
         expect(parsed.messages[0].content).toContain('You are Synax');
-        expect(parsed.tools.map((tool) => tool.function.name)).toEqual(['read', 'write', 'edit', 'git']);
+        expect(parsed.tools.map((tool) => tool.function.name)).toEqual(['read', 'write', 'edit', 'bash']);
         expect(parsed.messages[0].content).not.toContain('sk-context-secret');
       } finally {
         srv.close();
@@ -390,7 +390,7 @@ describe('CLI', () => {
         const parsed = JSON.parse(requestBody) as {
           tools: Array<{ function: { name: string } }>;
         };
-        expect(parsed.tools.map((tool) => tool.function.name)).toEqual(['read', 'write', 'edit', 'git']);
+        expect(parsed.tools.map((tool) => tool.function.name)).toEqual(['read', 'write', 'edit', 'bash']);
       } finally {
         srv.close();
         rmSync(cwd, { recursive: true, force: true });

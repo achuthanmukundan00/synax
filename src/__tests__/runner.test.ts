@@ -1,3 +1,4 @@
+import { execSync } from 'child_process';
 import { existsSync, mkdirSync, rmSync, writeFileSync, readFileSync } from 'fs';
 import { join } from 'path';
 
@@ -50,6 +51,17 @@ describe('shared bounded agent runner', () => {
     ]);
   });
 
+  it('keeps the system prompt focused on the four model-facing tools', async () => {
+    const client = fakeClient([{ content: 'done' }]);
+
+    await runAgentTurn({ repoRoot: TMP, task: 'hello', client });
+
+    const system = client.requests[0].messages[0].content as string;
+    expect(system).toContain('Tools: read, write, edit, bash.');
+    expect(system).not.toContain('GIT WORKFLOWS');
+    expect(system).not.toContain('git tool');
+  });
+
   it('constrains read-only and verify modes to read and bash tools', async () => {
     expect(buildModelFacingTools({ mode: 'read-only', bashEnabled: true }).map((tool) => tool.name)).toEqual([
       'read',
@@ -61,13 +73,8 @@ describe('shared bounded agent runner', () => {
     ]);
   });
 
-  it('uses legacy git surface only when bash is explicitly disabled', async () => {
-    expect(buildModelFacingTools({ bashEnabled: false }).map((tool) => tool.name)).toEqual([
-      'read',
-      'write',
-      'edit',
-      'git',
-    ]);
+  it('does not expose a legacy git surface when bash is disabled', async () => {
+    expect(buildModelFacingTools({ bashEnabled: false }).map((tool) => tool.name)).toEqual(['read', 'write', 'edit']);
     expect(buildModelFacingTools({ bashEnabled: true }).map((tool) => tool.name)).toEqual([
       'read',
       'write',
@@ -156,6 +163,93 @@ describe('shared bounded agent runner', () => {
     const result = await runAgentTurn({ repoRoot: TMP, task: 'run tests', client });
 
     expect(result.toolCalls).toContainEqual({ name: 'bash', success: true, error: undefined });
+  });
+
+  it('treats successful git commits as completed work even when no files are edited by Synax', async () => {
+    execSync('git init', { cwd: TMP, stdio: 'ignore' });
+    execSync('git config user.email "synax@example.test"', { cwd: TMP, stdio: 'ignore' });
+    execSync('git config user.name "Synax Test"', { cwd: TMP, stdio: 'ignore' });
+    writeFileSync(join(TMP, 'a.txt'), 'hello\n', 'utf-8');
+    const client = fakeClient([
+      {
+        toolCalls: [
+          {
+            id: 'call_1',
+            name: 'bash',
+            arguments: { command: 'git add a.txt && git commit -m "Add a.txt"' },
+          },
+        ],
+      },
+      { content: 'completed successfully' },
+    ]);
+
+    const result = await runAgentTurn({
+      repoRoot: TMP,
+      task: 'commit the unstaged changes',
+      client,
+      maxSteps: 2,
+    });
+
+    expect(result.terminalState).toBe('completed');
+    expect(execSync('git rev-list --count HEAD', { cwd: TMP, encoding: 'utf-8' }).trim()).toBe('1');
+  });
+
+  it('stops immediately after a successful git commit instead of spending more model steps', async () => {
+    execSync('git init', { cwd: TMP, stdio: 'ignore' });
+    execSync('git config user.email "synax@example.test"', { cwd: TMP, stdio: 'ignore' });
+    execSync('git config user.name "Synax Test"', { cwd: TMP, stdio: 'ignore' });
+    writeFileSync(join(TMP, 'a.txt'), 'hello\n', 'utf-8');
+    const client = fakeClient([
+      {
+        toolCalls: [
+          {
+            id: 'call_1',
+            name: 'bash',
+            arguments: { command: 'git add a.txt && git commit -m "Add a.txt"' },
+          },
+        ],
+      },
+      { toolCalls: [{ id: 'call_2', name: 'bash', arguments: { command: 'git status --short' } }] },
+    ]);
+
+    const result = await runAgentTurn({
+      repoRoot: TMP,
+      task: 'commit the unstaged changes',
+      client,
+      maxSteps: 32,
+    });
+
+    expect(result).toMatchObject({
+      terminalState: 'completed',
+      steps: 1,
+      toolCalls: [{ name: 'bash', success: true, error: undefined }],
+    });
+    expect(client.requests).toHaveLength(1);
+    expect(execSync('git rev-list --count HEAD', { cwd: TMP, encoding: 'utf-8' }).trim()).toBe('1');
+  });
+
+  it('treats successful gh publishing commands as completed work', async () => {
+    const client = fakeClient([
+      {
+        toolCalls: [
+          {
+            id: 'call_1',
+            name: 'bash',
+            arguments: { command: 'gh() { return 0; }; gh pr create --draft --fill' },
+          },
+        ],
+      },
+      { content: 'completed successfully' },
+    ]);
+
+    const result = await runAgentTurn({
+      repoRoot: TMP,
+      task: 'open a draft pull request',
+      client,
+      maxSteps: 2,
+    });
+
+    expect(result.terminalState).toBe('completed');
   });
 
   it('adds a safety warning for dangerous bash commands while still executing', async () => {
@@ -844,6 +938,64 @@ describe('shared bounded agent runner', () => {
     expect(result.toolCalls).toHaveLength(1);
   });
 
+  it('stops repeated identical bash commands before exhausting model steps', async () => {
+    const client = fakeClient([
+      { toolCalls: [{ id: '1', name: 'bash', arguments: { command: 'git status --short' } }] },
+      { toolCalls: [{ id: '2', name: 'bash', arguments: { command: 'git status --short' } }] },
+      { toolCalls: [{ id: '3', name: 'bash', arguments: { command: 'git status --short' } }] },
+      { toolCalls: [{ id: '4', name: 'bash', arguments: { command: 'git status --short' } }] },
+      { content: 'should not be reached' },
+    ]);
+
+    const result = await runAgentTurn({ repoRoot: TMP, task: 'commit all unstaged changes', client, maxSteps: 32 });
+
+    expect(result).toMatchObject({
+      terminalState: 'tool_error',
+      error: expect.stringContaining('Bash loop detected'),
+    });
+    expect(result.steps).toBeLessThan(32);
+  });
+
+  it('continues after large bash output when the model-facing context can compact it', async () => {
+    const client = fakeClient([
+      {
+        toolCalls: [
+          {
+            id: 'call_1',
+            name: 'bash',
+            arguments: { command: 'node -e "console.log(\'x\'.repeat(10000))"' },
+          },
+        ],
+      },
+      { content: 'reviewed the shell output' },
+    ]);
+
+    const result = await runAgentTurn({
+      repoRoot: TMP,
+      task: 'inspect shell output and summarize it',
+      client,
+      maxSteps: 4,
+      contextBudget: {
+        contextWindowTokens: 1500,
+        reservedOutputTokens: 300,
+        keepRecentTokens: 200,
+        maxSingleReadResultTokens: 6000,
+        keepRecentToolTurns: 1,
+      },
+    });
+
+    expect(result).toMatchObject({
+      terminalState: 'completed',
+      finalAnswer: 'reviewed the shell output',
+    });
+    expect(client.requests).toHaveLength(2);
+    const secondRequest = client.requests[1].messages as Array<{ role: string; name?: string; content: string }>;
+    const bashResult = secondRequest.find((message) => message.role === 'tool' && message.name === 'bash');
+    expect(bashResult?.content).toContain('"_compacted":true');
+    expect(bashResult?.content).toContain('"command"');
+    expect(bashResult?.content).not.toContain('x'.repeat(1000));
+  });
+
   it('asks for a final answer on the final allowed model step', async () => {
     writeFileSync(join(TMP, 'package.json'), '{}\n', 'utf-8');
     const client = fakeClient([
@@ -1082,9 +1234,7 @@ describe('shared bounded agent runner', () => {
     // The third request's messages should contain the gate nudge (added after step 2)
     const messages3 = client.requests[2].messages as Array<{ role: string; content: string }>;
     const userMessages3 = messages3.filter((m) => m.role === 'user');
-    expect(userMessages3.some((m) => m.content.includes('claimed completion without making any file changes'))).toBe(
-      true,
-    );
+    expect(userMessages3.some((m) => m.content.includes('claimed completion without taking action'))).toBe(true);
   });
 
   it('accepts legitimate read-only completion without changes', async () => {
