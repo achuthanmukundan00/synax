@@ -33,9 +33,10 @@ Slash commands:
 | `/budget`                      | Show context and loop limits                          |
 | `/test-provider`               | Probe provider models and chat endpoints              |
 | `/inspect`                     | Show project profile                                  |
-| `/verify`                      | Run configured verification command                   |
+| `/verify [quick|full]`         | Run configured verification command                   |
+| `/diff`                        | Show bounded git status and diff                     |
+| `/status`                      | Show git, budget, checkpoint, and read-state summary  |
 | `/clear`                       | Reset the chat conversation and inspection ledger     |
-| `/status`                      | Show git and budget status                            |
 | `/exit`, `/quit`               | Exit chat                                             |
 
 ## `synax ask`
@@ -64,6 +65,15 @@ Runs one bounded edit-capable agent task:
 npm run synax -- run --task "Fix the failing auth test"
 ```
 
+Task modes constrain the tool surface:
+
+```sh
+npm run synax -- run --mode read-only --task "Inspect the registry and summarize safe improvements"
+npm run synax -- run --mode patch --task "Make one docs-only wording improvement in README.md"
+npm run synax -- run --mode verify --task "Inspect the patch and report whether verification is safe"
+npm run synax -- run --mode docs --task "Update docs/guide/commands.md with one small wording fix"
+```
+
 Replacement edits print a patch preview before writing. Because `run` is non-interactive, previewed replacement
 edits are rejected by default. Pass `--yes` to accept previewed replacement edits during that run:
 
@@ -76,6 +86,13 @@ Plan files are not implemented yet:
 
 ```sh
 npm run synax -- run --plan plan.md
+```
+
+Verification profiles:
+
+```sh
+npm run synax -- run --task "Fix the failing auth test" --verification-profile quick
+npm run synax -- run --task "Fix the failing auth test" --verification-profile full
 ```
 
 ## `synax inspect`

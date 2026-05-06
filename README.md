@@ -102,6 +102,10 @@ npm run synax -- chat
 # Run one bounded edit-capable task; --yes accepts previewed replacement edits
 npm run synax -- run --task "Fix the failing test" --yes
 
+# Constrain the task surface
+npm run synax -- run --mode read-only --task "Inspect the command registry and identify one safe improvement. Do not modify files."
+npm run synax -- run --mode patch --task "Make one minimal docs-only wording improvement in README.md, then run npm run typecheck."
+
 # Show config
 npm run synax -- config show
 ```
@@ -116,6 +120,8 @@ Inside `synax chat`:
 /test-provider
 /inspect
 /verify
+/verify quick
+/verify full
 /diff
 /undo-last-edit
 /clear
@@ -212,6 +218,17 @@ npm run typecheck
 npm run lint
 npm test
 npm run build
+```
+
+## Smoke Tests
+
+Use these bounded self-development smoke tests when changing Synax itself:
+
+```sh
+npm run synax -- run --mode read-only --task "Inspect README.md and summarize Synax in 5 bullets. Do not modify files."
+npm run synax -- run --mode patch --task "Make one minimal docs-only wording improvement in README.md, then run npm run typecheck."
+npm run synax -- inspect
+npm run synax -- doctor --full
 ```
 
 ## License
