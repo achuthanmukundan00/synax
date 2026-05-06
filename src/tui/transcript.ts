@@ -16,7 +16,7 @@ export function renderTranscript(state: TranscriptRenderState, width: number): s
 
     // Insert a thin separator when switching between model and tool regions.
     if (lastKind && lastKind !== blockKind) {
-      blocks.push([dim(separator(width - 4))]);
+      blocks.push([dim(separator(Math.min(width - 4, 40)))]);
     }
     lastKind = blockKind;
 
@@ -42,7 +42,7 @@ export function renderTranscript(state: TranscriptRenderState, width: number): s
   if (!hasModelOutput) {
     const fallbackModel = cleanModelOutput(state.run.lastModelOutput || state.lastModelOutput || '');
     if (fallbackModel) {
-      if (lastKind) blocks.push([dim(separator(width - 4))]);
+      if (lastKind) blocks.push([dim(separator(Math.min(width - 4, 40)))]);
       blocks.push(renderEventBlock('model', fallbackModel, width));
     }
   }
@@ -258,6 +258,7 @@ function numberValue(value: Record<string, unknown> | undefined, key: string): n
 
 function summarizeOutput(output: string): string {
   return output
+    .replace(/^command:\s*/im, '')
     .replace(/^stdout:\s*/im, '')
     .replace(/^stderr:\s*/im, '')
     .split('\n')
