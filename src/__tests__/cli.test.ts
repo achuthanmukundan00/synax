@@ -384,7 +384,7 @@ describe('CLI', () => {
         const result = await runSynaxDetailed(['run', '--task', 'test task'], { cwd });
         expect(result.status).toBe(0);
         expect(result.stdout).toContain('test task');
-        expect(result.stdout).toContain('Synax run report');
+        expect(result.stdout).toContain('Synax Run Report');
         expect(result.stdout).toContain('run complete');
 
         const parsed = JSON.parse(requestBody) as {
