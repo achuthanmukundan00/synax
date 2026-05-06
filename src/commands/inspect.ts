@@ -22,6 +22,7 @@ import {
   type LocalDocsSearchResult,
 } from '../context/local-docs';
 import { buildModelFacingTools } from '../agent/runner';
+import { resolveContextBudgetSettings } from '../agent/context-budget';
 import { createContextLedger, type ContextLedger, type ModelCallEntry } from '../tools';
 
 export const PROJECT_CONTEXT_PATH = join('.synax', 'context.json');
@@ -42,6 +43,7 @@ export interface InspectCommandOptions {
   ledger?: boolean;
   context?: boolean;
   expanded?: boolean;
+  budget?: boolean;
   docs?: boolean;
   doc?: string;
   searchDocs?: string;
@@ -65,6 +67,7 @@ export function runInspectCommand(program: any): void {
     .option('--ledger', 'Show the context ledger (from .synax-ledger.json)')
     .option('--context', 'Show the context ledger in expanded format')
     .option('-e, --expanded', 'Show expanded ledger output')
+    .option('--budget', 'Show context budget configuration')
     .option('--docs', 'List bounded local docs and specs available to Synax')
     .option('--doc <path>', 'Read a bounded local docs/spec file')
     .option('--search-docs <query>', 'Search bounded local docs/spec files')
@@ -89,6 +92,7 @@ export function runInspectCommand(program: any): void {
         ledger: options.ledger,
         context: options.context,
         expanded: options.expanded,
+        budget: options.budget,
         docs: options.docs,
         doc: options.doc,
         searchDocs: options.searchDocs,
@@ -105,20 +109,70 @@ export function runInspectCommand(program: any): void {
         return;
       }
 
-      // --ledger or --context: show the context ledger
-      if (opts.ledger || opts.context) {
-        const ledgerPath = resolve(targetPath, '.synax-ledger.json');
-        const ledger = loadLedgerFromDisk(ledgerPath);
+      // --budget: show context budget configuration
+      if (opts.budget) {
+        const loaded = loadProjectConfig(targetPath);
+        const settings = resolveContextBudgetSettings({
+          contextBudgetTokens: loaded.config.contextBudgetTokens,
+        });
+        const effectiveInputLimit = settings.contextWindowTokens - settings.reservedOutputTokens;
 
-        if (!ledger) {
-          console.log('[synax] No ledger data found. Run a chat/ask session first.');
+        if (opts.json) {
+          console.log(
+            JSON.stringify(
+              {
+                contextWindowTokens: settings.contextWindowTokens,
+                reservedOutputTokens: settings.reservedOutputTokens,
+                keepRecentTokens: settings.keepRecentTokens,
+                maxSingleReadResultTokens: settings.maxSingleReadResultTokens,
+                maxTotalReadResultTokensPerTurn: settings.maxTotalReadResultTokensPerTurn,
+                effectiveInputLimit,
+                compactionThreshold: `${Math.floor(0.6 * effectiveInputLimit)} tokens (60% of effective limit)`,
+              },
+              null,
+              2,
+            ),
+          );
+        } else {
+          console.log('Synax Context Budget');
+          console.log('--------------------');
+          console.log(`  context window:     ${settings.contextWindowTokens} tokens`);
+          console.log(`  reserved output:    ${settings.reservedOutputTokens} tokens`);
+          console.log(`  effective limit:    ${effectiveInputLimit} tokens`);
+          console.log(`  compaction tail:    ${settings.keepRecentTokens} tokens`);
+          console.log(`  single read cap:    ${settings.maxSingleReadResultTokens} tokens`);
+          console.log(`  per-turn read cap:  ${settings.maxTotalReadResultTokensPerTurn} tokens`);
+          console.log(`  compaction at:      ~${Math.floor(0.6 * effectiveInputLimit)} tokens (60%)`);
+          console.log(`  estimator:          chars / 3.5 (approximate)`);
+        }
+        return;
+      }
+
+      // --ledger or --context: show the context ledger/state
+      if (opts.ledger || opts.context) {
+        const contextPath = resolve(targetPath, '.synax', 'context.json');
+        const legacyPath = resolve(targetPath, '.synax-ledger.json');
+        let contextData: Record<string, unknown> | null = null;
+
+        try {
+          if (existsSync(contextPath)) {
+            contextData = JSON.parse(readFileSync(contextPath, 'utf-8'));
+          } else if (existsSync(legacyPath)) {
+            contextData = JSON.parse(readFileSync(legacyPath, 'utf-8'));
+          }
+        } catch {
+          // ignore parse errors
+        }
+
+        if (!contextData) {
+          console.log('[synax] No context state found. Run a chat/ask session first.');
           return;
         }
 
-        if (opts.context || opts.expanded) {
-          console.log(JSON.stringify(ledger, null, 2));
+        if (opts.context || opts.expanded || opts.json) {
+          console.log(JSON.stringify(contextData, null, 2));
         } else {
-          console.log(ledger.getCompact());
+          console.log(contextData.orientation ?? JSON.stringify(contextData, null, 2));
         }
         return;
       }
