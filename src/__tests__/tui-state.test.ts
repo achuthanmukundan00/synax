@@ -1,0 +1,348 @@
+import {
+  applyEventToRunState,
+  compressChanges,
+  compressTimeline,
+  createInitialRunStateSnapshot,
+} from '../agent/tui-state';
+
+describe('tui-state', () => {
+  it('transitions through model and tool phases', () => {
+    let state = createInitialRunStateSnapshot(0);
+    state = applyEventToRunState(
+      state,
+      {
+        type: 'task_started',
+        timestamp: new Date(0).toISOString(),
+        mode: 'patch',
+        profile: 'default',
+        endpoint: 'http://127.0.0.1:1234/v1',
+        model: 'qwen',
+        contextBudgetTokens: 1000,
+        maxModelSteps: 10,
+        maxToolCalls: 10,
+        tools: ['read'],
+        task: 'update renderer',
+      },
+      1,
+    );
+    expect(state.phase).toBe('thinking');
+
+    state = applyEventToRunState(
+      state,
+      {
+        type: 'tool_started',
+        timestamp: new Date(1).toISOString(),
+        toolCallId: '1',
+        toolName: 'read',
+        summary: '{"path":"src/agent/renderers.ts"}',
+      },
+      2,
+    );
+    expect(state.phase).toBe('tool_execution');
+    expect(state.changes.items[state.changes.items.length - 1]?.path).toBe('src/agent/renderers.ts');
+
+    state = applyEventToRunState(
+      state,
+      {
+        type: 'tool_finished',
+        timestamp: new Date(2).toISOString(),
+        toolCallId: '1',
+        toolName: 'read',
+        summary: 'completed',
+        status: 'ok',
+      },
+      3,
+    );
+    expect(state.phase).toBe('thinking');
+  });
+
+  it('maps failed verification to S2 risk line', () => {
+    let state = createInitialRunStateSnapshot(0);
+    state = applyEventToRunState(
+      state,
+      {
+        type: 'task_finished',
+        timestamp: new Date(3).toISOString(),
+        status: 'failed_verification',
+        toolCalls: 2,
+        maxToolCalls: 10,
+        modelSteps: 2,
+        maxModelSteps: 10,
+        changedFiles: ['src/a.ts'],
+        verification: 'npm test failed',
+      },
+      4,
+    );
+    expect(state.verification.state).toBe('failed');
+    expect(state.severity === 'S2' || state.severity === 'S3').toBe(true);
+  });
+
+  it('verification lifecycle: planned → running → passed', () => {
+    let state = createInitialRunStateSnapshot(0);
+    expect(state.verification.state).toBe('planned');
+    expect(state.verification.checksPlanned).toBe(0);
+    expect(state.verification.checksRunning).toBe(0);
+    expect(state.verification.checksPassed).toBe(0);
+
+    state = applyEventToRunState(
+      state,
+      {
+        type: 'verification_planned',
+        timestamp: new Date(1).toISOString(),
+        checkId: 'chk-1',
+        checkLabel: 'npm test',
+        command: 'npm test',
+        summary: '3 file(s) changed',
+      },
+      2,
+    );
+    expect(state.verification.state).toBe('planned');
+    expect(state.verification.checksPlanned).toBe(1);
+    expect(state.verification.currentCheckLabel).toBe('npm test');
+    expect(state.phase).toBe('verifying');
+
+    state = applyEventToRunState(
+      state,
+      {
+        type: 'verification_started',
+        timestamp: new Date(3).toISOString(),
+        checkId: 'chk-1',
+        checkLabel: 'npm test',
+        command: 'npm test',
+      },
+      4,
+    );
+    expect(state.verification.state).toBe('running');
+    expect(state.verification.checksPlanned).toBe(0);
+    expect(state.verification.checksRunning).toBe(1);
+
+    state = applyEventToRunState(
+      state,
+      {
+        type: 'verification_passed',
+        timestamp: new Date(5).toISOString(),
+        checkId: 'chk-1',
+        checkLabel: 'npm test',
+        summary: 'all tests passed',
+        durationMs: 1234,
+      },
+      6,
+    );
+    expect(state.verification.state).toBe('passed');
+    expect(state.verification.checksPassed).toBe(1);
+    expect(state.verification.checksRunning).toBe(0);
+    expect(state.verification.summary).toContain('all tests passed');
+    expect(state.verification.summary).toContain('1.2s');
+  });
+
+  it('failed verification escalates severity to S2', () => {
+    let state = createInitialRunStateSnapshot(0);
+    state = applyEventToRunState(
+      state,
+      {
+        type: 'verification_planned',
+        timestamp: new Date(1).toISOString(),
+        checkId: 'chk-1',
+        checkLabel: 'npm test',
+        summary: 'planned',
+      },
+      1,
+    );
+    state = applyEventToRunState(
+      state,
+      {
+        type: 'verification_started',
+        timestamp: new Date(2).toISOString(),
+        checkId: 'chk-1',
+        checkLabel: 'npm test',
+      },
+      2,
+    );
+    state = applyEventToRunState(
+      state,
+      {
+        type: 'verification_failed',
+        timestamp: new Date(3).toISOString(),
+        checkId: 'chk-1',
+        checkLabel: 'npm test',
+        summary: '2 tests failed',
+        severity: 'S2',
+        durationMs: 500,
+      },
+      3,
+    );
+    expect(state.verification.state).toBe('failed');
+    expect(state.verification.checksFailed).toBe(1);
+    expect(state.verification.checksPassed).toBe(0);
+    const hasS2OrS3 = state.severity === 'S2' || state.severity === 'S3';
+    expect(hasS2OrS3).toBe(true);
+    expect(state.riskLine).toContain('verification failed');
+    expect(state.phase).toBe('verifying');
+  });
+
+  it('multiple verification checks compress correctly', () => {
+    let state = createInitialRunStateSnapshot(0);
+
+    // Check 1: planned → started → passed
+    state = applyEventToRunState(
+      state,
+      {
+        type: 'verification_planned',
+        timestamp: new Date(1).toISOString(),
+        checkId: 'chk-1',
+        checkLabel: 'npm test',
+        summary: 'first check',
+      },
+      1,
+    );
+    state = applyEventToRunState(
+      state,
+      {
+        type: 'verification_started',
+        timestamp: new Date(2).toISOString(),
+        checkId: 'chk-1',
+        checkLabel: 'npm test',
+      },
+      2,
+    );
+    state = applyEventToRunState(
+      state,
+      {
+        type: 'verification_passed',
+        timestamp: new Date(3).toISOString(),
+        checkId: 'chk-1',
+        checkLabel: 'npm test',
+        summary: 'ok',
+      },
+      3,
+    );
+    expect(state.verification.checksPassed).toBe(1);
+
+    // Check 2: planned → started → failed
+    state = applyEventToRunState(
+      state,
+      {
+        type: 'verification_planned',
+        timestamp: new Date(4).toISOString(),
+        checkId: 'chk-2',
+        checkLabel: 'npm run lint',
+        summary: 'second check',
+      },
+      4,
+    );
+    state = applyEventToRunState(
+      state,
+      {
+        type: 'verification_started',
+        timestamp: new Date(5).toISOString(),
+        checkId: 'chk-2',
+        checkLabel: 'npm run lint',
+      },
+      5,
+    );
+    state = applyEventToRunState(
+      state,
+      {
+        type: 'verification_failed',
+        timestamp: new Date(6).toISOString(),
+        checkId: 'chk-2',
+        checkLabel: 'npm run lint',
+        summary: 'lint errors',
+        severity: 'S2',
+      },
+      6,
+    );
+
+    // Aggregate: 1 passed + 1 failed
+    expect(state.verification.state).toBe('failed');
+    expect(state.verification.checksPlanned).toBe(0);
+    expect(state.verification.checksRunning).toBe(0);
+    expect(state.verification.checksPassed).toBe(1);
+    expect(state.verification.checksFailed).toBe(1);
+    expect(state.verification.checksSkipped).toBe(0);
+  });
+
+  it('handles repeated verification events idempotently', () => {
+    let state = createInitialRunStateSnapshot(0);
+
+    // Duplicate planned events with same checkId should not double-count
+    state = applyEventToRunState(
+      state,
+      {
+        type: 'verification_planned',
+        timestamp: new Date(1).toISOString(),
+        checkId: 'chk-1',
+        checkLabel: 'npm test',
+      },
+      1,
+    );
+    state = applyEventToRunState(
+      state,
+      {
+        type: 'verification_planned',
+        timestamp: new Date(2).toISOString(),
+        checkId: 'chk-1',
+        checkLabel: 'npm test',
+      },
+      2,
+    );
+    expect(state.verification.checksPlanned).toBe(1);
+    expect(state.verification.seenCheckIds.size).toBe(1);
+
+    // Different checkId should increment
+    state = applyEventToRunState(
+      state,
+      {
+        type: 'verification_planned',
+        timestamp: new Date(3).toISOString(),
+        checkId: 'chk-2',
+        checkLabel: 'npm run lint',
+      },
+      3,
+    );
+    expect(state.verification.checksPlanned).toBe(2);
+  });
+
+  it('verification_skipped counts correctly', () => {
+    let state = createInitialRunStateSnapshot(0);
+    state = applyEventToRunState(
+      state,
+      {
+        type: 'verification_skipped',
+        timestamp: new Date(1).toISOString(),
+        checkId: 'chk-1',
+        checkLabel: 'npm test',
+        summary: 'no verification command configured',
+      },
+      1,
+    );
+    expect(state.verification.state).toBe('planned');
+    expect(state.verification.checksSkipped).toBe(1);
+    expect(state.verification.seenCheckIds.has('chk-1')).toBe(true);
+  });
+
+  it('compresses timeline and change lists deterministically', () => {
+    const timeline = compressTimeline(
+      Array.from({ length: 16 }, (_, i) => ({
+        atMs: i,
+        phase: 'thinking' as const,
+        summary: `s${i}`,
+        severity: 'S0' as const,
+      })),
+      10,
+    );
+    expect(timeline).toHaveLength(10);
+    expect(timeline[0]?.summary).toBe('s6');
+
+    const changes = compressChanges(
+      [
+        { path: 'a.ts', op: 'edit' as const },
+        { path: 'a.ts', op: 'edit' as const },
+        { path: 'b.ts', op: 'read' as const },
+      ],
+      1,
+    );
+    expect(changes.items).toHaveLength(1);
+    expect(changes.overflowCount).toBe(1);
+  });
+});
