@@ -3,6 +3,7 @@ export { TuiRenderer } from './tui-renderer';
 
 export interface AgentRenderer {
   onEvent(event: AgentEvent): void;
+  setModelOutput?(text: string): void;
   finish?(): void;
 }
 

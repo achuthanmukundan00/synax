@@ -102,8 +102,11 @@ npm run synax -- inspect --doc specs/PRD.md
 # Ask one bounded question
 npm run synax -- ask --question "Where is provider config normalized?"
 
-# Start an interactive coding session
+# Start an interactive coding session (full-screen TUI on TTY)
 npm run synax -- chat
+
+# Plain fallback
+npm run synax -- chat --plain
 
 # Run one bounded edit-capable task; --yes accepts previewed replacement edits
 npm run synax -- run --task "Fix the failing test" --yes
