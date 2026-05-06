@@ -68,7 +68,7 @@ describe('chat session', () => {
     expect(session.conversation.messages[0].role).toBe('system');
   });
 
-  it('/verify invokes configured verification', async () => {
+  it('/verify quick invokes configured verification', async () => {
     writeFileSync(join(TMP, 'verify.js'), 'process.exit(0)\n', 'utf-8');
     const session = createChatSession({
       repoRoot: TMP,
@@ -78,9 +78,27 @@ describe('chat session', () => {
       },
     });
 
-    const report = await session.handleSlashCommand('/verify');
+    const report = await session.handleSlashCommand('/verify quick');
 
     expect(report.verification?.state).toBe('passed');
+    expect(report.output).toContain('verification (quick)');
+    expect(report.output).toContain('node verify.js');
+  });
+
+  it('/verify full uses bounded verification output settings', async () => {
+    writeFileSync(join(TMP, 'verify.js'), 'process.exit(1)\n', 'utf-8');
+    const session = createChatSession({
+      repoRoot: TMP,
+      config: {
+        provider: { kind: 'openai-compatible', base_url: 'http://localhost/v1', model: 'fake' },
+        verification: { defaultCommand: 'node verify.js' },
+      },
+    });
+
+    const report = await session.handleSlashCommand('/verify full');
+
+    expect(report.verification?.state).toBe('failed');
+    expect(report.output).toContain('verification (full)');
     expect(report.output).toContain('node verify.js');
   });
 
@@ -168,6 +186,30 @@ describe('chat session', () => {
     expect(badPath.output).toContain('provider.endpoint');
     expect(badNumber.output).toContain('must be a positive integer');
     expect(budget.output).toContain('Max model steps: 32');
+  });
+
+  it('/status includes context and checkpoint visibility', async () => {
+    mkdirSync(join(TMP, '.synax', 'checkpoints'), { recursive: true });
+    writeFileSync(join(TMP, '.synax', 'checkpoints', '2026-05-05T12-00-00-000Z.status.txt'), 'status\n', 'utf-8');
+    writeFileSync(join(TMP, '.synax', 'checkpoints', '2026-05-05T12-00-00-000Z.diff.patch'), 'diff\n', 'utf-8');
+    const session = createChatSession({
+      repoRoot: TMP,
+      config: {
+        provider: { kind: 'openai-compatible', base_url: 'http://localhost/v1', model: 'fake' },
+        contextBudgetTokens: 64000,
+        maxModelSteps: 24,
+        maxToolCalls: 48,
+      },
+    });
+
+    session.conversation.inspectionLedger.recordFileRead('README.md', 1, 1, '# Synax');
+    const report = await session.handleSlashCommand('/status');
+
+    expect(report.output).toContain('Context budget tokens: 64000');
+    expect(report.output).toContain('Max model steps: 24');
+    expect(report.output).toContain('Max tool calls: 48');
+    expect(report.output).toContain('Files read this session:');
+    expect(report.output).toContain('Latest checkpoint: 2026-05-05T12-00-00-000Z');
   });
 
   it('/test-provider reports ready when models and chat work', async () => {

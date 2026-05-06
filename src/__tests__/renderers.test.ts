@@ -30,7 +30,7 @@ describe('renderers', () => {
       renderer.onEvent({
         type: 'task_started',
         timestamp: new Date().toISOString(),
-        mode: 'bounded',
+        mode: 'patch',
         profile: 'default',
         endpoint: 'http://127.0.0.1:1234/v1',
         model: 'x',
@@ -87,7 +87,7 @@ describe('renderers', () => {
       renderer.onEvent({
         type: 'task_started',
         timestamp: new Date().toISOString(),
-        mode: 'bounded',
+        mode: 'patch',
         profile: 'default',
         endpoint: 'http://example.test/v1?api_key=secret',
         model: 'x',
