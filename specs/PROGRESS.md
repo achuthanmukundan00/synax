@@ -20,6 +20,39 @@ Next step:
 
 ## 2026-05-05
 
+Version/phase: v0.7 daily-driver safety, iteration 5 of 5
+
+Completed:
+
+- Added mode presets for `synax run` with actual tool-surface constraints for `read-only`, `patch`, `verify`, and `docs`.
+- Hardened replacement edits to require a prior read in the current session plus an exact text match before writing.
+- Made new-file writes atomic and bounded, and hardened undo/checkpoint/run-log writes to use atomic file replacement.
+- Added clearer run reports, `/verify quick|full`, `/diff`, `/status` context visibility, and self-development smoke-test docs.
+
+Verification run:
+
+- `npm run typecheck`: passed.
+- `npm test -- src/__tests__/agent-flow.test.ts src/__tests__/runner.test.ts src/__tests__/run-task.test.ts src/__tests__/chat.test.ts src/__tests__/renderers.test.ts src/__tests__/tools.test.ts --runInBand`: passed, 73 tests.
+- `npm test`: passed, 15 suites and 213 tests.
+- `npm run build`: passed.
+- `npm run docs:build`: passed.
+
+Decisions made:
+
+- Kept docs-mode mutation limited to docs-like paths instead of adding a broader path policy.
+- Let the run report expose files read, budgets, checkpoint info, and verification state in plain text rather than inventing token accounting.
+- Rejected broad self-development prompts early with a suggested first bounded step instead of trying to execute them.
+
+Blockers:
+
+- None.
+
+Next step:
+
+- Keep the safety/report surface in sync with any future TUI work.
+
+## 2026-05-05
+
 Version/phase: v0.7 daily-driver safety, iteration 4 of 5
 
 Completed:
