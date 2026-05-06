@@ -108,6 +108,7 @@ describe('tool registry and inspection tools', () => {
     });
     expect(ledger.hasInspectedFile('src.ts')).toBe(true);
     expect(ledger.hasInspectedRange('src.ts', 2, 3)).toBe(true);
+    expect(ledger.hasReadText('src.ts', 'two\nthree')).toBe(true);
   });
 
   it('reads the repository root as a bounded non-recursive directory listing', async () => {
@@ -115,7 +116,7 @@ describe('tool registry and inspection tools', () => {
     mkdirSync(join(TMP, 'docs'), { recursive: true });
     writeFileSync(join(TMP, 'package.json'), '{}\n', 'utf-8');
     writeFileSync(join(TMP, 'src', 'nested.ts'), 'export {}\n', 'utf-8');
-    for (let index = 0; index < 100; index += 1) {
+    for (let index = 0; index < 200; index += 1) {
       writeFileSync(join(TMP, `z-${index.toString().padStart(3, '0')}.txt`), 'extra\n', 'utf-8');
     }
     const registry = createToolRegistry({ repoRoot: TMP });
@@ -125,7 +126,7 @@ describe('tool registry and inspection tools', () => {
     expect(result.success).toBe(true);
     expect(result.output).toMatchObject({ path: '.', truncated: true });
     const entries = (result.output as DirectoryListingOutput).entries;
-    expect(entries).toHaveLength(80);
+    expect(entries).toHaveLength(160);
     expect(entries.slice(0, 3)).toEqual([
       { name: 'docs', type: 'directory' },
       { name: 'package.json', type: 'file' },
@@ -134,7 +135,17 @@ describe('tool registry and inspection tools', () => {
   });
 
   it('excludes heavy and generated paths from directory listings', async () => {
-    for (const directory of ['.git', 'node_modules', 'dist', 'coverage', '.next', '.vite', 'build', '.cache', 'cache']) {
+    for (const directory of [
+      '.git',
+      'node_modules',
+      'dist',
+      'coverage',
+      '.next',
+      '.vite',
+      'build',
+      '.cache',
+      'cache',
+    ]) {
       mkdirSync(join(TMP, directory), { recursive: true });
       writeFileSync(join(TMP, directory, 'ignored.txt'), 'ignored\n', 'utf-8');
     }

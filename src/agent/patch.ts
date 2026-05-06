@@ -1,9 +1,15 @@
-import { readFile, writeFile } from 'fs/promises';
+import { readFile } from 'fs/promises';
 
 import { type InspectionLedger } from '../tools/ledger';
 import { normalizeRepoPath } from '../tools/policy';
+import { atomicWriteFile } from './safety';
 
-export type PatchFailureState = 'invalid-patch' | 'unread-file-patch' | 'replacement-match-failure' | 'unsafe-path';
+export type PatchFailureState =
+  | 'invalid-patch'
+  | 'unread-file-patch'
+  | 'stale-read'
+  | 'replacement-match-failure'
+  | 'unsafe-path';
 
 export interface ReplaceInFilePatch {
   path: string;
@@ -22,6 +28,11 @@ export interface PatchValidationSuccess {
   matchCount: number;
   before: string;
   after: string;
+}
+
+export interface PatchPreview {
+  path: string;
+  diff: string;
 }
 
 export interface PatchValidationFailure {
@@ -54,8 +65,22 @@ export async function validateReplaceInFile(
   }
 
   const before = await readFile(target.absolutePath, 'utf-8');
+  if (!context.ledger.hasReadTextFromCompleteRead(target.path, patch.oldStr)) {
+    return {
+      ok: false,
+      failureState: 'stale-read',
+      message: `oldStr must match a prior read of ${target.path}`,
+    };
+  }
   const matchCount = countOccurrences(before, patch.oldStr);
-  if (matchCount !== 1) {
+  if (matchCount === 0) {
+    return {
+      ok: false,
+      failureState: 'stale-read',
+      message: `oldStr no longer matches the current contents of ${target.path}`,
+    };
+  }
+  if (matchCount > 1) {
     return {
       ok: false,
       failureState: 'replacement-match-failure',
@@ -84,8 +109,15 @@ export async function applyReplaceInFile(
     return { ok: false, failureState: 'unsafe-path', message: target.reason ?? 'invalid path' };
   }
 
-  await writeFile(target.absolutePath, validation.after, 'utf-8');
+  await atomicWriteFile(target.absolutePath, validation.after);
   return validation;
+}
+
+export function createPatchPreview(validation: PatchValidationSuccess): PatchPreview {
+  return {
+    path: validation.path,
+    diff: createUnifiedDiff(validation.path, validation.before, validation.after),
+  };
 }
 
 export function createUnifiedDiff(path: string, before: string, after: string): string {
