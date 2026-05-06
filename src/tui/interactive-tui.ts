@@ -50,16 +50,19 @@ export async function runInteractiveTui(
   let busy = false;
   let historyScrollOffset = 0;
   const diff = new DiffRenderer();
-  if (options?.modelLabel) {
-    state = {
-      ...state,
-      modelId: options.modelLabel,
-      providerName: options.providerName ?? providerNameFromEndpoint(options.endpointLabel ?? ''),
-      contextWindowTokens: options.contextWindowTokens,
-      coreLoaded: true,
-      sessionSpendLabel: isLocalEndpoint(options.endpointLabel ?? '') ? 'local' : undefined,
-    };
-  }
+  const applyOptionsToState = (): void => {
+    if (options?.modelLabel) {
+      state = {
+        ...state,
+        modelId: options.modelLabel,
+        providerName: options.providerName ?? providerNameFromEndpoint(options.endpointLabel ?? ''),
+        contextWindowTokens: options.contextWindowTokens,
+        coreLoaded: true,
+        sessionSpendLabel: isLocalEndpoint(options.endpointLabel ?? '') ? 'local' : undefined,
+      };
+    }
+  };
+  applyOptionsToState();
 
   // Wire the runtime event stream from ChatSession → TUI state reducer.
   // This ensures the TUI reflects REAL runtime state, not fake animation.
@@ -122,6 +125,11 @@ export async function runInteractiveTui(
 
     if (text.startsWith('/')) {
       const slash = await session.handleSlashCommand(text);
+      if (slash.newSession) {
+        state = createInitialRunStateSnapshot(Date.now());
+        applyOptionsToState();
+        historyScrollOffset = 0;
+      }
       if (slash.output) {
         state = applyEventToRunState(
           state,
