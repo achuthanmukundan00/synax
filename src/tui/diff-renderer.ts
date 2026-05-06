@@ -6,7 +6,7 @@ export class DiffRenderer {
   private height = 0;
 
   render(lines: string[], width: number, height: number): string {
-    const next = lines.slice(0, height).map((line) => clip(line, width));
+    const next = Array.from({ length: height }, (_, index) => pad(clip(lines[index] ?? '', width), width));
     const sizeChanged = width !== this.width || height !== this.height;
     this.width = width;
     this.height = height;
@@ -36,8 +36,7 @@ export class DiffRenderer {
 }
 
 function clip(line: string, width: number): string {
-  // eslint-disable-next-line no-control-regex
-  const visible = line.replace(/\u001b\[[0-9;]*m/g, '');
+  const visible = stripAnsi(line);
   if (visible.length <= width) return line;
 
   let visibleCount = 0;
@@ -59,4 +58,15 @@ function clip(line: string, width: number): string {
   }
 
   return out;
+}
+
+function pad(line: string, width: number): string {
+  const visible = stripAnsi(line);
+  if (visible.length >= width) return line;
+  return `${line}${' '.repeat(width - visible.length)}`;
+}
+
+function stripAnsi(line: string): string {
+  // eslint-disable-next-line no-control-regex
+  return line.replace(/\u001b\[[0-9;]*m/g, '');
 }
