@@ -1,6 +1,7 @@
 import { Command } from 'commander';
 import { createInterface } from 'node:readline/promises';
 import { stdin as input, stdout as output } from 'node:process';
+import type { Writable } from 'node:stream';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 
@@ -13,10 +14,13 @@ import {
   runAgentTurn,
   type AgentConversation,
   type AgentTerminalState,
+  type AgentBudgetSnapshot,
 } from '../agent/runner';
 import { runVerification, type VerificationResult } from '../agent/verification';
 import { buildProjectProfile, formatTextProfile } from '../config/profile';
 import { buildInspectConfigProfile } from './inspect';
+import { join } from 'path';
+import { writeFileSync, mkdirSync } from 'fs';
 import { discoverConfigPath, normalizeProviderConfig as normalizeProvider } from '../config/project';
 import type { NormalizedProviderConfig } from '../llm/types';
 import { readLatestCheckpoint, undoLastEdit } from '../agent/safety';
@@ -44,6 +48,36 @@ export interface SlashCommandReport {
   verification?: VerificationResult;
 }
 
+export type InlineInputSegment = InlineTextSegment | InlinePasteAttachment;
+
+export interface InlineTextSegment {
+  kind: 'text';
+  text: string;
+}
+
+export interface InlinePasteAttachment {
+  kind: 'paste';
+  text: string;
+  lines: number;
+  chars: number;
+}
+
+export interface InlinePasteDraft {
+  segments: InlineInputSegment[];
+}
+
+export interface InlinePasteInputSession {
+  handleText(text: string): void;
+  handleBackspace(): void;
+  handlePasteStart(): void;
+  handlePasteChunk(text: string): void;
+  handlePasteEnd(): void;
+  getDraft(): InlinePasteDraft;
+  getPreview(): string;
+  getVisibleBody(): string;
+  hasPaste(): boolean;
+}
+
 export function createChatSession(options: { repoRoot: string; config: ProjectConfig }): ChatSession {
   const conversation = createAgentConversation();
 
@@ -60,10 +94,30 @@ export function createChatSession(options: { repoRoot: string; config: ProjectCo
         maxSteps: options.config.maxModelSteps,
         maxToolCalls: options.config.maxToolCalls,
         tools: { bashEnabled: options.config.tools?.bash?.enabled },
+        contextBudget: {
+          contextBudgetTokens: options.config.contextBudgetTokens,
+          contextWindowTokens: options.config.contextWindowTokens,
+          reservedOutputTokens: options.config.reservedOutputTokens,
+          keepRecentTokens: options.config.keepRecentTokens,
+          maxSingleReadResultTokens: options.config.maxSingleReadResultTokens,
+          maxTotalReadResultTokensPerTurn: options.config.maxTotalReadResultTokensPerTurn,
+        },
         onActivity(activity) {
-          console.log(`[synax] ${activity.kind}: ${activity.message}`);
+          if (activity.kind === 'model_response') {
+            // Show model thoughts/output inline for debugging local-model behavior.
+            const label = `[synax] model step resp`;
+            if (activity.message) {
+              console.log(`${label}:\n${activity.message.replace(/^/gm, '  ')}`);
+            }
+          } else {
+            console.log(`[synax] ${activity.kind}: ${activity.message}`);
+          }
+        },
+        onBudget(snapshot) {
+          console.log(formatBudgetSnapshot(snapshot));
         },
       });
+      saveContextState(options.repoRoot, result.conversation);
       return {
         terminalState: result.terminalState,
         finalAnswer: result.finalAnswer,
@@ -78,6 +132,81 @@ export function createChatSession(options: { repoRoot: string; config: ProjectCo
         config: options.config,
         conversation,
       });
+    },
+  };
+}
+
+export function createInlinePasteInputSession(): InlinePasteInputSession {
+  const draft: InlinePasteDraft = { segments: [{ kind: 'text', text: '' }] };
+  let current = draft.segments[0] as InlineTextSegment;
+  let pasteText = '';
+  let pasteActive = false;
+
+  return {
+    handleText(text: string): void {
+      if (!text) return;
+      current.text += text;
+    },
+    handleBackspace(): void {
+      if (current.text.length > 0) {
+        current.text = current.text.slice(0, -1);
+        return;
+      }
+
+      const currentIndex = draft.segments.lastIndexOf(current);
+      if (currentIndex > 0) {
+        const previous = draft.segments[currentIndex - 1];
+        if (previous.kind === 'paste') {
+          draft.segments.splice(currentIndex - 1, 1);
+          return;
+        }
+      }
+
+      for (let index = draft.segments.length - 2; index >= 0; index -= 1) {
+        const segment = draft.segments[index];
+        if (segment.kind !== 'text' || segment.text.length === 0) continue;
+        segment.text = segment.text.slice(0, -1);
+        current = segment;
+        return;
+      }
+    },
+    handlePasteStart(): void {
+      if (pasteActive) return;
+      pasteActive = true;
+      pasteText = '';
+      current = { kind: 'text', text: '' };
+      draft.segments.push(current);
+    },
+    handlePasteChunk(text: string): void {
+      if (!pasteActive) {
+        current.text += text;
+        return;
+      }
+      pasteText += text;
+    },
+    handlePasteEnd(): void {
+      if (!pasteActive) return;
+      pasteActive = false;
+      const attachment: InlinePasteAttachment = {
+        kind: 'paste',
+        text: pasteText,
+        lines: countLines(pasteText),
+        chars: pasteText.length,
+      };
+      mergePasteAttachment(draft, attachment);
+      pasteText = '';
+    },
+    getDraft(): InlinePasteDraft {
+      return draft;
+    },
+    getPreview(): string {
+      return renderInlinePastePreview(draft);
+    },
+    getVisibleBody(): string {
+      return renderInlinePastePreview(draft);
+    },
+    hasPaste(): boolean {
+      return draft.segments.some((segment) => segment.kind === 'paste');
     },
   };
 }
@@ -116,33 +245,33 @@ export function chatCommand(program: Command): void {
       console.log('[synax] Chat initialized');
       printBanner(repoRoot, provider.model);
 
-      const rl = createInterface({ input, output, terminal: Boolean(output.isTTY) });
-      let exiting = false;
-      rl.on('SIGINT', () => {
-        exiting = true;
-        console.log('\n[synax] exiting');
-        rl.close();
-      });
-
       try {
         if (input.isTTY) {
-          while (!exiting) {
-            const line = await promptInteractiveLine(rl);
-            if (line === null) {
-              exiting = true;
-              break;
-            }
-            const shouldExit = await handleInteractiveLine(line, session);
-            if (shouldExit) break;
-          }
+          await runInlinePasteChat(session);
         } else {
+          const rl = createInterface({ input, output, terminal: false });
+          let exiting = false;
+          rl.on('SIGINT', () => {
+            exiting = true;
+            console.log('\n[synax] exiting');
+            rl.close();
+          });
           for await (const line of rl) {
-            const shouldExit = await handleInteractiveLine(line, session);
-            if (shouldExit) break;
+            const trimmed = line.trim();
+            if (!trimmed) continue;
+            if (trimmed.startsWith('/')) {
+              const report = await session.handleSlashCommand(trimmed);
+              if (report.output) console.log(report.output);
+              if (report.exit) break;
+              continue;
+            }
+            const report = await session.handleUserMessage(trimmed);
+            printTurnReport(report);
           }
+          if (!exiting) rl.close();
         }
       } finally {
-        if (!exiting) rl.close();
+        // no-op
       }
     });
   program.addCommand(chat);
@@ -150,37 +279,288 @@ export function chatCommand(program: Command): void {
 
 export async function promptInteractiveLine(
   rl: Pick<ReturnType<typeof createInterface>, 'question'>,
+  prompt = 'synax> ',
 ): Promise<string | null> {
   try {
-    return await rl.question('synax> ');
+    return await rl.question(prompt);
   } catch (error) {
     if (isUseAfterCloseError(error)) return null;
     throw error;
   }
 }
 
-function isUseAfterCloseError(error: unknown): boolean {
-  return typeof error === 'object' && error !== null && 'code' in error && error.code === 'ERR_USE_AFTER_CLOSE';
+export function flattenInlinePasteDraft(draft: InlinePasteDraft): string {
+  const parts: string[] = [];
+  let pasteIndex = 0;
+  for (const segment of draft.segments) {
+    if (segment.kind === 'text') {
+      if (segment.text.length > 0) parts.push(segment.text);
+      continue;
+    }
+    pasteIndex += 1;
+    const text = limitPasteText(segment.text);
+    parts.push(`--- BEGIN PASTED CONTENT ${pasteIndex}: ${countLines(text)} lines, ${text.length} chars ---`);
+    parts.push(text);
+    parts.push(`--- END PASTED CONTENT ${pasteIndex} ---`);
+  }
+  return parts
+    .map((part) => part.replace(/\r\n/g, '\n'))
+    .join('\n\n')
+    .replace(/\n{3,}/g, '\n\n');
 }
 
-async function handleInteractiveLine(line: string, session: ChatSession): Promise<boolean> {
-  const trimmed = line.trim();
-  if (!trimmed) return false;
+export function draftContainsPaste(draft: InlinePasteDraft): boolean {
+  return draft.segments.some((segment) => segment.kind === 'paste');
+}
 
-  if (trimmed.startsWith('/')) {
-    const report = await session.handleSlashCommand(trimmed);
-    if (report.output) console.log(report.output);
-    return Boolean(report.exit);
+export function draftPlainText(draft: InlinePasteDraft): string {
+  return draft.segments
+    .filter((segment): segment is InlineTextSegment => segment.kind === 'text')
+    .map((segment) => segment.text)
+    .join('');
+}
+
+export type InlineSubmissionKind = 'empty' | 'slash' | 'message';
+
+export function classifyInlineSubmission(draft: InlinePasteDraft): InlineSubmissionKind {
+  const plainText = draftPlainText(draft).trim();
+  if (!plainText && !draftContainsPaste(draft)) return 'empty';
+  if (!draftContainsPaste(draft) && plainText.startsWith('/')) return 'slash';
+  return 'message';
+}
+
+function renderInlinePastePreview(draft: InlinePasteDraft): string {
+  return draft.segments
+    .map((segment) =>
+      segment.kind === 'text' ? segment.text : `[pasted: ${segment.lines} lines, ${segment.chars} chars]`,
+    )
+    .join('')
+    .trim();
+}
+
+function mergePasteAttachment(draft: InlinePasteDraft, attachment: InlinePasteAttachment): void {
+  for (let index = draft.segments.length - 1; index >= 0; index -= 1) {
+    const segment = draft.segments[index];
+    if (segment.kind !== 'paste') continue;
+    const text =
+      segment.text.length > 0 && attachment.text.length > 0
+        ? `${segment.text}\n${attachment.text}`
+        : segment.text + attachment.text;
+    draft.segments[index] = {
+      kind: 'paste',
+      text,
+      lines: countLines(text),
+      chars: text.length,
+    };
+    return;
   }
+  draft.segments.splice(draft.segments.length - 1, 0, attachment);
+}
 
-  const report = await session.handleUserMessage(trimmed);
+function limitPasteText(text: string): string {
+  const maxChars = 12000;
+  if (text.length <= maxChars) return text;
+  return `${text.slice(0, maxChars)}\n… [truncated]`;
+}
+
+function countLines(text: string): number {
+  if (!text) return 0;
+  return text.split(/\r?\n/).length;
+}
+
+function printTurnReport(report: ChatTurnReport): void {
   if (report.finalAnswer) console.log(report.finalAnswer);
   if (report.error) console.log(`[synax] ${report.error}`);
   console.log(`[synax] terminal state: ${report.terminalState}`);
   if (report.changedFiles.length > 0) {
     console.log(`[synax] changed files: ${unique(report.changedFiles).join(', ')}`);
   }
-  return false;
+}
+
+export async function runInlinePasteChat(
+  session: ChatSession,
+  streams: {
+    stdin?: {
+      isTTY: boolean;
+      setRawMode(mode: boolean): void;
+      resume(): void;
+      pause(): void;
+      on(event: 'data', listener: (chunk: Buffer) => void): void;
+      off(event: 'data', listener: (chunk: Buffer) => void): void;
+    };
+    stdout?: Writable;
+  } = {},
+): Promise<void> {
+  let draft = createInlinePasteInputSession();
+  const stdin = streams.stdin ?? input;
+  const stdout = streams.stdout ?? output;
+  if (!stdin.isTTY || typeof stdin.setRawMode !== 'function') return;
+  stdin.setRawMode(true);
+  stdin.resume();
+  stdout.write('synax> ');
+  let pasteMode = false;
+  let suppressPasteTerminatorNewline = false;
+  let pending = '';
+  let resolveExit: (() => void) | undefined;
+  const exited = new Promise<void>((resolve) => {
+    resolveExit = resolve;
+  });
+
+  const render = (): void => {
+    stdout.write(`\r\x1b[2Ksynax> ${draft.getPreview()}`);
+  };
+
+  const resetPrompt = (): void => {
+    draft = createInlinePasteInputSession();
+    render();
+  };
+
+  const submit = async (): Promise<void> => {
+    const currentDraft = draft.getDraft();
+    const plainText = draftPlainText(currentDraft).trim();
+    const kind = classifyInlineSubmission(currentDraft);
+    if (kind === 'empty') {
+      stdout.write('\n');
+      return;
+    }
+    if (kind === 'slash') {
+      stdout.write('\n');
+      const report = await session.handleSlashCommand(plainText);
+      if (report.output) console.log(report.output);
+      if (report.exit) {
+        finish();
+        return;
+      }
+      draft = createInlinePasteInputSession();
+      render();
+      return;
+    }
+    const message = flattenInlinePasteDraft(currentDraft);
+    stdout.write('\n');
+    try {
+      const report = await session.handleUserMessage(message);
+      printTurnReport(report);
+      if (report.terminalState !== 'completed') {
+        stdout.write(`[synax] model response rejected: ${report.error ?? report.terminalState}\n`);
+      }
+    } catch (error) {
+      stdout.write(`[synax] model response rejected: ${error instanceof Error ? error.message : String(error)}\n`);
+    } finally {
+      resetPrompt();
+    }
+  };
+
+  const finish = (): void => {
+    stdin.off('data', onData);
+    resolveExit?.();
+  };
+
+  const flushPendingOutsidePaste = (): void => {
+    while (pending.length > 0) {
+      if (pending.startsWith('\x1b[200~')) {
+        pending = pending.slice(6);
+        pasteMode = true;
+        suppressPasteTerminatorNewline = false;
+        draft.handlePasteStart();
+        render();
+        flushPendingInsidePaste();
+        return;
+      }
+      if (pending.startsWith('\x1b[201~')) {
+        pending = pending.slice(6);
+        pasteMode = false;
+        suppressPasteTerminatorNewline = true;
+        draft.handlePasteEnd();
+        render();
+        flushPendingOutsidePaste();
+        return;
+      }
+      if (suppressPasteTerminatorNewline) {
+        suppressPasteTerminatorNewline = false;
+        if (pending.startsWith('\r\n')) {
+          pending = pending.slice(2);
+          continue;
+        }
+        if (pending.startsWith('\r') || pending.startsWith('\n')) {
+          pending = pending.slice(1);
+          continue;
+        }
+      }
+      const char = pending[0];
+      pending = pending.slice(1);
+      if (char === '\u0003') {
+        stdout.write('\n[synax] exiting\n');
+        finish();
+        return;
+      }
+      if (char === '\u007f' || char === '\b') {
+        draft.handleBackspace();
+        render();
+        continue;
+      }
+      if (char === '\r' || char === '\n') {
+        void submit();
+        continue;
+      }
+      draft.handleText(char);
+      render();
+    }
+  };
+
+  const flushPendingInsidePaste = (): void => {
+    while (pending.length > 0) {
+      if (pending.startsWith('\x1b[201~')) {
+        pending = pending.slice(6);
+        pasteMode = false;
+        suppressPasteTerminatorNewline = true;
+        draft.handlePasteEnd();
+        render();
+        flushPendingOutsidePaste();
+        return;
+      }
+      if (pending.startsWith('\x1b[200~')) {
+        pending = pending.slice(6);
+        continue;
+      }
+      const char = pending[0];
+      pending = pending.slice(1);
+      if (char === '\u0003') {
+        stdout.write('\n[synax] exiting\n');
+        finish();
+        return;
+      }
+      if (char === '\u007f' || char === '\b') {
+        continue;
+      }
+      draft.handlePasteChunk(char);
+    }
+    render();
+  };
+
+  const onData = (chunk: Buffer): void => {
+    pending += chunk.toString('utf8');
+    if (pasteMode) {
+      flushPendingInsidePaste();
+      return;
+    }
+    flushPendingOutsidePaste();
+  };
+
+  stdout.write('\x1b[?2004h');
+  stdin.on('data', onData);
+  try {
+    await exited;
+  } finally {
+    stdin.off('data', onData);
+    stdout.write('\x1b[?2004l');
+    stdin.setRawMode(false);
+    stdin.pause();
+    stdout.write('\n');
+  }
+}
+
+function isUseAfterCloseError(error: unknown): boolean {
+  return typeof error === 'object' && error !== null && 'code' in error && error.code === 'ERR_USE_AFTER_CLOSE';
 }
 
 async function handleSlashCommand(
@@ -218,9 +598,36 @@ async function handleSlashCommand(
     };
   }
   if (command === '/budget') {
+    const liveEstimate = context.conversation.tokenLedger.lastKnownTokenCount;
+    const liveLimit = (context.config.contextBudgetTokens ?? 131072) - (context.config.reservedOutputTokens ?? 8192);
+    const usedPercent = liveLimit > 0 ? Math.round((liveEstimate / liveLimit) * 100) : 0;
+    const liveLine =
+      liveEstimate > 0
+        ? `Live estimate: ~${liveEstimate}/${liveLimit} tokens (${usedPercent}%)`
+        : 'Live estimate: (no model calls yet)';
+    const compactionLine = context.conversation.latestCompaction
+      ? `Last compaction: stage ${context.conversation.latestCompaction.stage}, ${context.conversation.latestCompaction.summary.length} chars`
+      : 'Last compaction: none';
+    const assemblyLine = context.conversation.assemblyStats
+      ? `Assembly: ${context.conversation.assemblyStats.totalMessagesIn} → ${context.conversation.assemblyStats.totalMessagesOut} msgs, ${context.conversation.assemblyStats.compactedToolResults} compacted`
+      : 'Assembly: not run yet';
     return {
       handled: true,
-      output: `Budget\n------\nContext: ${context.config.contextBudgetTokens ?? 131072}\nMax model steps: ${context.config.maxModelSteps ?? 32}\nMax tool calls: ${context.config.maxToolCalls ?? 96}`,
+      output: [
+        'Budget',
+        '------',
+        `Context window:  ${context.config.contextBudgetTokens ?? 131072}`,
+        `Reserved output:  ${context.config.reservedOutputTokens ?? 8192}`,
+        `Max model steps:  ${context.config.maxModelSteps ?? 32}`,
+        `Max tool calls:   ${context.config.maxToolCalls ?? 96}`,
+        `Max single read:  ${context.config.maxSingleReadResultTokens ?? 12000}`,
+        `Max total reads:  ${context.config.maxTotalReadResultTokensPerTurn ?? 40000}`,
+        `Keep recent:      ${context.config.keepRecentTokens ?? 20000}`,
+        '',
+        liveLine,
+        compactionLine,
+        assemblyLine,
+      ].join('\n'),
     };
   }
   if (command === '/test-provider') {
@@ -239,13 +646,18 @@ async function handleSlashCommand(
     const filesRead = unique(context.conversation.inspectionLedger.getInspectedRanges().map((range) => range.path));
     const checkpoint = await readLatestCheckpoint(context.repoRoot);
     if (!git) return { handled: true, output: '[synax] git status unavailable' };
+    const liveEstimate = context.conversation.tokenLedger.lastKnownTokenCount;
+    const liveLimit = (context.config.contextBudgetTokens ?? 131072) - (context.config.reservedOutputTokens ?? 8192);
+    const usedPercent = liveLimit > 0 ? Math.round((liveEstimate / liveLimit) * 100) : 0;
+    const liveTokenLine =
+      liveEstimate > 0 ? `~${liveEstimate}/${liveLimit} tokens (${usedPercent}%)` : '(no model calls yet)';
     return {
       handled: true,
       output: [
         `Repo: ${git.root}`,
         `Branch: ${git.branch}`,
         `Dirty: ${git.isDirty ? 'yes' : 'no'}`,
-        `Context budget tokens: ${context.config.contextBudgetTokens ?? 'not configured'}`,
+        `Context budget: ${liveTokenLine}`,
         `Max model steps: ${context.config.maxModelSteps ?? 'not configured'}`,
         `Max tool calls: ${context.config.maxToolCalls ?? 'not configured'}`,
         `Files read this session: ${filesRead.length > 0 ? filesRead.join(', ') : '(none)'}`,
@@ -602,4 +1014,56 @@ function unique(values: string[]): string[] {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function formatBudgetSnapshot(snapshot: AgentBudgetSnapshot): string {
+  const usedPercent =
+    snapshot.inputLimit > 0 ? Math.round((snapshot.estimatedInputTokens / snapshot.inputLimit) * 100) : 0;
+  const bar = renderBudgetBar(usedPercent);
+  const label =
+    snapshot.compactionStage !== undefined ? `[budget step ${snapshot.step}]` : `[budget step ${snapshot.step}]`;
+  return `[synax] ${label} ${bar} ~${snapshot.estimatedInputTokens}/${snapshot.inputLimit} tokens (${usedPercent}%)`;
+}
+
+function renderBudgetBar(percent: number): string {
+  const width = 10;
+  const filled = Math.max(0, Math.min(width, Math.round((percent / 100) * width)));
+  const empty = width - filled;
+  const color = percent >= 90 ? '\x1b[31m' : percent >= 60 ? '\x1b[33m' : '\x1b[32m';
+  return `${color}█`.repeat(filled) + `\x1b[90m░`.repeat(empty) + '\x1b[0m';
+}
+
+function saveContextState(repoRoot: string, conversation: AgentConversation): void {
+  try {
+    const state = {
+      task: '',
+      inspectedFiles: unique(conversation.inspectionLedger.getInspectedRanges().map((r) => r.path)),
+      orientation: conversation.inspectionLedger.getOrientation(),
+      gitStatus: conversation.inspectionLedger.hasGitStatusInspection(),
+      gitDiff: conversation.inspectionLedger.hasGitDiffInspection(),
+      tokenEstimate: conversation.tokenLedger.lastKnownTokenCount,
+      assembly: conversation.assemblyStats
+        ? {
+            totalMessagesIn: conversation.assemblyStats.totalMessagesIn,
+            totalMessagesOut: conversation.assemblyStats.totalMessagesOut,
+            estimatedTokensIn: conversation.assemblyStats.estimatedTokensIn,
+            estimatedTokensOut: conversation.assemblyStats.estimatedTokensOut,
+            compactedToolResults: conversation.assemblyStats.compactedToolResults,
+            keptRecentTurns: conversation.assemblyStats.keptRecentTurns,
+          }
+        : null,
+      compaction: conversation.latestCompaction
+        ? {
+            stage: conversation.latestCompaction.stage,
+            tokensBefore: conversation.latestCompaction.tokensBefore,
+            tokensAfter: conversation.latestCompaction.tokensAfter ?? 0,
+          }
+        : null,
+    };
+    const dir = join(repoRoot, '.synax');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'context.json'), JSON.stringify(state, null, 2), 'utf-8');
+  } catch {
+    // Best-effort only
+  }
 }
