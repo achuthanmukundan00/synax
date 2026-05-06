@@ -384,7 +384,7 @@ describe('CLI', () => {
         const result = await runSynaxDetailed(['run', '--task', 'test task'], { cwd });
         expect(result.status).toBe(0);
         expect(result.stdout).toContain('test task');
-        expect(result.stdout).toContain('Synax run report');
+        expect(result.stdout).toContain('Synax Run Report');
         expect(result.stdout).toContain('run complete');
 
         const parsed = JSON.parse(requestBody) as {
@@ -393,6 +393,32 @@ describe('CLI', () => {
         expect(parsed.tools.map((tool) => tool.function.name)).toEqual(['read', 'write', 'edit', 'git']);
       } finally {
         srv.close();
+        rmSync(cwd, { recursive: true, force: true });
+      }
+    });
+
+    test('should reject invalid --repair-attempts values cleanly', async () => {
+      const cwd = mkdtempSync(path.join(tmpdir(), 'synax-cli-run-repair-'));
+      try {
+        writeFileSync(
+          path.join(cwd, '.synax.toml'),
+          ['[provider]', 'kind = "openai-compatible"', 'base_url = "http://localhost/v1"', 'model = "test-model"'].join(
+            '\n',
+          ),
+          'utf-8',
+        );
+
+        const invalid = await runSynaxDetailed(['run', '--task', 'test task', '--repair-attempts', 'nope'], { cwd });
+        const negative = await runSynaxDetailed(['run', '--task', 'test task', '--repair-attempts', '-1'], { cwd });
+        const large = await runSynaxDetailed(['run', '--task', 'test task', '--repair-attempts', '11'], { cwd });
+
+        expect(invalid.status).not.toBe(0);
+        expect(invalid.stderr).toContain('--repair-attempts must be a non-negative integer');
+        expect(negative.status).not.toBe(0);
+        expect(negative.stderr).toContain('--repair-attempts must be a non-negative integer');
+        expect(large.status).not.toBe(0);
+        expect(large.stderr).toContain('--repair-attempts must be between 0 and 10');
+      } finally {
         rmSync(cwd, { recursive: true, force: true });
       }
     });
@@ -425,6 +451,29 @@ describe('CLI', () => {
     test('should show profile even in subdirectory paths', () => {
       const output = runSynax(['inspect', '--path', './src']);
       expect(output).toContain('Synax Project Profile');
+    });
+
+    test('should expose local docs listing and bounded reads', () => {
+      const cwd = mkdtempSync(path.join(tmpdir(), 'synax-cli-inspect-docs-'));
+      try {
+        writeFileSync(
+          path.join(cwd, 'README.md'),
+          ['# Example', 'Authorization: Bearer sk-test-secret'].join('\n'),
+          'utf-8',
+        );
+
+        const docsOutput = runSynax(['inspect', '--docs'], { cwd });
+        expect(docsOutput).toContain('Synax Local Docs');
+        expect(docsOutput).toContain('- README.md');
+
+        const docOutput = runSynax(['inspect', '--doc', 'README.md'], { cwd });
+        expect(docOutput).toContain('Synax Local Doc: README.md');
+        expect(docOutput).toContain('1 | # Example');
+        expect(docOutput).toContain('2 | Authorization: Bearer [REDACTED]');
+        expect(docOutput).not.toContain('sk-test-secret');
+      } finally {
+        rmSync(cwd, { recursive: true, force: true });
+      }
     });
   });
 

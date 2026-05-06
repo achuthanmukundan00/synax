@@ -8,11 +8,13 @@ import { redactSecrets } from './secrets';
 import { ToolContext, ToolDefinition, ToolResult } from './types';
 
 const execFileAsync = promisify(execFile);
-const DEFAULT_MAX_FILES = 200;
-const DEFAULT_MAX_READ_LINES = 120;
-const DEFAULT_MAX_MATCHES = 50;
-const DEFAULT_MAX_GIT_LINES = 200;
-const DEFAULT_MAX_DIRECTORY_ENTRIES = 80;
+
+const DEFAULT_MAX_FILES = 300;
+const DEFAULT_MAX_READ_LINES = 1000;
+const DEFAULT_MAX_MATCHES = 80;
+const DEFAULT_MAX_GIT_LINES = 1000;
+const DEFAULT_MAX_DIRECTORY_ENTRIES = 160;
+
 const SKIPPED_DIRECTORY_LISTING_NAMES = new Set(['cache']);
 
 interface ListFilesInput {
@@ -142,7 +144,11 @@ const readFileRangeTool: ToolDefinition<ReadFileRangeInput> = {
         text: line,
       }));
       const actualEndLine = selected.length > 0 ? selected[selected.length - 1].lineNumber : startLine;
-      context.ledger.recordFileRange(target.path, startLine, actualEndLine);
+      const joined = selected.map((line) => line.text).join('\n');
+      context.ledger.recordFileRead(target.path, startLine, actualEndLine, joined);
+      for (const line of selected) {
+        context.ledger.recordFileRead(target.path, line.lineNumber, line.lineNumber, line.text);
+      }
 
       return success('read_file_range', {
         path: target.path,
@@ -200,7 +206,7 @@ const searchTextTool: ToolDefinition<SearchTextInput> = {
 
           const lineNumber = index + 1;
           matches.push({ path: file, lineNumber, line: lines[index] });
-          context.ledger.recordFileRange(file, lineNumber, lineNumber);
+          context.ledger.recordFileRead(file, lineNumber, lineNumber, lines[index]);
           if (matches.length >= maxMatches) {
             return success('search_text', { query: input.query, matches, truncated: true });
           }

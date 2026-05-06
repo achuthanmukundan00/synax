@@ -81,11 +81,23 @@ Check Relay and the configured model:
 npm run synax -- doctor --full
 ```
 
+Compatibility claims should be recorded against an exact provider, model, and Synax version. Use `docs/guide/compatibility.md` for the current compatibility report format and matrix.
+
 ## Common Commands
 
 ```sh
 # Inspect repository and config context
 npm run synax -- inspect
+
+# Show context budget configuration
+npm run synax -- inspect --budget
+
+# Show current working context state (after a chat session)
+npm run synax -- inspect --ledger
+
+# List or read bounded local docs/spec context
+npm run synax -- inspect --docs
+npm run synax -- inspect --doc specs/PRD.md
 
 # Ask one bounded question
 npm run synax -- ask --question "Where is provider config normalized?"
@@ -93,8 +105,12 @@ npm run synax -- ask --question "Where is provider config normalized?"
 # Start an interactive coding session
 npm run synax -- chat
 
-# Run one bounded edit-capable task
-npm run synax -- run --task "Fix the failing test"
+# Run one bounded edit-capable task; --yes accepts previewed replacement edits
+npm run synax -- run --task "Fix the failing test" --yes
+
+# Constrain the task surface
+npm run synax -- run --mode read-only --task "Inspect the command registry and identify one safe improvement. Do not modify files."
+npm run synax -- run --mode patch --task "Make one minimal docs-only wording improvement in README.md, then run npm run typecheck."
 
 # Show config
 npm run synax -- config show
@@ -110,6 +126,10 @@ Inside `synax chat`:
 /test-provider
 /inspect
 /verify
+/verify quick
+/verify full
+/diff
+/undo-last-edit
 /clear
 /status
 /exit
@@ -124,6 +144,12 @@ Session-only settings changes are available:
 /settings set agent.max_model_steps 24
 /settings set agent.max_tool_calls 64
 ```
+
+For large pasted prompts, use bracketed paste in the terminal. Synax detects the paste boundary,
+shows a compact inline chip such as `[pasted: 84 lines, 12.4k chars]`, and submits the full pasted body
+only when you press Enter.
+
+Typed slash commands still execute normally. A pasted slash command is treated as literal content.
 
 ## Configuration
 
@@ -171,15 +197,31 @@ SYNAX_MAX_TOOL_CALLS=64
 
 ## Agent Loop
 
+Synax manages context as a runtime discipline, not just a model instruction:
+
+- **Budget model**: Approximate token estimation (chars/3). Compaction triggers at ~60% of effective limit.
+- **Working context orientation**: After each read, the model receives a compact block listing inspected files, editable-from-memory files, truncated files needing reread, and git inspection state.
+- **Progressive loop resistance**: Duplicate reads escalate: cached return → warning with guidance → hard failure with orientation summary.
+- **Tool result compaction**: Large reads are truncated at per-read and per-turn caps. Repeated results are cached. Omitted reads return zero-token guidance instead of partial content.
+- **Edit safety**: Exact-text edits require a prior complete (non-truncated) read of that file region.
+- **Deterministic compaction**: When context exceeds budget, older messages are compacted into structured summaries without LLM calls.
+
+View context state:
+
+```sh
+synax inspect --budget    # budget configuration
+synax inspect --ledger    # working context state from last session
+```
+
 Synax sends a compact OpenAI-compatible tool surface to the model:
 
-| Tool | Purpose |
-| --- | --- |
-| `read` | List files, read bounded ranges, or search text |
-| `edit` | Exact `replace_in_file` edits |
-| `write` | Create new repo-local text files |
-| `git` | Show bounded git status or diff |
-| `bash` | Hidden unless explicitly enabled |
+| Tool    | Purpose                                         |
+| ------- | ----------------------------------------------- |
+| `read`  | List files, read bounded ranges, or search text |
+| `edit`  | Exact `replace_in_file` edits                   |
+| `write` | Create new repo-local text files                |
+| `git`   | Show bounded git status or diff                 |
+| `bash`  | Hidden unless explicitly enabled                |
 
 The model loop stops when the model returns a final answer, hits the configured model-step limit, hits the configured tool-call limit, or encounters a tool/provider error.
 
@@ -204,6 +246,17 @@ npm run typecheck
 npm run lint
 npm test
 npm run build
+```
+
+## Smoke Tests
+
+Use these bounded self-development smoke tests when changing Synax itself:
+
+```sh
+npm run synax -- run --mode read-only --task "Inspect README.md and summarize Synax in 5 bullets. Do not modify files."
+npm run synax -- run --mode patch --task "Make one minimal docs-only wording improvement in README.md, then run npm run typecheck."
+npm run synax -- inspect
+npm run synax -- doctor --full
 ```
 
 ## License

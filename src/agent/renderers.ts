@@ -37,6 +37,11 @@ export class NormalRenderer implements AgentRenderer {
       process.stdout.write(`      ${event.status === 'ok' ? 'ok' : 'error'}: ${event.summary}\n\n`);
       return;
     }
+    if (event.type === 'patch_preview') {
+      process.stdout.write(`      preview: ${event.path}\n`);
+      process.stdout.write(`${event.diff}\n\n`);
+      return;
+    }
     if (event.type === 'task_finished') {
       if (!this.printedHeader) return;
       process.stdout.write('Result\n------\n');
@@ -102,6 +107,12 @@ export class DebugRenderer implements AgentRenderer {
 
     if (event.type === 'assistant_message') {
       process.stdout.write(`  content: ${preview(event.content)}\n`);
+      return;
+    }
+
+    if (event.type === 'patch_preview') {
+      process.stdout.write(`  patch: ${event.path}\n`);
+      process.stdout.write(`  diff: ${preview(event.diff)}\n`);
       return;
     }
 
