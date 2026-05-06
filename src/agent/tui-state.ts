@@ -24,7 +24,14 @@ export interface TuiChangeItem {
   op: ChangeOp;
 }
 
-export type TuiDebugKind = 'user' | 'model' | 'tool_call' | 'tool_result' | 'final_summary';
+export type TuiDebugKind =
+  | 'user'
+  | 'model'
+  | 'command'
+  | 'local_command'
+  | 'tool_call'
+  | 'tool_result'
+  | 'final_summary';
 
 export interface TuiDebugHistoryItem {
   atMs: number;
@@ -208,6 +215,32 @@ export function applyEventToRunState(state: RunStateSnapshot, event: AgentEvent,
         lastModelOutput: note,
       };
       return withTimeline(next, next.phase, `Thinking · ${note}`, 'S0');
+    }
+    case 'command_output': {
+      next = withDebugHistory(next, {
+        atMs: nowMs,
+        kind: 'command',
+        summary: event.command,
+        detail: event.content,
+      });
+      return withTimeline(next, next.phase, `Command · ${event.command}`, 'S0');
+    }
+    case 'local_shell_command': {
+      next = withDebugHistory(next, {
+        atMs: nowMs,
+        kind: 'local_command',
+        summary: event.command,
+        detail: [
+          event.command,
+          `exit code: ${event.exitCode}`,
+          `duration: ${formatDuration(event.durationMs)}`,
+          event.stdout ? `stdout:\n${event.stdout}` : '',
+          event.stderr ? `stderr:\n${event.stderr}` : '',
+        ]
+          .filter(Boolean)
+          .join('\n'),
+      });
+      return withTimeline(next, next.phase, `Command · !${event.command}`, event.exitCode === 0 ? 'S0' : 'S2');
     }
     case 'tool_started': {
       next = withPhase(next, 'tool_execution', `tool ${event.toolName}`);

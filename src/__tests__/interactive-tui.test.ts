@@ -18,6 +18,27 @@ class CapturingWritable extends Writable {
     this.chunks.push(Buffer.isBuffer(chunk) ? chunk.toString('utf8') : String(chunk));
     callback();
   }
+
+  text(): string {
+    return this.chunks.join('');
+  }
+}
+
+function createTtyInput(): PassThrough & {
+  isTTY?: boolean;
+  setRawMode?: (mode: boolean) => void;
+  resume: () => void;
+  pause: () => void;
+} {
+  const stdin = new PassThrough() as PassThrough & {
+    isTTY?: boolean;
+    setRawMode?: (mode: boolean) => void;
+    resume: () => void;
+    pause: () => void;
+  };
+  stdin.isTTY = true;
+  stdin.setRawMode = jest.fn();
+  return stdin;
 }
 
 describe('interactive tui wiring', () => {
@@ -591,7 +612,7 @@ describe('interactive layout visual agreements', () => {
     expect(dock[0]).toMatch(/^┌─+ ~\/workspace\/git\/\.worktrees\/synax-tui {2}dev\/tui ┐\s*$/);
     expect(dock[1]).toMatch(/^│ Implement fixed-footprint reactor core rendering\s+│\s*$/);
     expect(dock[2]).toMatch(/^│\s+│\s*$/);
-    expect(dock[3]).toMatch(/^└ Enter submit \| Ctrl\+C exit \| \/help ─+┘\s*$/);
+    expect(dock[3]).toMatch(/^└ Enter submit \| Ctrl\+C exit \| \/help \| !cmd shell ─+┘\s*$/);
   });
 
   it('keeps the input dock inside the terminal write-safe column', () => {
@@ -998,6 +1019,87 @@ describe('interactive layout visual agreements', () => {
 });
 
 describe('interactive tui runtime', () => {
+  it('keeps slash commands local after a completed turn', async () => {
+    const stdin = createTtyInput();
+    const stdout = new CapturingWritable();
+    let resolveSlash: (() => void) | undefined;
+    const slashHandled = new Promise<void>((resolve) => {
+      resolveSlash = resolve;
+    });
+    const session: ChatSession = {
+      conversation: createChatSession({
+        repoRoot: process.cwd(),
+        config: { provider: { kind: 'openai-compatible', base_url: 'http://localhost/v1', model: 'fake' } },
+      }).conversation,
+      handleUserMessage: jest.fn(async () => ({
+        terminalState: 'completed' as const,
+        finalAnswer: 'done',
+        changedFiles: [],
+        workingTreeClean: true,
+        steps: 1,
+        toolCalls: 0,
+      })),
+      handleSlashCommand: jest.fn(async () => {
+        resolveSlash?.();
+        return { handled: true, output: 'Chat Commands\n-------------', exit: false };
+      }),
+    };
+
+    const runPromise = runInteractiveTui(session, { stdin, stdout });
+    stdin.write(Buffer.from('finish this\n', 'utf8'));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    stdin.write(Buffer.from('/help\n', 'utf8'));
+    await slashHandled;
+    stdin.write(Buffer.from('\u0003', 'utf8'));
+    await runPromise;
+
+    const plain = stripAnsi(stdout.text());
+    expect(session.handleUserMessage).toHaveBeenCalledTimes(1);
+    expect(session.handleUserMessage).toHaveBeenCalledWith('finish this');
+    expect(session.handleSlashCommand).toHaveBeenCalledWith('/help');
+    expect(plain).toContain('command  Chat Commands');
+    expect(plain).not.toContain('model  Chat Commands');
+  });
+
+  it('runs bang-prefixed TUI input as a local shell command', async () => {
+    const stdin = createTtyInput();
+    const stdout = new CapturingWritable();
+    let resolveShell: (() => void) | undefined;
+    const shellHandled = new Promise<void>((resolve) => {
+      resolveShell = resolve;
+    });
+    const session: ChatSession = {
+      conversation: createChatSession({
+        repoRoot: process.cwd(),
+        config: { provider: { kind: 'openai-compatible', base_url: 'http://localhost/v1', model: 'fake' } },
+      }).conversation,
+      handleUserMessage: jest.fn(),
+      handleSlashCommand: jest.fn(),
+      handleShellCommand: jest.fn(async (command: string) => {
+        resolveShell?.();
+        return {
+          command,
+          exitCode: 0,
+          stdout: 'hello\n',
+          stderr: '',
+          durationMs: 12,
+        };
+      }),
+    };
+
+    const runPromise = runInteractiveTui(session, { stdin, stdout });
+    stdin.write(Buffer.from('!echo hello\n', 'utf8'));
+    await shellHandled;
+    stdin.write(Buffer.from('\u0003', 'utf8'));
+    await runPromise;
+
+    const plain = stripAnsi(stdout.text());
+    expect(session.handleShellCommand).toHaveBeenCalledWith('echo hello');
+    expect(session.handleUserMessage).not.toHaveBeenCalled();
+    expect(plain).toContain('$ echo hello');
+    expect(plain).toContain('hello');
+  });
+
   it('listens to the default stdin when no custom stdin is provided', async () => {
     const stdout = new CapturingWritable();
     const session: ChatSession = {
