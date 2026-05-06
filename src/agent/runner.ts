@@ -1208,7 +1208,9 @@ function detectDangerousCommandWarnings(command: string): string[] {
 }
 
 function isRecoverableToolError(call: ParsedToolCall, result: { success: boolean; error?: string }): boolean {
-  if (call.name !== 'read' || result.success) return false;
+  if (result.success) return false;
+  if (call.name === 'bash') return !isBashLoopError(result.error);
+  if (call.name !== 'read') return false;
   return isEnoentError(result.error) || isReadPolicyLimitError(result.error);
 }
 
@@ -1219,6 +1221,10 @@ function isEnoentError(error: string | undefined): boolean {
 function isReadPolicyLimitError(error: string | undefined): boolean {
   if (error === undefined) return false;
   return error.includes('total read limit reached') || error.includes('Read loop detected');
+}
+
+function isBashLoopError(error: string | undefined): boolean {
+  return error !== undefined && error.includes('Bash loop detected');
 }
 
 function coercePatch(input: Record<string, unknown>): ReplaceInFilePatch | null {

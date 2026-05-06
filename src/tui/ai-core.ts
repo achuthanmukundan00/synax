@@ -48,7 +48,7 @@ export function modeColor(mode: CoreMode): string {
   if (mode === 'blocked') return '\u001b[33m';
   if (mode === 'failure' || mode === 'error') return '\u001b[31m';
   if (mode === 'completed') return '\u001b[32m';
-  if (mode === 'verifying') return '\u001b[33m';
+  if (mode === 'verifying') return '\u001b[32m';
   if (
     mode === 'idle' ||
     mode === 'planning' ||
@@ -218,12 +218,15 @@ function paletteForMode(mode: NormalizedCoreMode, frame: number): [MaterialColor
   const blue: MaterialColor = { r: 58, g: 109, b: 176 };
   const deepBlue: MaterialColor = { r: 32, g: 62, b: 112 };
   const green: MaterialColor = { r: 83, g: 156, b: 108 };
+  const paleGreen: MaterialColor = { r: 174, g: 204, b: 180 };
+  const coolBlue: MaterialColor = { r: 86, g: 141, b: 178 };
   const amber: MaterialColor = { r: 190, g: 133, b: 54 };
-  const yellow: MaterialColor = { r: 218, g: 174, b: 75 };
   const red: MaterialColor = { r: 183, g: 65, b: 52 };
 
-  if (mode === 'tool_execution') return [mix(steel, amber, 0.26), amber, mix(amber, yellow, 0.35 + wave * 0.2)];
-  if (mode === 'verifying') return [mix(steel, amber, 0.2), amber, mix(amber, yellow, 0.18)];
+  if (mode === 'tool_execution')
+    return [mix(steel, deepBlue, 0.32), mix(deepBlue, blue, 0.5), mix(blue, coolBlue, 0.35 + wave * 0.2)];
+  if (mode === 'verifying')
+    return [mix(steel, green, 0.18), mix(blue, green, 0.45), mix(green, paleGreen, 0.35 + wave * 0.12)];
   if (mode === 'completed') return [mix(steel, green, 0.22), mix(blue, green, 0.35), green];
   if (mode === 'blocked') return [mix(steel, amber, 0.28), amber, mix(amber, red, 0.38 + wave * 0.14)];
   if (mode === 'failure') return [mix(steel, red, 0.26), mix(amber, red, 0.62), red];
