@@ -38,7 +38,7 @@ export function renderTranscript(state: TranscriptRenderState, width: number): s
     }
 
     if (item.kind === 'command') {
-      blocks.push(renderEventBlock('command', item.detail || item.summary, width));
+      blocks.push(renderEventBlock('command', item.detail || item.summary, width, Number.POSITIVE_INFINITY));
       continue;
     }
 
@@ -105,9 +105,9 @@ export function toolsUsed(run: RunStateSnapshot): string[] {
   return Array.from(tools);
 }
 
-function renderEventBlock(label: string, body: string, width: number): string[] {
+function renderEventBlock(label: string, body: string, width: number, maxLines = 3): string[] {
   const available = Math.max(12, width - label.length - 4);
-  const wrapped = wrapText(body || 'no detail', available).slice(0, 3);
+  const wrapped = wrapText(body || 'no detail', available).slice(0, maxLines);
   return wrapped.map((line, index) =>
     index === 0
       ? `${eventLabel(label)}  ${clip(line, available)}`

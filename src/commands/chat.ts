@@ -53,6 +53,7 @@ export interface SlashCommandReport {
   exit?: boolean;
   output: string;
   verification?: VerificationResult;
+  newSession?: boolean;
 }
 
 export interface ShellCommandReport {
@@ -746,6 +747,10 @@ async function handleSlashCommand(
     resetAgentConversation(context.conversation);
     return { handled: true, output: '[synax] conversation cleared' };
   }
+  if (command === '/new') {
+    resetAgentConversation(context.conversation);
+    return { handled: true, output: '[synax] new session started', newSession: true };
+  }
   if (command === '/settings') {
     return { handled: true, output: renderSettingsPanel(context.repoRoot, context.config) };
   }
@@ -1139,7 +1144,7 @@ function printBanner(repoRoot: string, model: string): void {
   console.log(`Repo: ${repoRoot}`);
   console.log(`Model: ${model}`);
   console.log(
-    'Commands: /help /settings /tools /budget /test-provider /inspect /verify /verify quick /verify full /diff /undo-last-edit /clear /status /exit',
+    'Commands: /help /settings /tools /budget /test-provider /inspect /verify /verify quick /verify full /diff /undo-last-edit /clear /new /status /exit',
   );
   console.log('TUI shell: !<command>');
   console.log('');
@@ -1161,6 +1166,7 @@ function renderHelpPanel(): string {
     '/diff                      Show bounded git diff',
     '/undo-last-edit            Revert last Synax-owned edit when unchanged',
     '/clear                     Reset the conversation',
+    '/new                       Start a fresh session',
     '/status                    Show git and budget status',
     '/exit, /quit               Exit chat',
     '!<command>                 Run a local shell command from the TUI',
