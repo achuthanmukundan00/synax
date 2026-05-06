@@ -1,7 +1,9 @@
 import { execFile } from 'child_process';
-import { mkdir, readFile, rename, stat, writeFile } from 'fs/promises';
-import { join } from 'path';
+import { mkdir, readFile, readdir, rename, stat, writeFile } from 'fs/promises';
+import { dirname, join } from 'path';
 import { promisify } from 'util';
+
+import { normalizeRepoPath } from '../tools/policy';
 
 const execFileAsync = promisify(execFile);
 
@@ -14,8 +16,11 @@ export interface SafetyCheckpoint {
 
 export interface RunLogRecord {
   task: string;
+  mode?: string;
   terminalState: string;
   changedFiles: string[];
+  filesRead?: string[];
+  checkpointId?: string;
   verification: string;
   error?: string;
 }
@@ -61,8 +66,8 @@ export async function createSafetyCheckpoint(repoRoot: string): Promise<SafetyCh
       execFileAsync('git', ['status', '--short'], { cwd: repoRoot, maxBuffer: 128 * 1024 }),
       execFileAsync('git', ['diff', '--no-ext-diff'], { cwd: repoRoot, maxBuffer: 1024 * 1024 }),
     ]);
-    await writeFile(statusPath, status, 'utf-8');
-    await writeFile(diffPath, diff, 'utf-8');
+    await atomicWriteFile(statusPath, status);
+    await atomicWriteFile(diffPath, diff);
     return { id, createdAt: now.toISOString(), statusPath, diffPath };
   } catch {
     return null;
@@ -74,14 +79,14 @@ export async function writeRunLog(repoRoot: string, record: RunLogRecord): Promi
   const dir = join(repoRoot, '.synax', 'runs');
   await mkdir(dir, { recursive: true });
   const path = join(dir, `${id}.json`);
-  await writeFile(path, `${JSON.stringify({ ...record, createdAt: new Date().toISOString() }, null, 2)}\n`, 'utf-8');
+  await atomicWriteFile(path, `${JSON.stringify({ ...record, createdAt: new Date().toISOString() }, null, 2)}\n`);
   return path;
 }
 
 export async function writeLastEditRecord(repoRoot: string, record: LastEditRecord): Promise<void> {
   const dir = join(repoRoot, '.synax');
   await mkdir(dir, { recursive: true });
-  await writeFile(join(dir, 'last-edit.json'), `${JSON.stringify(record, null, 2)}\n`, 'utf-8');
+  await atomicWriteFile(join(dir, 'last-edit.json'), `${JSON.stringify(record, null, 2)}\n`);
 }
 
 export async function undoLastEdit(repoRoot: string): Promise<{ ok: boolean; message: string; path?: string }> {
@@ -89,14 +94,17 @@ export async function undoLastEdit(repoRoot: string): Promise<{ ok: boolean; mes
   try {
     const raw = await readFile(recordPath, 'utf-8');
     const parsed = JSON.parse(raw) as LastEditRecord;
-    const target = join(repoRoot, parsed.path);
-    const fileStat = await stat(target);
+    const target = normalizeRepoPath(repoRoot, parsed.path);
+    if (!target.ok || !target.absolutePath || target.path === undefined) {
+      return { ok: false, message: `cannot undo ${parsed.path}: ${target.reason ?? 'invalid path'}` };
+    }
+    const fileStat = await stat(target.absolutePath);
     if (!fileStat.isFile()) return { ok: false, message: `not a file: ${parsed.path}` };
-    const current = await readFile(target, 'utf-8');
+    const current = await readFile(target.absolutePath, 'utf-8');
     if (current !== parsed.after) {
       return { ok: false, message: `cannot undo ${parsed.path}: file has changed since last Synax edit` };
     }
-    await atomicWriteFile(target, parsed.before);
+    await atomicWriteFile(target.absolutePath, parsed.before);
     return { ok: true, message: `restored ${parsed.path}`, path: parsed.path };
   } catch {
     return { ok: false, message: 'no Synax-owned edit to undo' };
@@ -104,9 +112,38 @@ export async function undoLastEdit(repoRoot: string): Promise<{ ok: boolean; mes
 }
 
 export async function atomicWriteFile(path: string, content: string): Promise<void> {
+  await mkdir(dirname(path), { recursive: true });
   const tmpPath = `${path}.synax-tmp-${process.pid}-${Date.now()}`;
   await writeFile(tmpPath, content, 'utf-8');
   await rename(tmpPath, path);
+}
+
+export async function readLatestCheckpoint(repoRoot: string): Promise<SafetyCheckpoint | null> {
+  const dir = join(repoRoot, '.synax', 'checkpoints');
+  try {
+    const entries = await readdir(dir, { withFileTypes: true });
+    const checkpointFiles = entries
+      .filter((entry) => entry.isFile() && entry.name.endsWith('.status.txt'))
+      .map((entry) => entry.name)
+      .sort()
+      .reverse();
+    const latest = checkpointFiles[0];
+    if (!latest) return null;
+    const id = latest.replace(/\.status\.txt$/, '');
+    const statusPath = join(dir, latest);
+    const diffPath = join(dir, `${id}.diff.patch`);
+    const statusStat = await stat(statusPath);
+    const diffStat = await stat(diffPath);
+    if (!statusStat.isFile() || !diffStat.isFile()) return null;
+    return {
+      id,
+      createdAt: statusStat.mtime.toISOString(),
+      statusPath,
+      diffPath,
+    };
+  } catch {
+    return null;
+  }
 }
 
 function splitLines(text: string): string[] {

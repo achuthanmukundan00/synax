@@ -9,7 +9,7 @@
  */
 
 import { join, resolve } from 'path';
-import { readFileSync, existsSync, writeFileSync, mkdirSync } from 'fs';
+import { readFileSync, existsSync, writeFileSync, mkdirSync, renameSync } from 'fs';
 import { execSync } from 'child_process';
 import { buildProjectProfile, formatTextProfile, FullProfile, type ConfigProfile } from '../config/profile';
 import { discoverConfigPath, loadProjectConfig } from '../config/project';
@@ -302,7 +302,9 @@ export function writeProjectContext(baseDir: string, profile: FullProfile): stri
   };
 
   mkdirSync(join(baseDir, '.synax'), { recursive: true });
-  writeFileSync(contextPath, `${JSON.stringify(context, null, 2)}\n`, 'utf-8');
+  const tmpPath = `${contextPath}.synax-tmp-${process.pid}-${Date.now()}`;
+  writeFileSync(tmpPath, `${JSON.stringify(context, null, 2)}\n`, 'utf-8');
+  renameSync(tmpPath, contextPath);
   return contextPath;
 }
 
