@@ -165,6 +165,30 @@ describe('shared bounded agent runner', () => {
     expect(result.toolCalls).toContainEqual({ name: 'bash', success: true, error: undefined });
   });
 
+  it('lets the model recover from failed bash commands', async () => {
+    const client = fakeClient([
+      { toolCalls: [{ id: 'call_1', name: 'bash', arguments: { command: 'git commit -m "missing stage"' } }] },
+      { toolCalls: [{ id: 'call_2', name: 'bash', arguments: { command: 'git status --short' } }] },
+      { content: 'reported commit precondition failure' },
+    ]);
+
+    const result = await runAgentTurn({
+      repoRoot: TMP,
+      task: 'commit the unstaged changes',
+      client,
+      maxSteps: 4,
+    });
+
+    expect(result).toMatchObject({
+      terminalState: 'completed',
+      finalAnswer: 'reported commit precondition failure',
+    });
+    expect(result.toolCalls).toHaveLength(2);
+    expect(result.toolCalls[0]).toMatchObject({ name: 'bash', success: false });
+    expect(result.toolCalls[1]).toMatchObject({ name: 'bash', success: true });
+    expect(client.requests).toHaveLength(3);
+  });
+
   it('treats successful git commits as completed work even when no files are edited by Synax', async () => {
     execSync('git init', { cwd: TMP, stdio: 'ignore' });
     execSync('git config user.email "synax@example.test"', { cwd: TMP, stdio: 'ignore' });
