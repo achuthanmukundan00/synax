@@ -24,7 +24,7 @@ export interface TuiChangeItem {
   op: ChangeOp;
 }
 
-export type TuiDebugKind = 'user' | 'model' | 'tool_call' | 'tool_result';
+export type TuiDebugKind = 'user' | 'model' | 'tool_call' | 'tool_result' | 'final_summary';
 
 export interface TuiDebugHistoryItem {
   atMs: number;
@@ -116,17 +116,7 @@ export function createInitialRunStateSnapshot(nowMs: number): RunStateSnapshot {
     filesChangedThisRun: [],
     workingTreeClean: undefined,
     toolInvocationCount: 0,
-    verification: {
-      state: 'planned',
-      checksPlanned: 0,
-      checksRunning: 0,
-      checksPassed: 0,
-      checksFailed: 0,
-      checksSkipped: 0,
-      summary: 'planned',
-      currentCheckLabel: '',
-      seenCheckIds: new Set(),
-    },
+    verification: createEmptyVerificationState(),
     statusNote: '',
     riskLine: 'risk: nominal',
     severity: 'S0',
@@ -171,6 +161,18 @@ export function applyEventToRunState(state: RunStateSnapshot, event: AgentEvent,
           currentPhase: 'thinking',
           nextCheckpoint: 'awaiting model output',
         },
+        changes: { items: [], overflowCount: 0 },
+        filesChangedThisRun: [],
+        workingTreeClean: undefined,
+        toolInvocationCount: 0,
+        verification: createEmptyVerificationState(),
+        statusNote: '',
+        riskLine: 'risk: nominal',
+        terminalIssue: undefined,
+        severity: 'S0',
+        terminal: 'running',
+        lastModelOutput: '',
+        patchPreview: undefined,
       };
       next = withPhase(next, 'thinking', 'task started');
       next = withDebugHistory(next, {
@@ -336,6 +338,12 @@ export function applyEventToRunState(state: RunStateSnapshot, event: AgentEvent,
           toolInvocationCount: event.toolCalls,
         };
       }
+      next = withDebugHistory(next, {
+        atMs: nowMs,
+        kind: 'final_summary',
+        summary: 'final summary',
+        detail: formatFinalSummaryDebugItem(next),
+      });
       return withTimeline(next, phase, `run ${event.status}`, next.severity);
     }
     case 'error': {
@@ -433,6 +441,74 @@ const MAX_DEBUG_HISTORY = 200;
 function withDebugHistory(state: RunStateSnapshot, item: TuiDebugHistoryItem): RunStateSnapshot {
   const debugHistory = [...state.debugHistory, { ...item, detail: clipText(item.detail, 6000) }];
   return { ...state, debugHistory: debugHistory.slice(Math.max(0, debugHistory.length - MAX_DEBUG_HISTORY)) };
+}
+
+function createEmptyVerificationState(): TuiVerificationState {
+  return {
+    state: 'planned',
+    checksPlanned: 0,
+    checksRunning: 0,
+    checksPassed: 0,
+    checksFailed: 0,
+    checksSkipped: 0,
+    summary: 'planned',
+    currentCheckLabel: '',
+    seenCheckIds: new Set(),
+  };
+}
+
+function formatFinalSummaryDebugItem(state: RunStateSnapshot): string {
+  const fileCount =
+    state.filesChangedThisRun.length > 0
+      ? state.filesChangedThisRun.length
+      : state.changes.items.filter((item) => item.op !== 'read').length + state.changes.overflowCount;
+  const blockers = state.terminalIssue || (state.verification.state === 'failed' ? state.verification.summary : 'none');
+  const completed = state.terminal === 'completed' || state.phase === 'completed';
+  const result = completed ? 'completed' : state.terminal;
+  const followUp =
+    completed && state.verification.state !== 'failed' ? 'none' : 'resolve blocker and rerun verification';
+  return [
+    state.statusNote ? `Completed · ${state.statusNote.replace(/^completed:\s*/i, '')}` : '',
+    'Final summary',
+    `  objective: ${state.objective.label}`,
+    `  result: ${result}`,
+    `  Changed this run: ${plural(fileCount, 'file')}`,
+    `  Working tree: ${state.workingTreeClean === undefined ? 'unknown' : state.workingTreeClean ? 'clean' : 'dirty'}`,
+    `  tool invocations: ${state.toolInvocationCount}`,
+    `  tools used: ${toolsUsedForDebugSummary(state).join(', ') || 'none'}`,
+    `  commands run: ${commandsRunForDebugSummary(state).join(', ') || 'none'}`,
+    `  verification: ${state.verification.state}`,
+    `  blockers: ${blockers}`,
+    `  follow-up: ${followUp}`,
+  ]
+    .filter(Boolean)
+    .join('\n');
+}
+
+function toolsUsedForDebugSummary(state: RunStateSnapshot): string[] {
+  const tools = new Set<string>();
+  for (const item of state.debugHistory) {
+    if (item.kind !== 'tool_call') continue;
+    const [rawName = 'tool'] = item.detail.split('\n');
+    tools.add(rawName.trim());
+  }
+  return Array.from(tools);
+}
+
+function commandsRunForDebugSummary(state: RunStateSnapshot): string[] {
+  const commands: string[] = [];
+  for (const item of state.debugHistory) {
+    if (item.kind !== 'tool_call') continue;
+    const command = extractJsonStringValue(item.detail, 'command') ?? extractJsonStringValue(item.detail, 'cmd');
+    if (command) commands.push(command);
+  }
+  return commands;
+}
+
+function extractJsonStringValue(text: string, key: string): string | undefined {
+  const escapedKey = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const match = new RegExp(`"${escapedKey}"\\s*:\\s*"([^"]+)"`).exec(text);
+  return match?.[1];
 }
 
 function withRisk(state: RunStateSnapshot, riskLine: string, severity: TuiSeverity): RunStateSnapshot {
