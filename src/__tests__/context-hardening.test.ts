@@ -1123,9 +1123,9 @@ describe('model message assembly', () => {
 
     const client = fakeClient([
       { toolCalls: [{ id: '1', name: 'read', arguments: { path: 'a.txt' } }] },
-      { toolCalls: [{ id: '2', name: 'git', arguments: { action: 'status' } }] },
+      { toolCalls: [{ id: '2', name: 'bash', arguments: { command: 'git status --short' } }] },
       { toolCalls: [{ id: '3', name: 'read', arguments: { path: 'a.txt' } }] },
-      { toolCalls: [{ id: '4', name: 'git', arguments: { action: 'diff' } }] },
+      { toolCalls: [{ id: '4', name: 'bash', arguments: { command: 'git diff --no-ext-diff' } }] },
       { content: 'done' },
     ]);
 

@@ -28,8 +28,8 @@ That matches Relay's OpenAI-compatible local inference path.
 
 - Runs from the terminal with `synax chat`, `synax ask`, `synax run`, `synax inspect`, `synax config`, and `synax doctor`.
 - Talks to Relay through OpenAI-compatible `/v1/chat/completions`.
-- Sends a small model-facing tool surface for reading, searching, editing, writing, and git inspection.
-- Keeps bash disabled by default; verification uses configured project commands.
+- Sends a small model-facing tool surface: read, write, edit, and bash.
+- Uses bash for terminal workflows, including git and verification commands.
 - Supports local session settings for endpoint, model, headers, context budget, model-step limit, and tool-call limit.
 - Records inspect context and keeps model-visible data bounded.
 

@@ -229,6 +229,15 @@ function renderFrame(buffer: Cell[][], state: RunStateSnapshot): void {
     }
   }
 
+  const historyStart = state.lastModelOutput.trim().length > 0 ? modelOutputStart + 6 : modelOutputStart;
+  if (historyStart + 2 < rows && state.debugHistory.length > 0) {
+    writeLine(buffer, historyStart, 0, withStyle('History', '\u001b[1;37m'));
+    const historyLines = formatHistoryLines(state, cols - 14);
+    for (let i = 0; i < historyLines.length && historyStart + 1 + i < rows - 3; i += 1) {
+      writeLine(buffer, historyStart + 1 + i, 0, clipStyled(historyLines[i], cols - 14));
+    }
+  }
+
   writeLine(
     buffer,
     rows - 2,
@@ -368,4 +377,14 @@ function severityColor(severity: string): string {
 
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
+}
+
+function formatHistoryLines(state: RunStateSnapshot, width: number): string[] {
+  const lines: string[] = [];
+  for (const item of state.debugHistory.slice(-4)) {
+    const title = item.kind === 'tool_call' ? 'Tool call' : item.kind === 'tool_result' ? 'Tool result' : 'Model';
+    const detail = item.detail.replace(/\s+/g, ' ').trim();
+    lines.push(`${title}: ${detail.slice(0, Math.max(20, width - title.length - 2))}`);
+  }
+  return lines;
 }

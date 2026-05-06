@@ -17,8 +17,7 @@ export interface UnsupportedTaskGuardResult {
 const DOCS_MUTATION_ROOTS = ['README.md', 'AGENTS.md', 'docs/', 'specs/'];
 
 export function getAllowedModelTools(mode: RunMode, bashEnabled: boolean): string[] {
-  const commandTool = bashEnabled ? 'bash' : 'git';
-  const base = ['read', commandTool];
+  const base = bashEnabled ? ['read', 'bash'] : ['read'];
   if (mode === 'read-only' || mode === 'verify') {
     return base;
   }
@@ -108,9 +107,9 @@ export function guardUnsupportedTask(task: string, shellEnabled: boolean): Unsup
   if (commitIntent && !shellEnabled) {
     return {
       blocked: true,
-      message: 'This run cannot create commits. Synax exposes git status/diff only, not git commit/push.',
+      message: 'This run cannot create commits because bash is disabled.',
       suggestedFirstStep:
-        'Run `git status` and `git commit -m "<message>"` manually in your shell, then ask Synax to review or validate the diff.',
+        'Enable bash for Synax or run `git status` and `git commit -m "<message>"` manually in your shell.',
     };
   }
 

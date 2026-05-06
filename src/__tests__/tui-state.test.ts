@@ -66,6 +66,144 @@ describe('tui-state', () => {
     expect(state.phase).toBe('thinking');
   });
 
+  it('records distinct model step progress and assistant notes', () => {
+    let state = createInitialRunStateSnapshot(0);
+
+    state = applyEventToRunState(
+      state,
+      {
+        type: 'model_step_started',
+        timestamp: new Date(1).toISOString(),
+        stepIndex: 1,
+      },
+      1,
+    );
+    state = applyEventToRunState(
+      state,
+      {
+        type: 'assistant_message',
+        timestamp: new Date(2).toISOString(),
+        content: 'Inspecting the TUI state reducer before editing.',
+      },
+      2,
+    );
+    state = applyEventToRunState(
+      state,
+      {
+        type: 'model_step_started',
+        timestamp: new Date(3).toISOString(),
+        stepIndex: 2,
+      },
+      3,
+    );
+
+    expect(state.lastModelOutput).toBe('Inspecting the TUI state reducer before editing.');
+    expect(state.timeline.map((item) => item.summary)).toEqual([
+      'model step 1 started',
+      'model: Inspecting the TUI state reducer before editing.',
+      'model step 2 started',
+    ]);
+  });
+
+  it('records model responses and tool calls in a debug history', () => {
+    let state = createInitialRunStateSnapshot(0);
+
+    state = applyEventToRunState(
+      state,
+      {
+        type: 'assistant_message',
+        timestamp: new Date(1).toISOString(),
+        content: '<thinking>checking status</thinking>\nI will inspect git status.',
+      },
+      1,
+    );
+    state = applyEventToRunState(
+      state,
+      {
+        type: 'tool_started',
+        timestamp: new Date(2).toISOString(),
+        toolCallId: 'call_1',
+        toolName: 'bash',
+        summary: '{"command":"git status --short"}',
+      },
+      2,
+    );
+    state = applyEventToRunState(
+      state,
+      {
+        type: 'tool_finished',
+        timestamp: new Date(3).toISOString(),
+        toolCallId: 'call_1',
+        toolName: 'bash',
+        summary: 'completed',
+        status: 'ok',
+        detail: 'stdout:\n M src/tui/layout.ts',
+      },
+      3,
+    );
+
+    expect(state.debugHistory.map((item) => item.kind)).toEqual(['model', 'tool_call', 'tool_result']);
+    expect(state.debugHistory[0].detail).toContain('checking status');
+    expect(state.debugHistory[1].detail).toContain('git status --short');
+    expect(state.debugHistory[2].detail).toContain('M src/tui/layout.ts');
+  });
+
+  it('records a terminal completion summary', () => {
+    let state = createInitialRunStateSnapshot(0);
+    state = applyEventToRunState(
+      state,
+      {
+        type: 'assistant_message',
+        timestamp: new Date(2).toISOString(),
+        content: 'There are no unstaged changes on this branch.',
+      },
+      3,
+    );
+    state = applyEventToRunState(
+      state,
+      {
+        type: 'task_finished',
+        timestamp: new Date(3).toISOString(),
+        status: 'completed',
+        toolCalls: 2,
+        maxToolCalls: 10,
+        modelSteps: 3,
+        maxModelSteps: 10,
+        changedFiles: ['src/tui/layout.ts', 'src/agent/tui-state.ts'],
+        verification: 'npm test passed',
+      },
+      4,
+    );
+
+    expect(state.statusNote).toBe('completed: 3 model steps, 2 tool calls, 2 files changed');
+    expect(state.lastModelOutput).toBe('There are no unstaged changes on this branch.');
+  });
+
+  it('records patch previews for TUI rendering before an edit is applied', () => {
+    let state = createInitialRunStateSnapshot(0);
+    state = applyEventToRunState(
+      state,
+      {
+        type: 'patch_preview',
+        timestamp: new Date(1).toISOString(),
+        toolCallId: 'call_1',
+        toolName: 'edit',
+        path: 'src/tui/layout.ts',
+        diff: '--- src/tui/layout.ts\n+++ src/tui/layout.ts\n-old\n+new',
+      },
+      2,
+    );
+
+    expect(state.changes.items[state.changes.items.length - 1]).toEqual({
+      op: 'edit',
+      path: 'src/tui/layout.ts',
+    });
+    expect(state.patchPreview).toEqual({
+      path: 'src/tui/layout.ts',
+      diff: '--- src/tui/layout.ts\n+++ src/tui/layout.ts\n-old\n+new',
+    });
+  });
+
   it('maps failed verification to S2 risk line', () => {
     let state = createInitialRunStateSnapshot(0);
     state = applyEventToRunState(

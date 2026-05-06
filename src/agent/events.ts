@@ -21,6 +21,7 @@ export interface ToolEvent extends AgentEventBase {
   toolCallId: string;
   toolName: string;
   summary: string;
+  detail?: string;
   status?: 'ok' | 'error';
 }
 

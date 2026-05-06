@@ -120,11 +120,12 @@ export interface AgentTurnResult {
   error?: string;
 }
 
-const DEFAULT_MAX_STEPS = 32;
-const DEFAULT_MAX_TOOL_CALLS = 96;
+const DEFAULT_MAX_STEPS = 64;
+const DEFAULT_MAX_TOOL_CALLS = 192;
 const MAX_CONSECUTIVE_RECOVERABLE_TOOL_ERRORS = 3;
 const MAX_IDENTICAL_READS_PER_TURN = 3;
 const MAX_TOTAL_READS_PER_TURN = 24;
+const MAX_IDENTICAL_BASH_COMMANDS_PER_TURN = 3;
 const execFileAsync = promisify(execFile);
 
 interface AgentToolExecutionResult {
@@ -172,6 +173,7 @@ export async function runAgentTurn(options: AgentRunnerOptions & { task: string 
   const toolCalls: AgentTurnResult['toolCalls'] = [];
   const readCache = new Map<string, ToolResult>();
   const identicalReadCounts = new Map<string, number>();
+  const identicalBashCounts = new Map<string, number>();
   let totalReadCalls = 0;
   let totalReadResultTokens = 0;
   const contextBudget = resolveContextBudgetSettings(options.contextBudget ?? {});
@@ -444,9 +446,9 @@ export async function runAgentTurn(options: AgentRunnerOptions & { task: string 
         conversation.messages.push({
           role: 'user',
           content:
-            'You claimed completion without making any file changes. ' +
-            'Either make the required edits now, or explain specifically why no changes are needed. ' +
-            'Do not just say "verified" or "passed" — show evidence.',
+            'You claimed completion without taking action. ' +
+            'Use available tools (bash for git/commands, edit for file changes, write for new files) to complete the task. ' +
+            'If no action is needed, explain specifically why. Do not just say "verified" or "passed" — show evidence.',
         });
         continue;
       }
@@ -485,30 +487,33 @@ export async function runAgentTurn(options: AgentRunnerOptions & { task: string 
         toolCallId: call.id,
         toolName: call.name,
         summary: JSON.stringify(call.arguments).slice(0, 180),
+        detail: JSON.stringify(call.arguments, null, 2),
       });
-      const result = await executeAgentTool(call, {
-        repoRoot: options.repoRoot,
-        registry,
-        ledger: conversation.inspectionLedger,
-        mode,
-        readCache,
-        identicalReadCounts,
-        totalReadCalls,
-        totalReadResultTokens,
-        readResultBudget: contextBudget,
-        ensureCheckpoint: options.ensureCheckpoint,
-        approvePatch: options.approvePatch,
-        onPatchPreview: (preview) => {
-          options.onEvent?.({
-            type: 'patch_preview',
-            timestamp: eventNow(),
-            stepIndex: step,
-            toolCallId: call.id,
-            toolName: call.name,
-            ...preview,
-          });
-        },
-      });
+      const result =
+        detectRepeatedBashCommand(call, identicalBashCounts) ??
+        (await executeAgentTool(call, {
+          repoRoot: options.repoRoot,
+          registry,
+          ledger: conversation.inspectionLedger,
+          mode,
+          readCache,
+          identicalReadCounts,
+          totalReadCalls,
+          totalReadResultTokens,
+          readResultBudget: contextBudget,
+          ensureCheckpoint: options.ensureCheckpoint,
+          approvePatch: options.approvePatch,
+          onPatchPreview: (preview) => {
+            options.onEvent?.({
+              type: 'patch_preview',
+              timestamp: eventNow(),
+              stepIndex: step,
+              toolCallId: call.id,
+              toolName: call.name,
+              ...preview,
+            });
+          },
+        }));
       if (call.name === 'read') {
         totalReadCalls += 1;
         totalReadResultTokens += estimateReadResultTokens(result.toolResult);
@@ -527,13 +532,34 @@ export async function runAgentTurn(options: AgentRunnerOptions & { task: string 
         toolName: call.name,
         status: result.success ? 'ok' : 'error',
         summary: result.success ? 'completed' : (result.error ?? 'failed'),
+        detail: formatToolResultDetail(result.toolResult),
       });
       if (result.changedFile) changedFiles.push(result.changedFile);
-      if (result.completedAction) completedActions.push(result.completedAction);
+      if (result.completedAction) {
+        completedActions.push(result.completedAction);
+        flushContentToolResults(conversation, response, contentToolResults);
+        return {
+          terminalState: 'completed',
+          finalAnswer: formatCompletedActionFinalAnswer(result.completedAction, result.toolResult),
+          steps: step,
+          toolCalls,
+          changedFiles,
+          conversation,
+        };
+      }
 
       // Item 7: Budget check after EVERY tool result is appended.
-      // Prevent silent overflow buildup within a single step.
-      const afterToolTokens = estimateRequestTokens(conversation.messages);
+      // Check the model-facing assembled request, not the unpruned
+      // canonical transcript. Large shell/read results may be safely
+      // compacted before the next model call.
+      const afterToolMessages = buildModelRequest(
+        conversation,
+        contextBudget,
+        identicalReadCounts,
+        false,
+        totalReadCalls,
+      );
+      const afterToolTokens = estimateRequestTokens(afterToolMessages);
       const effectiveLimit = contextBudget.contextWindowTokens - contextBudget.reservedOutputTokens;
       if (afterToolTokens > effectiveLimit) {
         flushContentToolResults(conversation, response, contentToolResults);
@@ -549,7 +575,7 @@ export async function runAgentTurn(options: AgentRunnerOptions & { task: string 
             contextWindowTokens: contextBudget.contextWindowTokens,
             reservedOutputTokens: contextBudget.reservedOutputTokens,
             effectiveInputLimit: effectiveLimit,
-            largestContributors: summarizeLargestContributors(conversation.messages),
+            largestContributors: summarizeLargestContributors(afterToolMessages),
             compactionStage: 0, // overflow within a step, not compaction
           }),
         };
@@ -666,10 +692,6 @@ async function executeAgentTool(
     );
   }
 
-  if (call.name === 'git') {
-    return executeGitTool(call.arguments, context.registry, context.repoRoot);
-  }
-
   if (call.name === 'edit' || call.name === 'replace_in_file') {
     return executeReplaceInFile(call.arguments, context, call.name);
   }
@@ -761,14 +783,6 @@ async function executeReadTool(
   const normalized = normalizeReadToolResult(result, readResultBudget, totalReadResultTokens, ledger);
   readCache.set(signature, normalized);
   return publicToolResult('read', normalized);
-}
-
-async function executeGitTool(
-  input: Record<string, unknown>,
-  _registry: ToolRegistry,
-  repoRoot: string,
-): Promise<AgentToolExecutionResult> {
-  return executeBashTool(input, repoRoot, 'git');
 }
 
 async function executeReplaceInFile(
@@ -1019,45 +1033,12 @@ export function buildModelFacingTools(options: ModelToolSurfaceOptions = {}): To
         };
       },
     },
-    {
-      name: 'git',
-      description: 'Legacy alias for shell execution. Prefer bash.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          action: {
-            type: 'string',
-            enum: ['status', 'diff'],
-            description: 'Legacy git action.',
-          },
-          maxLines: {
-            type: 'number',
-            description: 'Legacy max diff lines.',
-          },
-        },
-        additionalProperties: false,
-      },
-      safetyPolicy: {
-        readOnly: false,
-        rejectsUnsafePaths: true,
-        boundedOutput: true,
-      },
-      ledgerBehavior: 'none',
-      async execute() {
-        return {
-          success: false,
-          toolName: 'git',
-          error: 'handled by the agent runner',
-        };
-      },
-    },
   ];
 
   if (bashEnabled) {
     tools.splice(3, 0, {
       name: 'bash',
-      description:
-        'Execute a shell command in the repository root. Use for git workflows and verification commands.',
+      description: 'Execute a shell command in the repository root. Use for git workflows and verification commands.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -1095,14 +1076,10 @@ function publicToolResult(toolName: string, result: ToolResult): AgentToolExecut
   };
 }
 
-async function executeBashTool(
-  input: Record<string, unknown>,
-  repoRoot: string,
-  aliasSource: 'bash' | 'git' = 'bash',
-): Promise<AgentToolExecutionResult> {
-  const command = resolveShellCommand(input, aliasSource);
+async function executeBashTool(input: Record<string, unknown>, repoRoot: string): Promise<AgentToolExecutionResult> {
+  const command = resolveShellCommand(input);
   if (!command) {
-    return toolFailure(aliasSource, 'command is required');
+    return toolFailure('bash', 'command is required');
   }
   const safetyWarnings = detectDangerousCommandWarnings(command);
 
@@ -1117,7 +1094,7 @@ async function executeBashTool(
       completedAction: completedShellAction(command),
       toolResult: {
         success: true,
-        toolName: aliasSource,
+        toolName: 'bash',
         output: {
           command,
           safetyWarnings,
@@ -1134,13 +1111,13 @@ async function executeBashTool(
       error: errorMessage(error),
       toolResult: {
         success: false,
-        toolName: aliasSource,
+        toolName: 'bash',
         error: errorMessage(error),
         output: {
           command,
           safetyWarnings,
-          stdout: typeof e.stdout === 'string' ? e.stdout : e.stdout?.toString('utf-8') ?? '',
-          stderr: typeof e.stderr === 'string' ? e.stderr : e.stderr?.toString('utf-8') ?? '',
+          stdout: typeof e.stdout === 'string' ? e.stdout : (e.stdout?.toString('utf-8') ?? ''),
+          stderr: typeof e.stderr === 'string' ? e.stderr : (e.stderr?.toString('utf-8') ?? ''),
           exitCode: typeof e.code === 'number' ? e.code : 1,
         },
       },
@@ -1148,21 +1125,30 @@ async function executeBashTool(
   }
 }
 
-function resolveShellCommand(input: Record<string, unknown>, aliasSource: 'bash' | 'git'): string | null {
-  if (aliasSource === 'git') {
-    const action =
-      typeof input.action === 'string'
-        ? input.action
-        : typeof input.operation === 'string'
-          ? input.operation
-          : 'status';
-    if (action === 'diff') return 'git diff --no-ext-diff';
-    return 'git status --short';
-  }
+function detectRepeatedBashCommand(call: ParsedToolCall, counts: Map<string, number>): AgentToolExecutionResult | null {
+  if (call.name !== 'bash') return null;
+  const command = resolveShellCommand(call.arguments);
+  if (!command) return null;
+  const key = normalizeShellCommand(command);
+  const seen = counts.get(key) ?? 0;
+  counts.set(key, seen + 1);
+  if (seen < MAX_IDENTICAL_BASH_COMMANDS_PER_TURN) return null;
+
+  return toolFailure(
+    'bash',
+    `Bash loop detected: command repeated ${seen + 1} times without completing the task: ${command}`,
+  );
+}
+
+function resolveShellCommand(input: Record<string, unknown>): string | null {
   if (typeof input.command === 'string' && input.command.trim().length > 0) {
     return input.command.trim();
   }
   return null;
+}
+
+function normalizeShellCommand(command: string): string {
+  return command.replace(/\s+/g, ' ').trim();
 }
 
 function completedShellAction(command: string): string | undefined {
@@ -1173,6 +1159,27 @@ function completedShellAction(command: string): string | undefined {
   if (/(^|[;&|(){}\s])gh\s+issue\s+create(?=\s|$)/.test(command)) return 'gh issue create';
   if (/(^|[;&|(){}\s])gh\s+release\s+create(?=\s|$)/.test(command)) return 'gh release create';
   return undefined;
+}
+
+function formatCompletedActionFinalAnswer(action: string, toolResult: ToolResult): string {
+  const output = toolResult.output;
+  const command =
+    output && typeof output === 'object' && typeof (output as { command?: unknown }).command === 'string'
+      ? (output as { command: string }).command
+      : undefined;
+  const stdout =
+    output && typeof output === 'object' && typeof (output as { stdout?: unknown }).stdout === 'string'
+      ? (output as { stdout: string }).stdout.trim() || undefined
+      : undefined;
+  const stderr =
+    output && typeof output === 'object' && typeof (output as { stderr?: unknown }).stderr === 'string'
+      ? (output as { stderr: string }).stderr.trim() || undefined
+      : undefined;
+  const evidence = stdout ?? stderr;
+  const lines = [`Completed ${action}.`];
+  if (command) lines.push(`Command: \`${command}\``);
+  if (evidence) lines.push(evidence);
+  return lines.join('\n');
 }
 
 function detectDangerousCommandWarnings(command: string): string[] {
@@ -1316,6 +1323,28 @@ function toolFailure(toolName: string, error: string): { success: false; toolRes
     error,
     toolResult: { success: false, toolName, error },
   };
+}
+
+function formatToolResultDetail(toolResult: ToolResult): string {
+  const output = toolResult.output;
+  if (!output || typeof output !== 'object') {
+    return toolResult.error ?? JSON.stringify(toolResult);
+  }
+  const record = output as Record<string, unknown>;
+  const lines: string[] = [];
+  if (typeof record.command === 'string') lines.push(`command: ${record.command}`);
+  if (Array.isArray(record.safetyWarnings) && record.safetyWarnings.length > 0) {
+    lines.push(`warnings: ${record.safetyWarnings.join(', ')}`);
+  }
+  if (typeof record.stdout === 'string' && record.stdout.length > 0) {
+    lines.push(`stdout:\n${record.stdout.trimEnd()}`);
+  }
+  if (typeof record.stderr === 'string' && record.stderr.length > 0) {
+    lines.push(`stderr:\n${record.stderr.trimEnd()}`);
+  }
+  if (typeof record.exitCode === 'number') lines.push(`exitCode: ${record.exitCode}`);
+  if (lines.length > 0) return lines.join('\n');
+  return toolResult.error ?? JSON.stringify(toolResult, null, 2);
 }
 
 /**
@@ -1510,16 +1539,12 @@ function finalAnswerNowMessage(): AgentMessage {
 function systemPrompt(): string {
   return [
     'You are Synax, a disciplined local coding agent.',
-    'Inspect only what you need. Stop when you have enough context.',
-    'READ EFFICIENTLY: use startLine/endLine to read 50-200 line ranges, not entire files.',
-    'Use query search first to locate relevant sections, then read only those ranges.',
-    'A full-file read wastes context; you rarely need more than 200 lines at once.',
-    'Do not reread files already in the working context block.',
-    'Exact edits require exact text currently visible in context.',
-    'If a file is marked "compacted from model view" or "truncated", reread the target range before editing.',
-    'Make minimal, targeted changes. Write only small repo-local text files.',
-    'When done, summarize changed files and verification results.',
-    'Emit tool calls only — no final-answer preambles around them.',
+    'Tools: read, write, edit, bash.',
+    'Use bash for terminal commands, including git and verification.',
+    'Use read only for repository inspection: list files, search text, or read bounded line ranges.',
+    'Use write for new text files and edit for exact replacements in files you have already read.',
+    'Do the smallest useful action, then stop and summarize changed files plus verification.',
+    'When calling a tool, emit only tool calls. Do not mix final-answer prose with tool calls.',
   ].join('\n');
 }
 
@@ -1625,8 +1650,8 @@ function buildModelRequest(
       role: 'user',
       content: [
         `⛔ STOP READING. ${remaining} read(s) remain before hard stop.`,
-        'You have enough context. Deliver your answer NOW.',
-        'Do not call any more read or inspect tools. Answer with what you have.',
+        'You have enough context. Use non-read tools (bash, edit, write) to act now.',
+        'Do not call any more read or inspect tools. Take action with what you have.',
       ].join('\n'),
     };
     const finalMessages = [...withOrientation, warning];

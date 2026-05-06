@@ -52,8 +52,8 @@ export async function runAgentTask(options: RunTaskOptions): Promise<RunTaskRepo
       toolCalls: [],
       messages: projectConfig.errors.map((error) => `${error.path}: ${error.message}`),
       contextBudgetTokens: projectConfig.config.contextBudgetTokens ?? 131072,
-      maxModelSteps: projectConfig.config.maxModelSteps ?? 32,
-      maxToolCalls: projectConfig.config.maxToolCalls ?? 96,
+      maxModelSteps: projectConfig.config.maxModelSteps ?? 64,
+      maxToolCalls: projectConfig.config.maxToolCalls ?? 192,
       error: 'config validation failed',
     };
   }
@@ -72,8 +72,8 @@ export async function runAgentTask(options: RunTaskOptions): Promise<RunTaskRepo
       toolCalls: [],
       messages: ['provider.model is required for run.'],
       contextBudgetTokens: projectConfig.config.contextBudgetTokens ?? 131072,
-      maxModelSteps: projectConfig.config.maxModelSteps ?? 32,
-      maxToolCalls: projectConfig.config.maxToolCalls ?? 96,
+      maxModelSteps: projectConfig.config.maxModelSteps ?? 64,
+      maxToolCalls: projectConfig.config.maxToolCalls ?? 192,
       error: 'provider.model is required',
     };
   }
@@ -92,8 +92,8 @@ export async function runAgentTask(options: RunTaskOptions): Promise<RunTaskRepo
     endpoint: providerConfig.baseUrl,
     model: providerConfig.model,
     contextBudgetTokens: projectConfig.config.contextBudgetTokens ?? 131072,
-    maxModelSteps: projectConfig.config.maxModelSteps ?? 32,
-    maxToolCalls: projectConfig.config.maxToolCalls ?? 96,
+    maxModelSteps: projectConfig.config.maxModelSteps ?? 64,
+    maxToolCalls: projectConfig.config.maxToolCalls ?? 192,
     tools,
     task: options.task,
   });
@@ -204,8 +204,8 @@ export async function runAgentTask(options: RunTaskOptions): Promise<RunTaskRepo
         task: `Verification failed. Fix the changed files and make verification pass. Failure output:\n${verification.stderr.slice(0, 1000)}`,
         client,
         mode,
-        maxSteps: Math.max(4, Math.floor((projectConfig.config.maxModelSteps ?? 32) / 2)),
-        maxToolCalls: Math.max(8, Math.floor((projectConfig.config.maxToolCalls ?? 96) / 2)),
+        maxSteps: Math.max(4, Math.floor((projectConfig.config.maxModelSteps ?? 64) / 2)),
+        maxToolCalls: Math.max(8, Math.floor((projectConfig.config.maxToolCalls ?? 192) / 2)),
         tools: { bashEnabled: projectConfig.config.tools?.bash?.enabled, mode },
         contextBudget: {
           contextBudgetTokens: projectConfig.config.contextBudgetTokens,
@@ -279,9 +279,9 @@ export async function runAgentTask(options: RunTaskOptions): Promise<RunTaskRepo
     timestamp: eventNow(),
     status: terminalState,
     toolCalls: turn.toolCalls.length + (repairedTurn === turn ? 0 : repairedTurn.toolCalls.length),
-    maxToolCalls: projectConfig.config.maxToolCalls ?? 96,
+    maxToolCalls: projectConfig.config.maxToolCalls ?? 192,
     modelSteps: turn.steps + (repairedTurn === turn ? 0 : repairedTurn.steps),
-    maxModelSteps: projectConfig.config.maxModelSteps ?? 32,
+    maxModelSteps: projectConfig.config.maxModelSteps ?? 64,
     changedFiles: unique([...turn.changedFiles, ...repairedTurn.changedFiles]),
     verification:
       verification.state === 'passed'
@@ -319,8 +319,8 @@ export async function runAgentTask(options: RunTaskOptions): Promise<RunTaskRepo
       ...(checkpointRecord ? [`checkpoint: ${checkpointRecord.id}`] : []),
     ],
     contextBudgetTokens: projectConfig.config.contextBudgetTokens ?? 131072,
-    maxModelSteps: projectConfig.config.maxModelSteps ?? 32,
-    maxToolCalls: projectConfig.config.maxToolCalls ?? 96,
+    maxModelSteps: projectConfig.config.maxModelSteps ?? 64,
+    maxToolCalls: projectConfig.config.maxToolCalls ?? 192,
     checkpoint: checkpointRecord
       ? {
           id: checkpointRecord.id,
