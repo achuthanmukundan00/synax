@@ -152,7 +152,7 @@ export function applyEventToRunState(state: RunStateSnapshot, event: AgentEvent,
     }
     case 'model_step_started': {
       next = withPhase(next, 'thinking', 'model step');
-      return withTimeline(next, 'thinking', `model step ${event.stepIndex ?? next.timeline.length + 1} started`, 'S0');
+      return withTimeline(next, 'thinking', `Thinking · step ${event.stepIndex ?? next.timeline.length + 1}`, 'S0');
     }
     case 'assistant_message': {
       const note = summarizeModelOutput(event.content);
@@ -167,7 +167,7 @@ export function applyEventToRunState(state: RunStateSnapshot, event: AgentEvent,
         ...next,
         lastModelOutput: note,
       };
-      return withTimeline(next, next.phase, `model: ${note}`, 'S0');
+      return withTimeline(next, next.phase, `Thinking · ${note}`, 'S0');
     }
     case 'tool_started': {
       next = withPhase(next, 'tool_execution', `tool ${event.toolName}`);
@@ -179,7 +179,7 @@ export function applyEventToRunState(state: RunStateSnapshot, event: AgentEvent,
         summary: `${event.toolName} call`,
         detail: `${event.toolName}\n${event.detail ?? event.summary}`,
       });
-      return withTimeline(next, 'tool_execution', `${event.toolName} started`, 'S0');
+      return withTimeline(next, 'tool_execution', `Tool · ${event.toolName}`, 'S0');
     }
     case 'tool_finished': {
       const severity = event.status === 'error' ? 'S1' : 'S0';
@@ -193,7 +193,12 @@ export function applyEventToRunState(state: RunStateSnapshot, event: AgentEvent,
       if (event.status === 'error') {
         next = withStatus(next, `${event.toolName} recovered with turbulence`, severity);
       }
-      return withTimeline(next, next.phase, `${event.toolName} ${event.status === 'ok' ? 'ok' : 'error'}`, severity);
+      return withTimeline(
+        next,
+        next.phase,
+        `Tool · ${event.toolName} ${event.status === 'ok' ? 'ok' : 'error'}`,
+        severity,
+      );
     }
     case 'patch_preview': {
       const compressed = compressChanges([
