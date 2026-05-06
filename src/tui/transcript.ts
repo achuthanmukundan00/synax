@@ -30,6 +30,11 @@ export function renderTranscript(state: TranscriptRenderState, width: number): s
       continue;
     }
 
+    if (item.kind === 'final_summary') {
+      blocks.push(renderFrozenFinalSummary(item.detail || item.summary, width));
+      continue;
+    }
+
     if (item.kind === 'tool_call') {
       const parsed = parseToolCall(item.detail);
       const next = history[i + 1]?.kind === 'tool_result' ? history[i + 1] : undefined;
@@ -62,7 +67,7 @@ export function renderTranscript(state: TranscriptRenderState, width: number): s
     blocks.push(renderVerification(state.run, width));
   }
 
-  if (shouldShowFinalSummary(state.run)) {
+  if (shouldShowFinalSummary(state.run) && !hasFrozenFinalSummary(state.run)) {
     blocks.push(['']);
     blocks.push(renderFinalSummary(state.run, width));
   }
@@ -221,6 +226,13 @@ function renderFinalSummary(run: RunStateSnapshot, width: number): string[] {
   ];
 }
 
+function renderFrozenFinalSummary(detail: string, width: number): string[] {
+  return detail.split('\n').map((line) => {
+    if (line === 'Final summary') return bold(line);
+    return clip(line, width);
+  });
+}
+
 interface ParsedToolCall {
   name: string;
   summary: string;
@@ -343,7 +355,7 @@ function colorizeGitDiffLine(line: string): string {
 function parseDiffStatLine(line: string): string | undefined {
   const trimmed = line.trim();
   if (!trimmed || /^\d+\s+files?\s+changed/.test(trimmed)) return undefined;
-  const match = /^(.+?)\s+\|\s+(\d+)\s+([+\-]+).*$/.exec(trimmed);
+  const match = /^(.+?)\s+\|\s+(\d+)\s+([+-]+).*$/.exec(trimmed);
   if (!match) return undefined;
   const path = match[1]?.trim();
   const count = Number(match[2]);
@@ -367,6 +379,10 @@ function commandsRun(run: RunStateSnapshot): string[] {
 
 function shouldShowFinalSummary(run: RunStateSnapshot): boolean {
   return run.terminal !== 'running' || run.phase === 'completed' || run.verification.state === 'failed';
+}
+
+function hasFrozenFinalSummary(run: RunStateSnapshot): boolean {
+  return run.debugHistory.some((item) => item.kind === 'final_summary');
 }
 
 function isGitCommand(command: string): boolean {
