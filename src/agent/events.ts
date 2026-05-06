@@ -47,13 +47,23 @@ export type AgentEvent =
       profile: string;
       endpoint: string;
       model: string;
+      providerName?: string;
       contextBudgetTokens: number;
+      contextWindowTokens?: number;
       maxModelSteps: number;
       maxToolCalls: number;
       tools: string[];
       task: string;
     })
   | (AgentEventBase & { type: 'model_step_started' })
+  | (AgentEventBase & {
+      type: 'context_budget_updated';
+      estimatedInputTokens: number;
+      inputLimit: number;
+      contextWindowTokens: number;
+      reservedOutputTokens: number;
+      step: number;
+    })
   | ToolEvent
   | VerificationLifecycleEvent
   | (AgentEventBase &
@@ -71,6 +81,7 @@ export type AgentEvent =
       modelSteps: number;
       maxModelSteps: number;
       changedFiles: string[];
+      workingTreeClean?: boolean;
       verification: string;
       error?: string;
     })

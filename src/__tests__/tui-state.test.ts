@@ -49,7 +49,8 @@ describe('tui-state', () => {
       2,
     );
     expect(state.phase).toBe('tool_execution');
-    expect(state.changes.items[state.changes.items.length - 1]?.path).toBe('src/agent/renderers.ts');
+    expect(state.changes.items).toEqual([]);
+    expect(state.toolInvocationCount).toBe(1);
 
     state = applyEventToRunState(
       state,
@@ -170,6 +171,7 @@ describe('tui-state', () => {
         modelSteps: 3,
         maxModelSteps: 10,
         changedFiles: ['src/tui/layout.ts', 'src/agent/tui-state.ts'],
+        workingTreeClean: true,
         verification: 'npm test passed',
       },
       4,
@@ -177,6 +179,55 @@ describe('tui-state', () => {
 
     expect(state.statusNote).toBe('completed: 3 model steps, 2 tool calls, 2 files changed');
     expect(state.lastModelOutput).toBe('There are no unstaged changes on this branch.');
+  });
+
+  it('separates files changed this run from working tree cleanliness and tool invocations', () => {
+    let state = createInitialRunStateSnapshot(0);
+
+    state = applyEventToRunState(
+      state,
+      {
+        type: 'tool_started',
+        timestamp: new Date(1).toISOString(),
+        toolCallId: 'read-1',
+        toolName: 'read',
+        summary: '{"path":"src/tui/layout.ts"}',
+      },
+      1,
+    );
+    state = applyEventToRunState(
+      state,
+      {
+        type: 'tool_started',
+        timestamp: new Date(2).toISOString(),
+        toolCallId: 'edit-1',
+        toolName: 'edit',
+        summary: '{"path":"src/tui/layout.ts"}',
+      },
+      2,
+    );
+    state = applyEventToRunState(
+      state,
+      {
+        type: 'task_finished',
+        timestamp: new Date(3).toISOString(),
+        status: 'completed',
+        toolCalls: 2,
+        maxToolCalls: 10,
+        modelSteps: 1,
+        maxModelSteps: 10,
+        changedFiles: ['src/tui/layout.ts'],
+        workingTreeClean: true,
+        verification: 'npm test passed',
+      },
+      3,
+    );
+
+    expect(state.toolInvocationCount).toBe(2);
+    expect(state.filesChangedThisRun).toEqual(['src/tui/layout.ts']);
+    expect(state.workingTreeClean).toBe(true);
+    expect(state.changes.items).toEqual([{ path: 'src/tui/layout.ts', op: 'edit' }]);
+    expect(state.statusNote).toBe('completed: 1 model step, 2 tool calls, 1 file changed');
   });
 
   it('records patch previews for TUI rendering before an edit is applied', () => {

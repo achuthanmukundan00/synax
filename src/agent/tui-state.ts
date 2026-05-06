@@ -24,7 +24,7 @@ export interface TuiChangeItem {
   op: ChangeOp;
 }
 
-export type TuiDebugKind = 'model' | 'tool_call' | 'tool_result';
+export type TuiDebugKind = 'user' | 'model' | 'tool_call' | 'tool_result';
 
 export interface TuiDebugHistoryItem {
   atMs: number;
@@ -51,6 +51,13 @@ export interface RunStateSnapshot {
   nowMs: number;
   mode: string;
   providerLabel: string;
+  modelId: string;
+  providerName: string;
+  contextUsedTokens?: number;
+  contextWindowTokens?: number;
+  thinkingEnabled?: boolean;
+  sessionSpendLabel?: string;
+  coreLoaded: boolean;
   phase: TuiPhase;
   objective: {
     label: string;
@@ -60,6 +67,9 @@ export interface RunStateSnapshot {
   phaseTransitions: Array<{ atMs: number; from: TuiPhase; to: TuiPhase; note: string }>;
   timeline: TuiTimelineItem[];
   changes: { items: TuiChangeItem[]; overflowCount: number };
+  filesChangedThisRun: string[];
+  workingTreeClean?: boolean;
+  toolInvocationCount: number;
   verification: TuiVerificationState;
   statusNote: string;
   riskLine: string;
@@ -87,6 +97,13 @@ export function createInitialRunStateSnapshot(nowMs: number): RunStateSnapshot {
     nowMs,
     mode: 'patch',
     providerLabel: 'n/a',
+    modelId: '',
+    providerName: 'unknown',
+    contextUsedTokens: undefined,
+    contextWindowTokens: undefined,
+    thinkingEnabled: undefined,
+    sessionSpendLabel: undefined,
+    coreLoaded: false,
     phase: 'idle',
     objective: {
       label: 'Waiting for run start',
@@ -96,6 +113,9 @@ export function createInitialRunStateSnapshot(nowMs: number): RunStateSnapshot {
     phaseTransitions: [],
     timeline: [],
     changes: { items: [], overflowCount: 0 },
+    filesChangedThisRun: [],
+    workingTreeClean: undefined,
+    toolInvocationCount: 0,
     verification: {
       state: 'planned',
       checksPlanned: 0,
@@ -141,6 +161,11 @@ export function applyEventToRunState(state: RunStateSnapshot, event: AgentEvent,
         startedAtMs: Date.parse(event.timestamp) || nowMs,
         mode: event.mode,
         providerLabel: `${event.model} @ ${event.endpoint}`,
+        modelId: event.model,
+        providerName: event.providerName ?? providerNameFromEndpoint(event.endpoint),
+        contextWindowTokens: event.contextWindowTokens ?? event.contextBudgetTokens,
+        coreLoaded: event.model.trim().length > 0,
+        sessionSpendLabel: isLocalEndpoint(event.endpoint) ? 'local' : undefined,
         objective: {
           label: event.task.trim() || 'No objective',
           currentPhase: 'thinking',
@@ -148,11 +173,24 @@ export function applyEventToRunState(state: RunStateSnapshot, event: AgentEvent,
         },
       };
       next = withPhase(next, 'thinking', 'task started');
+      next = withDebugHistory(next, {
+        atMs: nowMs,
+        kind: 'user',
+        summary: 'user prompt',
+        detail: event.task,
+      });
       return withTimeline(next, 'thinking', 'objective registered', 'S0');
     }
     case 'model_step_started': {
       next = withPhase(next, 'thinking', 'model step');
       return withTimeline(next, 'thinking', `Thinking · step ${event.stepIndex ?? next.timeline.length + 1}`, 'S0');
+    }
+    case 'context_budget_updated': {
+      return {
+        ...next,
+        contextUsedTokens: event.estimatedInputTokens,
+        contextWindowTokens: event.contextWindowTokens,
+      };
     }
     case 'assistant_message': {
       const note = summarizeModelOutput(event.content);
@@ -172,7 +210,11 @@ export function applyEventToRunState(state: RunStateSnapshot, event: AgentEvent,
     case 'tool_started': {
       next = withPhase(next, 'tool_execution', `tool ${event.toolName}`);
       next = withStatus(next, `tool: ${event.toolName}`, 'S0');
-      trackChangeFromToolStart(next, event.toolName, event.summary);
+      next = {
+        ...next,
+        toolInvocationCount: next.toolInvocationCount + 1,
+        changes: trackChangeFromToolStart(next.changes, event.toolName, event.summary),
+      };
       next = withDebugHistory(next, {
         atMs: nowMs,
         kind: 'tool_call',
@@ -284,10 +326,14 @@ export function applyEventToRunState(state: RunStateSnapshot, event: AgentEvent,
         next = withRisk(next, `terminal issue: ${event.error}`, 'S3');
       }
       if (event.status === 'completed') {
+        const filesChangedThisRun = unique(event.changedFiles);
         const summary = completionSummary(event.modelSteps, event.toolCalls, event.changedFiles.length);
         next = {
           ...withStatus(next, summary, 'S0'),
           lastModelOutput: next.lastModelOutput || summary,
+          filesChangedThisRun,
+          workingTreeClean: event.workingTreeClean,
+          toolInvocationCount: event.toolCalls,
         };
       }
       return withTimeline(next, phase, `run ${event.status}`, next.severity);
@@ -519,12 +565,16 @@ function terminalStateToPhase(status: TerminalState, verificationState: TuiVerif
   return 'error';
 }
 
-function trackChangeFromToolStart(state: RunStateSnapshot, toolName: string, summary: string): void {
+function trackChangeFromToolStart(
+  changes: RunStateSnapshot['changes'],
+  toolName: string,
+  summary: string,
+): RunStateSnapshot['changes'] {
   const path = extractPath(summary);
-  if (!path) return;
+  if (!path) return changes;
   const op = classifyTool(toolName);
-  const compressed = compressChanges([...state.changes.items, { path, op }]);
-  state.changes = compressed;
+  if (op === 'read') return changes;
+  return compressChanges([...changes.items, { path, op }]);
 }
 
 function classifyTool(toolName: string): ChangeOp {
@@ -588,4 +638,20 @@ function completionSummary(modelSteps: number, toolCalls: number, changedFiles: 
 
 function plural(count: number, singular: string, pluralText = `${singular}s`): string {
   return `${count} ${count === 1 ? singular : pluralText}`;
+}
+
+function unique(values: string[]): string[] {
+  return [...new Set(values)];
+}
+
+function isLocalEndpoint(endpoint: string): boolean {
+  return /(?:^|\/\/)(?:127\.0\.0\.1|localhost)(?::|\/|$)/i.test(endpoint);
+}
+
+function providerNameFromEndpoint(endpoint: string): string {
+  if (isLocalEndpoint(endpoint)) return 'Relay';
+  if (/api\.openai\.com/i.test(endpoint)) return 'OpenAI';
+  if (/anthropic/i.test(endpoint)) return 'Anthropic';
+  if (/openrouter/i.test(endpoint)) return 'OpenRouter';
+  return 'OpenAI-compatible';
 }
