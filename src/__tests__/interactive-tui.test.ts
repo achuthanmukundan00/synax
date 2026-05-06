@@ -5,6 +5,7 @@ import { DiffRenderer } from '../tui/diff-renderer';
 import { runInteractiveTui } from '../tui/interactive-tui';
 import { renderLayout } from '../tui/layout';
 import { parseInputChunk } from '../tui/input';
+import { createTerminalSession } from '../tui/terminal';
 import { PassThrough, Writable } from 'stream';
 
 class CapturingWritable extends Writable {
@@ -42,6 +43,35 @@ describe('tui input parser', () => {
   it('parses history scroll keys', () => {
     const events = parseInputChunk('\x1b[5~\x1b[6~');
     expect(events).toEqual([{ type: 'scroll_history_up' }, { type: 'scroll_history_down' }]);
+  });
+
+  it('parses SGR mouse wheel events as history scrolling', () => {
+    const events = parseInputChunk('\x1b[<64;12;8M\x1b[<65;12;8M');
+    expect(events).toEqual([{ type: 'scroll_history_up' }, { type: 'scroll_history_down' }]);
+  });
+});
+
+describe('terminal session', () => {
+  it('enables mouse reporting so trackpad scroll does not move terminal scrollback', () => {
+    const stdout = new CapturingWritable();
+    const stdin = new PassThrough() as PassThrough & {
+      isTTY?: boolean;
+      setRawMode?: (mode: boolean) => void;
+      resume: () => void;
+      pause: () => void;
+    };
+    stdin.isTTY = true;
+    stdin.setRawMode = jest.fn();
+    const terminal = createTerminalSession({ stdin, stdout });
+
+    terminal.start();
+    terminal.stop();
+
+    const output = stdout.chunks.join('');
+    expect(output).toContain('\u001b[?1000h');
+    expect(output).toContain('\u001b[?1006h');
+    expect(output).toContain('\u001b[?1006l');
+    expect(output).toContain('\u001b[?1000l');
   });
 });
 
