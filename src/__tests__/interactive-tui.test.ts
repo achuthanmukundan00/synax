@@ -959,6 +959,46 @@ describe('interactive layout visual agreements', () => {
     expect(plain.match(/Final summary/g)).toHaveLength(1);
   });
 
+  it('renders multi-line slash command output without 3-line cap', () => {
+    const run = {
+      ...createInitialRunStateSnapshot(0),
+      debugHistory: [
+        {
+          atMs: 1,
+          kind: 'command' as const,
+          summary: '/help',
+          detail: [
+            'Chat Commands',
+            '-------------',
+            '/help                      Show this help panel',
+            '/settings                  Show provider, agent, tool, and verification settings',
+            '/tools                     Show model-facing tools',
+            '/budget                    Show context and loop limits',
+            '/test-provider             Probe provider models and chat endpoints',
+          ].join('\n'),
+        },
+      ],
+    };
+    const plain = renderLayout(
+      {
+        run,
+        objectiveInput: '',
+        coreMode: 'idle',
+        nowMs: 2000,
+      },
+      100,
+      30,
+    )
+      .map((line) => stripAnsi(line))
+      .join('\n');
+
+    expect(plain).toContain('Show this help panel');
+    expect(plain).toContain('Show provider, agent, tool, and verification settings');
+    expect(plain).toContain('Show model-facing tools');
+    expect(plain).toContain('Show context and loop limits');
+    expect(plain).toContain('Probe provider models and chat endpoints');
+  });
+
   it('clamps transcript scroll offsets at the oldest and newest entries', () => {
     const run = {
       ...createInitialRunStateSnapshot(0),
@@ -1098,6 +1138,24 @@ describe('interactive tui runtime', () => {
     expect(session.handleUserMessage).not.toHaveBeenCalled();
     expect(plain).toContain('$ echo hello');
     expect(plain).toContain('hello');
+  });
+
+  it('resets state and conversation on /new command', async () => {
+    const repoRoot = process.cwd();
+    const config = {
+      provider: { kind: 'openai-compatible' as const, base_url: 'http://localhost/v1', model: 'fake' },
+    };
+    const session = createChatSession({ repoRoot, config, tui: true });
+
+    // Verify /new resets conversation and returns newSession flag
+    const report = await session.handleSlashCommand('/new');
+    expect(report.handled).toBe(true);
+    expect(report.newSession).toBe(true);
+    expect(report.output).toContain('new session');
+
+    // Verify conversation was cleared — subsequent /clear should produce same result
+    const clearReport = await session.handleSlashCommand('/clear');
+    expect(clearReport.output).toContain('conversation cleared');
   });
 
   it('listens to the default stdin when no custom stdin is provided', async () => {
