@@ -1,6 +1,6 @@
 import type { RunStateSnapshot } from '../agent/tui-state';
 import type { CoreMode } from './ai-core';
-import { CORE_WIDTH, modeColor, renderAiCore } from './ai-core';
+import { CORE_HEIGHT, CORE_WIDTH, modeColor, renderAiCore } from './ai-core';
 
 export interface InteractiveViewState {
   run: RunStateSnapshot;
@@ -21,73 +21,49 @@ export interface InteractiveViewState {
 export function renderLayout(state: InteractiveViewState, cols: number, rows: number): string[] {
   const width = Math.max(40, cols);
   const height = Math.max(14, rows);
-  const lines: string[] = [];
-  const core = renderAiCore(state.coreMode, state.nowMs / 1000);
-  const coreWidth = CORE_WIDTH;
-  const contentWidth = Math.max(20, width - coreWidth - 2);
-  const panel = renderDirectivePanel(state.objectiveInput, contentWidth, state.modelLabel);
+  const panel = renderDirectivePanel(state.objectiveInput, width, state.modelLabel);
   const bodyHeight = Math.max(1, height - panel.length);
+  const lines = Array.from({ length: bodyHeight }, () => '');
+  const core = renderAiCore(state.coreMode, state.nowMs / 1000);
+  const compact = width < 70 || bodyHeight < CORE_HEIGHT + 6;
+  const coreX = compact
+    ? Math.max(0, Math.floor((width - CORE_WIDTH) / 2))
+    : Math.max(0, Math.floor(width * 0.45 - CORE_WIDTH / 2));
+  const coreY = compact ? 2 : Math.max(2, Math.floor((bodyHeight - CORE_HEIGHT) / 2) - 2);
+  const telemetryWidth = compact ? width - 4 : Math.min(34, Math.max(24, width - (coreX + CORE_WIDTH + 4)));
+  const telemetryX = compact ? 2 : Math.min(width - telemetryWidth, coreX + CORE_WIDTH + 3);
+  const telemetryY = compact ? Math.min(bodyHeight - 1, coreY + CORE_HEIGHT + 1) : coreY + 1;
 
-  lines.push(
-    clip(
-      `\u001b[1;37mSynax\u001b[0m  ${state.run.phase}  ${elapsed(state.run.startedAtMs, state.nowMs)}`,
-      contentWidth,
-    ),
+  put(
+    lines,
+    0,
+    2,
+    `\u001b[1;37mSynax\u001b[0m ${modeColor(state.coreMode)}${phaseLabel(state.run.phase)}\u001b[0m ${elapsed(state.run.startedAtMs, state.nowMs)}`,
+    width,
   );
-  lines.push('');
-  lines.push(`Activity: ${clip(activitySummary(state.run), contentWidth - 10)}`);
-  lines.push(`Working on: ${clip(state.run.objective.label || 'Awaiting objective', contentWidth - 12)}`);
-  lines.push(
-    `Phase: ${clip(state.run.phase, contentWidth - 7)} | Next: ${clip(state.run.objective.nextCheckpoint, contentWidth - 16)}`,
-  );
-  lines.push('');
-  lines.push('Progress:');
-  const timeline = state.run.timeline.slice(-4);
-  if (timeline.length === 0) {
-    lines.push('  - waiting');
-  } else {
-    for (const item of timeline) lines.push(`  ${glyph(item.phase)} ${clip(item.summary, contentWidth - 4)}`);
+  put(lines, 1, 2, dim('contained local intelligence runtime'), width);
+  if (state.run.phase === 'completed' && state.run.statusNote) {
+    put(lines, 3, 2, activitySummary(state.run), width);
   }
-  lines.push('');
-  lines.push('Files touched:');
-  const files = state.run.changes.items.slice(-4);
-  if (files.length === 0) lines.push('  - none yet');
-  else for (const file of files) lines.push(`  ${file.op.padEnd(6)} ${clip(file.path, contentWidth - 10)}`);
-  lines.push('');
-  lines.push(`Verification: ${state.run.verification.state} (${state.run.verification.summary || 'not run yet'})`);
-  if (state.run.statusNote) lines.push(`Summary: ${clip(state.run.statusNote, contentWidth - 9)}`);
-  if (state.run.lastModelOutput) lines.push(`Model: ${clip(state.run.lastModelOutput, contentWidth - 7)}`);
-  if (state.run.patchPreview) {
-    lines.push('');
-    lines.push(`Diff preview: ${clip(state.run.patchPreview.path, contentWidth - 14)}`);
-    for (const diffLine of state.run.patchPreview.diff.split('\n').slice(0, 6)) {
-      lines.push(`  ${clip(diffLine, contentWidth - 4)}`);
-    }
-  }
-  renderHistory(lines, state.run, contentWidth, state.historyScrollOffset ?? 0);
-  if (state.blockedMessage) lines.push(`\u001b[33mBlocked: ${clip(state.blockedMessage, contentWidth - 9)}\u001b[0m`);
-  lines.push('');
+  putBlock(lines, coreY, coreX, core, width);
+  putTelemetry(lines, telemetryY, telemetryX, telemetryWidth, state);
 
-  const clipped = lines.slice(0, bodyHeight);
-  while (clipped.length < bodyHeight) clipped.push('');
+  if (state.run.patchPreview && bodyHeight > coreY + CORE_HEIGHT + 5) {
+    putPatchPreview(lines, Math.min(bodyHeight - 6, coreY + CORE_HEIGHT + 2), 2, Math.min(width - 4, 78), state.run);
+  }
+  if (state.blockedMessage) {
+    put(
+      lines,
+      Math.max(2, bodyHeight - 2),
+      2,
+      `\u001b[33mBlocked · ${clip(state.blockedMessage, width - 12)}\u001b[0m`,
+      width,
+    );
+  }
+
+  const clipped = lines.slice(0, bodyHeight).map((line) => pad(clip(line, width), width));
   clipped.push(...panel);
-
-  const coreX = Math.max(0, width - coreWidth);
-  const coreY = 0;
-  for (let i = 0; i < core.length && coreY + i < clipped.length; i += 1) {
-    const base = pad(clipped[coreY + i], width);
-    const left = sliceVisible(base, 0, coreX);
-    clipped[coreY + i] = `${left}${modeColor(state.coreMode)}${core[i]}\u001b[0m`;
-  }
-
-  return clipped.map((line) => pad(line, width));
-}
-
-function glyph(phase: string): string {
-  if (phase === 'completed') return '✓';
-  if (phase === 'error' || phase === 'blocked' || phase === 'budget_exhausted') return '!';
-  if (phase === 'tool_execution') return '◌';
-  return '·';
+  return clipped.map((line) => pad(clip(line, width), width));
 }
 
 function elapsed(startedAtMs: number, nowMs: number): string {
@@ -201,65 +177,106 @@ function truncateModelLabel(model: string, maxLen: number): string {
 
 function activitySummary(run: RunStateSnapshot): string {
   const latest = run.timeline[run.timeline.length - 1]?.summary;
+  if (run.phase === 'completed' && run.statusNote) return completionActivity(run.statusNote);
   if (latest) return latest;
-  if (run.statusNote) return run.statusNote;
-  if (run.phase === 'idle') return 'waiting for run start';
-  return run.objective.nextCheckpoint;
-}
-
-function renderHistory(lines: string[], run: RunStateSnapshot, contentWidth: number, scrollOffset: number): void {
-  if (run.debugHistory.length === 0) return;
-  const wrapped: string[] = [];
-  for (const item of run.debugHistory.slice(-30)) {
-    const title = historyTitle(item.kind);
-    const detailLines = item.detail.split('\n');
-    const first = `${title}: ${detailLines[0] ?? item.summary}`;
-    wrapped.push(...wrapText(first, contentWidth - 2).map((line, index) => (index === 0 ? line : `  ${line}`)));
-    for (const detailLine of detailLines.slice(1, 8)) {
-      wrapped.push(...wrapText(`  ${detailLine}`, contentWidth - 2));
-    }
-  }
-
-  const visibleCount = 8;
-  const maxOffset = Math.max(0, wrapped.length - visibleCount);
-  const offset = Math.max(0, Math.min(scrollOffset, maxOffset));
-  const start = Math.max(0, wrapped.length - visibleCount - offset);
-  const visible = wrapped.slice(start, start + visibleCount);
-  const position = maxOffset > 0 ? ` (${start + 1}-${start + visible.length}/${wrapped.length})` : '';
-
-  lines.push('');
-  lines.push(`History${position}`);
-  for (const line of visible) {
-    lines.push(`  ${clip(line, contentWidth - 4)}`);
-  }
-}
-
-function historyTitle(kind: string): string {
-  if (kind === 'tool_call') return 'Tool call';
-  if (kind === 'tool_result') return 'Tool result';
-  return 'Model';
+  if (run.statusNote) return compactStatus(run.statusNote);
+  if (run.phase === 'idle') return 'Idle · awaiting objective';
+  return `${phaseLabel(run.phase)} · ${run.objective.nextCheckpoint}`;
 }
 
 function renderDirectivePanel(objectiveInput: string, width: number, modelLabel?: string): string[] {
-  const inner = Math.max(8, width - 2);
+  const inner = Math.max(8, width - 4);
   const wrapped = wrapText(objectiveInput.trim() || 'Awaiting objective', inner - 2);
   const body = wrapped.slice(0, 2);
   while (body.length < 2) body.push('');
 
-  // Model label as instrumentation tag — low-contrast, right-aligned in top border.
   const label = modelLabel ? truncateModelLabel(modelLabel, Math.max(4, inner - 6)) : 'Directive';
-  const labelLen = label.length + 2; // space + label + space
-  const topDash = Math.max(0, inner - labelLen);
-
-  // Bottom border: help text, dynamically sized.
-  const helpText = ' Enter submit | Ctrl+C exit | Ctrl+L redraw | /help';
-  const helpLen = helpText.length;
-  const bottomDash = Math.max(0, inner - helpLen);
+  const topFill = Math.max(0, inner - label.length - 3);
+  const helpText = 'Enter submit | Ctrl+C exit | Ctrl+L redraw | /help';
+  const bottomFill = Math.max(0, inner - helpText.length - 1);
 
   return [
-    `┌${'─'.repeat(topDash)} ${label} ─┐`,
-    `│ ${clip(body[0], inner - 2).padEnd(inner - 2, ' ')} │`,
-    `│ ${clip(body[1], inner - 2).padEnd(inner - 2, ' ')} │`,
-    `└${helpText}${'─'.repeat(bottomDash)}┘`,
+    ` ${dim('▁'.repeat(topFill))} ${label} `,
+    ` ${clip(body[0], inner - 2).padEnd(inner - 2, ' ')} `,
+    ` ${clip(body[1], inner - 2).padEnd(inner - 2, ' ')} `,
+    ` ${dim(helpText)}${dim('▔'.repeat(bottomFill))}`,
   ];
+}
+
+function putTelemetry(lines: string[], y: number, x: number, width: number, state: InteractiveViewState): void {
+  const run = state.run;
+  const items = [
+    `${dim('Field')} ${modeColor(state.coreMode)}${phaseLabel(run.phase)}\u001b[0m`,
+    activitySummary(run),
+    `Objective · ${run.objective.label || 'Awaiting objective'}`,
+    `Next · ${run.objective.nextCheckpoint}`,
+    verificationLine(run),
+    changeLine(run),
+  ];
+
+  for (let i = 0; i < items.length; i += 1) {
+    put(lines, y + i, x, clip(items[i], width), x + width);
+  }
+}
+
+function putPatchPreview(lines: string[], y: number, x: number, width: number, run: RunStateSnapshot): void {
+  if (!run.patchPreview) return;
+  const diffLines = run.patchPreview.diff.split('\n').slice(0, 4);
+  put(lines, y, x, dim(`Diff preview: ${clip(run.patchPreview.path, width - 14)}`), x + width);
+  for (let i = 0; i < diffLines.length; i += 1) {
+    put(lines, y + i + 1, x + 2, clip(diffLines[i], width - 4), x + width);
+  }
+}
+
+function putBlock(lines: string[], y: number, x: number, block: string[], width: number): void {
+  for (let i = 0; i < block.length; i += 1) {
+    put(lines, y + i, x, block[i], width);
+  }
+}
+
+function put(lines: string[], y: number, x: number, text: string, width: number): void {
+  if (y < 0 || y >= lines.length || x >= width) return;
+  const base = pad(lines[y], width);
+  const left = sliceVisible(base, 0, Math.max(0, x));
+  const rightStart = Math.min(width, x + stripAnsi(text).length);
+  const right = sliceVisible(base, rightStart, width);
+  lines[y] = `${left}${text}${right}`;
+}
+
+function phaseLabel(phase: string): string {
+  if (phase === 'tool_execution') return 'Tool';
+  if (phase === 'budget_exhausted') return 'Budget exhausted';
+  return `${phase.slice(0, 1).toUpperCase()}${phase.slice(1)}`;
+}
+
+function verificationLine(run: RunStateSnapshot): string {
+  if (run.verification.state === 'passed') return 'Verification · passed';
+  if (run.verification.state === 'running') return `Verification · ${run.verification.currentCheckLabel || 'running'}`;
+  if (run.verification.state === 'failed') return `Verification · failed`;
+  if (run.verification.state === 'skipped') return `Verification · skipped`;
+  return `Verification · ${run.verification.summary || 'planned'}`;
+}
+
+function changeLine(run: RunStateSnapshot): string {
+  const count = run.changes.items.length + run.changes.overflowCount;
+  if (count === 0) return 'Changes · none';
+  const latest = run.changes.items[run.changes.items.length - 1];
+  if (!latest) return `Changes · ${count}`;
+  return `Changes · ${count} · ${latest.op} ${latest.path}`;
+}
+
+function completionActivity(statusNote: string): string {
+  const trimmed = statusNote.replace(/^completed:\s*/i, '');
+  return `Completed · ${trimmed}`;
+}
+
+function compactStatus(statusNote: string): string {
+  if (statusNote.startsWith('tool: ')) return `Tool · ${statusNote.slice(6)}`;
+  if (statusNote.startsWith('passed: ')) return `Verification · passed`;
+  if (statusNote.startsWith('failed: ')) return `Verification · failed`;
+  return statusNote;
+}
+
+function dim(text: string): string {
+  return `\u001b[90m${text}\u001b[0m`;
 }

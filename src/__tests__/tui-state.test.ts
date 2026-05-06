@@ -66,7 +66,7 @@ describe('tui-state', () => {
     expect(state.phase).toBe('thinking');
   });
 
-  it('records distinct model step progress and assistant notes', () => {
+  it('records compact model step progress and assistant notes', () => {
     let state = createInitialRunStateSnapshot(0);
 
     state = applyEventToRunState(
@@ -99,9 +99,9 @@ describe('tui-state', () => {
 
     expect(state.lastModelOutput).toBe('Inspecting the TUI state reducer before editing.');
     expect(state.timeline.map((item) => item.summary)).toEqual([
-      'model step 1 started',
-      'model: Inspecting the TUI state reducer before editing.',
-      'model step 2 started',
+      'Thinking · step 1',
+      'Thinking · Inspecting the TUI state reducer before editing.',
+      'Thinking · step 2',
     ]);
   });
 
