@@ -594,6 +594,58 @@ describe('interactive layout visual agreements', () => {
     expect(dock[3]).toMatch(/^└ Enter submit \| Ctrl\+C exit \| \/help ─+┘\s*$/);
   });
 
+  it('keeps the input dock inside the terminal write-safe column', () => {
+    const lines = renderLayout(
+      {
+        run: createInitialRunStateSnapshot(0),
+        objectiveInput: 'Inspect the prompt border',
+        coreMode: 'idle',
+        nowMs: 2000,
+        cwdLabel: '~/workspace/git/.worktrees/synax-tui',
+        gitBranch: 'dev/tui',
+      },
+      90,
+      24,
+    ).map(stripAnsi);
+    const dock = lines.slice(-4);
+
+    expect(lines).toHaveLength(24);
+    expect(lines.every((line) => line.length === 90)).toBe(true);
+    expect(dock[0].endsWith('┐ ')).toBe(true);
+    expect(dock[1].endsWith('│ ')).toBe(true);
+    expect(dock[2].endsWith('│ ')).toBe(true);
+    expect(dock[3].endsWith('┘ ')).toBe(true);
+  });
+
+  it('reserves a blank gutter between long transcript output and the input dock', () => {
+    const run = {
+      ...createInitialRunStateSnapshot(0),
+      phase: 'completed' as const,
+      debugHistory: Array.from({ length: 32 }, (_, index) => ({
+        atMs: index,
+        kind: 'model' as const,
+        summary: `model event ${index}`,
+        detail: `model event ${index}`,
+      })),
+    };
+    const lines = renderLayout(
+      {
+        run,
+        objectiveInput: '',
+        coreMode: 'completed',
+        nowMs: 2000,
+        historyScrollOffset: 0,
+      },
+      90,
+      24,
+    ).map(stripAnsi);
+
+    expect(lines.at(-5)?.trim()).toBe('');
+    expect(lines.at(-4)?.trimStart().startsWith('┌')).toBe(true);
+    expect(lines.at(-3)).toContain('Awaiting objective');
+    expect(lines.at(-1)?.trimStart().startsWith('└ Enter submit')).toBe(true);
+  });
+
   it('renders unloaded core as inert and still', () => {
     const first = renderDottedCore({ mode: 'unloaded', frame: 1, width: 20, height: 7 });
     const second = renderDottedCore({ mode: 'unloaded', frame: 20, width: 20, height: 7 });

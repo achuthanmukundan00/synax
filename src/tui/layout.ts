@@ -4,7 +4,7 @@ import { CORE_HEIGHT, CORE_WIDTH, modeColor, renderAiCore, renderDottedCore } fr
 import { renderTranscript, toolsUsed } from './transcript';
 import pkg from '../../package.json';
 
-const DIRECTIVE_PANEL_HEIGHT = 4;
+const INPUT_DOCK_HEIGHT = 5;
 
 export interface InteractiveViewState {
   run: RunStateSnapshot;
@@ -28,8 +28,9 @@ export interface InteractiveViewState {
 
 export function renderLayout(state: InteractiveViewState, cols: number, rows: number): string[] {
   const width = Math.max(40, cols);
+  const renderWidth = terminalWriteWidth(width);
   const height = Math.max(14, rows);
-  const panel = renderDirectivePanel(state.objectiveInput, width, locationLabel(state.cwdLabel, state.gitBranch));
+  const panel = renderInputDock(state.objectiveInput, renderWidth, locationLabel(state.cwdLabel, state.gitBranch));
   const bodyHeight = Math.max(1, height - panel.length);
   const lines = Array.from({ length: bodyHeight }, () => '');
   const hasTranscript =
@@ -40,10 +41,10 @@ export function renderLayout(state: InteractiveViewState, cols: number, rows: nu
     Boolean(state.run.lastModelOutput.trim());
 
   if (!hasTranscript) {
-    renderWelcome(lines, width, bodyHeight, state);
+    renderWelcome(lines, renderWidth, bodyHeight, state);
   } else {
-    renderHeader(lines, width, state);
-    renderOperationalSurface(lines, width, bodyHeight, state);
+    renderHeader(lines, renderWidth, state);
+    renderOperationalSurface(lines, renderWidth, bodyHeight, state);
   }
 
   if (state.blockedMessage) {
@@ -51,19 +52,19 @@ export function renderLayout(state: InteractiveViewState, cols: number, rows: nu
       lines,
       Math.max(2, bodyHeight - 2),
       2,
-      `\u001b[33mBlocked · ${clip(state.blockedMessage, width - 12)}\u001b[0m`,
-      width,
+      `\u001b[33mBlocked · ${clip(state.blockedMessage, renderWidth - 12)}\u001b[0m`,
+      renderWidth,
     );
   }
 
-  const clipped = lines.slice(0, bodyHeight).map((line) => pad(clip(line, width), width));
+  const clipped = lines.slice(0, bodyHeight).map((line) => pad(clip(line, renderWidth), width));
   clipped.push(...panel);
   return clipped.map((line) => pad(clip(line, width), width));
 }
 
 export function maxHistoryScrollOffset(state: InteractiveViewState, _cols: number, rows: number): number {
   const height = Math.max(14, rows);
-  const bodyHeight = Math.max(1, height - DIRECTIVE_PANEL_HEIGHT);
+  const bodyHeight = Math.max(1, height - INPUT_DOCK_HEIGHT);
   // Account for header + separator + transcript label = 5 lines of chrome
   const visibleRows = Math.max(1, bodyHeight - 5);
   const estimatedLines = state.run.debugHistory.length * 3;
@@ -238,6 +239,10 @@ function wrapText(text: string, maxWidth: number): string[] {
   return lines.length > 0 ? lines : [''];
 }
 
+function renderInputDock(objectiveInput: string, width: number, metadataLabel?: string): string[] {
+  return ['', ...renderDirectivePanel(objectiveInput, width, metadataLabel)];
+}
+
 function renderDirectivePanel(objectiveInput: string, width: number, metadataLabel?: string): string[] {
   const inner = Math.max(8, width - 2);
   const wrapped = wrapText(objectiveInput.trim() || 'Awaiting objective', inner - 2);
@@ -255,6 +260,10 @@ function renderDirectivePanel(objectiveInput: string, width: number, metadataLab
     `│ ${clip(body[1], inner - 2).padEnd(inner - 2, ' ')} │`,
     `└ ${helpText} ${'─'.repeat(bottomFill)}┘`,
   ];
+}
+
+function terminalWriteWidth(width: number): number {
+  return width > 1 ? width - 1 : width;
 }
 
 function renderCoreModule(state: InteractiveViewState, width: number, maxHeight: number): string[] {
