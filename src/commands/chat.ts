@@ -19,7 +19,7 @@ import { buildProjectProfile, formatTextProfile } from '../config/profile';
 import { buildInspectConfigProfile } from './inspect';
 import { discoverConfigPath, normalizeProviderConfig as normalizeProvider } from '../config/project';
 import type { NormalizedProviderConfig } from '../llm/types';
-import { undoLastEdit } from '../agent/safety';
+import { readLatestCheckpoint, undoLastEdit } from '../agent/safety';
 
 const execFileAsync = promisify(execFile);
 
@@ -236,6 +236,8 @@ async function handleSlashCommand(
   if (command === '/status') {
     const profile = buildProjectProfile(context.repoRoot);
     const git = profile.git;
+    const filesRead = unique(context.conversation.inspectionLedger.getInspectedRanges().map((range) => range.path));
+    const checkpoint = await readLatestCheckpoint(context.repoRoot);
     if (!git) return { handled: true, output: '[synax] git status unavailable' };
     return {
       handled: true,
@@ -246,18 +248,24 @@ async function handleSlashCommand(
         `Context budget tokens: ${context.config.contextBudgetTokens ?? 'not configured'}`,
         `Max model steps: ${context.config.maxModelSteps ?? 'not configured'}`,
         `Max tool calls: ${context.config.maxToolCalls ?? 'not configured'}`,
+        `Files read this session: ${filesRead.length > 0 ? filesRead.join(', ') : '(none)'}`,
+        `Latest checkpoint: ${checkpoint ? `${checkpoint.id} (${checkpoint.statusPath})` : '(none)'}`,
       ].join('\n'),
     };
   }
-  if (command === '/verify') {
+  const verifyMatch = trimmedCommand.match(/^\/verify(?:\s+(quick|full))?$/i);
+  if (verifyMatch) {
+    const profile = verifyMatch[1]?.toLowerCase() === 'full' ? 'full' : 'quick';
     const verification = await runVerification({
       repoRoot: context.repoRoot,
       command: context.config.verification?.defaultCommand,
+      timeoutMs: profile === 'full' ? 120000 : 30000,
+      maxOutputChars: profile === 'full' ? 12000 : 4000,
     });
     return {
       handled: true,
       verification,
-      output: formatVerification(verification),
+      output: formatVerification(verification, profile),
     };
   }
   if (command === '/diff') {
@@ -272,10 +280,24 @@ async function handleSlashCommand(
 
 async function renderGitDiff(repoRoot: string): Promise<string> {
   try {
-    const { stdout } = await execFileAsync('git', ['diff', '--no-ext-diff'], { cwd: repoRoot, maxBuffer: 256 * 1024 });
-    const lines = stdout.split(/\r?\n/);
-    const bounded = lines.slice(0, 200).join('\n').trim();
-    return bounded || '[synax] no unstaged diff';
+    const [{ stdout: status }, { stdout: diff }] = await Promise.all([
+      execFileAsync('git', ['status', '--short'], { cwd: repoRoot, maxBuffer: 64 * 1024 }),
+      execFileAsync('git', ['diff', '--no-ext-diff'], { cwd: repoRoot, maxBuffer: 256 * 1024 }),
+    ]);
+    const statusLines = status
+      .split(/\r?\n/)
+      .map((line) => line.trimEnd())
+      .filter(Boolean)
+      .slice(0, 80);
+    const diffLines = diff
+      .split(/\r?\n/)
+      .map((line) => line.trimEnd())
+      .slice(0, 200);
+    const sections = ['Synax Diff', '----------', 'Status:'];
+    sections.push(statusLines.length > 0 ? statusLines.map((line) => `  ${line}`).join('\n') : '  (clean)');
+    sections.push('', 'Diff:');
+    sections.push(diffLines.length > 0 ? diffLines.join('\n') : '  (no unstaged diff)');
+    return sections.join('\n');
   } catch (error) {
     return `[synax] diff unavailable: ${error instanceof Error ? error.message : String(error)}`;
   }
@@ -495,7 +517,7 @@ function printBanner(repoRoot: string, model: string): void {
   console.log('-----');
   console.log(`Repo: ${repoRoot}`);
   console.log(`Model: ${model}`);
-  console.log('Commands: /help /settings /tools /budget /test-provider /inspect /verify /diff /undo-last-edit /clear /status /exit');
+  console.log('Commands: /help /settings /tools /budget /test-provider /inspect /verify /verify quick /verify full /diff /undo-last-edit /clear /status /exit');
   console.log('');
 }
 
@@ -511,7 +533,7 @@ function renderHelpPanel(): string {
     '/budget                    Show context and loop limits',
     '/test-provider             Probe provider models and chat endpoints',
     '/inspect                   Show project profile',
-    '/verify                    Run configured verification command',
+    '/verify [quick|full]       Run configured verification command',
     '/diff                      Show bounded git diff',
     '/undo-last-edit            Revert last Synax-owned edit when unchanged',
     '/clear                     Reset the conversation',
@@ -563,8 +585,8 @@ function renderSettingsPanel(repoRoot: string, config: ProjectConfig): string {
   ].join('\n');
 }
 
-function formatVerification(result: VerificationResult): string {
-  const lines = [`[synax] verification: ${result.state}`];
+function formatVerification(result: VerificationResult, profile?: 'quick' | 'full'): string {
+  const lines = [`[synax] verification${profile ? ` (${profile})` : ''}: ${result.state}`];
   if (result.command) lines.push(`command: ${result.command}`);
   if (result.exitCode !== undefined) lines.push(`exit code: ${result.exitCode}`);
   if (result.stdout.trim()) lines.push(result.stdout.trim());
