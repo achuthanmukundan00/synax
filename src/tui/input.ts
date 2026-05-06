@@ -6,6 +6,13 @@ export interface ParsedInput {
 export function parseInputChunk(chunk: string): ParsedInput[] {
   const events: ParsedInput[] = [];
   for (let index = 0; index < chunk.length; index += 1) {
+    const mouse = parseSgrMouse(chunk, index);
+    if (mouse) {
+      if (mouse.button === 64) events.push({ type: 'scroll_history_up' });
+      if (mouse.button === 65) events.push({ type: 'scroll_history_down' });
+      index += mouse.length - 1;
+      continue;
+    }
     if (chunk.startsWith('\x1b[5~', index)) {
       events.push({ type: 'scroll_history_up' });
       index += 3;
@@ -36,4 +43,10 @@ export function parseInputChunk(chunk: string): ParsedInput[] {
     events.push({ type: 'text', value: char });
   }
   return events;
+}
+
+function parseSgrMouse(chunk: string, index: number): { button: number; length: number } | undefined {
+  const match = /^\x1b\[<(\d+);\d+;\d+[mM]/.exec(chunk.slice(index));
+  if (!match) return undefined;
+  return { button: Number(match[1]), length: match[0].length };
 }
