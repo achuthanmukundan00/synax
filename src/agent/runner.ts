@@ -131,6 +131,7 @@ interface AgentToolExecutionResult {
   success: boolean;
   toolResult: ToolResult;
   changedFile?: string;
+  completedAction?: string;
   error?: string;
   terminalState?: AgentTerminalState;
 }
@@ -167,6 +168,7 @@ export async function runAgentTurn(options: AgentRunnerOptions & { task: string 
   const maxSteps = options.maxSteps ?? DEFAULT_MAX_STEPS;
   const maxToolCalls = options.maxToolCalls ?? DEFAULT_MAX_TOOL_CALLS;
   const changedFiles: string[] = [];
+  const completedActions: string[] = [];
   const toolCalls: AgentTurnResult['toolCalls'] = [];
   const readCache = new Map<string, ToolResult>();
   const identicalReadCounts = new Map<string, number>();
@@ -433,7 +435,12 @@ export async function runAgentTurn(options: AgentRunnerOptions & { task: string 
     if (response.toolCalls.length === 0) {
       // Gate: prevent premature completion when the model claims success
       // without making any changes in patch/verify mode.
-      if (mode !== 'read-only' && changedFiles.length === 0 && isPrematureCompletionClaim(response.content)) {
+      if (
+        mode !== 'read-only' &&
+        changedFiles.length === 0 &&
+        completedActions.length === 0 &&
+        isPrematureCompletionClaim(response.content)
+      ) {
         conversation.messages.push({
           role: 'user',
           content:
@@ -522,6 +529,7 @@ export async function runAgentTurn(options: AgentRunnerOptions & { task: string 
         summary: result.success ? 'completed' : (result.error ?? 'failed'),
       });
       if (result.changedFile) changedFiles.push(result.changedFile);
+      if (result.completedAction) completedActions.push(result.completedAction);
 
       // Item 7: Budget check after EVERY tool result is appended.
       // Prevent silent overflow buildup within a single step.
@@ -1106,6 +1114,7 @@ async function executeBashTool(
     });
     return {
       success: true,
+      completedAction: completedShellAction(command),
       toolResult: {
         success: true,
         toolName: aliasSource,
@@ -1154,6 +1163,16 @@ function resolveShellCommand(input: Record<string, unknown>, aliasSource: 'bash'
     return input.command.trim();
   }
   return null;
+}
+
+function completedShellAction(command: string): string | undefined {
+  if (/(^|[;&|(){}\s])git\s+commit(?=\s|$)/.test(command)) return 'git commit';
+  if (/(^|[;&|(){}\s])git\s+push(?=\s|$)/.test(command)) return 'git push';
+  if (/(^|[;&|(){}\s])gh\s+pr\s+create(?=\s|$)/.test(command)) return 'gh pr create';
+  if (/(^|[;&|(){}\s])gh\s+pr\s+merge(?=\s|$)/.test(command)) return 'gh pr merge';
+  if (/(^|[;&|(){}\s])gh\s+issue\s+create(?=\s|$)/.test(command)) return 'gh issue create';
+  if (/(^|[;&|(){}\s])gh\s+release\s+create(?=\s|$)/.test(command)) return 'gh release create';
+  return undefined;
 }
 
 function detectDangerousCommandWarnings(command: string): string[] {
