@@ -8,7 +8,9 @@
 import { type NormalizedProviderConfig, type ChatOptions, type ChatResponse, type LlmError } from './types';
 import { type ContextLedger } from '../tools';
 import {
+  type ToolCallParserMode,
   parseOpenAIToolCallsResult,
+  parseQwenToolCallsFromContentResult,
   parseToolCallsFromContentResult,
   sanitizeReasoningTags,
   toOpenAIToolDefinition,
@@ -120,7 +122,7 @@ function parseErrorResponse(status: number, bodyText: string): LlmError {
 // Success response parsing
 // ---------------------------------------------------------------------------
 
-function parseSuccessResponse(bodyText: string): ChatResponse {
+function parseSuccessResponse(bodyText: string, parserMode: ToolCallParserMode): ChatResponse {
   const json = JSON.parse(bodyText) as {
     model?: string;
     choices?: Array<{
@@ -141,7 +143,9 @@ function parseSuccessResponse(bodyText: string): ChatResponse {
   const fallbackToolCallResult =
     standardToolCallResult.calls.length > 0
       ? ({ ok: true, source: 'none', calls: [] } as const)
-      : parseToolCallsFromContentResult(content);
+      : parserMode === 'qwen3_coder' || parserMode === 'qwen3_xml'
+        ? parseQwenToolCallsFromContentResult(content)
+        : parseToolCallsFromContentResult(content);
   if (!fallbackToolCallResult.ok) {
     throw modelToolCallParseError(fallbackToolCallResult.message);
   }
@@ -150,6 +154,12 @@ function parseSuccessResponse(bodyText: string): ChatResponse {
     content,
     model: json.model ?? '',
     finishReason: finishReason ?? 'stop',
+    toolCallFormat:
+      standardToolCallResult.calls.length > 0
+        ? 'openai'
+        : fallbackToolCallResult.calls.length > 0
+          ? 'content_xml'
+          : 'none',
     toolCalls: [...standardToolCallResult.calls, ...fallbackToolCallResult.calls],
     usage: json.usage
       ? {
@@ -191,6 +201,7 @@ export function createOpenAICompatibleClient(
   const model = cfg.model ?? '';
   const baseUrl = (cfg.baseUrl ?? 'http://127.0.0.1:1234/v1').replace(/\/+$/, '');
   const endpoint = baseUrl + '/chat/completions';
+  const parserMode = selectToolCallParserMode(cfg.model, cfg.toolCallParser);
 
   // Build base headers
   const headers: Record<string, string> = {
@@ -234,7 +245,7 @@ export function createOpenAICompatibleClient(
       const result = await dispatchRequest(endpoint, body, headers, timeoutMs);
 
       if (result.status >= 200 && result.status < 300) {
-        const response = parseSuccessResponse(result.bodyText);
+        const response = parseSuccessResponse(result.bodyText, parserMode);
 
         // Record token usage from the response when a ledger is present.
         if (ledger && response.usage) {
@@ -273,6 +284,18 @@ export function createOpenAICompatibleClient(
       throw parseErrorResponse(result.status, result.bodyText);
     },
   };
+}
+
+function selectToolCallParserMode(model: string, override?: string): ToolCallParserMode {
+  const normalizedOverride = (override ?? '').trim().toLowerCase();
+  if (normalizedOverride === 'qwen3_xml' || normalizedOverride === 'qwen3_coder') return normalizedOverride;
+  if (normalizedOverride === 'generic' || normalizedOverride.length > 0) return 'generic';
+
+  const lowerModel = model.toLowerCase();
+  if (lowerModel.includes('qwen3.6') || lowerModel.includes('qwen3.5') || lowerModel.includes('qwen3-coder')) {
+    return 'qwen3_coder';
+  }
+  return 'generic';
 }
 
 export { providerError, classifyStatus, parseErrorResponse, parseSuccessResponse };
