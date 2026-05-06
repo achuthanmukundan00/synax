@@ -112,11 +112,11 @@ describe('checkContextBudget', () => {
   });
 
   it('accepts the 131072-token high-context local profile', () => {
-    const result = checkContextBudget({ contextBudgetTokens: 131072, maxModelSteps: 32, maxToolCalls: 96 });
+    const result = checkContextBudget({ contextBudgetTokens: 131072, maxModelSteps: 64, maxToolCalls: 192 });
     expect(result.status).toBe('pass');
     expect(result.message).toContain('contextBudgetTokens set to 131072');
-    expect(result.message).toContain('maxModelSteps set to 32');
-    expect(result.message).toContain('maxToolCalls set to 96');
+    expect(result.message).toContain('maxModelSteps set to 64');
+    expect(result.message).toContain('maxToolCalls set to 192');
   });
 
   it('returns warn for no budget configured', () => {
@@ -255,7 +255,7 @@ describe('formatReport', () => {
       contextBudget: {
         check: 'context-budget',
         status: 'pass',
-        message: 'contextBudgetTokens set to 131072; maxModelSteps set to 32; maxToolCalls set to 96',
+        message: 'contextBudgetTokens set to 131072; maxModelSteps set to 64; maxToolCalls set to 192',
       },
       relayHealth: { check: 'relay-health', status: 'skip', message: undefined },
     };
