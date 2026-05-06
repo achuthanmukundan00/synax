@@ -141,8 +141,7 @@ function renderCommandEvent(
   if (!result) return block;
 
   const parsed = parseCommandResult(result.detail || result.summary);
-  const exitOk = parsed.exitCode === 0;
-  const exitLabel = exitOk ? dim(`exit ${parsed.exitCode}`) : `\u001b[1;31mexit ${parsed.exitCode ?? 1}\u001b[0m`;
+  const exitLabel = dim(`exit ${parsed.exitCode ?? 1}`);
   const tags = [exitLabel];
   if (parsed.duration) tags.push(dim(parsed.duration));
   if (isGitCommand(command)) tags.push(dim('git'));
@@ -152,7 +151,8 @@ function renderCommandEvent(
   const showOutput = output.length > 0 && (parsed.exitCode !== 0 || output.length < 420);
   if (showOutput) {
     for (const line of wrapText(output, Math.max(20, width - 4)).slice(0, parsed.exitCode === 0 ? 2 : 4)) {
-      block.push(`  ${dim(clip(line, width - 4))}`);
+      const clipped = clip(line, width - 4);
+      block.push(`  ${hasAnsi(clipped) ? clipped : dim(clipped)}`);
     }
   }
 
@@ -360,42 +360,84 @@ function cleanModelOutput(output: string): string {
 }
 
 function wrapText(text: string, maxWidth: number): string[] {
-  const stripped = stripAnsi(text);
   const lines: string[] = [];
-  let current = '';
+  const width = Math.max(1, maxWidth);
 
-  for (let i = 0; i < stripped.length; i += 1) {
-    const ch = stripped[i];
-    if (ch === '\n') {
-      lines.push(current.trimEnd());
-      current = '';
+  for (const rawLine of text.split('\n')) {
+    let remaining = rawLine;
+    if (visibleLength(remaining.trimEnd()) === 0) {
+      lines.push('');
       continue;
     }
-    current += ch;
-    if (current.length >= maxWidth) {
-      const lastSpace = current.lastIndexOf(' ');
-      if (lastSpace > maxWidth / 2) {
-        lines.push(current.slice(0, lastSpace).trimEnd());
-        current = current.slice(lastSpace + 1);
-      } else {
-        lines.push(current.slice(0, maxWidth));
-        current = current.slice(maxWidth);
-      }
+
+    while (visibleLength(remaining) > width) {
+      const breakAt = findVisibleBreak(remaining, width);
+      lines.push(closeAnsi(sliceAnsi(remaining, 0, breakAt).trimEnd()));
+      remaining = sliceAnsi(remaining, breakAt, Number.POSITIVE_INFINITY).trimStart();
     }
+    lines.push(remaining.trimEnd());
   }
-  if (current.trim().length > 0) lines.push(current.trimEnd());
+
   return lines.length > 0 ? lines : [''];
 }
 
 function clip(text: string, width: number): string {
-  const visible = stripAnsi(text);
-  if (visible.length <= width) return text;
-  return `${visible.slice(0, Math.max(0, width - 1))}…`;
+  if (visibleLength(text) <= width) return text;
+  return closeAnsi(`${sliceAnsi(text, 0, Math.max(0, width - 1))}…`);
 }
 
 function stripAnsi(input: string): string {
   // eslint-disable-next-line no-control-regex
   return input.replace(/\u001b\[[0-9;]*m/g, '');
+}
+
+function hasAnsi(input: string): boolean {
+  // eslint-disable-next-line no-control-regex
+  return /\u001b\[[0-9;]*m/.test(input);
+}
+
+function visibleLength(input: string): number {
+  return stripAnsi(input).length;
+}
+
+function closeAnsi(input: string): string {
+  return hasAnsi(input) && !input.endsWith('\u001b[0m') ? `${input}\u001b[0m` : input;
+}
+
+function findVisibleBreak(input: string, maxWidth: number): number {
+  const visible = stripAnsi(input);
+  const prefix = visible.slice(0, maxWidth);
+  const lastSpace = prefix.lastIndexOf(' ');
+  return lastSpace > maxWidth / 2 ? lastSpace : maxWidth;
+}
+
+function sliceAnsi(input: string, start: number, end: number): string {
+  const targetStart = Math.max(0, start);
+  const targetEnd = Math.max(targetStart, end);
+  let visibleIndex = 0;
+  let out = '';
+  let writing = false;
+
+  for (let i = 0; i < input.length; i += 1) {
+    if (input[i] === '\u001b') {
+      // eslint-disable-next-line no-control-regex
+      const match = /\u001b\[[0-9;]*m/.exec(input.slice(i));
+      if (match) {
+        if (writing || visibleIndex >= targetStart) out += match[0];
+        i += match[0].length - 1;
+        continue;
+      }
+    }
+
+    if (visibleIndex >= targetEnd) break;
+    if (visibleIndex >= targetStart) {
+      writing = true;
+      out += input[i];
+    }
+    visibleIndex += 1;
+  }
+
+  return out;
 }
 
 function eventLabel(label: string): string {
