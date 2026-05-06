@@ -125,11 +125,56 @@ export async function runInteractiveTui(
       if (slash.output) {
         state = applyEventToRunState(
           state,
-          { type: 'assistant_message', timestamp: new Date().toISOString(), content: slash.output },
+          { type: 'command_output', timestamp: new Date().toISOString(), command: text, content: slash.output },
           Date.now(),
         );
       }
       if (slash.exit) finish();
+      busy = false;
+      paint(true);
+      return;
+    }
+
+    if (text.startsWith('!')) {
+      const command = text.slice(1).trim();
+      if (!command) {
+        state = applyEventToRunState(
+          state,
+          {
+            type: 'command_output',
+            timestamp: new Date().toISOString(),
+            command: '!',
+            content: '[synax] shell command required after !',
+          },
+          Date.now(),
+        );
+      } else if (session.handleShellCommand) {
+        const report = await session.handleShellCommand(command);
+        state = applyEventToRunState(
+          state,
+          {
+            type: 'local_shell_command',
+            timestamp: new Date().toISOString(),
+            command: report.command,
+            exitCode: report.exitCode,
+            durationMs: report.durationMs,
+            stdout: report.stdout,
+            stderr: report.stderr,
+          },
+          Date.now(),
+        );
+      } else {
+        state = applyEventToRunState(
+          state,
+          {
+            type: 'command_output',
+            timestamp: new Date().toISOString(),
+            command: text,
+            content: '[synax] local shell commands are unavailable in this session',
+          },
+          Date.now(),
+        );
+      }
       busy = false;
       paint(true);
       return;

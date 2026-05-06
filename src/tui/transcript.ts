@@ -12,7 +12,14 @@ export function renderTranscript(state: TranscriptRenderState, width: number): s
 
   for (let i = 0; i < history.length; i += 1) {
     const item = history[i];
-    const blockKind = item.kind === 'user' ? 'user' : item.kind === 'model' ? 'model' : 'tool';
+    const blockKind =
+      item.kind === 'user'
+        ? 'user'
+        : item.kind === 'model'
+          ? 'model'
+          : item.kind === 'command' || item.kind === 'local_command'
+            ? 'command'
+            : 'tool';
 
     // Insert a thin separator when switching between model and tool regions.
     if (lastKind && lastKind !== blockKind) {
@@ -27,6 +34,16 @@ export function renderTranscript(state: TranscriptRenderState, width: number): s
 
     if (item.kind === 'model') {
       blocks.push(renderEventBlock('model', cleanModelOutput(item.detail || item.summary), width));
+      continue;
+    }
+
+    if (item.kind === 'command') {
+      blocks.push(renderEventBlock('command', item.detail || item.summary, width));
+      continue;
+    }
+
+    if (item.kind === 'local_command') {
+      blocks.push(renderCommandEvent(item.summary, { summary: item.summary, detail: item.detail }, width));
       continue;
     }
 
