@@ -1,5 +1,5 @@
 import { createChatSession, shouldUseInteractiveTui, type ChatSession } from '../commands/chat';
-import { createInitialRunStateSnapshot } from '../agent/tui-state';
+import { applyEventToRunState, createInitialRunStateSnapshot } from '../agent/tui-state';
 import { CORE_HEIGHT, CORE_WIDTH, modeColor, renderAiCore, renderDottedCore } from '../tui/ai-core';
 import { DiffRenderer } from '../tui/diff-renderer';
 import { runInteractiveTui } from '../tui/interactive-tui';
@@ -588,7 +588,7 @@ describe('interactive layout visual agreements', () => {
     expect(plain).not.toContain('Directive');
     expect(plain).toContain('The renderer now keeps the prompt inside a proper box.');
     expect(plain).not.toContain('Qwen3.6-35B-A3B-UD-IQ3_XXS.gguf');
-    expect(dock[0]).toMatch(/^┌─+ ~\/workspace\/git\/\.worktrees\/synax-tui  dev\/tui ┐\s*$/);
+    expect(dock[0]).toMatch(/^┌─+ ~\/workspace\/git\/\.worktrees\/synax-tui {2}dev\/tui ┐\s*$/);
     expect(dock[1]).toMatch(/^│ Implement fixed-footprint reactor core rendering\s+│\s*$/);
     expect(dock[2]).toMatch(/^│\s+│\s*$/);
     expect(dock[3]).toMatch(/^└ Enter submit \| Ctrl\+C exit \| \/help ─+┘\s*$/);
@@ -849,6 +849,93 @@ describe('interactive layout visual agreements', () => {
     expect(plain).toContain('I will check git status.');
     expect(plain).toContain('$ git status --short');
     expect(plain).toContain('M src/tui/layout.ts');
+  });
+
+  it('keeps completed run summaries above the next submitted prompt', () => {
+    let run = createInitialRunStateSnapshot(0);
+    run = applyEventToRunState(
+      run,
+      {
+        type: 'task_started',
+        timestamp: '2026-05-06T12:00:00.000Z',
+        mode: 'interactive',
+        profile: 'default',
+        endpoint: 'http://127.0.0.1:1234/v1',
+        model: 'local-model',
+        providerName: 'Relay',
+        contextBudgetTokens: 0,
+        maxModelSteps: 0,
+        maxToolCalls: 0,
+        tools: [],
+        task: 'first task',
+      },
+      1,
+    );
+    run = applyEventToRunState(
+      run,
+      {
+        type: 'assistant_message',
+        timestamp: '2026-05-06T12:00:01.000Z',
+        content: 'Finished the first task.',
+      },
+      2,
+    );
+    run = applyEventToRunState(
+      run,
+      {
+        type: 'task_finished',
+        timestamp: '2026-05-06T12:00:02.000Z',
+        status: 'completed',
+        toolCalls: 0,
+        maxToolCalls: 0,
+        modelSteps: 1,
+        maxModelSteps: 1,
+        changedFiles: [],
+        workingTreeClean: true,
+        verification: 'passed',
+      },
+      3,
+    );
+    run = applyEventToRunState(
+      run,
+      {
+        type: 'task_started',
+        timestamp: '2026-05-06T12:00:03.000Z',
+        mode: 'interactive',
+        profile: 'default',
+        endpoint: 'http://127.0.0.1:1234/v1',
+        model: 'local-model',
+        providerName: 'Relay',
+        contextBudgetTokens: 0,
+        maxModelSteps: 0,
+        maxToolCalls: 0,
+        tools: [],
+        task: 'second task should be visible',
+      },
+      4,
+    );
+
+    const plain = renderLayout(
+      {
+        run,
+        objectiveInput: '',
+        coreMode: 'thinking',
+        nowMs: 4000,
+        historyScrollOffset: 0,
+      },
+      100,
+      32,
+    )
+      .map((line) => stripAnsi(line))
+      .join('\n');
+
+    const summaryIndex = plain.indexOf('Final summary');
+    const nextPromptIndex = plain.indexOf('user  second task should be visible');
+
+    expect(run.terminal).toBe('running');
+    expect(summaryIndex).toBeGreaterThanOrEqual(0);
+    expect(nextPromptIndex).toBeGreaterThan(summaryIndex);
+    expect(plain.match(/Final summary/g)).toHaveLength(1);
   });
 
   it('clamps transcript scroll offsets at the oldest and newest entries', () => {
