@@ -442,6 +442,20 @@ export function validateConfig(config: ProjectConfig): ValidationError[] {
       }
     }
   }
+  validateSameNumericValue(errors, [
+    ['contextBudgetTokens', config.contextBudgetTokens],
+    ['context_budget_tokens', config.context_budget_tokens],
+    ['contextWindowTokens', config.contextWindowTokens],
+    ['context_window_tokens', config.context_window_tokens],
+  ]);
+  if (config.agent !== undefined && typeof config.agent === 'object') {
+    validateSameNumericValue(errors, [
+      ['agent.contextBudgetTokens', config.agent.contextBudgetTokens],
+      ['agent.context_budget_tokens', config.agent.context_budget_tokens],
+      ['agent.contextWindowTokens', config.agent.contextWindowTokens],
+      ['agent.context_window_tokens', config.agent.context_window_tokens],
+    ]);
+  }
   return errors;
 }
 
@@ -451,6 +465,20 @@ function validatePositiveInteger(errors: ValidationError[], path: string, value:
     errors.push({ path, message: 'must be a number' });
   } else if (value <= 0 || !Number.isInteger(value)) {
     errors.push({ path, message: 'must be a positive integer' });
+  }
+}
+
+function validateSameNumericValue(errors: ValidationError[], entries: Array<[string, number | undefined]>): void {
+  const first = entries.find((entry): entry is [string, number] => entry[1] !== undefined);
+  if (!first) return;
+  const [canonicalPath, canonicalValue] = first;
+  for (const [aliasPath, aliasValue] of entries.slice(1)) {
+    if (aliasValue !== undefined && aliasValue !== canonicalValue) {
+      errors.push({
+        path: aliasPath,
+        message: `conflicts with ${canonicalPath}; use one value for context budget/window tokens`,
+      });
+    }
   }
 }
 
@@ -467,7 +495,10 @@ function configFromParsedToml(parsed: Record<string, unknown>): ProjectConfig {
   if (parsed.base_url !== undefined) config.baseUrl = parsed.base_url as string;
   if (agent !== undefined) config.agent = agent;
   if (parsed.contextBudgetTokens !== undefined) config.contextBudgetTokens = parsed.contextBudgetTokens as number;
-  if (parsed.context_budget_tokens !== undefined) config.contextBudgetTokens = parsed.context_budget_tokens as number;
+  if (parsed.context_budget_tokens !== undefined) {
+    config.context_budget_tokens = parsed.context_budget_tokens as number;
+    config.contextBudgetTokens = parsed.context_budget_tokens as number;
+  }
   if (agent?.contextBudgetTokens !== undefined) config.contextBudgetTokens = agent.contextBudgetTokens;
   if (agent?.context_budget_tokens !== undefined) config.contextBudgetTokens = agent.context_budget_tokens;
   if (parsed.maxModelSteps !== undefined) config.maxModelSteps = parsed.maxModelSteps as number;
@@ -479,9 +510,18 @@ function configFromParsedToml(parsed: Record<string, unknown>): ProjectConfig {
   if (agent?.maxToolCalls !== undefined) config.maxToolCalls = agent.maxToolCalls;
   if (agent?.max_tool_calls !== undefined) config.maxToolCalls = agent.max_tool_calls;
   if (parsed.contextWindowTokens !== undefined) config.contextWindowTokens = parsed.contextWindowTokens as number;
-  if (parsed.context_window_tokens !== undefined) config.contextWindowTokens = parsed.context_window_tokens as number;
+  if (parsed.context_window_tokens !== undefined) {
+    config.context_window_tokens = parsed.context_window_tokens as number;
+    config.contextWindowTokens = parsed.context_window_tokens as number;
+  }
   if (agent?.contextWindowTokens !== undefined) config.contextWindowTokens = agent.contextWindowTokens;
   if (agent?.context_window_tokens !== undefined) config.contextWindowTokens = agent.context_window_tokens;
+  if (config.contextWindowTokens === undefined && config.contextBudgetTokens !== undefined) {
+    config.contextWindowTokens = config.contextBudgetTokens;
+  }
+  if (config.contextBudgetTokens === undefined && config.contextWindowTokens !== undefined) {
+    config.contextBudgetTokens = config.contextWindowTokens;
+  }
   if (parsed.reservedOutputTokens !== undefined) config.reservedOutputTokens = parsed.reservedOutputTokens as number;
   if (parsed.reserved_output_tokens !== undefined)
     config.reservedOutputTokens = parsed.reserved_output_tokens as number;
@@ -520,7 +560,10 @@ function applyEnvOverrides(config: ProjectConfig, errors: ValidationError[]): Pr
   const contextBudgetTokens = readEnvPositiveInteger('SYNAX_CONTEXT_BUDGET_TOKENS', errors);
   const maxModelSteps = readEnvPositiveInteger('SYNAX_MAX_MODEL_STEPS', errors);
   const maxToolCalls = readEnvPositiveInteger('SYNAX_MAX_TOOL_CALLS', errors);
-  if (contextBudgetTokens !== undefined) overrides.contextBudgetTokens = contextBudgetTokens;
+  if (contextBudgetTokens !== undefined) {
+    overrides.contextBudgetTokens = contextBudgetTokens;
+    overrides.contextWindowTokens = contextBudgetTokens;
+  }
   if (maxModelSteps !== undefined) overrides.maxModelSteps = maxModelSteps;
   if (maxToolCalls !== undefined) overrides.maxToolCalls = maxToolCalls;
   return { ...config, ...overrides };

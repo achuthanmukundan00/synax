@@ -47,6 +47,7 @@ const DEFAULT_SETTINGS: ContextBudgetSettings = {
 
 const MAX_SUMMARY_CHARS = 8000;
 const MAX_STRUCTURED_SECTION_CHARS = 2000;
+const CHARS_PER_ESTIMATED_TOKEN = 3;
 
 // ---------------------------------------------------------------------------
 // Settings resolution
@@ -74,12 +75,12 @@ export function resolveContextBudgetSettings(config: {
 }
 
 // ---------------------------------------------------------------------------
-// Token estimation (chars / 3.5)
+// Token estimation (chars / 3)
 // ---------------------------------------------------------------------------
 
 export function estimateTokens(text: string): number {
   if (!text) return 0;
-  return Math.ceil(text.length / 3.5);
+  return Math.ceil(text.length / CHARS_PER_ESTIMATED_TOKEN);
 }
 
 export function estimateMessageTokens(message: AgentMessage): number {
@@ -402,7 +403,7 @@ function compactMessagesAggressive(
 
 export function truncateForTokenBudget(text: string, maxTokens: number): { text: string; truncated: boolean } {
   if (estimateTokens(text) <= maxTokens) return { text, truncated: false };
-  const maxChars = Math.max(1, Math.floor(maxTokens * 3.5));
+  const maxChars = Math.max(1, Math.floor(maxTokens * CHARS_PER_ESTIMATED_TOKEN));
   return { text: text.slice(0, maxChars), truncated: true };
 }
 
@@ -525,14 +526,55 @@ function adjustKeepFromForToolIntegrity(messages: AgentMessage[], initialKeepFro
   }
 
   // P5: If we hit the iteration limit, the tool-pair graph is too tangled
-  // to resolve safely. Return 0 (keep everything) rather than risk orphan
-  // tool calls or tool results.
-  if (iterations >= maxIterations) return 0;
+  // to resolve safely. Fall back to the least aggressive position that still
+  // preserves some compaction rather than silently keeping everything.
+  if (iterations >= maxIterations) return findProtocolSafeCompactionBoundary(messages, initialKeepFrom);
 
   // If we expanded so far that nothing will be compacted, return 0
   if (keepFrom <= 0) return 0;
 
+  if (!isProtocolSafeCompactionBoundary(messages, keepFrom)) {
+    return findProtocolSafeCompactionBoundary(messages, keepFrom);
+  }
+
   return keepFrom;
+}
+
+function findProtocolSafeCompactionBoundary(messages: AgentMessage[], preferredKeepFrom: number): number {
+  const start = Math.max(1, Math.min(preferredKeepFrom, messages.length));
+  for (let keepFrom = start; keepFrom <= messages.length; keepFrom += 1) {
+    if (isProtocolSafeCompactionBoundary(messages, keepFrom)) return keepFrom;
+  }
+  return messages.length;
+}
+
+function isProtocolSafeCompactionBoundary(messages: AgentMessage[], keepFrom: number): boolean {
+  const kept = messages.slice(keepFrom);
+  const keptToolCallIds = new Set<string>();
+  const keptToolResultIds = new Set<string>();
+  const keptXmlCallIds = new Set<string>();
+  const keptXmlResultIds = new Set<string>();
+
+  for (const message of kept) {
+    for (const id of extractToolCallIds(message)) keptToolCallIds.add(id);
+    if (message.role === 'tool' && typeof message.tool_call_id === 'string') {
+      keptToolResultIds.add(message.tool_call_id);
+    }
+    for (const id of extractXmlToolCallIds(message)) keptXmlCallIds.add(id);
+    for (const id of extractXmlToolResultIds(message)) keptXmlResultIds.add(id);
+  }
+
+  for (const id of keptToolResultIds) {
+    if (!keptToolCallIds.has(id)) return false;
+  }
+  for (const id of keptToolCallIds) {
+    if (!keptToolResultIds.has(id)) return false;
+  }
+  for (const id of keptXmlResultIds) {
+    if (!keptXmlCallIds.has(id)) return false;
+  }
+
+  return true;
 }
 
 function extractXmlToolResultIds(message: AgentMessage): string[] {
