@@ -85,6 +85,6 @@ git diff
 
 For run/task safety artifacts, Synax records:
 
-- pre-run checkpoints under `.synax/checkpoints/`
+- lazy checkpoints under `.synax/checkpoints/` once the first allowed mutation is about to run
 - bounded run logs under `.synax/runs/`
 - last Synax-owned edit metadata at `.synax/last-edit.json` for `/undo-last-edit`

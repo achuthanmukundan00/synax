@@ -80,7 +80,7 @@ export async function runAgentTask(options: RunTaskOptions): Promise<RunTaskRepo
 
   const client = createOpenAICompatibleClient(providerConfig);
   const dirtyTree = await detectDirtyTree(options.repoRoot);
-  let checkpoint = options.recordRunArtifacts === false ? null : await createSafetyCheckpoint(options.repoRoot);
+  let checkpoint: { id: string; statusPath: string; diffPath: string } | null = null;
   const tools = buildModelFacingTools({ bashEnabled: projectConfig.config.tools?.bash?.enabled, mode }).map(
     (tool) => tool.name,
   );
@@ -108,8 +108,14 @@ export async function runAgentTask(options: RunTaskOptions): Promise<RunTaskRepo
     onActivity: options.onActivity,
     onEvent: options.onEvent,
     approvePatch: () => (options.yes ? 'accept' : 'reject'),
-    ensureCheckpoint: async () => checkpoint ?? (checkpoint = await createSafetyCheckpoint(options.repoRoot)),
+    ensureCheckpoint: async () => {
+      if (options.recordRunArtifacts === false) return null;
+      if (checkpoint) return checkpoint;
+      checkpoint = await createSafetyCheckpoint(options.repoRoot);
+      return checkpoint;
+    },
   });
+  const checkpointRecord = checkpoint as { id: string; statusPath: string; diffPath: string } | null;
 
   let verification: VerificationResult = { state: 'skipped', stdout: '', stderr: '' };
   if (turn.changedFiles.length > 0) {
@@ -154,11 +160,7 @@ export async function runAgentTask(options: RunTaskOptions): Promise<RunTaskRepo
     terminalState = 'failed_verification';
   }
   const finalAnswer = repairedTurn === turn ? turn.finalAnswer : repairedTurn.finalAnswer || turn.finalAnswer;
-  const filesRead = unique(
-    turn.conversation.inspectionLedger
-      .getInspectedRanges()
-      .map((range) => range.path),
-  );
+  const filesRead = unique(turn.conversation.inspectionLedger.getInspectedRanges().map((range) => range.path));
   options.onEvent?.({
     type: 'assistant_message',
     timestamp: eventNow(),
@@ -188,7 +190,7 @@ export async function runAgentTask(options: RunTaskOptions): Promise<RunTaskRepo
       terminalState,
       changedFiles: unique([...turn.changedFiles, ...repairedTurn.changedFiles]),
       filesRead,
-      checkpointId: checkpoint?.id,
+      checkpointId: checkpointRecord?.id,
       verification: verification.state,
       error: turn.error,
     });
@@ -206,12 +208,18 @@ export async function runAgentTask(options: RunTaskOptions): Promise<RunTaskRepo
     toolCalls: [...turn.toolCalls, ...(repairedTurn === turn ? [] : repairedTurn.toolCalls)],
     messages: [
       ...(dirtyTree.dirty ? ['working tree was dirty before run', ...dirtyTree.summary] : []),
-      ...(checkpoint ? [`checkpoint: ${checkpoint.id}`] : []),
+      ...(checkpointRecord ? [`checkpoint: ${checkpointRecord.id}`] : []),
     ],
     contextBudgetTokens: projectConfig.config.contextBudgetTokens ?? 131072,
     maxModelSteps: projectConfig.config.maxModelSteps ?? 32,
     maxToolCalls: projectConfig.config.maxToolCalls ?? 96,
-    checkpoint: checkpoint ? { id: checkpoint.id, statusPath: checkpoint.statusPath, diffPath: checkpoint.diffPath } : null,
+    checkpoint: checkpointRecord
+      ? {
+          id: checkpointRecord.id,
+          statusPath: checkpointRecord.statusPath,
+          diffPath: checkpointRecord.diffPath,
+        }
+      : null,
     error: turn.error,
   };
 }

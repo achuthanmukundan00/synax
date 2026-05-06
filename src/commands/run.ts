@@ -2,6 +2,8 @@ import { Command } from 'commander';
 import { runAgentTask } from '../agent/run-task';
 import { normalizeRunMode, type RunMode } from '../agent/task-policy';
 
+const MAX_REPAIR_ATTEMPTS = 10;
+
 export function runCommand(program: Command): void {
   const run = new Command('run');
   run
@@ -12,52 +14,77 @@ export function runCommand(program: Command): void {
     .option('-y, --yes', 'Accept previewed replacement edits in non-interactive runs')
     .option('--verification-profile <profile>', 'Verification profile: quick or full')
     .option('--repair-attempts <count>', 'Bounded verification repair attempts')
-    .action(async (options: {
-      task?: string;
-      plan?: string;
-      mode?: RunMode;
-      yes?: boolean;
-      verificationProfile?: 'quick' | 'full';
-      repairAttempts?: string;
-    }) => {
-      if (options.task) {
-        const activities: string[] = [];
-        try {
-          const report = await runAgentTask({
-            repoRoot: process.cwd(),
-            task: options.task,
-            mode: normalizeRunMode(options.mode),
-            yes: options.yes,
-            verificationProfile: options.verificationProfile,
-            repairAttempts: options.repairAttempts ? Number.parseInt(options.repairAttempts, 10) : undefined,
-            onActivity(activity) {
-              activities.push(activity.message);
-              console.log(`[synax] ${activity.kind}: ${activity.message}`);
-            },
-            onEvent(event) {
-              if (event.type === 'patch_preview') {
-                console.log(`[synax] patch preview: ${event.path}`);
-                console.log(event.diff || '(no changes)');
-              }
-            },
-          });
-          printReport(report, activities);
-          if (report.terminalState !== 'completed') {
+    .action(
+      async (options: {
+        task?: string;
+        plan?: string;
+        mode?: RunMode;
+        yes?: boolean;
+        verificationProfile?: 'quick' | 'full';
+        repairAttempts?: string;
+      }) => {
+        if (options.task) {
+          const activities: string[] = [];
+          try {
+            const repairAttemptsResult = parseRepairAttempts(options.repairAttempts);
+            if (!repairAttemptsResult.ok) {
+              console.error(`[synax] ${repairAttemptsResult.error}`);
+              process.exitCode = 1;
+              return;
+            }
+            const report = await runAgentTask({
+              repoRoot: process.cwd(),
+              task: options.task,
+              mode: normalizeRunMode(options.mode),
+              yes: options.yes,
+              verificationProfile: options.verificationProfile,
+              repairAttempts: repairAttemptsResult.value,
+              onActivity(activity) {
+                activities.push(activity.message);
+                console.log(`[synax] ${activity.kind}: ${activity.message}`);
+              },
+              onEvent(event) {
+                if (event.type === 'patch_preview') {
+                  console.log(`[synax] patch preview: ${event.path}`);
+                  console.log(event.diff || '(no changes)');
+                }
+              },
+            });
+            printReport(report, activities);
+            if (report.terminalState !== 'completed') {
+              process.exitCode = 1;
+            }
+          } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            console.error(`[synax] Provider or task failure: ${message}`);
             process.exitCode = 1;
           }
-        } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
-          console.error(`[synax] Provider or task failure: ${message}`);
-          process.exitCode = 1;
+        } else if (options.plan) {
+          console.log(`[synax] Run plan received: "${options.plan}"`);
+          console.log('[synax] Placeholder: Plan execution engine not yet implemented.');
+        } else {
+          console.log('[synax] Run command initialized. Use --task or --plan to specify work.');
         }
-      } else if (options.plan) {
-        console.log(`[synax] Run plan received: "${options.plan}"`);
-        console.log('[synax] Placeholder: Plan execution engine not yet implemented.');
-      } else {
-        console.log('[synax] Run command initialized. Use --task or --plan to specify work.');
-      }
-    });
+      },
+    );
   program.addCommand(run);
+}
+
+function parseRepairAttempts(
+  value: string | undefined,
+): { ok: true; value: number | undefined } | { ok: false; error: string } {
+  if (value === undefined) return { ok: true, value: undefined };
+  if (!/^\d+$/.test(value)) {
+    return { ok: false, error: '--repair-attempts must be a non-negative integer' };
+  }
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isSafeInteger(parsed)) {
+    return { ok: false, error: '--repair-attempts is too large to be safe' };
+  }
+  if (parsed > MAX_REPAIR_ATTEMPTS) {
+    return { ok: false, error: `--repair-attempts must be between 0 and ${MAX_REPAIR_ATTEMPTS}` };
+  }
+  return { ok: true, value: parsed };
 }
 
 function printReport(report: Awaited<ReturnType<typeof runAgentTask>>, activities: string[]): void {
@@ -74,7 +101,9 @@ function printReport(report: Awaited<ReturnType<typeof runAgentTask>>, activitie
   console.log(`Context budget: ${report.contextBudgetTokens}`);
   console.log(`Changed files: ${report.filesChanged.length > 0 ? report.filesChanged.join(', ') : 'none'}`);
   console.log(`Files read this run: ${report.filesRead.length > 0 ? report.filesRead.join(', ') : 'none'}`);
-  console.log(`Latest checkpoint: ${report.checkpoint ? `${report.checkpoint.id} (${report.checkpoint.statusPath})` : 'none'}`);
+  console.log(
+    `Latest checkpoint: ${report.checkpoint ? `${report.checkpoint.id} (${report.checkpoint.statusPath})` : 'none'}`,
+  );
   console.log(`Verification: ${report.verification.state}`);
   if (report.verification.state === 'failed' && report.verification.command) {
     console.log(`Verification command: ${report.verification.command}`);
