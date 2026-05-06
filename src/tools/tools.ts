@@ -142,7 +142,11 @@ const readFileRangeTool: ToolDefinition<ReadFileRangeInput> = {
         text: line,
       }));
       const actualEndLine = selected.length > 0 ? selected[selected.length - 1].lineNumber : startLine;
-      context.ledger.recordFileRange(target.path, startLine, actualEndLine);
+      const joined = selected.map((line) => line.text).join('\n');
+      context.ledger.recordFileRead(target.path, startLine, actualEndLine, joined);
+      for (const line of selected) {
+        context.ledger.recordFileRead(target.path, line.lineNumber, line.lineNumber, line.text);
+      }
 
       return success('read_file_range', {
         path: target.path,
@@ -200,7 +204,7 @@ const searchTextTool: ToolDefinition<SearchTextInput> = {
 
           const lineNumber = index + 1;
           matches.push({ path: file, lineNumber, line: lines[index] });
-          context.ledger.recordFileRange(file, lineNumber, lineNumber);
+          context.ledger.recordFileRead(file, lineNumber, lineNumber, lines[index]);
           if (matches.length >= maxMatches) {
             return success('search_text', { query: input.query, matches, truncated: true });
           }
