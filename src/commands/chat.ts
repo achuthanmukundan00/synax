@@ -517,7 +517,9 @@ function printBanner(repoRoot: string, model: string): void {
   console.log('-----');
   console.log(`Repo: ${repoRoot}`);
   console.log(`Model: ${model}`);
-  console.log('Commands: /help /settings /tools /budget /test-provider /inspect /verify /verify quick /verify full /diff /undo-last-edit /clear /status /exit');
+  console.log(
+    'Commands: /help /settings /tools /budget /test-provider /inspect /verify /verify quick /verify full /diff /undo-last-edit /clear /status /exit',
+  );
   console.log('');
 }
 

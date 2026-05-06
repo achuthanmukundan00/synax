@@ -223,7 +223,9 @@ async function printDocsImpact(targetPath: string, opts: InspectCommandOptions):
     docsChanged,
     behaviorChanged,
     needsDocsUpdate: needsDocs,
-    message: needsDocs ? 'Public behavior likely changed without docs updates.' : 'No obvious docs-impact mismatch detected.',
+    message: needsDocs
+      ? 'Public behavior likely changed without docs updates.'
+      : 'No obvious docs-impact mismatch detected.',
   };
   if (opts.json) {
     console.log(JSON.stringify(output, null, 2));
