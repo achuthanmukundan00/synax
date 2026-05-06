@@ -228,6 +228,9 @@ describe('interactive layout visual agreements', () => {
         ],
         overflowCount: 0,
       },
+      filesChangedThisRun: ['src/tui/layout.ts', 'src/__tests__/interactive-tui.test.ts'],
+      workingTreeClean: true,
+      toolInvocationCount: 3,
       verification: {
         ...createInitialRunStateSnapshot(0).verification,
         state: 'passed' as const,
@@ -290,7 +293,12 @@ describe('interactive layout visual agreements', () => {
     );
     const plain = lines.map((line) => stripAnsi(line)).join('\n');
 
-    expect(plain).toContain('model');
+    expect(plain).not.toContain('model qwen');
+    expect(plain).not.toContain('tools 3');
+    expect(plain).not.toContain('files 2');
+    expect(plain).toContain('Model      qwen');
+    expect(plain).toContain('Provider   Relay');
+    expect(plain).toContain('Context');
     expect(plain).toContain('Inspecting TUI runtime state and renderer boundaries.');
     expect(plain).not.toContain('hidden chain');
     expect(plain).toContain('read  src/tui/layout.ts:1-120');
@@ -303,7 +311,9 @@ describe('interactive layout visual agreements', () => {
     expect(plain).toContain('verify  passed');
     expect(plain).toContain('Final summary');
     expect(plain).toContain('objective: Improve TUI observability');
-    expect(plain).toContain('files changed: 2');
+    expect(plain).toContain('Changed this run: 2 files');
+    expect(plain).toContain('Working tree: clean');
+    expect(plain).toContain('tool invocations: 3');
     expect(plain).toContain('commands run: npm test src/__tests__/interactive-tui.test.ts');
   });
 
@@ -441,7 +451,7 @@ describe('interactive layout visual agreements', () => {
     expect(smallPlain).not.toMatch(/[·•◎╱╲◆━×]/);
   });
 
-  it('renders a closed input dock and shows model output', () => {
+  it('renders a closed input dock with cwd and branch instead of model id', () => {
     const run = createInitialRunStateSnapshot(0);
     run.lastModelOutput = 'The renderer now keeps the prompt inside a proper box.';
     const lines = renderLayout(
@@ -452,6 +462,8 @@ describe('interactive layout visual agreements', () => {
         nowMs: 2000,
         lastModelOutput: 'raw parser chatter should stay out of default TUI',
         modelLabel: 'Qwen3.6-35B-A3B-UD-IQ3_XXS.gguf',
+        cwdLabel: '~/workspace/git/.worktrees/synax-tui',
+        gitBranch: 'dev/tui',
       },
       90,
       28,
@@ -461,10 +473,72 @@ describe('interactive layout visual agreements', () => {
 
     expect(plain).not.toContain('Directive');
     expect(plain).toContain('The renderer now keeps the prompt inside a proper box.');
-    expect(dock[0]).toMatch(/^┌─+ Qwen3\.6-35B-A3B-UD-IQ3_XXS\.gguf ┐\s*$/);
+    expect(plain).not.toContain('Qwen3.6-35B-A3B-UD-IQ3_XXS.gguf');
+    expect(dock[0]).toMatch(/^┌─+ ~\/workspace\/git\/\.worktrees\/synax-tui  dev\/tui ┐\s*$/);
     expect(dock[1]).toMatch(/^│ Implement fixed-footprint reactor core rendering\s+│\s*$/);
     expect(dock[2]).toMatch(/^│\s+│\s*$/);
     expect(dock[3]).toMatch(/^└ Enter submit \| Ctrl\+C exit \| \/help ─+┘\s*$/);
+  });
+
+  it('renders unloaded core as inert and still', () => {
+    const first = renderDottedCore({ mode: 'unloaded', frame: 1, width: 20, height: 7 });
+    const second = renderDottedCore({ mode: 'unloaded', frame: 20, width: 20, height: 7 });
+
+    expect(first.map(stripAnsi)).toEqual(second.map(stripAnsi));
+    expect(first.join('')).not.toContain('\u001b[38;2;');
+
+    const run = createInitialRunStateSnapshot(0);
+    const plain = renderLayout(
+      {
+        run,
+        objectiveInput: '',
+        coreMode: 'unloaded',
+        nowMs: 2000,
+      },
+      120,
+      28,
+    )
+      .map((line) => stripAnsi(line))
+      .join('\n');
+
+    expect(plain).toContain('Core unloaded');
+  });
+
+  it('summarizes diff stat command output into semantic file change rows', () => {
+    const run = {
+      ...createInitialRunStateSnapshot(0),
+      debugHistory: [
+        {
+          atMs: 1,
+          kind: 'tool_call' as const,
+          summary: 'bash call',
+          detail: 'bash\n{"command":"git diff --stat"}',
+        },
+        {
+          atMs: 2,
+          kind: 'tool_result' as const,
+          summary: 'bash ok',
+          detail:
+            'exit code: 0\nsrc/__tests__/interactive-tui.test.ts | 46 +++++++++++++++++++++\nsrc/tui/layout.ts | 12 ++++++',
+        },
+      ],
+    };
+
+    const plain = renderLayout(
+      {
+        run,
+        objectiveInput: '',
+        coreMode: 'thinking',
+        nowMs: 2000,
+      },
+      100,
+      30,
+    )
+      .map((line) => stripAnsi(line))
+      .join('\n');
+
+    expect(plain).toContain('changed  src/__tests__/interactive-tui.test.ts  +46 lines');
+    expect(plain).not.toContain('+++++++++++++++++++++');
   });
 
   it('surfaces compact operational summaries with the latest model reply', () => {

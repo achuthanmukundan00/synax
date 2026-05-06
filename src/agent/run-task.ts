@@ -5,6 +5,8 @@ import { runVerification, type VerificationResult } from './verification';
 import { eventNow, type AgentEvent } from './events';
 import { createSafetyCheckpoint, detectDirtyTree, writeRunLog } from './safety';
 import { normalizeRunMode, type RunMode } from './task-policy';
+import { execFile } from 'child_process';
+import { promisify } from 'util';
 
 export interface RunTaskOptions {
   repoRoot: string;
@@ -35,6 +37,8 @@ export interface RunTaskReport {
   checkpoint?: { id: string; statusPath: string; diffPath: string } | null;
   error?: string;
 }
+
+const execFileAsync = promisify(execFile);
 
 export async function runAgentTask(options: RunTaskOptions): Promise<RunTaskReport> {
   const projectConfig = loadProjectConfig(options.repoRoot);
@@ -80,6 +84,7 @@ export async function runAgentTask(options: RunTaskOptions): Promise<RunTaskRepo
 
   const client = createOpenAICompatibleClient(providerConfig);
   const dirtyTree = await detectDirtyTree(options.repoRoot);
+  const beforeHead = await gitHead(options.repoRoot);
   let checkpoint: { id: string; statusPath: string; diffPath: string } | null = null;
   const tools = buildModelFacingTools({ bashEnabled: projectConfig.config.tools?.bash?.enabled, mode }).map(
     (tool) => tool.name,
@@ -91,7 +96,9 @@ export async function runAgentTask(options: RunTaskOptions): Promise<RunTaskRepo
     profile: projectConfig.config.activeProfile ?? 'default',
     endpoint: providerConfig.baseUrl,
     model: providerConfig.model,
+    providerName: providerNameFromPreset(projectConfig.config.provider?.preset),
     contextBudgetTokens: projectConfig.config.contextBudgetTokens ?? 131072,
+    contextWindowTokens: projectConfig.config.contextWindowTokens ?? projectConfig.config.contextBudgetTokens ?? 131072,
     maxModelSteps: projectConfig.config.maxModelSteps ?? 64,
     maxToolCalls: projectConfig.config.maxToolCalls ?? 192,
     tools,
@@ -115,6 +122,17 @@ export async function runAgentTask(options: RunTaskOptions): Promise<RunTaskRepo
     },
     onActivity: options.onActivity,
     onEvent: options.onEvent,
+    onBudget(snapshot) {
+      options.onEvent?.({
+        type: 'context_budget_updated',
+        timestamp: eventNow(),
+        estimatedInputTokens: snapshot.estimatedInputTokens,
+        inputLimit: snapshot.inputLimit,
+        contextWindowTokens: snapshot.contextWindowTokens,
+        reservedOutputTokens: snapshot.reservedOutputTokens,
+        step: snapshot.step,
+      });
+    },
     approvePatch: () => (options.yes ? 'accept' : 'reject'),
     ensureCheckpoint: async () => {
       if (options.recordRunArtifacts === false) return null;
@@ -269,6 +287,13 @@ export async function runAgentTask(options: RunTaskOptions): Promise<RunTaskRepo
   }
   const finalAnswer = repairedTurn === turn ? turn.finalAnswer : repairedTurn.finalAnswer || turn.finalAnswer;
   const filesRead = unique(turn.conversation.inspectionLedger.getInspectedRanges().map((range) => range.path));
+  const afterHead = await gitHead(options.repoRoot);
+  const changedByCommit =
+    beforeHead && afterHead && beforeHead !== afterHead
+      ? await changedFilesBetween(options.repoRoot, beforeHead, afterHead)
+      : [];
+  const filesChanged = unique([...turn.changedFiles, ...repairedTurn.changedFiles, ...changedByCommit]);
+  const finalDirtyTree = await detectDirtyTree(options.repoRoot);
   options.onEvent?.({
     type: 'assistant_message',
     timestamp: eventNow(),
@@ -282,7 +307,8 @@ export async function runAgentTask(options: RunTaskOptions): Promise<RunTaskRepo
     maxToolCalls: projectConfig.config.maxToolCalls ?? 192,
     modelSteps: turn.steps + (repairedTurn === turn ? 0 : repairedTurn.steps),
     maxModelSteps: projectConfig.config.maxModelSteps ?? 64,
-    changedFiles: unique([...turn.changedFiles, ...repairedTurn.changedFiles]),
+    changedFiles: filesChanged,
+    workingTreeClean: !finalDirtyTree.dirty,
     verification:
       verification.state === 'passed'
         ? `${verification.command ?? 'verification'} passed`
@@ -296,7 +322,7 @@ export async function runAgentTask(options: RunTaskOptions): Promise<RunTaskRepo
       task: options.task,
       mode,
       terminalState,
-      changedFiles: unique([...turn.changedFiles, ...repairedTurn.changedFiles]),
+      changedFiles: filesChanged,
       filesRead,
       checkpointId: checkpointRecord?.id,
       verification: verification.state,
@@ -309,7 +335,7 @@ export async function runAgentTask(options: RunTaskOptions): Promise<RunTaskRepo
     mode,
     terminalState,
     finalAnswer,
-    filesChanged: unique([...turn.changedFiles, ...repairedTurn.changedFiles]),
+    filesChanged,
     filesRead,
     verification,
     steps: turn.steps + (repairedTurn === turn ? 0 : repairedTurn.steps),
@@ -334,4 +360,37 @@ export async function runAgentTask(options: RunTaskOptions): Promise<RunTaskRepo
 
 function unique(values: string[]): string[] {
   return [...new Set(values)];
+}
+
+function providerNameFromPreset(preset: string | undefined): string | undefined {
+  if (!preset) return undefined;
+  if (preset === 'relay-local' || preset === 'relay-cloudflare') return 'Relay';
+  if (preset === 'openai') return 'OpenAI';
+  if (preset === 'anthropic') return 'Anthropic';
+  if (preset === 'openrouter') return 'OpenRouter';
+  return undefined;
+}
+
+async function gitHead(repoRoot: string): Promise<string | null> {
+  try {
+    const { stdout } = await execFileAsync('git', ['rev-parse', 'HEAD'], { cwd: repoRoot, maxBuffer: 64 * 1024 });
+    return stdout.trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+async function changedFilesBetween(repoRoot: string, before: string, after: string): Promise<string[]> {
+  try {
+    const { stdout } = await execFileAsync('git', ['diff', '--name-only', `${before}..${after}`], {
+      cwd: repoRoot,
+      maxBuffer: 256 * 1024,
+    });
+    return stdout
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean);
+  } catch {
+    return [];
+  }
 }

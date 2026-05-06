@@ -2,6 +2,7 @@ import type { RunStateSnapshot } from '../agent/tui-state';
 import type { CoreMode } from './ai-core';
 import { CORE_HEIGHT, CORE_WIDTH, modeColor, renderAiCore, renderDottedCore } from './ai-core';
 import { renderTranscript, toolsUsed } from './transcript';
+import pkg from '../../package.json';
 
 const DIRECTIVE_PANEL_HEIGHT = 4;
 
@@ -17,6 +18,10 @@ export interface InteractiveViewState {
   modelLabel?: string;
   /** Active endpoint for state display. */
   endpointLabel?: string;
+  /** Working directory displayed in the input dock. */
+  cwdLabel?: string;
+  /** Current git branch displayed in the input dock when available. */
+  gitBranch?: string;
   /** Number of wrapped history lines hidden below the viewport. */
   historyScrollOffset?: number;
 }
@@ -24,7 +29,7 @@ export interface InteractiveViewState {
 export function renderLayout(state: InteractiveViewState, cols: number, rows: number): string[] {
   const width = Math.max(40, cols);
   const height = Math.max(14, rows);
-  const panel = renderDirectivePanel(state.objectiveInput, width, state.modelLabel);
+  const panel = renderDirectivePanel(state.objectiveInput, width, locationLabel(state.cwdLabel, state.gitBranch));
   const bodyHeight = Math.max(1, height - panel.length);
   const lines = Array.from({ length: bodyHeight }, () => '');
   const hasTranscript =
@@ -79,16 +84,10 @@ function renderWelcome(lines: string[], width: number, bodyHeight: number, state
 
 function renderHeader(lines: string[], width: number, state: InteractiveViewState): void {
   const run = state.run;
-  const toolCount = toolsUsed(run).length;
-  const fileCount = run.changes.items.length + run.changes.overflowCount;
-  const model = state.modelLabel || modelFromProvider(run.providerLabel);
   const header = [
-    '\u001b[1;37mSynax\u001b[0m',
+    `\u001b[1;37mSynax v${pkg.version}\u001b[0m`,
     `${modeColor(state.coreMode)}${phaseLabel(run.phase)}\u001b[0m`,
     elapsed(run.startedAtMs, state.nowMs),
-    `model ${model || 'local'}`,
-    `tools ${toolCount}`,
-    `files ${fileCount}`,
   ].join('  ');
   put(lines, 0, 2, clip(header, width - 4), width);
 }
@@ -131,7 +130,7 @@ function renderOperationalSurface(
 }
 
 function operationalSideWidth(width: number, bodyHeight: number): number {
-  return width >= 110 && bodyHeight >= 18 ? 24 : 0;
+  return width >= 110 && bodyHeight >= 18 ? 36 : 0;
 }
 
 function operationalTranscriptWidth(width: number, bodyHeight: number): number {
@@ -142,7 +141,13 @@ function operationalTranscriptWidth(width: number, bodyHeight: number): number {
 function renderCompactCore(mode: CoreMode, nowMs: number, width: number, height: number): string[] {
   return [
     dim('core'),
-    ...renderDottedCore({ mode, frame: Math.floor((nowMs / 1000) * 8), width, height, unicode: true }),
+    ...renderDottedCore({
+      mode,
+      frame: mode === 'unloaded' ? 0 : Math.floor((nowMs / 1000) * 8),
+      width,
+      height,
+      unicode: true,
+    }),
   ];
 }
 
@@ -248,13 +253,6 @@ function wrapText(text: string, maxWidth: number): string[] {
   return lines.length > 0 ? lines : [''];
 }
 
-/** Truncate a model ID for display in the input panel border label. */
-function truncateModelLabel(model: string, maxLen: number): string {
-  if (model.length <= maxLen) return model;
-  // Keep as much of the identifier as we can, strip from the end.
-  return `${model.slice(0, maxLen - 1)}…`;
-}
-
 function activitySummary(run: RunStateSnapshot): string {
   const latest = run.timeline[run.timeline.length - 1]?.summary;
   if (run.phase === 'completed' && run.statusNote) return completionActivity(run.statusNote);
@@ -264,13 +262,13 @@ function activitySummary(run: RunStateSnapshot): string {
   return `${phaseLabel(run.phase)} · ${run.objective.nextCheckpoint}`;
 }
 
-function renderDirectivePanel(objectiveInput: string, width: number, modelLabel?: string): string[] {
+function renderDirectivePanel(objectiveInput: string, width: number, metadataLabel?: string): string[] {
   const inner = Math.max(8, width - 2);
   const wrapped = wrapText(objectiveInput.trim() || 'Awaiting objective', inner - 2);
   const body = wrapped.slice(0, 2);
   while (body.length < 2) body.push('');
 
-  const label = modelLabel ? ` ${truncateModelLabel(modelLabel, Math.max(4, inner - 6))} ` : '';
+  const label = metadataLabel ? ` ${truncateMiddle(metadataLabel, Math.max(4, inner - 6))} ` : '';
   const topFill = Math.max(0, inner - label.length);
   const helpText = 'Enter submit | Ctrl+C exit | /help';
   const bottomFill = Math.max(0, inner - helpText.length - 2);
@@ -285,16 +283,24 @@ function renderDirectivePanel(objectiveInput: string, width: number, modelLabel?
 
 function putTelemetry(lines: string[], y: number, x: number, width: number, state: InteractiveViewState): void {
   const run = state.run;
+  const model = state.modelLabel || run.modelId || modelFromProvider(run.providerLabel);
+  const provider = providerLabel(state.endpointLabel, run);
+  const context = contextLine(run);
   const items = [
     `${modeColor(state.coreMode)}${phaseLabel(run.phase)}\u001b[0m`,
+    run.coreLoaded ? 'Core loaded' : 'Core unloaded',
+    alignedRow('Model', model ? truncateMiddle(model, Math.max(8, width - 12)) : 'unknown'),
+    alignedRow('Provider', provider),
+    alignedRow('Context', context),
+    contextUsageBar(run, Math.max(8, width - 2)),
+    alignedRow('Thinking', run.thinkingEnabled === undefined ? 'unknown' : run.thinkingEnabled ? 'on' : 'off'),
+    alignedRow('Session $', run.sessionSpendLabel ?? 'unknown'),
+    toolsUsed(run).length > 0 ? alignedRow('tools used', toolsUsed(run).join(', ')) : '',
     activitySummary(run),
-    `Objective · ${run.objective.label || 'Awaiting objective'}`,
-    `Next · ${run.objective.nextCheckpoint}`,
-    verificationLine(run),
-    changeLine(run),
   ];
 
   for (let i = 0; i < items.length; i += 1) {
+    if (!items[i]) continue;
     put(lines, y + i, x, clip(items[i], width), x + width);
   }
 }
@@ -320,22 +326,6 @@ function phaseLabel(phase: string): string {
   return `${phase.slice(0, 1).toUpperCase()}${phase.slice(1)}`;
 }
 
-function verificationLine(run: RunStateSnapshot): string {
-  if (run.verification.state === 'passed') return 'Verification · passed';
-  if (run.verification.state === 'running') return `Verification · ${run.verification.currentCheckLabel || 'running'}`;
-  if (run.verification.state === 'failed') return `Verification · failed`;
-  if (run.verification.state === 'skipped') return `Verification · skipped`;
-  return `Verification · ${run.verification.summary || 'planned'}`;
-}
-
-function changeLine(run: RunStateSnapshot): string {
-  const count = run.changes.items.length + run.changes.overflowCount;
-  if (count === 0) return 'Changes · none';
-  const latest = run.changes.items[run.changes.items.length - 1];
-  if (!latest) return `Changes · ${count}`;
-  return `Changes · ${count} · ${latest.op} ${latest.path}`;
-}
-
 function completionActivity(statusNote: string): string {
   const trimmed = statusNote.replace(/^completed:\s*/i, '');
   return `Completed · ${trimmed}`;
@@ -351,6 +341,58 @@ function compactStatus(statusNote: string): string {
 function modelFromProvider(provider: string): string {
   const [model] = provider.split(' @ ');
   return model === 'n/a' ? '' : model;
+}
+
+function providerLabel(endpointLabel: string | undefined, run: RunStateSnapshot): string {
+  if (run.providerName && run.providerName !== 'unknown') return run.providerName;
+  const endpoint = endpointLabel || run.providerLabel.split(' @ ')[1] || '';
+  if (/(?:^|\/\/)(?:127\.0\.0\.1|localhost)(?::|\/|$)/i.test(endpoint)) return 'Relay';
+  if (/api\.openai\.com/i.test(endpoint)) return 'OpenAI';
+  if (/anthropic/i.test(endpoint)) return 'Anthropic';
+  if (/openrouter/i.test(endpoint)) return 'OpenRouter';
+  return endpoint ? 'OpenAI-compatible' : 'unknown';
+}
+
+function contextLine(run: RunStateSnapshot): string {
+  if (run.contextUsedTokens === undefined && run.contextWindowTokens === undefined) return 'unknown';
+  return `${formatTokens(run.contextUsedTokens ?? 0)} / ${formatTokens(run.contextWindowTokens ?? 0)}`;
+}
+
+function contextUsageBar(run: RunStateSnapshot, width: number): string {
+  const total = run.contextWindowTokens;
+  const used = run.contextUsedTokens ?? 0;
+  if (!total || total <= 0) return dim('[────────────] unknown');
+  const barWidth = Math.min(14, Math.max(8, width - 2));
+  const ratio = Math.max(0, Math.min(1, used / total));
+  const filled = Math.round(ratio * barWidth);
+  const glyph = ratio > 0.85 ? '▓' : '█';
+  return dim(`[${glyph.repeat(filled)}${'░'.repeat(barWidth - filled)}]`);
+}
+
+function alignedRow(label: string, value: string): string {
+  return `${label.padEnd(10, ' ')} ${value}`;
+}
+
+function formatTokens(tokens: number): string {
+  if (tokens >= 1_000_000) return `${(tokens / 1_000_000).toFixed(1)}M`;
+  if (tokens >= 1000) return `${(tokens / 1000).toFixed(tokens >= 10_000 ? 1 : 1)}k`;
+  return String(tokens);
+}
+
+function truncateMiddle(value: string, maxLen: number): string {
+  if (value.length <= maxLen) return value;
+  if (maxLen <= 4) return value.slice(0, maxLen);
+  const keep = maxLen - 1;
+  const head = Math.ceil(keep * 0.62);
+  const tail = Math.max(1, keep - head);
+  return `${value.slice(0, head)}…${value.slice(value.length - tail)}`;
+}
+
+function locationLabel(cwdLabel?: string, gitBranch?: string): string | undefined {
+  if (!cwdLabel && !gitBranch) return undefined;
+  if (!gitBranch) return cwdLabel;
+  if (!cwdLabel) return gitBranch;
+  return `${cwdLabel}  ${gitBranch}`;
 }
 
 function dim(text: string): string {

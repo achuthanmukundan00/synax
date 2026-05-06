@@ -24,7 +24,7 @@ import { join } from 'path';
 import { writeFileSync, mkdirSync } from 'fs';
 import { discoverConfigPath, normalizeProviderConfig as normalizeProvider } from '../config/project';
 import type { NormalizedProviderConfig } from '../llm/types';
-import { readLatestCheckpoint, undoLastEdit } from '../agent/safety';
+import { detectDirtyTree, readLatestCheckpoint, undoLastEdit } from '../agent/safety';
 import { runInteractiveTui } from '../tui/interactive-tui';
 
 const execFileAsync = promisify(execFile);
@@ -41,7 +41,9 @@ export interface ChatTurnReport {
   terminalState: AgentTerminalState;
   finalAnswer: string;
   changedFiles: string[];
+  workingTreeClean?: boolean;
   steps: number;
+  toolCalls?: number;
   error?: string;
 }
 
@@ -100,6 +102,7 @@ export function createChatSession(options: {
     async handleUserMessage(message: string): Promise<ChatTurnReport> {
       const providerConfig = normalizeProviderConfig(options.config.provider ?? {});
       const client = createOpenAICompatibleClient(providerConfig);
+      const beforeHead = await gitHead(options.repoRoot);
       const result = await runAgentTurn({
         repoRoot: options.repoRoot,
         task: message,
@@ -138,17 +141,34 @@ export function createChatSession(options: {
         },
         onEvent: (event) => eventSink?.(event),
         onBudget(snapshot) {
+          eventSink?.({
+            type: 'context_budget_updated',
+            timestamp: new Date().toISOString(),
+            estimatedInputTokens: snapshot.estimatedInputTokens,
+            inputLimit: snapshot.inputLimit,
+            contextWindowTokens: snapshot.contextWindowTokens,
+            reservedOutputTokens: snapshot.reservedOutputTokens,
+            step: snapshot.step,
+          });
           if (!options.tui) {
             console.log(formatBudgetSnapshot(snapshot));
           }
         },
       });
+      const afterHead = await gitHead(options.repoRoot);
+      const changedByCommit =
+        beforeHead && afterHead && beforeHead !== afterHead
+          ? await changedFilesBetween(options.repoRoot, beforeHead, afterHead)
+          : [];
+      const finalDirtyTree = await detectDirtyTree(options.repoRoot);
       saveContextState(options.repoRoot, result.conversation);
       return {
         terminalState: result.terminalState,
         finalAnswer: result.finalAnswer,
-        changedFiles: result.changedFiles,
+        changedFiles: unique([...result.changedFiles, ...changedByCommit]),
+        workingTreeClean: !finalDirtyTree.dirty,
         steps: result.steps,
+        toolCalls: result.toolCalls.length,
         error: result.error,
       };
     },
@@ -264,6 +284,8 @@ export function chatCommand(program: Command): void {
       let lastModelOutput = '';
 
       const modelLabel = provider.model.trim() || undefined;
+      const cwdLabel = compactHome(repoRoot);
+      const gitBranch = await currentGitBranch(repoRoot);
 
       const session = createChatSession({
         repoRoot,
@@ -299,6 +321,10 @@ export function chatCommand(program: Command): void {
           lastModelOutput: () => lastModelOutput,
           modelLabel,
           endpointLabel: provider.baseUrl || undefined,
+          providerName: providerNameFromPreset(loaded.config.provider?.preset),
+          cwdLabel,
+          gitBranch,
+          contextWindowTokens: loaded.config.contextWindowTokens ?? loaded.config.contextBudgetTokens,
         });
         return;
       }
@@ -444,6 +470,60 @@ function printTurnReport(report: ChatTurnReport): void {
   if (report.changedFiles.length > 0) {
     console.log(`[synax] changed files: ${unique(report.changedFiles).join(', ')}`);
   }
+}
+
+async function currentGitBranch(repoRoot: string): Promise<string | undefined> {
+  try {
+    const { stdout } = await execFileAsync('git', ['branch', '--show-current'], {
+      cwd: repoRoot,
+      maxBuffer: 64 * 1024,
+    });
+    return stdout.trim() || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+async function gitHead(repoRoot: string): Promise<string | null> {
+  try {
+    const { stdout } = await execFileAsync('git', ['rev-parse', 'HEAD'], {
+      cwd: repoRoot,
+      maxBuffer: 64 * 1024,
+    });
+    return stdout.trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+async function changedFilesBetween(repoRoot: string, before: string, after: string): Promise<string[]> {
+  try {
+    const { stdout } = await execFileAsync('git', ['diff', '--name-only', `${before}..${after}`], {
+      cwd: repoRoot,
+      maxBuffer: 256 * 1024,
+    });
+    return stdout
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+function compactHome(path: string): string {
+  const home = process.env.HOME;
+  if (!home) return path;
+  return path === home ? '~' : path.startsWith(`${home}/`) ? `~/${path.slice(home.length + 1)}` : path;
+}
+
+function providerNameFromPreset(preset: string | undefined): string | undefined {
+  if (!preset) return undefined;
+  if (preset === 'relay-local' || preset === 'relay-cloudflare') return 'Relay';
+  if (preset === 'openai') return 'OpenAI';
+  if (preset === 'anthropic') return 'Anthropic';
+  if (preset === 'openrouter') return 'OpenRouter';
+  return undefined;
 }
 
 export async function runInlinePasteChat(
