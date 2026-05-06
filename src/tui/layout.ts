@@ -67,7 +67,7 @@ export function maxHistoryScrollOffset(state: InteractiveViewState, _cols: numbe
   const bodyHeight = Math.max(1, height - INPUT_DOCK_HEIGHT);
   // Account for header + separator + transcript label = 5 lines of chrome
   const visibleRows = Math.max(1, bodyHeight - 5);
-  const estimatedLines = state.run.debugHistory.length * 3;
+  const estimatedLines = state.run.debugHistory.length * 4;
   return Math.max(0, estimatedLines - visibleRows);
 }
 
