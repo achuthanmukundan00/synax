@@ -1,3 +1,4 @@
+import { execSync } from 'child_process';
 import { existsSync, mkdirSync, rmSync, writeFileSync, readFileSync } from 'fs';
 import { join } from 'path';
 
@@ -63,5 +64,37 @@ describe('runAgentTask patch approval', () => {
     });
     expect(readFileSync(join(TMP, 'a.txt'), 'utf-8')).toBe('hello\n');
     expect(events.map((event) => event.type)).toContain('patch_preview');
+  });
+
+  it('reports context ledger and checkpoint details for bounded runs', async () => {
+    execSync('git init', { cwd: TMP, stdio: 'ignore' });
+    execSync('git config user.email "synax@example.test"', { cwd: TMP, stdio: 'ignore' });
+    execSync('git config user.name "Synax Test"', { cwd: TMP, stdio: 'ignore' });
+    writeFileSync(join(TMP, 'README.md'), '# Synax\n', 'utf-8');
+    responses = [{ toolCalls: [{ id: 'call_1', name: 'read', arguments: { path: 'README.md' } }] }, { content: 'done' }];
+
+    const report = await runAgentTask({
+      repoRoot: TMP,
+      task: 'Inspect README.md',
+    });
+
+    expect(report.mode).toBe('patch');
+    expect(report.filesRead).toEqual(['README.md']);
+    expect(report.checkpoint?.id).toBeTruthy();
+    expect(report.contextBudgetTokens).toBeGreaterThan(0);
+    expect(report.maxModelSteps).toBeGreaterThan(0);
+    expect(report.maxToolCalls).toBeGreaterThan(0);
+  });
+
+  it('blocks broad self-development prompts before calling the model', async () => {
+    const report = await runAgentTask({
+      repoRoot: TMP,
+      task: 'rewrite the TUI',
+    });
+
+    expect(report.terminalState).toBe('blocked');
+    expect(report.error).toContain('Task is too broad');
+    expect(report.finalAnswer).toContain('Suggested first step');
+    expect(requests).toHaveLength(0);
   });
 });
