@@ -269,11 +269,11 @@ function summarizeOutput(output: string): string {
 }
 
 function parseCommandResult(detail: string): { exitCode?: number; duration?: string; output: string } {
-  const exitMatch = /exit(?:\s+code)?:\s*(-?\d+)/i.exec(detail);
+  const exitMatch = /exit(?:\s+code|Code)?:\s*(-?\d+)/i.exec(detail);
   const durationMatch = /duration:\s*([^\n]+)/i.exec(detail);
   const output = detail
     .split('\n')
-    .filter((line) => !/^exit(?:\s+code)?:/i.test(line.trim()) && !/^duration:/i.test(line.trim()))
+    .filter((line) => !/^exit(?:\s+code|Code)?:/i.test(line.trim()) && !/^duration:/i.test(line.trim()))
     .join('\n');
   return {
     exitCode: exitMatch ? Number(exitMatch[1]) : undefined,
