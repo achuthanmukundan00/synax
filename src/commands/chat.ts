@@ -329,8 +329,6 @@ export function chatCommand(program: Command): void {
         return;
       }
 
-      console.log('[synax] Chat initialized');
-      printBanner(repoRoot, provider.model);
       if (useTui) {
         await runInteractiveTui(session, {
           blockedMessage: !provider.model.trim() ? 'provider.model is required' : undefined,
@@ -345,6 +343,8 @@ export function chatCommand(program: Command): void {
         return;
       }
 
+      console.log('[synax] Chat initialized');
+      printBanner(repoRoot, provider.model);
       try {
         if (input.isTTY) {
           await runInlinePasteChat(session);
