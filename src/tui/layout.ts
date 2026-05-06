@@ -56,14 +56,13 @@ export function renderLayout(state: InteractiveViewState, cols: number, rows: nu
   return clipped.map((line) => pad(clip(line, width), width));
 }
 
-export function maxHistoryScrollOffset(state: InteractiveViewState, cols: number, rows: number): number {
-  const width = Math.max(40, cols);
+export function maxHistoryScrollOffset(state: InteractiveViewState, _cols: number, rows: number): number {
   const height = Math.max(14, rows);
   const bodyHeight = Math.max(1, height - DIRECTIVE_PANEL_HEIGHT);
-  const transcriptWidth = operationalTranscriptWidth(width, bodyHeight);
-  const transcriptLines = renderTranscript(state, Math.max(24, transcriptWidth));
-  const visibleRows = Math.max(1, bodyHeight - 3);
-  return Math.max(0, transcriptLines.length - visibleRows);
+  // Account for header + separator + transcript label = 5 lines of chrome
+  const visibleRows = Math.max(1, bodyHeight - 5);
+  const estimatedLines = state.run.debugHistory.length * 3;
+  return Math.max(0, estimatedLines - visibleRows);
 }
 
 function renderWelcome(lines: string[], width: number, bodyHeight: number, state: InteractiveViewState): void {
@@ -105,7 +104,7 @@ function renderOperationalSurface(
   const sideWidth = operationalSideWidth(width, bodyHeight);
   const transcriptWidth = operationalTranscriptWidth(width, bodyHeight);
   const transcriptLines = renderTranscript(state, Math.max(24, transcriptWidth));
-  const visibleRows = Math.max(1, bodyHeight - 3);
+  const visibleRows = Math.max(1, bodyHeight - 5);
   const maxScrollOffset = Math.max(0, transcriptLines.length - visibleRows);
   const scrollOffset = Math.min(maxScrollOffset, Math.max(0, state.historyScrollOffset ?? 0));
   const visibleTranscript = transcriptLines.slice(
@@ -113,9 +112,13 @@ function renderOperationalSurface(
     Math.max(0, transcriptLines.length - scrollOffset),
   );
 
+  // Transcript header with a thin rule beneath it.
   put(lines, 2, 2, dim('Transcript'), width);
-  for (let i = 0; i < visibleTranscript.length && 3 + i < bodyHeight; i += 1) {
-    put(lines, 3 + i, 2, clip(visibleTranscript[i], transcriptWidth), width);
+  put(lines, 3, 2, dim(separatorBar(Math.min(transcriptWidth, 40))), width);
+
+  const lineOffset = 4;
+  for (let i = 0; i < visibleTranscript.length && lineOffset + i < bodyHeight; i += 1) {
+    put(lines, lineOffset + i, 2, clip(visibleTranscript[i], transcriptWidth), width);
   }
 
   if (showSideCore) {
@@ -269,7 +272,7 @@ function renderDirectivePanel(objectiveInput: string, width: number, modelLabel?
 
   const label = modelLabel ? ` ${truncateModelLabel(modelLabel, Math.max(4, inner - 6))} ` : '';
   const topFill = Math.max(0, inner - label.length);
-  const helpText = 'Enter submit | Ctrl+C exit | Ctrl+L redraw | /help';
+  const helpText = 'Enter submit | Ctrl+C exit | /help';
   const bottomFill = Math.max(0, inner - helpText.length - 2);
 
   return [
@@ -352,4 +355,8 @@ function modelFromProvider(provider: string): string {
 
 function dim(text: string): string {
   return `\u001b[90m${text}\u001b[0m`;
+}
+
+function separatorBar(width: number): string {
+  return '─'.repeat(Math.max(1, width));
 }
