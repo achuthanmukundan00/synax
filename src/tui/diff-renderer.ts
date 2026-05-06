@@ -36,6 +36,7 @@ export class DiffRenderer {
 }
 
 function clip(line: string, width: number): string {
+  // eslint-disable-next-line no-control-regex
   const visible = line.replace(/\u001b\[[0-9;]*m/g, '');
   if (visible.length <= width) return line;
 
@@ -43,6 +44,7 @@ function clip(line: string, width: number): string {
   let out = '';
   for (let i = 0; i < line.length; i += 1) {
     if (line[i] === '\u001b') {
+      // eslint-disable-next-line no-control-regex
       const match = /\u001b\[[0-9;]*m/.exec(line.slice(i));
       if (match) {
         out += match[0];

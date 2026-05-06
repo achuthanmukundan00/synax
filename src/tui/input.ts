@@ -1,5 +1,5 @@
 export interface ParsedInput {
-  type: 'text' | 'submit' | 'backspace' | 'exit' | 'redraw' | 'scroll_history_up' | 'scroll_history_down';
+  type: 'text' | 'submit' | 'backspace' | 'exit' | 'scroll_history_up' | 'scroll_history_down';
   value?: string;
 }
 
@@ -28,10 +28,6 @@ export function parseInputChunk(chunk: string): ParsedInput[] {
       events.push({ type: 'exit' });
       continue;
     }
-    if (char === '\u000c') {
-      events.push({ type: 'redraw' });
-      continue;
-    }
     if (char === '\u007f' || char === '\b') {
       events.push({ type: 'backspace' });
       continue;
@@ -46,6 +42,7 @@ export function parseInputChunk(chunk: string): ParsedInput[] {
 }
 
 function parseSgrMouse(chunk: string, index: number): { button: number; length: number } | undefined {
+  // eslint-disable-next-line no-control-regex
   const match = /^\x1b\[<(\d+);\d+;\d+[mM]/.exec(chunk.slice(index));
   if (!match) return undefined;
   return { button: Number(match[1]), length: match[0].length };

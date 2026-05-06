@@ -1093,15 +1093,31 @@ function summarizeBashOutput(out: Record<string, unknown>): Record<string, unkno
   const exitCode = typeof out.exitCode === 'number' ? out.exitCode : undefined;
   const safetyWarnings = Array.isArray(out.safetyWarnings) ? out.safetyWarnings.filter(isString) : undefined;
 
+  const totalBytes = Buffer.byteLength(stdout, 'utf-8') + Buffer.byteLength(stderr, 'utf-8');
+
+  // Keep full output for small results so the model can inspect details.
+  const FULL_OUTPUT_THRESHOLD = 2048;
+  if (totalBytes <= FULL_OUTPUT_THRESHOLD) {
+    return {
+      command,
+      exitCode,
+      stdout: stdout.trim() || undefined,
+      stderr: stderr.trim() || undefined,
+      safetyWarnings,
+    };
+  }
+
+  // Large outputs get a compact summary with previews.
   return {
     command,
     exitCode,
     stdoutBytes: Buffer.byteLength(stdout, 'utf-8'),
     stderrBytes: Buffer.byteLength(stderr, 'utf-8'),
-    stdoutPreview: clipped(stdout.trim(), 300) || undefined,
+    stdoutPreview: clipped(stdout.trim(), 400) || undefined,
     stderrPreview: clipped(stderr.trim(), 300) || undefined,
     safetyWarnings,
     _compacted: true,
+    _compactionReason: `output exceeds ${FULL_OUTPUT_THRESHOLD} bytes`,
   };
 }
 
