@@ -108,6 +108,7 @@ describe('tool registry and inspection tools', () => {
     });
     expect(ledger.hasInspectedFile('src.ts')).toBe(true);
     expect(ledger.hasInspectedRange('src.ts', 2, 3)).toBe(true);
+    expect(ledger.hasReadText('src.ts', 'two\nthree')).toBe(true);
   });
 
   it('reads the repository root as a bounded non-recursive directory listing', async () => {
