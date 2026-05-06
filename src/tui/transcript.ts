@@ -147,10 +147,11 @@ function renderCommandEvent(
   if (isGitCommand(command)) tags.push(dim('git'));
   block.push(`  ${tags.join(' · ')}`);
 
-  const output = summarizeCommandDisplay(command, parsed.output).trim();
+  const output = colorizeCommandOutput(command, summarizeCommandDisplay(command, parsed.output)).trim();
   const showOutput = output.length > 0 && (parsed.exitCode !== 0 || output.length < 420);
   if (showOutput) {
-    for (const line of wrapText(output, Math.max(20, width - 4)).slice(0, parsed.exitCode === 0 ? 2 : 4)) {
+    const maxOutputLines = isGitDiffCommand(command) ? 6 : parsed.exitCode === 0 ? 2 : 4;
+    for (const line of wrapText(output, Math.max(20, width - 4)).slice(0, maxOutputLines)) {
       const clipped = clip(line, width - 4);
       block.push(`  ${hasAnsi(clipped) ? clipped : dim(clipped)}`);
     }
@@ -312,6 +313,33 @@ function summarizeCommandDisplay(command: string, output: string): string {
   return rows.length > 0 ? rows.join('\n') : output;
 }
 
+function colorizeCommandOutput(command: string, output: string): string {
+  const trimmedCommand = command.trim();
+  if (!isGitDiffCommand(trimmedCommand) || /^git\s+diff\b.*--stat\b/.test(trimmedCommand) || hasAnsi(output)) {
+    return output;
+  }
+
+  return output
+    .split('\n')
+    .map((line) => colorizeGitDiffLine(line))
+    .join('\n');
+}
+
+function colorizeGitDiffLine(line: string): string {
+  if (line.startsWith('+') && !line.startsWith('+++')) return green(line);
+  if (line.startsWith('-') && !line.startsWith('---')) return red(line);
+  if (line.startsWith('@@')) return cyan(line);
+  if (
+    line.startsWith('diff --git') ||
+    line.startsWith('index ') ||
+    line.startsWith('--- ') ||
+    line.startsWith('+++ ')
+  ) {
+    return bold(line);
+  }
+  return line;
+}
+
 function parseDiffStatLine(line: string): string | undefined {
   const trimmed = line.trim();
   if (!trimmed || /^\d+\s+files?\s+changed/.test(trimmed)) return undefined;
@@ -343,6 +371,10 @@ function shouldShowFinalSummary(run: RunStateSnapshot): boolean {
 
 function isGitCommand(command: string): boolean {
   return /^git(?:\s|$)/.test(command.trim());
+}
+
+function isGitDiffCommand(command: string): boolean {
+  return /^git\s+diff\b/.test(command.trim());
 }
 
 function completionActivity(statusNote: string): string {
@@ -450,6 +482,14 @@ function bold(text: string): string {
 
 function red(text: string): string {
   return `\u001b[31m${text}\u001b[0m`;
+}
+
+function green(text: string): string {
+  return `\u001b[32m${text}\u001b[0m`;
+}
+
+function cyan(text: string): string {
+  return `\u001b[36m${text}\u001b[0m`;
 }
 
 function dim(text: string): string {
