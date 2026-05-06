@@ -165,6 +165,7 @@ describe('LLM client — basic chat', () => {
     ]);
     expect(body.tool_choice).toBe('auto');
     expect(resp.toolCalls).toEqual([{ id: 'call_read', name: 'read_file_range', arguments: { path: 'src/a.ts' } }]);
+    expect(resp.toolCallFormat).toBe('openai');
   });
 
   test('rejects malformed OpenAI-compatible tool call arguments', async () => {
@@ -198,6 +199,109 @@ describe('LLM client — basic chat', () => {
     await expect(client.chat({ messages: [{ role: 'user', content: 'read a file' }] })).rejects.toThrow(
       'model emitted malformed tool call output: OpenAI tool call arguments contained malformed JSON',
     );
+  });
+
+  test('auto-selects Qwen parser for Qwen3.6 models and parses XML-style tool calls', async () => {
+    srv.close();
+    srv = await createMockServer((_req, res) => {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(
+        JSON.stringify({
+          model: 'Qwen3.6-35B-A3B',
+          choices: [
+            {
+              message: {
+                role: 'assistant',
+                content:
+                  'Let me inspect that.\n<tool_call>\n<function=read>\n<parameter=path>README.md</parameter>\n</function>\n</tool_call>',
+              },
+              finish_reason: 'tool_calls',
+            },
+          ],
+        }),
+      );
+    });
+    const client = createOpenAICompatibleClient(makeConfig({ baseUrl: getServerUrl(srv), model: 'Qwen3.6-35B-A3B' }));
+    const resp = await client.chat({ messages: [{ role: 'user', content: 'inspect' }] });
+    expect(resp.toolCalls).toEqual([{ id: 'call_1', name: 'read', arguments: { path: 'README.md' } }]);
+    expect(resp.toolCallFormat).toBe('content_xml');
+  });
+
+  test('accepts markdown final answers that mention <tool_call> literally', async () => {
+    srv.close();
+    srv = await createMockServer((_req, res) => {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(
+        JSON.stringify({
+          model: 'test-model',
+          choices: [
+            {
+              message: {
+                role: 'assistant',
+                content: '## Report\nThis references `src/llm/tool-calls.ts` and literal `<tool_call>` text.',
+              },
+              finish_reason: 'stop',
+            },
+          ],
+        }),
+      );
+    });
+    const client = createOpenAICompatibleClient(makeConfig({ baseUrl: getServerUrl(srv) }));
+    const resp = await client.chat({ messages: [{ role: 'user', content: 'report' }] });
+    expect(resp.toolCalls).toEqual([]);
+    expect(resp.toolCallFormat).toBe('none');
+  });
+
+  test('accepts fenced code blocks containing literal <tool_call> text', async () => {
+    srv.close();
+    srv = await createMockServer((_req, res) => {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(
+        JSON.stringify({
+          model: 'test-model',
+          choices: [
+            {
+              message: {
+                role: 'assistant',
+                content: '```md\nUse <tool_call> ... </tool_call> only as documentation.\n```',
+              },
+              finish_reason: 'stop',
+            },
+          ],
+        }),
+      );
+    });
+    const client = createOpenAICompatibleClient(makeConfig({ baseUrl: getServerUrl(srv) }));
+    const resp = await client.chat({ messages: [{ role: 'user', content: 'report' }] });
+    expect(resp.toolCalls).toEqual([]);
+    expect(resp.toolCallFormat).toBe('none');
+  });
+
+  test('supports explicit qwen3_xml parser override alias', async () => {
+    srv.close();
+    srv = await createMockServer((_req, res) => {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(
+        JSON.stringify({
+          model: 'custom-model',
+          choices: [
+            {
+              message: {
+                role: 'assistant',
+                content: '<tool_call><function=read><parameter=path>README.md</parameter></function></tool_call>',
+              },
+              finish_reason: 'tool_calls',
+            },
+          ],
+        }),
+      );
+    });
+    const client = createOpenAICompatibleClient(
+      makeConfig({ baseUrl: getServerUrl(srv), model: 'custom-model', tool_call_parser: 'qwen3_xml' }),
+    );
+    const resp = await client.chat({ messages: [{ role: 'user', content: 'inspect' }] });
+    expect(resp.toolCalls).toEqual([{ id: 'call_1', name: 'read', arguments: { path: 'README.md' } }]);
+    expect(resp.toolCallFormat).toBe('content_xml');
   });
 });
 

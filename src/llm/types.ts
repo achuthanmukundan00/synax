@@ -78,6 +78,7 @@ export interface NormalizedProviderConfig {
   kind: string;
   baseUrl: string;
   model: string;
+  toolCallParser?: string;
   apiKey?: string;
   customHeaders?: Record<string, string>;
   timeoutMs?: number;
@@ -87,6 +88,7 @@ export interface ChatResponse {
   content: string;
   model: string;
   finishReason: string;
+  toolCallFormat?: 'openai' | 'content_xml' | 'none';
   toolCalls: Array<{
     id: string;
     name: string;
