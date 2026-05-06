@@ -5,6 +5,7 @@ export interface ParsedToolCall {
 }
 
 export type ToolCallParseFailureReason = 'malformed-json';
+export type ToolCallParserMode = 'generic' | 'qwen3_coder' | 'qwen3_xml';
 
 export type ToolCallParseResult =
   | {
@@ -56,21 +57,29 @@ export function parseToolCallsFromContent(content: string): ParsedToolCall[] {
 export function parseToolCallsFromContentResult(content: string): ToolCallParseResult {
   const sanitized = sanitizeReasoningTags(content);
   const calls: ParsedToolCall[] = [];
+  const toolCallBlocks = extractToolCallBlocksWithRanges(sanitized);
+  let sawMalformedToolCallBlock = false;
 
-  for (const block of extractToolCallBlocks(sanitized)) {
-    const parsed = parseJsonObjectResult(block);
+  for (const toolCallBlock of toolCallBlocks) {
+    const parsed = parseJsonObjectResult(toolCallBlock.block);
     if (!parsed.ok) {
-      return {
-        ok: false,
-        reason: 'malformed-json',
-        message: 'tool_call block contained malformed JSON',
-      };
+      sawMalformedToolCallBlock = true;
+      continue;
     }
     const parsedCalls = toolCallsFromUnknownResult(parsed.value, calls.length);
     if (!parsedCalls.ok) {
-      return { ok: false, reason: 'malformed-json', message: parsedCalls.message };
+      sawMalformedToolCallBlock = true;
+      continue;
     }
     calls.push(...parsedCalls.calls);
+  }
+
+  if (sawMalformedToolCallBlock && calls.length === 0 && isStandaloneToolCallResponse(sanitized, toolCallBlocks)) {
+    return {
+      ok: false,
+      reason: 'malformed-json',
+      message: 'tool_call block contained malformed JSON',
+    };
   }
 
   for (const block of extractJsonCodeBlocks(sanitized)) {
@@ -95,6 +104,22 @@ export function parseToolCallsFromContentResult(content: string): ToolCallParseR
   }
 
   return { ok: true, source: calls.length > 0 ? 'content' : 'none', calls };
+}
+
+export function parseQwenToolCallsFromContentResult(content: string): ToolCallParseResult {
+  const sanitized = sanitizeReasoningTags(content);
+  const matches = [...sanitized.matchAll(/<tool_call>\s*([\s\S]*?)\s*<\/tool_call>/gi)];
+  if (matches.length === 0) return { ok: true, source: 'none', calls: [] };
+
+  const calls: ParsedToolCall[] = [];
+  for (const [index, match] of matches.entries()) {
+    const block = match[1] ?? '';
+    const parsed = parseQwenToolBlock(block, index);
+    if (!parsed.ok) return parsed;
+    calls.push(parsed.call);
+  }
+
+  return { ok: true, source: 'content', calls };
 }
 
 export function sanitizeReasoningTags(content: string): string {
@@ -146,8 +171,24 @@ export function toAnthropicToolDefinition(tool: {
   };
 }
 
-function extractToolCallBlocks(content: string): string[] {
-  return [...content.matchAll(/<tool_call>\s*([\s\S]*?)\s*<\/tool_call>/g)].map((match) => match[1]);
+function extractToolCallBlocksWithRanges(content: string): Array<{ block: string; start: number; end: number }> {
+  return [...content.matchAll(/<tool_call>\s*([\s\S]*?)\s*<\/tool_call>/g)].map((match) => ({
+    block: match[1] ?? '',
+    start: match.index ?? 0,
+    end: (match.index ?? 0) + match[0].length,
+  }));
+}
+
+function isStandaloneToolCallResponse(content: string, blocks: Array<{ start: number; end: number }>): boolean {
+  if (blocks.length === 0) return false;
+  let cursor = 0;
+  for (const block of blocks) {
+    if (content.slice(cursor, block.start).trim().length > 0) {
+      return false;
+    }
+    cursor = block.end;
+  }
+  return content.slice(cursor).trim().length === 0;
 }
 
 function extractJsonCodeBlocks(content: string): string[] {
@@ -226,4 +267,53 @@ function parseArgumentsResult(value: unknown, label: string): ParsedArguments {
     return { ok: true, arguments: value as Record<string, unknown> };
   }
   return { ok: false, message: `${label} must be a JSON object` };
+}
+
+function parseQwenToolBlock(
+  block: string,
+  index: number,
+): { ok: true; call: ParsedToolCall } | { ok: false; reason: 'malformed-json'; message: string } {
+  const fnMatch = block.match(/<function=([^>\s]+)>\s*([\s\S]*?)\s*<\/function>/i);
+  if (!fnMatch || !fnMatch[1]) {
+    return { ok: false, reason: 'malformed-json', message: 'Qwen tool_call block missing <function=...> wrapper' };
+  }
+  const argsBody = fnMatch[2] ?? '';
+  const args: Record<string, unknown> = {};
+  const paramRegex = /<parameter=([^>\s]+)>\s*([\s\S]*?)\s*<\/parameter>/gi;
+  let foundAnyParam = false;
+
+  for (const param of argsBody.matchAll(paramRegex)) {
+    const key = param[1]?.trim();
+    if (!key) continue;
+    foundAnyParam = true;
+    args[key] = parseQwenArgumentValue((param[2] ?? '').trim());
+  }
+
+  if (!foundAnyParam && argsBody.trim().length > 0) {
+    return { ok: false, reason: 'malformed-json', message: 'Qwen tool_call block contained malformed <parameter=...>' };
+  }
+
+  return {
+    ok: true,
+    call: {
+      id: `call_${index + 1}`,
+      name: fnMatch[1].trim(),
+      arguments: args,
+    },
+  };
+}
+
+function parseQwenArgumentValue(raw: string): unknown {
+  if (raw === 'true') return true;
+  if (raw === 'false') return false;
+  if (raw === 'null') return null;
+  if (/^-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?$/.test(raw)) return Number(raw);
+  if ((raw.startsWith('{') && raw.endsWith('}')) || (raw.startsWith('[') && raw.endsWith(']'))) {
+    try {
+      return JSON.parse(raw);
+    } catch {
+      return raw;
+    }
+  }
+  return raw;
 }
