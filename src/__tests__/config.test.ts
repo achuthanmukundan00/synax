@@ -188,18 +188,18 @@ describe('loadProjectConfig', () => {
     const configPath = join(TMP, '.synax.toml');
     writeFileSync(
       configPath,
-      ['[tools]', 'exposed = ["read","write","edit","bash","git"]', 'shell = "zsh"'].join('\n'),
+      ['[tools]', 'exposed = ["read","write","edit","bash"]', 'shell = "zsh"'].join('\n'),
     );
     const result = loadProjectConfig(TMP);
     expect(result.errors).toHaveLength(0);
-    expect(result.config.tools?.exposed).toEqual(['read', 'write', 'edit', 'bash', 'git']);
+    expect(result.config.tools?.exposed).toEqual(['read', 'write', 'edit', 'bash']);
   });
 
-  it('defaults bash tool execution to disabled', () => {
+  it('defaults bash tool execution to enabled', () => {
     const result = loadProjectConfig(TMP);
     expect(result.errors).toHaveLength(0);
-    expect(result.config.tools?.exposed).toEqual(['read', 'write', 'edit', 'git']);
-    expect(result.config.tools?.bash?.enabled).toBe(false);
+    expect(result.config.tools?.exposed).toEqual(['read', 'write', 'edit', 'bash']);
+    expect(result.config.tools?.bash?.enabled).toBe(true);
   });
 
   it('supports explicitly enabling bash in tool config', () => {

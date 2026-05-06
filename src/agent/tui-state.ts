@@ -1,7 +1,15 @@
 import type { AgentEvent, TerminalState } from './events';
 
 export type TuiSeverity = 'S0' | 'S1' | 'S2' | 'S3';
-export type TuiPhase = 'idle' | 'thinking' | 'tool_execution' | 'verifying' | 'completed' | 'blocked' | 'error';
+export type TuiPhase =
+  | 'idle'
+  | 'thinking'
+  | 'tool_execution'
+  | 'verifying'
+  | 'completed'
+  | 'blocked'
+  | 'budget_exhausted'
+  | 'error';
 export type ChangeOp = 'create' | 'edit' | 'delete' | 'read' | 'test' | 'other';
 
 export interface TuiTimelineItem {
@@ -49,6 +57,8 @@ export interface RunStateSnapshot {
   terminalIssue?: string;
   severity: TuiSeverity;
   terminal: 'running' | 'completed' | 'failed' | 'blocked';
+  /** Last model response text for observability in the TUI overlay. */
+  lastModelOutput: string;
 }
 
 const MAX_TIMELINE_ITEMS = 10;
@@ -85,6 +95,21 @@ export function createInitialRunStateSnapshot(nowMs: number): RunStateSnapshot {
     riskLine: 'risk: nominal',
     severity: 'S0',
     terminal: 'running',
+    lastModelOutput: '',
+  };
+}
+
+export function createBlockedRunStateSnapshot(nowMs: number, label: string, nextCheckpoint: string): RunStateSnapshot {
+  return {
+    ...createInitialRunStateSnapshot(nowMs),
+    phase: 'blocked',
+    objective: {
+      label,
+      currentPhase: 'blocked',
+      nextCheckpoint,
+    },
+    riskLine: 'risk: configuration required',
+    terminal: 'blocked',
   };
 }
 
@@ -407,7 +432,9 @@ function deriveVerificationFallback(verification: string): TuiVerificationState 
 function terminalStateToPhase(status: TerminalState, verificationState: TuiVerificationState['state']): TuiPhase {
   if (status === 'completed') return verificationState === 'passed' ? 'completed' : 'verifying';
   if (status === 'blocked' || status === 'user_input_required') return 'blocked';
+  if (status === 'budget_exhausted') return 'budget_exhausted';
   if (status === 'failed_verification') return 'verifying';
+  if (status === 'model_error' || status === 'tool_error') return 'error';
   return 'error';
 }
 
@@ -437,6 +464,7 @@ function checkpointForPhase(phase: TuiPhase): string {
   if (phase === 'tool_execution') return 'awaiting tool result';
   if (phase === 'verifying') return 'awaiting verification result';
   if (phase === 'completed') return 'run finalized';
+  if (phase === 'budget_exhausted') return 'context budget exhausted — narrow task or raise limit';
   if (phase === 'blocked' || phase === 'error') return 'operator decision required';
   return 'awaiting task';
 }

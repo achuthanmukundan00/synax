@@ -460,6 +460,18 @@ describe('incremental token estimation', () => {
     expect(ledger.lastMeasuredIndex).toBe(4);
   });
 
+  it('re-estimates when a previously measured message list shrinks', () => {
+    const ledger = createTokenLedger();
+    const expanded = [makeMsg('system', 'sys'), ...makeBulkMessages(8, 'user', 120)];
+    const compacted = expanded.slice(0, 4);
+
+    estimateIncrementalTokens(expanded, ledger);
+    const tokensAfterShrink = estimateIncrementalTokens(compacted, ledger);
+
+    expect(tokensAfterShrink).toBe(estimateRequestTokens(compacted));
+    expect(ledger.lastMeasuredIndex).toBe(compacted.length - 1);
+  });
+
   it('reset clears state', () => {
     const ledger = createTokenLedger();
     estimateIncrementalTokens([makeMsg('user', 'hi')], ledger);

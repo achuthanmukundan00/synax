@@ -2,7 +2,7 @@
 
 ## `synax`
 
-With no arguments, Synax starts `chat`.
+With no arguments, Synax starts `chat` in full-screen TUI mode when attached to a TTY.
 
 ```sh
 npm run synax --
@@ -10,10 +10,16 @@ npm run synax --
 
 ## `synax chat`
 
-Interactive agent shell:
+Interactive agent shell (full-screen TUI by default on TTY):
 
 ```sh
 npm run synax -- chat
+```
+
+Plain fallback:
+
+```sh
+npm run synax -- chat --plain
 ```
 
 Single-turn chat:
@@ -122,9 +128,9 @@ The TUI is an opt-in MVP that shows a fixed-frame control surface during `synax 
 - 9×9 AI core overlay indicating internal state
 - SIGWINCH resize repaint
 
-Current TUI limitations:
+Current run-TUI limitations:
 
-- Only for `synax run --tui`, not chat or ask
+- `synax run --tui` remains the non-interactive run surface
 - Fixed layout; no scrolling panes or log streaming
 - No interactive controls beyond `q` to quit
 - Verification status is derived from lifecycle events emitted by the runtime (not summary text parsing)

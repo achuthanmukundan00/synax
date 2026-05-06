@@ -111,6 +111,15 @@ export function estimateIncrementalTokens(messages: AgentMessage[], ledger: Toke
     return full;
   }
 
+  if (messages.length - 1 < ledger.lastMeasuredIndex) {
+    // Message history shrank (e.g. compaction or transient assembly-only messages
+    // were previously measured). Re-estimate from scratch to avoid stale inflation.
+    const full = estimateRequestTokens(messages);
+    ledger.lastKnownTokenCount = full;
+    ledger.lastMeasuredIndex = messages.length - 1;
+    return full;
+  }
+
   if (ledger.lastMeasuredIndex >= messages.length - 1) {
     // No new messages; reuse known count but verify with a cheap fallback
     // to guard against subtle drift (only re-estimate last few messages).

@@ -1,6 +1,8 @@
 import { existsSync } from 'fs';
 import { mkdir, readFile } from 'fs/promises';
 import { dirname } from 'path';
+import { execFile } from 'child_process';
+import { promisify } from 'util';
 
 import { type ChatOptions, type ChatResponse } from '../llm/types';
 import { type ParsedToolCall } from '../llm/tool-calls';
@@ -33,7 +35,14 @@ import {
 } from './context-budget';
 import { atomicWriteFile, writeLastEditRecord } from './safety';
 import { eventNow, type AgentEvent, type TerminalState } from './events';
-import { canMutatePath, describeToolCall, guardBroadTask, getAllowedModelTools, type RunMode } from './task-policy';
+import {
+  canMutatePath,
+  describeToolCall,
+  guardBroadTask,
+  guardUnsupportedTask,
+  getAllowedModelTools,
+  type RunMode,
+} from './task-policy';
 
 export type AgentTerminalState = TerminalState;
 
@@ -116,6 +125,7 @@ const DEFAULT_MAX_TOOL_CALLS = 96;
 const MAX_CONSECUTIVE_RECOVERABLE_TOOL_ERRORS = 3;
 const MAX_IDENTICAL_READS_PER_TURN = 3;
 const MAX_TOTAL_READS_PER_TURN = 24;
+const execFileAsync = promisify(execFile);
 
 interface AgentToolExecutionResult {
   success: boolean;
@@ -152,7 +162,8 @@ export async function runAgentTurn(options: AgentRunnerOptions & { task: string 
       ledger: conversation.inspectionLedger,
     });
   const mode = options.mode ?? 'patch';
-  const tools = buildModelFacingTools({ ...options.tools, mode });
+  const bashEnabled = options.tools?.bashEnabled ?? true;
+  const tools = buildModelFacingTools({ ...options.tools, bashEnabled, mode });
   const maxSteps = options.maxSteps ?? DEFAULT_MAX_STEPS;
   const maxToolCalls = options.maxToolCalls ?? DEFAULT_MAX_TOOL_CALLS;
   const changedFiles: string[] = [];
@@ -174,6 +185,19 @@ export async function runAgentTurn(options: AgentRunnerOptions & { task: string 
       changedFiles,
       conversation,
       error: broadTask.message,
+    };
+  }
+
+  const unsupportedTask = guardUnsupportedTask(options.task, bashEnabled);
+  if (unsupportedTask) {
+    return {
+      terminalState: 'blocked',
+      finalAnswer: `${unsupportedTask.message}\nSuggested first step: ${unsupportedTask.suggestedFirstStep}`,
+      steps: 0,
+      toolCalls,
+      changedFiles,
+      conversation,
+      error: unsupportedTask.message,
     };
   }
 
@@ -407,6 +431,19 @@ export async function runAgentTurn(options: AgentRunnerOptions & { task: string 
     }
 
     if (response.toolCalls.length === 0) {
+      // Gate: prevent premature completion when the model claims success
+      // without making any changes in patch/verify mode.
+      if (mode !== 'read-only' && changedFiles.length === 0 && isPrematureCompletionClaim(response.content)) {
+        conversation.messages.push({
+          role: 'user',
+          content:
+            'You claimed completion without making any file changes. ' +
+            'Either make the required edits now, or explain specifically why no changes are needed. ' +
+            'Do not just say "verified" or "passed" — show evidence.',
+        });
+        continue;
+      }
+
       return {
         terminalState: 'completed',
         finalAnswer: response.content.trim(),
@@ -622,7 +659,7 @@ async function executeAgentTool(
   }
 
   if (call.name === 'git') {
-    return executeGitTool(call.arguments, context.registry);
+    return executeGitTool(call.arguments, context.registry, context.repoRoot);
   }
 
   if (call.name === 'edit' || call.name === 'replace_in_file') {
@@ -634,7 +671,7 @@ async function executeAgentTool(
   }
 
   if (call.name === 'bash') {
-    return toolFailure('bash', 'bash tool is not enabled in this scaffold');
+    return executeBashTool(call.arguments, context.repoRoot);
   }
 
   const toolResult = await context.registry.execute(call.name, call.arguments);
@@ -720,13 +757,10 @@ async function executeReadTool(
 
 async function executeGitTool(
   input: Record<string, unknown>,
-  registry: ToolRegistry,
+  _registry: ToolRegistry,
+  repoRoot: string,
 ): Promise<AgentToolExecutionResult> {
-  const action =
-    typeof input.action === 'string' ? input.action : typeof input.operation === 'string' ? input.operation : 'status';
-  const result =
-    action === 'diff' ? await registry.execute('show_git_diff', input) : await registry.execute('show_git_status', {});
-  return publicToolResult('git', result);
+  return executeBashTool(input, repoRoot, 'git');
 }
 
 async function executeReplaceInFile(
@@ -863,7 +897,7 @@ async function executeCreateFile(
 }
 
 export function buildModelFacingTools(options: ModelToolSurfaceOptions = {}): ToolDefinition[] {
-  const bashEnabled = options.bashEnabled ?? false;
+  const bashEnabled = options.bashEnabled ?? true;
   const allowedNames = getAllowedModelTools(options.mode ?? 'patch', bashEnabled);
   const tools: ToolDefinition[] = [
     {
@@ -979,28 +1013,28 @@ export function buildModelFacingTools(options: ModelToolSurfaceOptions = {}): To
     },
     {
       name: 'git',
-      description: 'Inspect bounded git status or diff. Pass action "diff" for diff; defaults to status.',
+      description: 'Legacy alias for shell execution. Prefer bash.',
       inputSchema: {
         type: 'object',
         properties: {
           action: {
             type: 'string',
             enum: ['status', 'diff'],
-            description: 'Git inspection action.',
+            description: 'Legacy git action.',
           },
           maxLines: {
             type: 'number',
-            description: 'Maximum diff lines for action=diff.',
+            description: 'Legacy max diff lines.',
           },
         },
         additionalProperties: false,
       },
       safetyPolicy: {
-        readOnly: true,
+        readOnly: false,
         rejectsUnsafePaths: true,
         boundedOutput: true,
       },
-      ledgerBehavior: 'records-git-status',
+      ledgerBehavior: 'none',
       async execute() {
         return {
           success: false,
@@ -1015,7 +1049,7 @@ export function buildModelFacingTools(options: ModelToolSurfaceOptions = {}): To
     tools.splice(3, 0, {
       name: 'bash',
       description:
-        'Reserved shell execution surface. This v0.3 scaffold exposes the name only when shell execution policy enables it.',
+        'Execute a shell command in the repository root. Use for git workflows and verification commands.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -1051,6 +1085,100 @@ function publicToolResult(toolName: string, result: ToolResult): AgentToolExecut
     toolResult: { ...result, toolName },
     error: result.error,
   };
+}
+
+async function executeBashTool(
+  input: Record<string, unknown>,
+  repoRoot: string,
+  aliasSource: 'bash' | 'git' = 'bash',
+): Promise<AgentToolExecutionResult> {
+  const command = resolveShellCommand(input, aliasSource);
+  if (!command) {
+    return toolFailure(aliasSource, 'command is required');
+  }
+  const safetyWarnings = detectDangerousCommandWarnings(command);
+
+  try {
+    const { stdout, stderr } = await execFileAsync('/bin/bash', ['-lc', command], {
+      cwd: repoRoot,
+      maxBuffer: 256 * 1024,
+      timeout: 30_000,
+    });
+    return {
+      success: true,
+      toolResult: {
+        success: true,
+        toolName: aliasSource,
+        output: {
+          command,
+          safetyWarnings,
+          stdout: String(stdout ?? ''),
+          stderr: String(stderr ?? ''),
+          exitCode: 0,
+        },
+      },
+    };
+  } catch (error) {
+    const e = error as { stdout?: string | Buffer; stderr?: string | Buffer; code?: number };
+    return {
+      success: false,
+      error: errorMessage(error),
+      toolResult: {
+        success: false,
+        toolName: aliasSource,
+        error: errorMessage(error),
+        output: {
+          command,
+          safetyWarnings,
+          stdout: typeof e.stdout === 'string' ? e.stdout : e.stdout?.toString('utf-8') ?? '',
+          stderr: typeof e.stderr === 'string' ? e.stderr : e.stderr?.toString('utf-8') ?? '',
+          exitCode: typeof e.code === 'number' ? e.code : 1,
+        },
+      },
+    };
+  }
+}
+
+function resolveShellCommand(input: Record<string, unknown>, aliasSource: 'bash' | 'git'): string | null {
+  if (aliasSource === 'git') {
+    const action =
+      typeof input.action === 'string'
+        ? input.action
+        : typeof input.operation === 'string'
+          ? input.operation
+          : 'status';
+    if (action === 'diff') return 'git diff --no-ext-diff';
+    return 'git status --short';
+  }
+  if (typeof input.command === 'string' && input.command.trim().length > 0) {
+    return input.command.trim();
+  }
+  return null;
+}
+
+function detectDangerousCommandWarnings(command: string): string[] {
+  const normalized = command.toLowerCase().replace(/\s+/g, ' ').trim();
+  const warnings: string[] = [];
+  const patterns: Array<{ pattern: RegExp; warning: string }> = [
+    { pattern: /\brm\s+-rf\s+\/(?=[\s;|&)"']|$)/, warning: 'destructive delete of root path (`rm -rf /`) detected' },
+    { pattern: /\brm\s+-rf\s+~(?=[\s;|&)"']|$)/, warning: 'destructive delete of home path (`rm -rf ~`) detected' },
+    {
+      pattern: /\brm\s+-rf\s+\.(?=[\s;|&)"']|$)/,
+      warning: 'destructive delete of current directory (`rm -rf .`) detected',
+    },
+    { pattern: /\brm\s+-rf\s+\/etc(?=[\s;|&/)"']|$)/, warning: 'system directory deletion (`rm -rf /etc`) detected' },
+    { pattern: /\bmkfs(\.| )/, warning: 'filesystem formatting command detected' },
+    { pattern: /\bdd\s+if=.*\s+of=\/dev\//, warning: 'raw block device write detected' },
+    { pattern: /\bshutdown\b|\breboot\b|\bhalt\b/, warning: 'system power-state command detected' },
+    { pattern: /\bchmod\s+-r\s+0{0,2}\s+\//, warning: 'broad permission reset on root detected' },
+    { pattern: /\bchown\s+-r\s+.+\s+\//, warning: 'recursive ownership change on root detected' },
+    { pattern: /\bcurl\b.*\|\s*(bash|sh)\b/, warning: 'remote script pipe-to-shell detected' },
+    { pattern: /\bwget\b.*\|\s*(bash|sh)\b/, warning: 'remote script pipe-to-shell detected' },
+  ];
+  for (const entry of patterns) {
+    if (entry.pattern.test(normalized)) warnings.push(entry.warning);
+  }
+  return warnings;
 }
 
 function isRecoverableToolError(call: ParsedToolCall, result: { success: boolean; error?: string }): boolean {
@@ -1285,6 +1413,44 @@ function readPathFromOutput(output: unknown): string | undefined {
   return typeof path === 'string' ? path : undefined;
 }
 
+/**
+ * Detect when a model claims completion/success without actually doing work.
+ * Catches phrases like "verified passed", "all tests pass", "everything looks good"
+ * when the model hasn't made any file changes.
+ */
+function isPrematureCompletionClaim(text: string): boolean {
+  const normalized = text
+    .replace(/<think>[\s\S]*?<\/think>/gi, '')
+    .replace(/<thinking>[\s\S]*?<\/thinking>/gi, '')
+    .trim()
+    .toLowerCase();
+
+  if (normalized.length < 10) return false;
+
+  const prematurePhrases = [
+    'verified passed',
+    'verification passed',
+    'all tests pass',
+    'all tests passing',
+    'tests are passing',
+    'everything looks good',
+    'everything is fine',
+    'no issues found',
+    'no problems found',
+    'looks correct',
+    'looks good',
+    'confirmed working',
+    'confirmed fixed',
+    'should be fixed',
+    'should work now',
+    'problem solved',
+    'issue resolved',
+    'completed successfully',
+  ];
+
+  return prematurePhrases.some((phrase) => normalized.includes(phrase));
+}
+
 function isSafeToolPreamble(text: string): boolean {
   const normalized = text
     .replace(/<think>[\s\S]*?<\/think>/gi, '')
@@ -1351,7 +1517,10 @@ function formatModelResponseActivity(response: ChatResponse, _step: number): Age
   const trimmedContent = response.content.trim();
 
   if (trimmedContent.length > 0) {
-    const preview = trimmedContent.length > 300 ? trimmedContent.slice(0, 300) + '…' : trimmedContent;
+    // Show substantially more model output so users can see what the model is thinking.
+    // 1200 chars is enough to surface reasoning, thinking tags, and tool-call intent
+    // without flooding the terminal.
+    const preview = trimmedContent.length > 1200 ? trimmedContent.slice(0, 1200) + '…' : trimmedContent;
     lines.push(preview);
   }
 

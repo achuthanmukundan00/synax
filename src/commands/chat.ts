@@ -15,6 +15,7 @@ import {
   type AgentConversation,
   type AgentTerminalState,
   type AgentBudgetSnapshot,
+  type AgentActivity,
 } from '../agent/runner';
 import { runVerification, type VerificationResult } from '../agent/verification';
 import { buildProjectProfile, formatTextProfile } from '../config/profile';
@@ -24,6 +25,7 @@ import { writeFileSync, mkdirSync } from 'fs';
 import { discoverConfigPath, normalizeProviderConfig as normalizeProvider } from '../config/project';
 import type { NormalizedProviderConfig } from '../llm/types';
 import { readLatestCheckpoint, undoLastEdit } from '../agent/safety';
+import { runInteractiveTui } from '../tui/interactive-tui';
 
 const execFileAsync = promisify(execFile);
 
@@ -31,6 +33,8 @@ export interface ChatSession {
   conversation: AgentConversation;
   handleUserMessage(message: string): Promise<ChatTurnReport>;
   handleSlashCommand(command: string): Promise<SlashCommandReport>;
+  /** Install a runtime event sink for real-time TUI state updates. */
+  setEventSink?: (sink: ((event: import('../agent/events').AgentEvent) => void) | null) => void;
 }
 
 export interface ChatTurnReport {
@@ -78,11 +82,21 @@ export interface InlinePasteInputSession {
   hasPaste(): boolean;
 }
 
-export function createChatSession(options: { repoRoot: string; config: ProjectConfig }): ChatSession {
+export function createChatSession(options: {
+  repoRoot: string;
+  config: ProjectConfig;
+  onActivity?: (activity: AgentActivity) => void;
+  /** Suppress stdout writes (for TUI mode). */
+  tui?: boolean;
+}): ChatSession {
   const conversation = createAgentConversation();
+  let eventSink: ((event: import('../agent/events').AgentEvent) => void) | null = null;
 
   return {
     conversation,
+    setEventSink: (sink) => {
+      eventSink = sink;
+    },
     async handleUserMessage(message: string): Promise<ChatTurnReport> {
       const providerConfig = normalizeProviderConfig(options.config.provider ?? {});
       const client = createOpenAICompatibleClient(providerConfig);
@@ -103,18 +117,23 @@ export function createChatSession(options: { repoRoot: string; config: ProjectCo
           maxTotalReadResultTokensPerTurn: options.config.maxTotalReadResultTokensPerTurn,
         },
         onActivity(activity) {
-          if (activity.kind === 'model_response') {
-            // Show model thoughts/output inline for debugging local-model behavior.
-            const label = `[synax] model step resp`;
-            if (activity.message) {
-              console.log(`${label}:\n${activity.message.replace(/^/gm, '  ')}`);
+          options.onActivity?.(activity);
+          if (!options.tui) {
+            if (activity.kind === 'model_response') {
+              const label = `[synax] model step resp`;
+              if (activity.message) {
+                console.log(`${label}:\n${activity.message.replace(/^/gm, '  ')}`);
+              }
+            } else {
+              console.log(`[synax] ${activity.kind}: ${activity.message}`);
             }
-          } else {
-            console.log(`[synax] ${activity.kind}: ${activity.message}`);
           }
         },
+        onEvent: (event) => eventSink?.(event),
         onBudget(snapshot) {
-          console.log(formatBudgetSnapshot(snapshot));
+          if (!options.tui) {
+            console.log(formatBudgetSnapshot(snapshot));
+          }
         },
       });
       saveContextState(options.repoRoot, result.conversation);
@@ -216,7 +235,8 @@ export function chatCommand(program: Command): void {
   chat
     .description('Start an interactive Synax agent shell')
     .option('-m, --message <message>', 'Run one chat turn and exit')
-    .action(async (options: { message?: string }) => {
+    .option('--plain', 'Use plain line-mode chat instead of full-screen TUI')
+    .action(async (options: { message?: string; plain?: boolean }) => {
       const repoRoot = process.cwd();
       const loaded = loadProjectConfig(repoRoot);
       if (loaded.errors.length > 0) {
@@ -226,14 +246,36 @@ export function chatCommand(program: Command): void {
       }
 
       const provider = normalizeProviderConfig(loaded.config.provider ?? {});
-      if (!provider.model.trim()) {
-        console.error('[synax] Config error: provider.model is required for chat.');
-        process.exitCode = 1;
-        return;
-      }
+      const useTui = shouldUseInteractiveTui({
+        plain: Boolean(options.plain),
+        message: options.message,
+        stdinIsTTY: input.isTTY,
+        stdoutIsTTY: output.isTTY,
+      });
 
-      const session = createChatSession({ repoRoot, config: loaded.config });
+      // Shared state so the TUI can observe model output in real time.
+      let lastModelOutput = '';
+
+      const modelLabel = provider.model.trim() || undefined;
+
+      const session = createChatSession({
+        repoRoot,
+        config: loaded.config,
+        onActivity: useTui
+          ? (activity) => {
+              if (activity.kind === 'model_response' && activity.modelOutput) {
+                lastModelOutput = activity.modelOutput;
+              }
+            }
+          : undefined,
+        tui: useTui,
+      });
       if (options.message) {
+        if (!provider.model.trim()) {
+          console.error('[synax] Config error: provider.model is required for chat.');
+          process.exitCode = 1;
+          return;
+        }
         const report = await session.handleUserMessage(options.message);
         console.log(options.message);
         if (report.finalAnswer) console.log(report.finalAnswer);
@@ -244,6 +286,15 @@ export function chatCommand(program: Command): void {
 
       console.log('[synax] Chat initialized');
       printBanner(repoRoot, provider.model);
+      if (useTui) {
+        await runInteractiveTui(session, {
+          blockedMessage: !provider.model.trim() ? 'provider.model is required' : undefined,
+          lastModelOutput: () => lastModelOutput,
+          modelLabel,
+          endpointLabel: provider.baseUrl || undefined,
+        });
+        return;
+      }
 
       try {
         if (input.isTTY) {
@@ -275,6 +326,17 @@ export function chatCommand(program: Command): void {
       }
     });
   program.addCommand(chat);
+}
+
+export function shouldUseInteractiveTui(options: {
+  plain: boolean;
+  message?: string;
+  stdinIsTTY?: boolean;
+  stdoutIsTTY?: boolean;
+}): boolean {
+  if (options.plain) return false;
+  if (options.message) return false;
+  return Boolean(options.stdinIsTTY && options.stdoutIsTTY);
 }
 
 export async function promptInteractiveLine(
