@@ -549,8 +549,12 @@ function configFromParsedToml(parsed: Record<string, unknown>): ProjectConfig {
     config.maxTotalReadResultTokensPerTurn = agent.max_total_read_result_tokens_per_turn;
   if (parsed.subagents !== undefined && typeof parsed.subagents === 'object')
     config.subagents = parsed.subagents as { enabled?: boolean; mode?: 'sequential' | 'parallel' };
-  if (parsed.verification !== undefined && typeof parsed.verification === 'object')
-    config.verification = parsed.verification as { defaultCommand?: string };
+  if (parsed.verification !== undefined && typeof parsed.verification === 'object') {
+    const v = parsed.verification as Record<string, unknown>;
+    config.verification = {
+      defaultCommand: (v.defaultCommand ?? v.default_command) as string | undefined,
+    };
+  }
   if (parsed.tools !== undefined && typeof parsed.tools === 'object') config.tools = parsed.tools as ToolSurfaceConfig;
   return config;
 }

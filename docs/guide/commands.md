@@ -106,6 +106,30 @@ npm run synax -- run --task "Fix the failing auth test" --verification-profile q
 npm run synax -- run --task "Fix the failing auth test" --verification-profile full
 ```
 
+Run control-surface TUI (stable frame, no log spam):
+
+```sh
+npm run synax -- run --task "Fix the failing auth test" --tui
+```
+
+The TUI is an opt-in MVP that shows a fixed-frame control surface during `synax run`:
+
+- Phase machine (idle → thinking → tool_execution → verifying → completed/blocked/error)
+- Severity ladder (S0–S3) and risk line
+- Compact timeline of recent events
+- Change file list with overflow compression
+- Verification lifecycle counts (planned, running, passed, failed, skipped)
+- 9×9 AI core overlay indicating internal state
+- SIGWINCH resize repaint
+
+Current TUI limitations:
+
+- Only for `synax run --tui`, not chat or ask
+- Fixed layout; no scrolling panes or log streaming
+- No interactive controls beyond `q` to quit
+- Verification status is derived from lifecycle events emitted by the runtime (not summary text parsing)
+- Small terminals (< 40 cols, < 18 rows) show a minimal warning
+
 ## `synax inspect`
 
 Inspects project metadata:

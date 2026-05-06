@@ -125,19 +125,80 @@ export async function runAgentTask(options: RunTaskOptions): Promise<RunTaskRepo
   });
   const checkpointRecord = checkpoint as { id: string; statusPath: string; diffPath: string } | null;
 
+  const verificationCommand = projectConfig.config.verification?.defaultCommand;
+  const verCheckId = 'run-verification';
+  if (verificationCommand && turn.changedFiles.length > 0) {
+    options.onEvent?.({
+      type: 'verification_planned',
+      timestamp: eventNow(),
+      checkId: verCheckId,
+      checkLabel: verificationCommand,
+      command: verificationCommand,
+      summary: `${turn.changedFiles.length} file(s) changed`,
+    });
+  }
+
   let verification: VerificationResult = { state: 'skipped', stdout: '', stderr: '' };
   if (turn.changedFiles.length > 0) {
+    const vStarted = Date.now();
+    options.onEvent?.({
+      type: 'verification_started',
+      timestamp: eventNow(),
+      checkId: verCheckId,
+      checkLabel: verificationCommand ?? '(no command)',
+      command: verificationCommand,
+    });
     verification = await runVerification({
       repoRoot: options.repoRoot,
-      command: projectConfig.config.verification?.defaultCommand,
+      command: verificationCommand,
       timeoutMs: options.verificationProfile === 'full' ? 120000 : 30000,
       maxOutputChars: options.verificationProfile === 'full' ? 12000 : 4000,
     });
+    const vDuration = Date.now() - vStarted;
+    if (verification.state === 'passed') {
+      options.onEvent?.({
+        type: 'verification_passed',
+        timestamp: eventNow(),
+        checkId: verCheckId,
+        checkLabel: verificationCommand ?? '(no command)',
+        command: verification.command,
+        summary: verification.stdout.slice(0, 200).trim() || 'passed',
+        durationMs: vDuration,
+      });
+    } else if (verification.state === 'failed') {
+      options.onEvent?.({
+        type: 'verification_failed',
+        timestamp: eventNow(),
+        checkId: verCheckId,
+        checkLabel: verificationCommand ?? '(no command)',
+        command: verification.command,
+        summary: verification.stderr.slice(0, 200).trim() || `exit ${verification.exitCode ?? '?'}`,
+        severity: 'S2',
+        durationMs: vDuration,
+      });
+    } else {
+      options.onEvent?.({
+        type: 'verification_skipped',
+        timestamp: eventNow(),
+        checkId: verCheckId,
+        checkLabel: verificationCommand ?? '(no command)',
+        summary: 'no verification command configured',
+      });
+    }
   }
   let repairedTurn = turn;
   const maxRepairAttempts = options.repairAttempts ?? 1;
   if (verification.state === 'failed' && maxRepairAttempts > 0) {
     for (let attempt = 1; attempt <= maxRepairAttempts; attempt += 1) {
+      const repairCheckId = `repair-verification-${attempt}`;
+      options.onEvent?.({
+        type: 'verification_planned',
+        timestamp: eventNow(),
+        checkId: repairCheckId,
+        checkLabel: `repair attempt ${attempt}`,
+        command: verificationCommand,
+        summary: `repair ${attempt}/${maxRepairAttempts}`,
+      });
       const repair = await runAgentTurn({
         repoRoot: options.repoRoot,
         task: `Verification failed. Fix the changed files and make verification pass. Failure output:\n${verification.stderr.slice(0, 1000)}`,
@@ -161,12 +222,43 @@ export async function runAgentTask(options: RunTaskOptions): Promise<RunTaskRepo
       });
       repairedTurn = repair;
       if (repair.changedFiles.length > 0) {
+        const rStarted = Date.now();
+        options.onEvent?.({
+          type: 'verification_started',
+          timestamp: eventNow(),
+          checkId: repairCheckId,
+          checkLabel: `repair attempt ${attempt}`,
+          command: verificationCommand,
+        });
         verification = await runVerification({
           repoRoot: options.repoRoot,
-          command: projectConfig.config.verification?.defaultCommand,
+          command: verificationCommand,
           timeoutMs: options.verificationProfile === 'full' ? 120000 : 30000,
           maxOutputChars: options.verificationProfile === 'full' ? 12000 : 4000,
         });
+        const rDuration = Date.now() - rStarted;
+        if (verification.state === 'passed') {
+          options.onEvent?.({
+            type: 'verification_passed',
+            timestamp: eventNow(),
+            checkId: repairCheckId,
+            checkLabel: `repair attempt ${attempt}`,
+            command: verification.command,
+            summary: verification.stdout.slice(0, 200).trim() || 'passed',
+            durationMs: rDuration,
+          });
+        } else {
+          options.onEvent?.({
+            type: 'verification_failed',
+            timestamp: eventNow(),
+            checkId: repairCheckId,
+            checkLabel: `repair attempt ${attempt}`,
+            command: verification.command,
+            summary: verification.stderr.slice(0, 200).trim() || `exit ${verification.exitCode ?? '?'}`,
+            severity: 'S2',
+            durationMs: rDuration,
+          });
+        }
       }
       if (verification.state === 'passed') break;
     }
