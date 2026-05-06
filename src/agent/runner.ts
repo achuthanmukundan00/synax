@@ -184,6 +184,11 @@ export async function runAgentTurn(options: AgentRunnerOptions & { task: string 
     const isFinalStep = step === maxSteps;
     try {
       options.onActivity?.({ kind: 'model', message: `model step ${step}` });
+      options.onEvent?.({
+        type: 'model_step_started',
+        timestamp: eventNow(),
+        stepIndex: step,
+      });
 
       // Preflight budget guard (item 7): runs before EVERY model call.
       const effectiveInputLimit = contextBudget.contextWindowTokens - contextBudget.reservedOutputTokens;
@@ -237,7 +242,13 @@ export async function runAgentTurn(options: AgentRunnerOptions & { task: string 
         }
 
         // Build model request with assembly, orientation, and token ledger update
-        const assembled = buildModelRequest(conversation, contextBudget, identicalReadCounts, isFinalStep, totalReadCalls);
+        const assembled = buildModelRequest(
+          conversation,
+          contextBudget,
+          identicalReadCounts,
+          isFinalStep,
+          totalReadCalls,
+        );
 
         // Final belt-and-suspenders check on assembled messages
         if (isFinalStep) {
@@ -270,7 +281,13 @@ export async function runAgentTurn(options: AgentRunnerOptions & { task: string 
         });
       } else {
         // Within budget: build assembled model request proactively
-        const assembled = buildModelRequest(conversation, contextBudget, identicalReadCounts, isFinalStep, totalReadCalls);
+        const assembled = buildModelRequest(
+          conversation,
+          contextBudget,
+          identicalReadCounts,
+          isFinalStep,
+          totalReadCalls,
+        );
 
         // Extra budget check for final step
         if (isFinalStep) {
@@ -289,7 +306,13 @@ export async function runAgentTurn(options: AgentRunnerOptions & { task: string 
               };
             }
             // Rebuild from freshly compacted messages
-            const fallbackAssembled = buildModelRequest(conversation, contextBudget, identicalReadCounts, isFinalStep, totalReadCalls);
+            const fallbackAssembled = buildModelRequest(
+              conversation,
+              contextBudget,
+              identicalReadCounts,
+              isFinalStep,
+              totalReadCalls,
+            );
             const fallbackTokens = estimateRequestTokens(fallbackAssembled);
             if (fallbackTokens > effectiveInputLimit) {
               return {
@@ -1323,17 +1346,12 @@ function errorMessage(error: unknown): string {
  * Format a human-readable summary of the model's response for CLI display.
  * Shows text content (model "thoughts") and tool call intentions.
  */
-function formatModelResponseActivity(
-  response: ChatResponse,
-  _step: number,
-): AgentActivity {
+function formatModelResponseActivity(response: ChatResponse, _step: number): AgentActivity {
   const lines: string[] = [];
   const trimmedContent = response.content.trim();
 
   if (trimmedContent.length > 0) {
-    const preview = trimmedContent.length > 300
-      ? trimmedContent.slice(0, 300) + '…'
-      : trimmedContent;
+    const preview = trimmedContent.length > 300 ? trimmedContent.slice(0, 300) + '…' : trimmedContent;
     lines.push(preview);
   }
 
@@ -1404,20 +1422,17 @@ function buildModelRequest(
   // Read budget warning: fire when approaching the total read limit OR
   // when the model is re-reading files excessively.
   // Placed LAST in the message list for maximum influence on local models.
-  const READ_BUDGET_WARNING_THRESHOLD = Math.floor(MAX_TOTAL_READS_PER_TURN * 0.50);
+  const READ_BUDGET_WARNING_THRESHOLD = Math.floor(MAX_TOTAL_READS_PER_TURN * 0.5);
   const hasReadBudgetPressure =
     totalReadCalls !== undefined &&
     totalReadCalls >= READ_BUDGET_WARNING_THRESHOLD &&
     totalReadCalls < MAX_TOTAL_READS_PER_TURN;
 
-  const hasRepetitionPressure =
-    readCounts !== undefined &&
-    [...readCounts.values()].some((count) => count >= 3);
+  const hasRepetitionPressure = readCounts !== undefined && [...readCounts.values()].some((count) => count >= 3);
 
   if (hasReadBudgetPressure || hasRepetitionPressure) {
-    const remaining = totalReadCalls !== undefined
-      ? MAX_TOTAL_READS_PER_TURN - totalReadCalls
-      : MAX_TOTAL_READS_PER_TURN;
+    const remaining =
+      totalReadCalls !== undefined ? MAX_TOTAL_READS_PER_TURN - totalReadCalls : MAX_TOTAL_READS_PER_TURN;
     const warning: AgentMessage = {
       role: 'user',
       content: [
