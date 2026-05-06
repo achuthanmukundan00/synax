@@ -199,7 +199,7 @@ SYNAX_MAX_TOOL_CALLS=64
 
 Synax manages context as a runtime discipline, not just a model instruction:
 
-- **Budget model**: Approximate token estimation (chars/3.5). Compaction triggers at ~60% of effective limit.
+- **Budget model**: Approximate token estimation (chars/3). Compaction triggers at ~60% of effective limit.
 - **Working context orientation**: After each read, the model receives a compact block listing inspected files, editable-from-memory files, truncated files needing reread, and git inspection state.
 - **Progressive loop resistance**: Duplicate reads escalate: cached return → warning with guidance → hard failure with orientation summary.
 - **Tool result compaction**: Large reads are truncated at per-read and per-turn caps. Repeated results are cached. Omitted reads return zero-token guidance instead of partial content.
