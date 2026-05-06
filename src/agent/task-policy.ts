@@ -55,15 +55,18 @@ export function guardBroadTask(task: string): BroadTaskGuardResult | null {
   const matches: Array<{ pattern: RegExp; firstStep: string }> = [
     {
       pattern: /\bimplement all of v1\b/i,
-      firstStep: 'Inventory the current v0.7 safety paths and choose one checkpoint/report improvement to finish first.',
+      firstStep:
+        'Inventory the current v0.7 safety paths and choose one checkpoint/report improvement to finish first.',
     },
     {
       pattern: /\brewrite the tui\b/i,
-      firstStep: 'Start by inspecting the current command/report path and define one tiny TUI-adjacent output improvement.',
+      firstStep:
+        'Start by inspecting the current command/report path and define one tiny TUI-adjacent output improvement.',
     },
     {
       pattern: /\brefactor the agent runtime\b/i,
-      firstStep: 'Pick one agent runtime file and harden a single safety boundary instead of refactoring the whole runtime.',
+      firstStep:
+        'Pick one agent runtime file and harden a single safety boundary instead of refactoring the whole runtime.',
     },
     {
       pattern: /\bfix everything\b/i,
@@ -100,7 +103,12 @@ export function describeToolCall(name: string, input: Record<string, unknown>): 
   }
 
   if (name === 'git') {
-    const action = typeof input.action === 'string' ? input.action : typeof input.operation === 'string' ? input.operation : 'status';
+    const action =
+      typeof input.action === 'string'
+        ? input.action
+        : typeof input.operation === 'string'
+          ? input.operation
+          : 'status';
     return action === 'diff' ? 'git diff' : 'git status';
   }
 

@@ -66,24 +66,56 @@ describe('runAgentTask patch approval', () => {
     expect(events.map((event) => event.type)).toContain('patch_preview');
   });
 
-  it('reports context ledger and checkpoint details for bounded runs', async () => {
+  it('reports context ledger and checkpoint details once a mutation is approved', async () => {
     execSync('git init', { cwd: TMP, stdio: 'ignore' });
     execSync('git config user.email "synax@example.test"', { cwd: TMP, stdio: 'ignore' });
     execSync('git config user.name "Synax Test"', { cwd: TMP, stdio: 'ignore' });
-    writeFileSync(join(TMP, 'README.md'), '# Synax\n', 'utf-8');
-    responses = [{ toolCalls: [{ id: 'call_1', name: 'read', arguments: { path: 'README.md' } }] }, { content: 'done' }];
+    responses = [
+      { toolCalls: [{ id: 'call_1', name: 'write', arguments: { path: 'notes/demo.md', content: '# Demo\n' } }] },
+      { content: 'done' },
+    ];
 
     const report = await runAgentTask({
       repoRoot: TMP,
-      task: 'Inspect README.md',
+      task: 'Create notes/demo.md',
+      yes: true,
     });
 
     expect(report.mode).toBe('patch');
-    expect(report.filesRead).toEqual(['README.md']);
+    expect(report.filesChanged).toEqual(['notes/demo.md']);
     expect(report.checkpoint?.id).toBeTruthy();
     expect(report.contextBudgetTokens).toBeGreaterThan(0);
     expect(report.maxModelSteps).toBeGreaterThan(0);
     expect(report.maxToolCalls).toBeGreaterThan(0);
+  });
+
+  it('does not create checkpoints for read-only runs with no mutations', async () => {
+    execSync('git init', { cwd: TMP, stdio: 'ignore' });
+    execSync('git config user.email "synax@example.test"', { cwd: TMP, stdio: 'ignore' });
+    execSync('git config user.name "Synax Test"', { cwd: TMP, stdio: 'ignore' });
+    writeFileSync(join(TMP, 'README.md'), '# Synax\n', 'utf-8');
+    responses = [{ content: 'done' }];
+
+    const report = await runAgentTask({
+      repoRoot: TMP,
+      task: 'Inspect README.md',
+      mode: 'read-only',
+    });
+
+    expect(report.terminalState).toBe('completed');
+    expect(report.checkpoint).toBeNull();
+    expect(existsSync(join(TMP, '.synax', 'checkpoints'))).toBe(false);
+  });
+
+  it('does not create checkpoints for blocked broad-task runs', async () => {
+    const report = await runAgentTask({
+      repoRoot: TMP,
+      task: 'rewrite the TUI',
+    });
+
+    expect(report.terminalState).toBe('blocked');
+    expect(report.checkpoint).toBeNull();
+    expect(existsSync(join(TMP, '.synax', 'checkpoints'))).toBe(false);
   });
 
   it('blocks broad self-development prompts before calling the model', async () => {
