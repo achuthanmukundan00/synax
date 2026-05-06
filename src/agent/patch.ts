@@ -65,7 +65,7 @@ export async function validateReplaceInFile(
   }
 
   const before = await readFile(target.absolutePath, 'utf-8');
-  if (!context.ledger.hasReadText(target.path, patch.oldStr)) {
+  if (!context.ledger.hasReadTextFromCompleteRead(target.path, patch.oldStr)) {
     return {
       ok: false,
       failureState: 'stale-read',
