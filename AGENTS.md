@@ -23,20 +23,6 @@ v0.4 focuses on local-model tool-call survival:
 
 Do not chase generic agent parity before fixing local model reliability. Local models often emit malformed tool calls, invalid JSON, leaked reasoning tags, mixed final answers, provider quirks, and constrained-runtime behavior. Synax should survive those cases safely before adding broader agent features.
 
-## Ralph Wiggum Operating Mode
-
-Be small, literal, and careful:
-
-1. Inspect before editing.
-2. Make the smallest correct patch.
-3. Avoid broad refactors.
-4. Do not add dependencies unless clearly necessary.
-5. Update docs when public behavior changes.
-6. Run relevant verification before claiming success.
-7. Report files changed, tests run, and remaining risks.
-
-If a task is ambiguous, prefer a conservative, inspectable change over an ambitious redesign.
-
 ## Hard Rules
 
 - Use TypeScript.
