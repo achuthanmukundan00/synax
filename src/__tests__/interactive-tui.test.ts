@@ -151,14 +151,16 @@ describe('interactive layout visual agreements', () => {
     }
     const plain = lines.map((line) => stripAnsi(line)).join('\n');
     expect(plain).toContain('Synax');
-    expect(plain).toContain('Field');
+    expect(plain).not.toContain('Field');
+    expect(plain).not.toContain('contained local intelligence runtime');
     expect(plain).toMatch(/[.·•○◎╱╲]/);
     expect(plain).not.toContain('Files touched:');
     expect(plain).not.toContain('History');
   });
 
-  it('renders an integrated directive dock and hides raw model output chatter', () => {
+  it('renders a closed input dock and shows model output', () => {
     const run = createInitialRunStateSnapshot(0);
+    run.lastModelOutput = 'The renderer now keeps the prompt inside a proper box.';
     const lines = renderLayout(
       {
         run,
@@ -166,18 +168,23 @@ describe('interactive layout visual agreements', () => {
         coreMode: 'thinking',
         nowMs: 2000,
         lastModelOutput: 'raw parser chatter should stay out of default TUI',
+        modelLabel: 'Qwen3.6-35B-A3B-UD-IQ3_XXS.gguf',
       },
       90,
       28,
     );
     const plain = lines.map((line) => stripAnsi(line)).join('\n');
-    expect(plain).toContain('Directive');
-    expect(plain).toContain('▁');
-    expect(plain).not.toContain('Model output');
-    expect(plain).not.toContain('raw parser chatter');
+    const dock = lines.slice(-4).map(stripAnsi);
+
+    expect(plain).not.toContain('Directive');
+    expect(plain).toContain('The renderer now keeps the prompt inside a proper box.');
+    expect(dock[0]).toMatch(/^┌─+ Qwen3\.6-35B-A3B-UD-IQ3_XXS\.gguf ┐\s*$/);
+    expect(dock[1]).toMatch(/^│ Implement fixed-footprint reactor core rendering\s+│\s*$/);
+    expect(dock[2]).toMatch(/^│\s+│\s*$/);
+    expect(dock[3]).toMatch(/^└ Enter submit \| Ctrl\+C exit \| Ctrl\+L redraw \| \/help ─+┘\s*$/);
   });
 
-  it('surfaces compact operational summaries without model transcript text', () => {
+  it('surfaces compact operational summaries with the latest model reply', () => {
     const run = {
       ...createInitialRunStateSnapshot(0),
       phase: 'completed' as const,
@@ -197,7 +204,7 @@ describe('interactive layout visual agreements', () => {
     const plain = lines.map((line) => stripAnsi(line)).join('\n');
 
     expect(plain).toContain('Completed · 2 model steps, 1 tool call, 1 file changed');
-    expect(plain).not.toContain('Updated the TUI state and verified the focused tests.');
+    expect(plain).toContain('Updated the TUI state and verified the focused tests.');
   });
 
   it('surfaces patch preview diffs from run state', () => {
