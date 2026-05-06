@@ -72,6 +72,15 @@ export type AgentEvent =
         toolCallId: string;
         toolName: string;
       })
+  | (AgentEventBase & { type: 'command_output'; command: string; content: string })
+  | (AgentEventBase & {
+      type: 'local_shell_command';
+      command: string;
+      exitCode: number;
+      durationMs: number;
+      stdout: string;
+      stderr: string;
+    })
   | (AgentEventBase & { type: 'assistant_message'; content: string })
   | (AgentEventBase & {
       type: 'task_finished';
