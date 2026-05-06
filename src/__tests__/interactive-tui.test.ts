@@ -91,6 +91,15 @@ describe('diff renderer', () => {
     expect(out).toContain('\u001b[1;37mSynax\u001b[0m');
     expect(out).toContain('idle 0:13');
   });
+
+  it('clears stale characters when a changed line gets shorter', () => {
+    const diff = new DiffRenderer();
+    diff.render(['abcdef'], 8, 1);
+
+    const out = diff.render(['xy'], 8, 1);
+
+    expect(out).toContain('\u001b[1;1Hxy      ');
+  });
 });
 
 describe('ai core renderer', () => {
@@ -352,6 +361,43 @@ describe('interactive layout visual agreements', () => {
     expect(plain).toContain('verify  failed');
     expect(plain).toContain('blockers: verification failed: Jest assertion failed');
     expect(plain).toContain('next: Expected transcript to contain read block');
+  });
+
+  it('parses camelCase command exit codes as successful results', () => {
+    const run = {
+      ...createInitialRunStateSnapshot(0),
+      phase: 'completed' as const,
+      terminal: 'completed' as const,
+      debugHistory: [
+        {
+          atMs: 1,
+          kind: 'tool_call' as const,
+          summary: 'bash call',
+          detail: 'bash\n{"command":"npm test"}',
+        },
+        {
+          atMs: 2,
+          kind: 'tool_result' as const,
+          summary: 'bash ok',
+          detail: 'stdout:\nPASS src/__tests__/interactive-tui.test.ts\nexitCode: 0',
+        },
+      ],
+    };
+    const plain = renderLayout(
+      {
+        run,
+        objectiveInput: '',
+        coreMode: 'completed',
+        nowMs: 5000,
+      },
+      100,
+      30,
+    )
+      .map((line) => stripAnsi(line))
+      .join('\n');
+
+    expect(plain).toContain('exit 0');
+    expect(plain).not.toContain('exit 1');
   });
 
   it('switches to compact core mode after the first run event and hides it on small terminals', () => {
