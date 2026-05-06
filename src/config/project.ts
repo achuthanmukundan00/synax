@@ -195,7 +195,7 @@ const DEFAULTS: ProjectConfig = {
     customHeaders: undefined,
     timeoutSeconds: 120,
   },
-  tools: { exposed: ['read', 'write', 'edit', 'git'], shell: 'zsh', unsafe: false, bash: { enabled: false } },
+  tools: { exposed: ['read', 'write', 'edit', 'bash'], shell: 'zsh', unsafe: false, bash: { enabled: true } },
 };
 
 export function discoverConfigPath(baseDir?: string): string | null {
@@ -243,12 +243,12 @@ export function generateDefaultConfig(): string {
     'defaultCommand = ""',
     '',
     '[tools]',
-    'exposed = ["read", "write", "edit", "git"]',
+    'exposed = ["read", "write", "edit", "bash"]',
     'shell = "zsh"',
     'unsafe = false',
     '',
     '[tools.bash]',
-    'enabled = false',
+    'enabled = true',
     '',
     '[provider]',
     'kind = "openai-compatible"',

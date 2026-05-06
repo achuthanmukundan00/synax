@@ -56,6 +56,12 @@ export class TuiRenderer implements AgentRenderer {
     this.paint();
   }
 
+  setModelOutput(text: string): void {
+    this.state = { ...this.state, lastModelOutput: text };
+    this.dirtyAll = true;
+    this.paint();
+  }
+
   finish(): void {
     if (this.timer) {
       clearInterval(this.timer);
@@ -205,6 +211,24 @@ function renderFrame(buffer: Cell[][], state: RunStateSnapshot): void {
       writeLine(buffer, verifyStart + 4, 0, clipStyled(`note: ${state.statusNote}`, cols - 14));
     }
   }
+
+  // Model observability: show last model output so users can see what the model is thinking.
+  const modelOutputStart = Math.max(verifyStart + 6, 28);
+  if (modelOutputStart + 2 < rows && state.lastModelOutput.trim().length > 0) {
+    writeLine(buffer, modelOutputStart, 0, withStyle('Model output', '\u001b[1;37m'));
+    // eslint-disable-next-line no-control-regex
+    const cleaned = state.lastModelOutput.replace(/\u001b\[[0-9;]*m/g, '');
+    // Show up to 4 lines of model output, each wrapped to fit.
+    const rawLines = cleaned.split('\n');
+    let shown = 0;
+    for (const rawLine of rawLines) {
+      if (modelOutputStart + 1 + shown >= rows - 3) break;
+      if (shown >= 4) break;
+      writeLine(buffer, modelOutputStart + 1 + shown, 0, clipStyled(rawLine.trim().slice(0, cols - 14), cols - 14));
+      shown += 1;
+    }
+  }
+
   writeLine(
     buffer,
     rows - 2,
@@ -313,7 +337,8 @@ function phaseGlyph(phase: string): string {
   if (phase === 'tool_execution') return '>';
   if (phase === 'verifying') return '=';
   if (phase === 'completed') return '+';
-  if (phase === 'blocked' || phase === 'error') return '!';
+  if (phase === 'budget_exhausted' || phase === 'error') return '!';
+  if (phase === 'blocked') return '!';
   return '.';
 }
 
@@ -330,7 +355,7 @@ function elapsedLabel(state: RunStateSnapshot): string {
 function coreStateFromPhase(phase: string): CoreState {
   if (phase === 'tool_execution') return 'tool_execution';
   if (phase === 'verifying') return 'verifying';
-  if (phase === 'blocked' || phase === 'error') return 'blocked';
+  if (phase === 'budget_exhausted' || phase === 'blocked' || phase === 'error') return 'blocked';
   if (phase === 'thinking') return 'thinking';
   return 'idle';
 }

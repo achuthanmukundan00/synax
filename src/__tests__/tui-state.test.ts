@@ -2,10 +2,20 @@ import {
   applyEventToRunState,
   compressChanges,
   compressTimeline,
+  createBlockedRunStateSnapshot,
   createInitialRunStateSnapshot,
 } from '../agent/tui-state';
 
 describe('tui-state', () => {
+  it('creates a blocked startup snapshot for missing configuration', () => {
+    const state = createBlockedRunStateSnapshot(0, 'Configuration required', 'configure provider.model');
+
+    expect(state.phase).toBe('blocked');
+    expect(state.objective.label).toBe('Configuration required');
+    expect(state.objective.nextCheckpoint).toBe('configure provider.model');
+    expect(state.terminal).toBe('blocked');
+  });
+
   it('transitions through model and tool phases', () => {
     let state = createInitialRunStateSnapshot(0);
     state = applyEventToRunState(

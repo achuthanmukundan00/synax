@@ -45,6 +45,9 @@ export function runCommand(program: Command): void {
               verificationProfile: options.verificationProfile,
               repairAttempts: repairAttemptsResult.value,
               onActivity(activity) {
+                if (activity.kind === 'model_response' && activity.modelOutput) {
+                  renderer?.setModelOutput?.(activity.modelOutput);
+                }
                 if (renderer) return;
                 activities.push(activity.message);
                 console.log(`[synax] ${activity.kind}: ${activity.message}`);
