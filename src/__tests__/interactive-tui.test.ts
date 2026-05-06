@@ -143,7 +143,7 @@ describe('ai core renderer', () => {
 });
 
 describe('interactive layout visual agreements', () => {
-  it('anchors the composition around a dominant central core field', () => {
+  it('keeps the core large only for the empty idle surface', () => {
     const run = createInitialRunStateSnapshot(0);
     const lines = renderLayout(
       {
@@ -165,8 +165,203 @@ describe('interactive layout visual agreements', () => {
     expect(plain).not.toContain('Field');
     expect(plain).not.toContain('contained local intelligence runtime');
     expect(plain).toMatch(/[.·•○◎╱╲]/);
-    expect(plain).not.toContain('Files touched:');
-    expect(plain).not.toContain('History');
+    expect(plain).toContain('Awaiting objective');
+  });
+
+  it('renders read, command, edit, verification, and final summary blocks as the main surface', () => {
+    const run = {
+      ...createInitialRunStateSnapshot(0),
+      runId: 'run-1',
+      phase: 'completed' as const,
+      providerLabel: 'qwen @ http://127.0.0.1:1234/v1',
+      objective: {
+        label: 'Improve TUI observability',
+        currentPhase: 'completed' as const,
+        nextCheckpoint: 'run finalized',
+      },
+      statusNote: 'completed: 3 model steps, 4 tool calls, 2 files changed',
+      lastModelOutput: 'Implemented the transcript layout and verified focused tests.',
+      changes: {
+        items: [
+          { path: 'src/tui/layout.ts', op: 'edit' as const },
+          { path: 'src/__tests__/interactive-tui.test.ts', op: 'edit' as const },
+        ],
+        overflowCount: 0,
+      },
+      verification: {
+        ...createInitialRunStateSnapshot(0).verification,
+        state: 'passed' as const,
+        checksPassed: 1,
+        summary: 'all tests passed (1.2s)',
+        currentCheckLabel: 'npm test src/__tests__/interactive-tui.test.ts',
+      },
+      patchPreview: {
+        path: 'src/tui/layout.ts',
+        diff: '@@ -1,2 +1,2 @@\n-old dashboard\n+new transcript',
+      },
+      debugHistory: [
+        {
+          atMs: 1,
+          kind: 'model' as const,
+          summary: 'Inspecting TUI runtime state and renderer boundaries.',
+          detail: '<thinking>hidden chain</thinking>Inspecting TUI runtime state and renderer boundaries.',
+        },
+        {
+          atMs: 2,
+          kind: 'tool_call' as const,
+          summary: 'read call',
+          detail: 'read\n{"path":"src/tui/layout.ts","startLine":1,"endLine":120}',
+        },
+        {
+          atMs: 3,
+          kind: 'tool_result' as const,
+          summary: 'read ok',
+          detail: 'export function renderLayout(...) { ... }',
+        },
+        {
+          atMs: 4,
+          kind: 'tool_call' as const,
+          summary: 'bash call',
+          detail: 'bash\n{"command":"npm test src/__tests__/interactive-tui.test.ts"}',
+        },
+        {
+          atMs: 5,
+          kind: 'tool_result' as const,
+          summary: 'bash ok',
+          detail: 'exit code: 0\nduration: 1.2s\nPASS src/__tests__/interactive-tui.test.ts',
+        },
+        {
+          atMs: 6,
+          kind: 'tool_call' as const,
+          summary: 'edit call',
+          detail: 'edit\n{"path":"src/tui/layout.ts"}',
+        },
+      ],
+    };
+    const lines = renderLayout(
+      {
+        run,
+        objectiveInput: '',
+        coreMode: 'completed',
+        nowMs: 2000,
+      },
+      120,
+      36,
+    );
+    const plain = lines.map((line) => stripAnsi(line)).join('\n');
+
+    expect(plain).toContain('model');
+    expect(plain).toContain('Inspecting TUI runtime state and renderer boundaries.');
+    expect(plain).not.toContain('hidden chain');
+    expect(plain).toContain('read  src/tui/layout.ts:1-120');
+    expect(plain).toContain('$ npm test src/__tests__/interactive-tui.test.ts');
+    expect(plain).toContain('exit 0');
+    expect(plain).toContain('1.2s');
+    expect(plain).toContain('edit  src/tui/layout.ts');
+    expect(plain).toContain('-old dashboard');
+    expect(plain).toContain('+new transcript');
+    expect(plain).toContain('verify  passed');
+    expect(plain).toContain('Final summary');
+    expect(plain).toContain('objective: Improve TUI observability');
+    expect(plain).toContain('files changed: 2');
+    expect(plain).toContain('commands run: npm test src/__tests__/interactive-tui.test.ts');
+  });
+
+  it('renders failed command output and blocker in the transcript summary', () => {
+    const run = {
+      ...createInitialRunStateSnapshot(0),
+      phase: 'verifying' as const,
+      terminal: 'failed' as const,
+      terminalIssue: 'verification failed: Jest assertion failed',
+      riskLine: 'verification failed: Jest assertion failed',
+      objective: {
+        label: 'Fix TUI transcript',
+        currentPhase: 'verifying' as const,
+        nextCheckpoint: 'inspect terminal issue',
+      },
+      verification: {
+        ...createInitialRunStateSnapshot(0).verification,
+        state: 'failed' as const,
+        checksFailed: 1,
+        summary: 'Expected transcript to contain read block',
+        currentCheckLabel: 'npm test',
+      },
+      debugHistory: [
+        {
+          atMs: 1,
+          kind: 'tool_call' as const,
+          summary: 'bash call',
+          detail: 'bash\n{"command":"npm test"}',
+        },
+        {
+          atMs: 2,
+          kind: 'tool_result' as const,
+          summary: 'bash error',
+          detail:
+            'exit code: 1\nduration: 4.4s\nFAIL src/__tests__/interactive-tui.test.ts\nExpected transcript to contain read block',
+        },
+      ],
+    };
+    const plain = renderLayout(
+      {
+        run,
+        objectiveInput: '',
+        coreMode: 'failure',
+        nowMs: 5000,
+      },
+      100,
+      30,
+    )
+      .map((line) => stripAnsi(line))
+      .join('\n');
+
+    expect(plain).toContain('$ npm test');
+    expect(plain).toContain('exit 1');
+    expect(plain).toContain('FAIL src/__tests__/interactive-tui.test.ts');
+    expect(plain).toContain('verify  failed');
+    expect(plain).toContain('blockers: verification failed: Jest assertion failed');
+    expect(plain).toContain('next blocker: Expected transcript to contain read block');
+  });
+
+  it('switches to compact core mode after the first run event and hides it on small terminals', () => {
+    const run = {
+      ...createInitialRunStateSnapshot(0),
+      phase: 'thinking' as const,
+      debugHistory: [
+        { atMs: 1, kind: 'model' as const, summary: 'model response', detail: 'Inspecting files before editing.' },
+      ],
+    };
+
+    const mediumPlain = renderLayout(
+      {
+        run,
+        objectiveInput: '',
+        coreMode: 'thinking',
+        nowMs: 2000,
+      },
+      92,
+      24,
+    )
+      .map((line) => stripAnsi(line))
+      .join('\n');
+    const smallPlain = renderLayout(
+      {
+        run,
+        objectiveInput: '',
+        coreMode: 'thinking',
+        nowMs: 2000,
+      },
+      56,
+      18,
+    )
+      .map((line) => stripAnsi(line))
+      .join('\n');
+
+    expect(mediumPlain).toContain('core');
+    expect(mediumPlain).toContain('Inspecting files before editing.');
+    expect(smallPlain).toContain('Synax');
+    expect(smallPlain).toContain('Inspecting files before editing.');
+    expect(smallPlain).not.toMatch(/[·•◎╱╲◆━×]/);
   });
 
   it('renders a closed input dock and shows model output', () => {
@@ -245,7 +440,7 @@ describe('interactive layout visual agreements', () => {
     expect(plain).toContain('+new');
   });
 
-  it('keeps scrollable debug history off the primary visual surface', () => {
+  it('renders debug history as segmented transcript blocks', () => {
     const run = {
       ...createInitialRunStateSnapshot(0),
       debugHistory: [
@@ -277,12 +472,11 @@ describe('interactive layout visual agreements', () => {
     );
     const plain = lines.map((line) => stripAnsi(line)).join('\n');
 
-    expect(plain).not.toContain('History');
-    expect(plain).not.toContain('Model: I will check git status.');
-    expect(plain).not.toContain('Tool call: bash');
-    expect(plain).not.toContain('git status --short');
-    expect(plain).not.toContain('Tool result: stdout:');
-    expect(plain).not.toContain('M src/tui/layout.ts');
+    expect(plain).toContain('Transcript');
+    expect(plain).toContain('model');
+    expect(plain).toContain('I will check git status.');
+    expect(plain).toContain('$ git status --short');
+    expect(plain).toContain('M src/tui/layout.ts');
   });
 });
 
