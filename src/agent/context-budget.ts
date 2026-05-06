@@ -960,6 +960,10 @@ function summarizeToolOutput(
     return summarizeGitDiffOutput(out);
   }
 
+  if (toolName === 'bash') {
+    return summarizeBashOutput(out);
+  }
+
   if (toolName === 'edit' || toolName === 'replace_in_file') {
     // Edit results are small (path + diff), keep compact
     return {
@@ -1082,6 +1086,25 @@ function summarizeGitDiffOutput(out: Record<string, unknown>): Record<string, un
   };
 }
 
+function summarizeBashOutput(out: Record<string, unknown>): Record<string, unknown> {
+  const command = typeof out.command === 'string' ? out.command : undefined;
+  const stdout = typeof out.stdout === 'string' ? out.stdout : '';
+  const stderr = typeof out.stderr === 'string' ? out.stderr : '';
+  const exitCode = typeof out.exitCode === 'number' ? out.exitCode : undefined;
+  const safetyWarnings = Array.isArray(out.safetyWarnings) ? out.safetyWarnings.filter(isString) : undefined;
+
+  return {
+    command,
+    exitCode,
+    stdoutBytes: Buffer.byteLength(stdout, 'utf-8'),
+    stderrBytes: Buffer.byteLength(stderr, 'utf-8'),
+    stdoutPreview: clipped(stdout.trim(), 300) || undefined,
+    stderrPreview: clipped(stderr.trim(), 300) || undefined,
+    safetyWarnings,
+    _compacted: true,
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Utility
 // ---------------------------------------------------------------------------
@@ -1097,4 +1120,8 @@ function tryParseJson(value: string): unknown {
   } catch {
     return null;
   }
+}
+
+function isString(value: unknown): value is string {
+  return typeof value === 'string';
 }

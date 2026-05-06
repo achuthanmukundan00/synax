@@ -40,6 +40,7 @@ export async function runInteractiveTui(
     : createInitialRunStateSnapshot(Date.now());
   let exiting = false;
   let busy = false;
+  let historyScrollOffset = 0;
   const diff = new DiffRenderer();
 
   // Wire the runtime event stream from ChatSession → TUI state reducer.
@@ -71,6 +72,7 @@ export async function runInteractiveTui(
         lastModelOutput: options?.lastModelOutput?.(),
         modelLabel: options?.modelLabel,
         endpointLabel: options?.endpointLabel,
+        historyScrollOffset,
       },
       terminal.columns,
       terminal.rows,
@@ -172,6 +174,14 @@ export async function runInteractiveTui(
       if (event.type === 'redraw') {
         terminal.clearScreen();
         paint(true);
+        continue;
+      }
+      if (event.type === 'scroll_history_up') {
+        historyScrollOffset += 3;
+        continue;
+      }
+      if (event.type === 'scroll_history_down') {
+        historyScrollOffset = Math.max(0, historyScrollOffset - 3);
         continue;
       }
       if (event.type === 'backspace') {

@@ -45,8 +45,12 @@ export function runCommand(program: Command): void {
               verificationProfile: options.verificationProfile,
               repairAttempts: repairAttemptsResult.value,
               onActivity(activity) {
-                if (activity.kind === 'model_response' && activity.modelOutput) {
-                  renderer?.setModelOutput?.(activity.modelOutput);
+                if (activity.kind === 'model_response' && activity.message.trim().length > 0) {
+                  renderer?.onEvent({
+                    type: 'assistant_message',
+                    timestamp: new Date().toISOString(),
+                    content: activity.message,
+                  });
                 }
                 if (renderer) return;
                 activities.push(activity.message);
