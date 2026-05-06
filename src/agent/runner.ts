@@ -1,5 +1,5 @@
 import { existsSync } from 'fs';
-import { mkdir, readFile, writeFile } from 'fs/promises';
+import { mkdir, readFile } from 'fs/promises';
 import { dirname } from 'path';
 
 import { type ChatOptions, type ChatResponse } from '../llm/types';
@@ -14,8 +14,15 @@ import {
   type PatchPreview,
   type ReplaceInFilePatch,
 } from './patch';
-import { writeLastEditRecord } from './safety';
+import { atomicWriteFile, writeLastEditRecord } from './safety';
 import { eventNow, type AgentEvent, type TerminalState } from './events';
+import {
+  canMutatePath,
+  describeToolCall,
+  guardBroadTask,
+  getAllowedModelTools,
+  type RunMode,
+} from './task-policy';
 
 export type AgentTerminalState = TerminalState;
 
@@ -41,16 +48,19 @@ export interface AgentRunnerOptions {
   client: AgentClient;
   maxSteps?: number;
   maxToolCalls?: number;
+  mode?: RunMode;
   tools?: ModelToolSurfaceOptions;
   conversation?: AgentConversation;
   registry?: ToolRegistry;
   onActivity?: (activity: AgentActivity) => void;
   onEvent?: (event: AgentEvent) => void;
   approvePatch?: (preview: PatchPreview) => PatchApprovalDecision | Promise<PatchApprovalDecision>;
+  ensureCheckpoint?: () => Promise<unknown>;
 }
 
 export interface ModelToolSurfaceOptions {
   bashEnabled?: boolean;
+  mode?: RunMode;
 }
 
 export interface AgentActivity {
@@ -98,12 +108,26 @@ export async function runAgentTurn(options: AgentRunnerOptions & { task: string 
   const conversation = options.conversation ?? createAgentConversation();
   const registry =
     options.registry ?? createToolRegistry({ repoRoot: options.repoRoot, ledger: conversation.inspectionLedger });
-  const tools = buildModelFacingTools(options.tools);
+  const mode = options.mode ?? 'patch';
+  const tools = buildModelFacingTools({ ...options.tools, mode });
   const maxSteps = options.maxSteps ?? DEFAULT_MAX_STEPS;
   const maxToolCalls = options.maxToolCalls ?? DEFAULT_MAX_TOOL_CALLS;
   const changedFiles: string[] = [];
   const toolCalls: AgentTurnResult['toolCalls'] = [];
   let consecutiveRecoverableToolErrors = 0;
+
+  const broadTask = guardBroadTask(options.task);
+  if (broadTask) {
+    return {
+      terminalState: 'blocked',
+      finalAnswer: `${broadTask.message}\nSuggested first step: ${broadTask.suggestedFirstStep}`,
+      steps: 0,
+      toolCalls,
+      changedFiles,
+      conversation,
+      error: broadTask.message,
+    };
+  }
 
   conversation.messages.push({ role: 'user', content: options.task });
 
@@ -199,7 +223,10 @@ export async function runAgentTurn(options: AgentRunnerOptions & { task: string 
           error: `max tool calls exceeded: ${maxToolCalls}`,
         };
       }
-      options.onActivity?.({ kind: 'tool', message: `${call.name}(${JSON.stringify(call.arguments)})` });
+      options.onActivity?.({
+        kind: 'tool',
+        message: describeToolCall(call.name, call.arguments as Record<string, unknown>),
+      });
       options.onEvent?.({
         type: 'tool_started',
         timestamp: eventNow(),
@@ -212,6 +239,8 @@ export async function runAgentTurn(options: AgentRunnerOptions & { task: string 
         repoRoot: options.repoRoot,
         registry,
         ledger: conversation.inspectionLedger,
+        mode,
+        ensureCheckpoint: options.ensureCheckpoint,
         approvePatch: options.approvePatch,
         onPatchPreview: (preview) => {
           options.onEvent?.({
@@ -297,6 +326,8 @@ async function executeAgentTool(
     repoRoot: string;
     registry: ToolRegistry;
     ledger: InspectionLedger;
+    mode: RunMode;
+    ensureCheckpoint?: () => Promise<unknown>;
     approvePatch?: (preview: PatchPreview) => PatchApprovalDecision | Promise<PatchApprovalDecision>;
     onPatchPreview?: (preview: PatchPreview) => void;
   },
@@ -314,7 +345,7 @@ async function executeAgentTool(
   }
 
   if (call.name === 'write' || call.name === 'create_file') {
-    return executeCreateFile(call.arguments, context.repoRoot, call.name);
+    return executeCreateFile(call.arguments, context, call.name);
   }
 
   if (call.name === 'bash') {
@@ -361,6 +392,8 @@ async function executeReplaceInFile(
   context: {
     repoRoot: string;
     ledger: InspectionLedger;
+    mode: RunMode;
+    ensureCheckpoint?: () => Promise<unknown>;
     approvePatch?: (preview: PatchPreview) => PatchApprovalDecision | Promise<PatchApprovalDecision>;
     onPatchPreview?: (preview: PatchPreview) => void;
   },
@@ -370,6 +403,17 @@ async function executeReplaceInFile(
   if (!patch) {
     return toolFailure(toolName, 'path, oldStr, and newStr are required');
   }
+
+  if (context.mode === 'read-only' || context.mode === 'verify') {
+    return toolFailure(toolName, `${context.mode} mode does not allow edits`);
+  }
+
+  const mutationPath = canMutatePath(context.mode, context.repoRoot, patch.path);
+  if (!mutationPath.ok) {
+    return toolFailure(toolName, mutationPath.reason ?? 'mutation path rejected');
+  }
+
+  await context.ensureCheckpoint?.();
 
   const validation = await validateReplaceInFile(patch, { repoRoot: context.repoRoot, ledger: context.ledger });
   if (!validation.ok) {
@@ -421,23 +465,40 @@ async function executeReplaceInFile(
 
 async function executeCreateFile(
   input: Record<string, unknown>,
-  repoRoot: string,
+  context: {
+    repoRoot: string;
+    mode: RunMode;
+    ensureCheckpoint?: () => Promise<unknown>;
+  },
   toolName = 'create_file',
 ): Promise<AgentToolExecutionResult> {
   if (typeof input.path !== 'string' || typeof input.content !== 'string') {
     return toolFailure(toolName, 'path and content are required');
   }
 
-  const target = normalizeRepoPath(repoRoot, input.path);
+  if (context.mode === 'read-only' || context.mode === 'verify') {
+    return toolFailure(toolName, `${context.mode} mode does not allow writes`);
+  }
+
+  const target = normalizeRepoPath(context.repoRoot, input.path);
   if (!target.ok || !target.absolutePath || target.path === undefined) {
     return toolFailure(toolName, target.reason ?? 'invalid path');
+  }
+  const mutationPath = canMutatePath(context.mode, context.repoRoot, target.path);
+  if (!mutationPath.ok) {
+    return toolFailure(toolName, mutationPath.reason ?? 'mutation path rejected');
   }
   if (existsSync(target.absolutePath)) {
     return toolFailure(toolName, `file already exists: ${target.path}`);
   }
 
+  if (Buffer.byteLength(input.content, 'utf-8') > 16 * 1024) {
+    return toolFailure(toolName, 'create_file content is too large; write a smaller text file');
+  }
+
+  await context.ensureCheckpoint?.();
   await mkdir(dirname(target.absolutePath), { recursive: true });
-  await writeFile(target.absolutePath, input.content, 'utf-8');
+  await atomicWriteFile(target.absolutePath, input.content);
   const written = await readFile(target.absolutePath, 'utf-8');
   return {
     success: true,
@@ -452,6 +513,7 @@ async function executeCreateFile(
 
 export function buildModelFacingTools(options: ModelToolSurfaceOptions = {}): ToolDefinition[] {
   const bashEnabled = options.bashEnabled ?? false;
+  const allowedNames = getAllowedModelTools(options.mode ?? 'patch', bashEnabled);
   const tools: ToolDefinition[] = [
     {
       name: 'read',
@@ -552,7 +614,7 @@ export function buildModelFacingTools(options: ModelToolSurfaceOptions = {}): To
     });
   }
 
-  return tools;
+  return tools.filter((tool) => allowedNames.includes(tool.name));
 }
 
 function publicToolResult(toolName: string, result: ToolResult): AgentToolExecutionResult {
