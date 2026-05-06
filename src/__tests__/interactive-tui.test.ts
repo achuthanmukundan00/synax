@@ -97,9 +97,20 @@ describe('ai core renderer', () => {
   it('keeps material state color selection stable', () => {
     expect(modeColor('blocked')).toBe('\u001b[33m');
     expect(modeColor('failure')).toBe('\u001b[31m');
-    expect(modeColor('verifying')).toBe('\u001b[33m');
+    expect(modeColor('verifying')).toBe('\u001b[32m');
     expect(modeColor('completed')).toBe('\u001b[32m');
     expect(modeColor('planning')).toBe('\u001b[34m');
+  });
+
+  it('keeps normal running work out of warning amber', () => {
+    const runningModes = ['tool_execution', 'bash', 'verifying'] as const;
+
+    for (const mode of runningModes) {
+      const colors = extractTrueColors(renderAiCore(mode, 0.4).join(''));
+      expect(colors.some(isWarningAmber)).toBe(false);
+    }
+
+    expect(extractTrueColors(renderAiCore('blocked', 0.4).join('')).some(isWarningAmber)).toBe(true);
   });
 
   it('uses restrained truecolor inside the containment field', () => {
@@ -321,4 +332,16 @@ describe('interactive tui runtime', () => {
 function stripAnsi(input: string): string {
   // eslint-disable-next-line no-control-regex
   return input.replace(/\u001b\[[0-9;]*m/g, '');
+}
+
+function extractTrueColors(input: string): Array<{ r: number; g: number; b: number }> {
+  return Array.from(input.matchAll(/\u001b\[38;2;(\d+);(\d+);(\d+)m/g), ([, r, g, b]) => ({
+    r: Number(r),
+    g: Number(g),
+    b: Number(b),
+  }));
+}
+
+function isWarningAmber(color: { r: number; g: number; b: number }): boolean {
+  return color.r >= 150 && color.g >= 95 && color.g > color.b * 1.35 && color.r > color.b * 2;
 }
