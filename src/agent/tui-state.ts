@@ -380,9 +380,13 @@ function withStatus(state: RunStateSnapshot, statusNote: string, severity: TuiSe
   return { ...state, statusNote: clipText(statusNote, 120), severity: maxSeverity(state.severity, severity) };
 }
 
+/** Maximum debug history entries retained for transcript rendering.
+ *  Keep bounded so render cost stays O(1) regardless of session length. */
+const MAX_DEBUG_HISTORY = 200;
+
 function withDebugHistory(state: RunStateSnapshot, item: TuiDebugHistoryItem): RunStateSnapshot {
   const debugHistory = [...state.debugHistory, { ...item, detail: clipText(item.detail, 6000) }];
-  return { ...state, debugHistory: debugHistory.slice(Math.max(0, debugHistory.length - 120)) };
+  return { ...state, debugHistory: debugHistory.slice(Math.max(0, debugHistory.length - MAX_DEBUG_HISTORY)) };
 }
 
 function withRisk(state: RunStateSnapshot, riskLine: string, severity: TuiSeverity): RunStateSnapshot {
