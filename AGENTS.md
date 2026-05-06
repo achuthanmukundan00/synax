@@ -189,6 +189,18 @@ Recommended verification order after code changes:
 4. `npm run build`
 5. `npm run docs:build` when docs changed
 
+## Synax Self-Development
+
+When modifying Synax itself:
+
+- Inspect the relevant tests and nearby runtime files before editing.
+- Change the smallest viable code path.
+- Prefer hardening existing behavior over adding new abstractions.
+- Update docs only when behavior changes.
+- Run `npm run typecheck` before claiming success.
+- Run targeted tests when available, then broader verification if the change touches public behavior.
+- Summarize changed files, verification status, and any remaining gaps in the final response.
+
 Do not ask before running normal project-local verification commands.
 
 ## Documentation
