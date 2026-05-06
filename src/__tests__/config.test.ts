@@ -116,6 +116,22 @@ describe('parseTomlString', () => {
     expect(result.config.maxToolCalls).toBe(96);
   });
 
+  it('keeps context budget and context window aliases in sync', () => {
+    const result = parseTomlString(['[agent]', 'context_budget_tokens = 64000'].join('\n'));
+
+    expect(result.errors).toHaveLength(0);
+    expect(result.config.contextBudgetTokens).toBe(64000);
+    expect(result.config.contextWindowTokens).toBe(64000);
+  });
+
+  it('rejects conflicting context budget and context window aliases', () => {
+    const result = parseTomlString(
+      ['[agent]', 'context_budget_tokens = 64000', 'context_window_tokens = 32000'].join('\n'),
+    );
+
+    expect(result.errors.some((error) => error.path === 'agent.context_window_tokens')).toBe(true);
+  });
+
   it('returns errors for invalid TOML', () => {
     const result = parseTomlString('invalid toml {{{');
     expect(result.errors.length).toBeGreaterThan(0);
