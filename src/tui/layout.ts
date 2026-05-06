@@ -1,6 +1,7 @@
 import type { RunStateSnapshot } from '../agent/tui-state';
 import type { CoreMode } from './ai-core';
-import { CORE_HEIGHT, CORE_WIDTH, modeColor, renderAiCore } from './ai-core';
+import { CORE_HEIGHT, CORE_WIDTH, modeColor, renderAiCore, renderDottedCore } from './ai-core';
+import { renderTranscript, toolsUsed } from './transcript';
 
 export interface InteractiveViewState {
   run: RunStateSnapshot;
@@ -24,33 +25,20 @@ export function renderLayout(state: InteractiveViewState, cols: number, rows: nu
   const panel = renderDirectivePanel(state.objectiveInput, width, state.modelLabel);
   const bodyHeight = Math.max(1, height - panel.length);
   const lines = Array.from({ length: bodyHeight }, () => '');
-  const core = renderAiCore(state.coreMode, state.nowMs / 1000);
-  const compact = width < 70 || bodyHeight < CORE_HEIGHT + 6;
-  const coreX = compact
-    ? Math.max(0, Math.floor((width - CORE_WIDTH) / 2))
-    : Math.max(0, Math.floor(width * 0.45 - CORE_WIDTH / 2));
-  const coreY = compact ? 2 : Math.max(2, Math.floor((bodyHeight - CORE_HEIGHT) / 2) - 2);
-  const telemetryWidth = compact ? width - 4 : Math.min(34, Math.max(24, width - (coreX + CORE_WIDTH + 4)));
-  const telemetryX = compact ? 2 : Math.min(width - telemetryWidth, coreX + CORE_WIDTH + 3);
-  const telemetryY = compact ? Math.min(bodyHeight - 1, coreY + CORE_HEIGHT + 1) : coreY + 1;
+  const hasTranscript =
+    state.run.timeline.length > 0 ||
+    state.run.debugHistory.length > 0 ||
+    state.run.phase !== 'idle' ||
+    Boolean(state.run.patchPreview) ||
+    Boolean(state.run.lastModelOutput.trim());
 
-  put(
-    lines,
-    0,
-    2,
-    `\u001b[1;37mSynax\u001b[0m ${modeColor(state.coreMode)}${phaseLabel(state.run.phase)}\u001b[0m ${elapsed(state.run.startedAtMs, state.nowMs)}`,
-    width,
-  );
-  if (state.run.phase === 'completed' && state.run.statusNote) {
-    put(lines, 2, 2, activitySummary(state.run), width);
+  if (!hasTranscript) {
+    renderWelcome(lines, width, bodyHeight, state);
+  } else {
+    renderHeader(lines, width, state);
+    renderOperationalSurface(lines, width, bodyHeight, state);
   }
-  putBlock(lines, coreY, coreX, core, width);
-  putTelemetry(lines, telemetryY, telemetryX, telemetryWidth, state);
-  putLatestReply(lines, bodyHeight, width, state);
 
-  if (state.run.patchPreview && bodyHeight > coreY + CORE_HEIGHT + 5) {
-    putPatchPreview(lines, Math.min(bodyHeight - 6, coreY + CORE_HEIGHT + 2), 2, Math.min(width - 4, 78), state.run);
-  }
   if (state.blockedMessage) {
     put(
       lines,
@@ -64,6 +52,72 @@ export function renderLayout(state: InteractiveViewState, cols: number, rows: nu
   const clipped = lines.slice(0, bodyHeight).map((line) => pad(clip(line, width), width));
   clipped.push(...panel);
   return clipped.map((line) => pad(clip(line, width), width));
+}
+
+function renderWelcome(lines: string[], width: number, bodyHeight: number, state: InteractiveViewState): void {
+  const core = renderAiCore(state.coreMode, state.nowMs / 1000);
+  const coreX = Math.max(0, Math.floor(width * 0.45 - CORE_WIDTH / 2));
+  const coreY = Math.max(2, Math.floor((bodyHeight - CORE_HEIGHT) / 2) - 2);
+  const telemetryWidth = Math.min(34, Math.max(24, width - (coreX + CORE_WIDTH + 4)));
+  const telemetryX = Math.min(width - telemetryWidth, coreX + CORE_WIDTH + 3);
+
+  renderHeader(lines, width, state);
+  putBlock(lines, coreY, coreX, core, width);
+  putTelemetry(lines, coreY + 1, telemetryX, telemetryWidth, state);
+}
+
+function renderHeader(lines: string[], width: number, state: InteractiveViewState): void {
+  const run = state.run;
+  const toolCount = toolsUsed(run).length;
+  const fileCount = run.changes.items.length + run.changes.overflowCount;
+  const model = state.modelLabel || modelFromProvider(run.providerLabel);
+  const header = [
+    '\u001b[1;37mSynax\u001b[0m',
+    `${modeColor(state.coreMode)}${phaseLabel(run.phase)}\u001b[0m`,
+    elapsed(run.startedAtMs, state.nowMs),
+    `model ${model || 'local'}`,
+    `tools ${toolCount}`,
+    `files ${fileCount}`,
+  ].join('  ');
+  put(lines, 0, 2, clip(header, width - 4), width);
+}
+
+function renderOperationalSurface(
+  lines: string[],
+  width: number,
+  bodyHeight: number,
+  state: InteractiveViewState,
+): void {
+  const showSideCore = width >= 110 && bodyHeight >= 18;
+  const showHeaderCore = !showSideCore && width >= 70 && bodyHeight >= 18;
+  const sideWidth = showSideCore ? 24 : 0;
+  const transcriptWidth = showSideCore ? width - sideWidth - 5 : width - 4;
+  const transcriptLines = renderTranscript(state, Math.max(24, transcriptWidth));
+  const scrollOffset = Math.max(0, state.historyScrollOffset ?? 0);
+  const visibleTranscript = transcriptLines.slice(
+    Math.max(0, transcriptLines.length - (bodyHeight - 3) - scrollOffset),
+    Math.max(0, transcriptLines.length - scrollOffset),
+  );
+
+  put(lines, 2, 2, dim('Transcript'), width);
+  for (let i = 0; i < visibleTranscript.length && 3 + i < bodyHeight; i += 1) {
+    put(lines, 3 + i, 2, clip(visibleTranscript[i], transcriptWidth), width);
+  }
+
+  if (showSideCore) {
+    const core = renderCompactCore(state.coreMode, state.nowMs, 20, 7);
+    putBlock(lines, 2, width - sideWidth, core, width);
+    putTelemetry(lines, 11, width - sideWidth, sideWidth - 2, state);
+  } else if (showHeaderCore) {
+    put(lines, 1, Math.max(2, width - 36), `core ${phaseLabel(state.run.phase).toLowerCase()}`, width);
+  }
+}
+
+function renderCompactCore(mode: CoreMode, nowMs: number, width: number, height: number): string[] {
+  return [
+    dim('core'),
+    ...renderDottedCore({ mode, frame: Math.floor((nowMs / 1000) * 8), width, height, unicode: true }),
+  ];
 }
 
 function elapsed(startedAtMs: number, nowMs: number): string {
@@ -180,7 +234,7 @@ function activitySummary(run: RunStateSnapshot): string {
   if (run.phase === 'completed' && run.statusNote) return completionActivity(run.statusNote);
   if (latest) return latest;
   if (run.statusNote) return compactStatus(run.statusNote);
-  if (run.phase === 'idle') return 'Idle · awaiting objective';
+  if (run.phase === 'idle') return 'Idle · Awaiting objective';
   return `${phaseLabel(run.phase)} · ${run.objective.nextCheckpoint}`;
 }
 
@@ -216,36 +270,6 @@ function putTelemetry(lines: string[], y: number, x: number, width: number, stat
 
   for (let i = 0; i < items.length; i += 1) {
     put(lines, y + i, x, clip(items[i], width), x + width);
-  }
-}
-
-function putLatestReply(lines: string[], bodyHeight: number, width: number, state: InteractiveViewState): void {
-  const reply = cleanModelOutput(state.run.lastModelOutput || state.lastModelOutput || latestModelHistory(state.run));
-  if (!reply) return;
-
-  const maxWidth = Math.min(width - 4, 110);
-  const wrapped = wrapText(reply, maxWidth).slice(0, 3);
-  const y = Math.max(3, bodyHeight - wrapped.length - 2);
-  put(lines, y, 2, `${dim('Reply ·')} ${clip(wrapped[0] ?? '', maxWidth - 8)}`, width);
-  for (let i = 1; i < wrapped.length; i += 1) {
-    put(lines, y + i, 2, clip(wrapped[i], maxWidth), width);
-  }
-}
-
-function latestModelHistory(run: RunStateSnapshot): string {
-  for (let i = run.debugHistory.length - 1; i >= 0; i -= 1) {
-    const item = run.debugHistory[i];
-    if (item?.kind === 'model') return item.detail;
-  }
-  return '';
-}
-
-function putPatchPreview(lines: string[], y: number, x: number, width: number, run: RunStateSnapshot): void {
-  if (!run.patchPreview) return;
-  const diffLines = run.patchPreview.diff.split('\n').slice(0, 4);
-  put(lines, y, x, dim(`Diff preview: ${clip(run.patchPreview.path, width - 14)}`), x + width);
-  for (let i = 0; i < diffLines.length; i += 1) {
-    put(lines, y + i + 1, x + 2, clip(diffLines[i], width - 4), x + width);
   }
 }
 
@@ -298,13 +322,9 @@ function compactStatus(statusNote: string): string {
   return statusNote;
 }
 
-function cleanModelOutput(output: string): string {
-  return output
-    .replace(/<think>[\s\S]*?<\/think>/gi, '')
-    .replace(/<thinking>[\s\S]*?<\/thinking>/gi, '')
-    .replace(/<tool_call>[\s\S]*?<\/tool_call>/gi, '')
-    .replace(/\s+/g, ' ')
-    .trim();
+function modelFromProvider(provider: string): string {
+  const [model] = provider.split(' @ ');
+  return model === 'n/a' ? '' : model;
 }
 
 function dim(text: string): string {
