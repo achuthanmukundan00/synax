@@ -205,7 +205,7 @@ describe('interactive layout visual agreements', () => {
     expect(plain).not.toContain('Field');
     expect(plain).not.toContain('contained local intelligence runtime');
     expect(plain).toMatch(/[.·•○◎╱╲]/);
-    expect(plain).toContain('Awaiting objective');
+    expect(plain).toContain('Core        Unloaded');
   });
 
   it('renders read, command, edit, verification, and final summary blocks as the main surface', () => {
@@ -296,8 +296,8 @@ describe('interactive layout visual agreements', () => {
     expect(plain).not.toContain('model qwen');
     expect(plain).not.toContain('tools 3');
     expect(plain).not.toContain('files 2');
-    expect(plain).toContain('Model      qwen');
-    expect(plain).toContain('Provider   Relay');
+    expect(plain).toContain('Model       qwen');
+    expect(plain).toContain('Provider    Relay');
     expect(plain).toContain('Context');
     expect(plain).toContain('Inspecting TUI runtime state and renderer boundaries.');
     expect(plain).not.toContain('hidden chain');
@@ -371,6 +371,75 @@ describe('interactive layout visual agreements', () => {
     expect(plain).toContain('verify  failed');
     expect(plain).toContain('blockers: verification failed: Jest assertion failed');
     expect(plain).toContain('next: Expected transcript to contain read block');
+  });
+
+  it('preserves git diff ANSI colors in command output', () => {
+    const run = {
+      ...createInitialRunStateSnapshot(0),
+      debugHistory: [
+        {
+          atMs: 1,
+          kind: 'tool_call' as const,
+          summary: 'bash call',
+          detail: 'bash\n{"command":"git diff src/tui/transcript.ts"}',
+        },
+        {
+          atMs: 2,
+          kind: 'tool_result' as const,
+          summary: 'bash ok',
+          detail:
+            'exit code: 1\n\u001b[1mdiff --git a/src/tui/transcript.ts b/src/tui/transcript.ts\u001b[0m\n\u001b[31m-old line\u001b[0m\n\u001b[32m+new line\u001b[0m',
+        },
+      ],
+    };
+
+    const rendered = renderLayout(
+      {
+        run,
+        objectiveInput: '',
+        coreMode: 'thinking',
+        nowMs: 2000,
+      },
+      100,
+      30,
+    ).join('\n');
+
+    expect(rendered).toContain('\u001b[31m-old line\u001b[0m');
+    expect(rendered).toContain('\u001b[32m+new line\u001b[0m');
+  });
+
+  it('does not color command exit codes red in the transcript', () => {
+    const run = {
+      ...createInitialRunStateSnapshot(0),
+      debugHistory: [
+        {
+          atMs: 1,
+          kind: 'tool_call' as const,
+          summary: 'bash call',
+          detail: 'bash\n{"command":"git diff --quiet"}',
+        },
+        {
+          atMs: 2,
+          kind: 'tool_result' as const,
+          summary: 'bash changed',
+          detail: 'exit code: 1\nworking tree differs',
+        },
+      ],
+    };
+
+    const rendered = renderLayout(
+      {
+        run,
+        objectiveInput: '',
+        coreMode: 'thinking',
+        nowMs: 2000,
+      },
+      100,
+      30,
+    ).join('\n');
+
+    expect(rendered).toContain('exit 1');
+    expect(rendered).not.toContain('\u001b[1;31mexit 1\u001b[0m');
   });
 
   it('parses camelCase command exit codes as successful results', () => {
@@ -501,7 +570,62 @@ describe('interactive layout visual agreements', () => {
       .map((line) => stripAnsi(line))
       .join('\n');
 
-    expect(plain).toContain('Core unloaded');
+    expect(plain).toContain('Core        Unloaded');
+    expect(plain).toContain('Model       none');
+    expect(plain).toContain('Provider    none');
+  });
+
+  it('renders core telemetry as a structured module panel', () => {
+    const run = {
+      ...createInitialRunStateSnapshot(0),
+      phase: 'completed' as const,
+      providerLabel: 'Qwen3.6-35B-A3B-UD-IQ3_XXS.gguf @ http://127.0.0.1:1234/v1',
+      providerName: 'llama.cpp',
+      modelId: 'Qwen3.6-35B-A3B-UD-IQ3_XXS.gguf',
+      coreLoaded: true,
+      contextUsedTokens: 8192,
+      contextWindowTokens: 131072,
+      thinkingEnabled: undefined,
+      sessionSpendLabel: undefined,
+      toolInvocationCount: 1,
+      statusNote: 'completed: 13 model steps, 1 tool call, 0 files changed',
+      debugHistory: [
+        {
+          atMs: 1,
+          kind: 'tool_call' as const,
+          summary: 'bash call',
+          detail: 'bash\n{"command":"git status --short"}',
+        },
+      ],
+    };
+
+    const plain = renderLayout(
+      {
+        run,
+        objectiveInput: '',
+        coreMode: 'completed',
+        nowMs: 2000,
+      },
+      120,
+      30,
+    )
+      .map((line) => stripAnsi(line))
+      .join('\n');
+
+    expect(plain).toContain('Core Module');
+    expect(plain).toContain('Runtime');
+    expect(plain).toContain('Session');
+    expect(plain).toContain('Core        Loaded');
+    expect(plain).toContain('Model       Qwen3.6-35B-A3…XS.gguf');
+    expect(plain).toContain('Provider    llama.cpp');
+    expect(plain).toContain('Context     8.2k / 131.1k');
+    expect(plain).toContain('Thinking    unknown');
+    expect(plain).toContain('Spend       unknown');
+    expect(plain).toContain('Tools       bash');
+    expect(plain).toContain('Steps       13');
+    expect(plain).not.toContain('Core loaded');
+    expect(plain).not.toContain('Session $');
+    expect(plain).not.toContain('tools used bash');
   });
 
   it('summarizes diff stat command output into semantic file change rows', () => {

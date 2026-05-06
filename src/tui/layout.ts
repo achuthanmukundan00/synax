@@ -79,7 +79,7 @@ function renderWelcome(lines: string[], width: number, bodyHeight: number, state
 
   renderHeader(lines, width, state);
   putBlock(lines, coreY, coreX, core, width);
-  putTelemetry(lines, coreY + 1, telemetryX, telemetryWidth, state);
+  putBlock(lines, coreY + 1, telemetryX, renderTelemetry(state, telemetryWidth), width);
 }
 
 function renderHeader(lines: string[], width: number, state: InteractiveViewState): void {
@@ -121,34 +121,19 @@ function renderOperationalSurface(
   }
 
   if (showSideCore) {
-    const core = renderCompactCore(state.coreMode, state.nowMs, 20, 7);
-    putBlock(lines, 2, width - sideWidth, core, width);
-    putTelemetry(lines, 11, width - sideWidth, sideWidth - 2, state);
+    putBlock(lines, 2, width - sideWidth, renderCoreModule(state, sideWidth - 2, bodyHeight - 2), width);
   } else if (showHeaderCore) {
     put(lines, 1, Math.max(2, width - 36), `core ${phaseLabel(state.run.phase).toLowerCase()}`, width);
   }
 }
 
 function operationalSideWidth(width: number, bodyHeight: number): number {
-  return width >= 110 && bodyHeight >= 18 ? 36 : 0;
+  return width >= 110 && bodyHeight >= 18 ? 38 : 0;
 }
 
 function operationalTranscriptWidth(width: number, bodyHeight: number): number {
   const sideWidth = operationalSideWidth(width, bodyHeight);
   return sideWidth > 0 ? width - sideWidth - 5 : width - 4;
-}
-
-function renderCompactCore(mode: CoreMode, nowMs: number, width: number, height: number): string[] {
-  return [
-    dim('core'),
-    ...renderDottedCore({
-      mode,
-      frame: mode === 'unloaded' ? 0 : Math.floor((nowMs / 1000) * 8),
-      width,
-      height,
-      unicode: true,
-    }),
-  ];
 }
 
 function elapsed(startedAtMs: number, nowMs: number): string {
@@ -253,15 +238,6 @@ function wrapText(text: string, maxWidth: number): string[] {
   return lines.length > 0 ? lines : [''];
 }
 
-function activitySummary(run: RunStateSnapshot): string {
-  const latest = run.timeline[run.timeline.length - 1]?.summary;
-  if (run.phase === 'completed' && run.statusNote) return completionActivity(run.statusNote);
-  if (latest) return latest;
-  if (run.statusNote) return compactStatus(run.statusNote);
-  if (run.phase === 'idle') return 'Idle · Awaiting objective';
-  return `${phaseLabel(run.phase)} · ${run.objective.nextCheckpoint}`;
-}
-
 function renderDirectivePanel(objectiveInput: string, width: number, metadataLabel?: string): string[] {
   const inner = Math.max(8, width - 2);
   const wrapped = wrapText(objectiveInput.trim() || 'Awaiting objective', inner - 2);
@@ -281,28 +257,82 @@ function renderDirectivePanel(objectiveInput: string, width: number, metadataLab
   ];
 }
 
-function putTelemetry(lines: string[], y: number, x: number, width: number, state: InteractiveViewState): void {
+function renderCoreModule(state: InteractiveViewState, width: number, maxHeight: number): string[] {
+  const inner = Math.max(20, width - 2);
+  const coreWidth = Math.min(20, inner);
+  const core = renderDottedCore({
+    mode: state.coreMode,
+    frame: state.coreMode === 'unloaded' ? 0 : Math.floor((state.nowMs / 1000) * 8),
+    width: coreWidth,
+    height: 7,
+    unicode: true,
+  }).map((line) => centerVisible(line, inner));
+  const body = [
+    panelTitle('Core Module', inner),
+    ...core,
+    dim(separatorBar(inner)),
+    dim('Runtime'),
+    ...runtimeTelemetryRows(state, inner),
+    contextUsageBar(state.run, inner),
+    dim(separatorBar(inner)),
+    dim('Session'),
+    ...sessionTelemetryRows(state.run, inner),
+  ];
+
+  if (width < 24 || body.length + 1 > maxHeight) return body.map((line) => clip(line, width));
+
+  return [
+    `┌${panelTitle('Core Module', inner).slice(0, inner)}┐`,
+    ...body.slice(1).map((line) => `│${pad(clip(line, inner), inner)}│`),
+    `└${'─'.repeat(inner)}┘`,
+  ];
+}
+
+function renderTelemetry(state: InteractiveViewState, width: number): string[] {
+  const inner = Math.max(20, width);
+  return [
+    dim('Runtime'),
+    ...runtimeTelemetryRows(state, inner),
+    contextUsageBar(state.run, inner),
+    dim(separatorBar(inner)),
+    dim('Session'),
+    ...sessionTelemetryRows(state.run, inner),
+  ].map((line) => clip(line, width));
+}
+
+function runtimeTelemetryRows(state: InteractiveViewState, width: number): string[] {
   const run = state.run;
   const model = state.modelLabel || run.modelId || modelFromProvider(run.providerLabel);
   const provider = providerLabel(state.endpointLabel, run);
   const context = contextLine(run);
-  const items = [
-    `${modeColor(state.coreMode)}${phaseLabel(run.phase)}\u001b[0m`,
-    run.coreLoaded ? 'Core loaded' : 'Core unloaded',
-    alignedRow('Model', model ? truncateMiddle(model, Math.max(8, width - 12)) : 'unknown'),
-    alignedRow('Provider', provider),
-    alignedRow('Context', context),
-    contextUsageBar(run, Math.max(8, width - 2)),
-    alignedRow('Thinking', run.thinkingEnabled === undefined ? 'unknown' : run.thinkingEnabled ? 'on' : 'off'),
-    alignedRow('Session $', run.sessionSpendLabel ?? 'unknown'),
-    toolsUsed(run).length > 0 ? alignedRow('tools used', toolsUsed(run).join(', ')) : '',
-    activitySummary(run),
-  ];
+  const valueWidth = Math.max(4, width - 12);
 
-  for (let i = 0; i < items.length; i += 1) {
-    if (!items[i]) continue;
-    put(lines, y + i, x, clip(items[i], width), x + width);
-  }
+  return [
+    instrumentRow('Core', run.coreLoaded ? 'Loaded' : 'Unloaded', width, { color: modeColor(state.coreMode) }),
+    instrumentRow('Model', model ? truncateMiddle(model, valueWidth) : 'none', width, { dimValue: !model }),
+    instrumentRow('Provider', provider === 'unknown' ? 'none' : provider, width, { dimValue: provider === 'unknown' }),
+    instrumentRow('Context', context, width, { dimValue: context === 'unknown' }),
+  ];
+}
+
+function sessionTelemetryRows(run: RunStateSnapshot, width: number): string[] {
+  const tools = toolsUsed(run);
+
+  return [
+    instrumentRow(
+      'Thinking',
+      run.thinkingEnabled === undefined ? 'unknown' : run.thinkingEnabled ? 'on' : 'off',
+      width,
+      {
+        dimValue: run.thinkingEnabled === undefined,
+      },
+    ),
+    instrumentRow('Spend', run.sessionSpendLabel ?? 'unknown', width, {
+      dimValue: run.sessionSpendLabel === undefined,
+    }),
+    instrumentRow('Tools', tools.length > 0 ? tools.join(', ') : 'none', width, { dimValue: tools.length === 0 }),
+    instrumentRow('Steps', modelSteps(run.statusNote), width, { dimValue: modelSteps(run.statusNote) === 'unknown' }),
+  ];
 }
 
 function putBlock(lines: string[], y: number, x: number, block: string[], width: number): void {
@@ -324,18 +354,6 @@ function phaseLabel(phase: string): string {
   if (phase === 'tool_execution') return 'Tool';
   if (phase === 'budget_exhausted') return 'Budget exhausted';
   return `${phase.slice(0, 1).toUpperCase()}${phase.slice(1)}`;
-}
-
-function completionActivity(statusNote: string): string {
-  const trimmed = statusNote.replace(/^completed:\s*/i, '');
-  return `Completed · ${trimmed}`;
-}
-
-function compactStatus(statusNote: string): string {
-  if (statusNote.startsWith('tool: ')) return `Tool · ${statusNote.slice(6)}`;
-  if (statusNote.startsWith('passed: ')) return `Verification · passed`;
-  if (statusNote.startsWith('failed: ')) return `Verification · failed`;
-  return statusNote;
 }
 
 function modelFromProvider(provider: string): string {
@@ -361,16 +379,44 @@ function contextLine(run: RunStateSnapshot): string {
 function contextUsageBar(run: RunStateSnapshot, width: number): string {
   const total = run.contextWindowTokens;
   const used = run.contextUsedTokens ?? 0;
-  if (!total || total <= 0) return dim('[────────────] unknown');
-  const barWidth = Math.min(14, Math.max(8, width - 2));
+  const barWidth = Math.max(8, width - 2);
+  if (!total || total <= 0) return dim(`[${'─'.repeat(barWidth)}]`);
   const ratio = Math.max(0, Math.min(1, used / total));
   const filled = Math.round(ratio * barWidth);
   const glyph = ratio > 0.85 ? '▓' : '█';
   return dim(`[${glyph.repeat(filled)}${'░'.repeat(barWidth - filled)}]`);
 }
 
-function alignedRow(label: string, value: string): string {
-  return `${label.padEnd(10, ' ')} ${value}`;
+function instrumentRow(
+  label: string,
+  value: string,
+  width: number,
+  options: { color?: string; dimValue?: boolean } = {},
+): string {
+  const labelWidth = 11;
+  const valueWidth = Math.max(1, width - labelWidth - 1);
+  const renderedValue = options.dimValue ? dim(truncateMiddle(value, valueWidth)) : truncateMiddle(value, valueWidth);
+  const prefix = `${label.padEnd(labelWidth, ' ')} `;
+  if (!options.color) return `${prefix}${renderedValue}`;
+  return `${prefix}${options.color}${truncateMiddle(value, valueWidth)}\u001b[0m`;
+}
+
+function modelSteps(statusNote: string): string {
+  const match = /(\d+)\s+model steps?/i.exec(statusNote);
+  return match ? match[1] : 'unknown';
+}
+
+function panelTitle(title: string, width: number): string {
+  const label = ` ${title} `;
+  const fill = Math.max(0, width - label.length);
+  return `${label}${'─'.repeat(fill)}`;
+}
+
+function centerVisible(line: string, width: number): string {
+  const visible = stripAnsi(line).length;
+  if (visible >= width) return clip(line, width);
+  const left = Math.floor((width - visible) / 2);
+  return `${' '.repeat(left)}${line}${' '.repeat(width - visible - left)}`;
 }
 
 function formatTokens(tokens: number): string {
