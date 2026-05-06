@@ -12,8 +12,10 @@
  */
 
 import {
+  compactMessages,
   compactMessagesMultiStage,
   createTokenLedger,
+  estimateMessageTokens,
   estimateIncrementalTokens,
   estimateRequestTokens,
   estimateTokens,
@@ -62,6 +64,28 @@ function makeBulkMessages(count: number, baseRole: string, charsPerMsg: number):
     });
   }
   return msgs;
+}
+
+function expectNoOrphanedToolProtocol(messages: AgentMessage[]): void {
+  const toolCallIds = new Set<string>();
+  const resultIds = new Set<string>();
+  for (const message of messages) {
+    if (Array.isArray(message.tool_calls)) {
+      for (const call of message.tool_calls as Array<{ id?: unknown }>) {
+        if (typeof call.id === 'string') toolCallIds.add(call.id);
+      }
+    }
+    if (message.role === 'tool' && typeof message.tool_call_id === 'string') {
+      resultIds.add(message.tool_call_id);
+    }
+  }
+
+  for (const id of resultIds) {
+    expect(toolCallIds.has(id)).toBe(true);
+  }
+  for (const id of toolCallIds) {
+    expect(resultIds.has(id)).toBe(true);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -285,6 +309,33 @@ describe('tool-call / tool-result integrity', () => {
       }
     }
   });
+
+  it('fallback path preserves protocol validity for tangled tool-call histories', () => {
+    const msgs: AgentMessage[] = [
+      makeMsg('system', 's'),
+      makeToolCallMsg('kept_result_needs_older_call', 'read'),
+      {
+        ...makeToolCallMsg('dangling_last_call', 'read'),
+        content: 'latest dangling assistant '.padEnd(1000, 'x'),
+      },
+      makeToolResultMsg('kept_result_needs_older_call', 'read', JSON.stringify({ success: true })),
+      makeMsg('user', 'latest user question'),
+    ];
+    const body = msgs.slice(1);
+    const keepFromOneTokens =
+      estimateMessageTokens(body[1]) + estimateMessageTokens(body[2]) + estimateMessageTokens(body[3]);
+    const keepFromZeroTokens = keepFromOneTokens + estimateMessageTokens(body[0]);
+
+    const result = compactMessages(msgs, {
+      ...settings,
+      keepRecentTokens: keepFromOneTokens,
+      contextWindowTokens: keepFromZeroTokens + 2000,
+    });
+
+    expect(result.compaction).not.toBeNull();
+    expect(result.activeMessages.length).toBeLessThan(msgs.length);
+    expectNoOrphanedToolProtocol(result.activeMessages);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -366,6 +417,10 @@ describe('incremental token estimation', () => {
     const ledger = createTokenLedger();
     expect(ledger.lastKnownTokenCount).toBe(0);
     expect(ledger.lastMeasuredIndex).toBe(-1);
+  });
+
+  it('uses the configured chars-per-token estimate', () => {
+    expect(estimateTokens('x'.repeat(30))).toBe(10);
   });
 
   it('full estimate on first call', () => {
@@ -752,7 +807,7 @@ describe('working context orientation', () => {
     }
 
     const orientation = ledger.getOrientation();
-    // Should be under ~2000 tokens (chars/3.5 ≈ 7000 chars max)
+    // Should be under the bounded orientation cap.
     expect(orientation.length).toBeLessThan(7000);
   });
 });
@@ -1172,6 +1227,39 @@ describe('model message assembly', () => {
     expect(conversation.assemblyStats).toBeDefined();
     expect(conversation.assemblyStats!.compactedToolResults).toBeGreaterThan(0);
     expect(conversation.assemblyStats!.estimatedTokensOut).toBeLessThan(conversation.assemblyStats!.estimatedTokensIn);
+    const lastRequestMessages = client.requests[client.requests.length - 1].messages as AgentMessage[];
+    expect(conversation.assemblyStats!.totalMessagesOut).toBe(lastRequestMessages.length);
+    expect(conversation.assemblyStats!.estimatedTokensOut).toBe(estimateRequestTokens(lastRequestMessages));
+  });
+
+  it('assembly stats include read-budget warning messages sent to the model', async () => {
+    writeFileSync(join(TMP, 'repeat.txt'), 'same content\n', 'utf-8');
+
+    const conversation = createAgentConversation();
+    const client = fakeClient([
+      { toolCalls: [{ id: '1', name: 'read', arguments: { path: 'repeat.txt' } }] },
+      { toolCalls: [{ id: '2', name: 'read', arguments: { path: 'repeat.txt' } }] },
+      { toolCalls: [{ id: '3', name: 'read', arguments: { path: 'repeat.txt' } }] },
+      { content: 'done' },
+    ]);
+
+    const result = await runAgentTurn({
+      repoRoot: TMP,
+      task: 'read repeat file',
+      client,
+      conversation,
+      contextBudget: {
+        maxSingleReadResultTokens: 50000,
+        maxTotalReadResultTokensPerTurn: 500000,
+        keepRecentToolTurns: 1,
+      },
+    });
+
+    expect(result.terminalState).toBe('completed');
+    const lastRequestMessages = client.requests[client.requests.length - 1].messages as AgentMessage[];
+    expect(lastRequestMessages.at(-1)?.content).toContain('STOP READING');
+    expect(conversation.assemblyStats!.totalMessagesOut).toBe(lastRequestMessages.length);
+    expect(conversation.assemblyStats!.estimatedTokensOut).toBe(estimateRequestTokens(lastRequestMessages));
   });
 
   it('directory listing results are compacted correctly', async () => {

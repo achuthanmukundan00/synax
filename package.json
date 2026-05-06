@@ -19,7 +19,8 @@
     "docs:build": "vitepress build docs",
     "docs:preview": "vitepress preview docs",
     "synax": "node dist/cli.js",
-    "bench:agent-workload": "node dist/scripts/bench-agent-workload.js"
+    "deploy": "npm run docs:build && wrangler deploy",
+    "preview": "npm run docs:build && wrangler dev"
   },
   "keywords": [],
   "author": "",
@@ -42,7 +43,8 @@
     "prettier": "^3.5.3",
     "ts-jest": "^29.2.6",
     "typescript": "^5.8.2",
-    "vitepress": "^1.6.4"
+    "vitepress": "^1.6.4",
+    "wrangler": "^4.88.0"
   },
   "engines": {
     "node": ">=18.0.0"
