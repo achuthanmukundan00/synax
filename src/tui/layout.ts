@@ -251,7 +251,7 @@ function renderDirectivePanel(objectiveInput: string, width: number, metadataLab
 
   const label = metadataLabel ? ` ${truncateMiddle(metadataLabel, Math.max(4, inner - 6))} ` : '';
   const topFill = Math.max(0, inner - label.length);
-  const helpText = 'Enter submit | Ctrl+C exit | /help';
+  const helpText = 'Enter submit | Ctrl+C exit | /help | !cmd shell';
   const bottomFill = Math.max(0, inner - helpText.length - 2);
 
   return [

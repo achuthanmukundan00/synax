@@ -33,6 +33,7 @@ export interface ChatSession {
   conversation: AgentConversation;
   handleUserMessage(message: string): Promise<ChatTurnReport>;
   handleSlashCommand(command: string): Promise<SlashCommandReport>;
+  handleShellCommand?(command: string): Promise<ShellCommandReport>;
   /** Install a runtime event sink for real-time TUI state updates. */
   setEventSink?: (sink: ((event: import('../agent/events').AgentEvent) => void) | null) => void;
 }
@@ -52,6 +53,14 @@ export interface SlashCommandReport {
   exit?: boolean;
   output: string;
   verification?: VerificationResult;
+}
+
+export interface ShellCommandReport {
+  command: string;
+  exitCode: number;
+  stdout: string;
+  stderr: string;
+  durationMs: number;
 }
 
 export type InlineInputSegment = InlineTextSegment | InlinePasteAttachment;
@@ -177,6 +186,12 @@ export function createChatSession(options: {
         repoRoot: options.repoRoot,
         config: options.config,
         conversation,
+      });
+    },
+    async handleShellCommand(command: string): Promise<ShellCommandReport> {
+      return runLocalShellCommand(command, {
+        repoRoot: options.repoRoot,
+        shell: options.config.tools?.shell ?? 'zsh',
       });
     },
   };
@@ -839,6 +854,51 @@ async function handleSlashCommand(
   return { handled: false, output: `[synax] unknown command: ${rawCommand}` };
 }
 
+async function runLocalShellCommand(
+  command: string,
+  context: { repoRoot: string; shell: string },
+): Promise<ShellCommandReport> {
+  const startedAt = Date.now();
+  try {
+    const result = await execFileAsync(context.shell, ['-lc', command], {
+      cwd: context.repoRoot,
+      timeout: 30000,
+      maxBuffer: 1024 * 1024,
+    });
+    return {
+      command,
+      exitCode: 0,
+      stdout: truncateShellOutput(result.stdout),
+      stderr: truncateShellOutput(result.stderr),
+      durationMs: Date.now() - startedAt,
+    };
+  } catch (error) {
+    const shellError = error as {
+      code?: number | string;
+      signal?: string;
+      stdout?: string;
+      stderr?: string;
+      message?: string;
+    };
+    const exitCode = typeof shellError.code === 'number' ? shellError.code : 1;
+    const stderr =
+      shellError.stderr ??
+      (shellError.signal ? `terminated by signal ${shellError.signal}` : (shellError.message ?? ''));
+    return {
+      command,
+      exitCode,
+      stdout: truncateShellOutput(shellError.stdout ?? ''),
+      stderr: truncateShellOutput(stderr),
+      durationMs: Date.now() - startedAt,
+    };
+  }
+}
+
+function truncateShellOutput(output: string, limit = 6000): string {
+  if (output.length <= limit) return output;
+  return `${output.slice(0, limit)}\n[synax] output truncated to ${limit} chars`;
+}
+
 async function renderGitDiff(repoRoot: string): Promise<string> {
   try {
     const [{ stdout: status }, { stdout: diff }] = await Promise.all([
@@ -1081,6 +1141,7 @@ function printBanner(repoRoot: string, model: string): void {
   console.log(
     'Commands: /help /settings /tools /budget /test-provider /inspect /verify /verify quick /verify full /diff /undo-last-edit /clear /status /exit',
   );
+  console.log('TUI shell: !<command>');
   console.log('');
 }
 
@@ -1102,6 +1163,7 @@ function renderHelpPanel(): string {
     '/clear                     Reset the conversation',
     '/status                    Show git and budget status',
     '/exit, /quit               Exit chat',
+    '!<command>                 Run a local shell command from the TUI',
     '',
     'Session Settings',
     '----------------',
