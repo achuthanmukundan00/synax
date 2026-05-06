@@ -7,7 +7,7 @@ import {
 import type { ChatSession } from '../commands/chat';
 import { stdin as defaultStdin } from 'node:process';
 import { DiffRenderer } from './diff-renderer';
-import { renderLayout } from './layout';
+import { maxHistoryScrollOffset, renderLayout, type InteractiveViewState } from './layout';
 import { parseInputChunk } from './input';
 import { createTerminalSession, type InputStreamLike } from './terminal';
 import type { Writable } from 'node:stream';
@@ -61,22 +61,28 @@ export async function runInteractiveTui(
     return 'idle';
   };
 
-  const paint = (force = false): void => {
-    const lines = renderLayout(
-      {
-        run: { ...state, nowMs: Date.now() },
-        objectiveInput: inputBuffer,
-        blockedMessage: options?.blockedMessage,
-        coreMode: coreMode(),
-        nowMs: Date.now(),
-        lastModelOutput: options?.lastModelOutput?.(),
-        modelLabel: options?.modelLabel,
-        endpointLabel: options?.endpointLabel,
-        historyScrollOffset,
-      },
-      terminal.columns,
-      terminal.rows,
+  const viewState = (): InteractiveViewState => ({
+    run: { ...state, nowMs: Date.now() },
+    objectiveInput: inputBuffer,
+    blockedMessage: options?.blockedMessage,
+    coreMode: coreMode(),
+    nowMs: Date.now(),
+    lastModelOutput: options?.lastModelOutput?.(),
+    modelLabel: options?.modelLabel,
+    endpointLabel: options?.endpointLabel,
+    historyScrollOffset,
+  });
+
+  const clampHistoryScroll = (): void => {
+    historyScrollOffset = Math.min(
+      maxHistoryScrollOffset(viewState(), terminal.columns, terminal.rows),
+      Math.max(0, historyScrollOffset),
     );
+  };
+
+  const paint = (force = false): void => {
+    clampHistoryScroll();
+    const lines = renderLayout(viewState(), terminal.columns, terminal.rows);
     const out = diff.render(lines, terminal.columns, terminal.rows);
     if (!out && !force) return;
     terminal.synchronizedWrite(out || '');
@@ -178,10 +184,12 @@ export async function runInteractiveTui(
       }
       if (event.type === 'scroll_history_up') {
         historyScrollOffset += 3;
+        clampHistoryScroll();
         continue;
       }
       if (event.type === 'scroll_history_down') {
         historyScrollOffset = Math.max(0, historyScrollOffset - 3);
+        clampHistoryScroll();
         continue;
       }
       if (event.type === 'backspace') {

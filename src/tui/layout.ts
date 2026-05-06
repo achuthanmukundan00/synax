@@ -3,6 +3,8 @@ import type { CoreMode } from './ai-core';
 import { CORE_HEIGHT, CORE_WIDTH, modeColor, renderAiCore, renderDottedCore } from './ai-core';
 import { renderTranscript, toolsUsed } from './transcript';
 
+const DIRECTIVE_PANEL_HEIGHT = 4;
+
 export interface InteractiveViewState {
   run: RunStateSnapshot;
   objectiveInput: string;
@@ -54,6 +56,16 @@ export function renderLayout(state: InteractiveViewState, cols: number, rows: nu
   return clipped.map((line) => pad(clip(line, width), width));
 }
 
+export function maxHistoryScrollOffset(state: InteractiveViewState, cols: number, rows: number): number {
+  const width = Math.max(40, cols);
+  const height = Math.max(14, rows);
+  const bodyHeight = Math.max(1, height - DIRECTIVE_PANEL_HEIGHT);
+  const transcriptWidth = operationalTranscriptWidth(width, bodyHeight);
+  const transcriptLines = renderTranscript(state, Math.max(24, transcriptWidth));
+  const visibleRows = Math.max(1, bodyHeight - 3);
+  return Math.max(0, transcriptLines.length - visibleRows);
+}
+
 function renderWelcome(lines: string[], width: number, bodyHeight: number, state: InteractiveViewState): void {
   const core = renderAiCore(state.coreMode, state.nowMs / 1000);
   const coreX = Math.max(0, Math.floor(width * 0.45 - CORE_WIDTH / 2));
@@ -90,12 +102,14 @@ function renderOperationalSurface(
 ): void {
   const showSideCore = width >= 110 && bodyHeight >= 18;
   const showHeaderCore = !showSideCore && width >= 70 && bodyHeight >= 18;
-  const sideWidth = showSideCore ? 24 : 0;
-  const transcriptWidth = showSideCore ? width - sideWidth - 5 : width - 4;
+  const sideWidth = operationalSideWidth(width, bodyHeight);
+  const transcriptWidth = operationalTranscriptWidth(width, bodyHeight);
   const transcriptLines = renderTranscript(state, Math.max(24, transcriptWidth));
-  const scrollOffset = Math.max(0, state.historyScrollOffset ?? 0);
+  const visibleRows = Math.max(1, bodyHeight - 3);
+  const maxScrollOffset = Math.max(0, transcriptLines.length - visibleRows);
+  const scrollOffset = Math.min(maxScrollOffset, Math.max(0, state.historyScrollOffset ?? 0));
   const visibleTranscript = transcriptLines.slice(
-    Math.max(0, transcriptLines.length - (bodyHeight - 3) - scrollOffset),
+    Math.max(0, transcriptLines.length - visibleRows - scrollOffset),
     Math.max(0, transcriptLines.length - scrollOffset),
   );
 
@@ -111,6 +125,15 @@ function renderOperationalSurface(
   } else if (showHeaderCore) {
     put(lines, 1, Math.max(2, width - 36), `core ${phaseLabel(state.run.phase).toLowerCase()}`, width);
   }
+}
+
+function operationalSideWidth(width: number, bodyHeight: number): number {
+  return width >= 110 && bodyHeight >= 18 ? 24 : 0;
+}
+
+function operationalTranscriptWidth(width: number, bodyHeight: number): number {
+  const sideWidth = operationalSideWidth(width, bodyHeight);
+  return sideWidth > 0 ? width - sideWidth - 5 : width - 4;
 }
 
 function renderCompactCore(mode: CoreMode, nowMs: number, width: number, height: number): string[] {
