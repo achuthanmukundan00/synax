@@ -1,0 +1,452 @@
+import type { AgentEvent, TerminalState } from './events';
+
+export type TuiSeverity = 'S0' | 'S1' | 'S2' | 'S3';
+export type TuiPhase = 'idle' | 'thinking' | 'tool_execution' | 'verifying' | 'completed' | 'blocked' | 'error';
+export type ChangeOp = 'create' | 'edit' | 'delete' | 'read' | 'test' | 'other';
+
+export interface TuiTimelineItem {
+  atMs: number;
+  phase: TuiPhase;
+  summary: string;
+  severity: TuiSeverity;
+}
+
+export interface TuiChangeItem {
+  path: string;
+  op: ChangeOp;
+}
+
+export interface TuiVerificationState {
+  state: 'planned' | 'running' | 'passed' | 'failed' | 'skipped';
+  checksPlanned: number;
+  checksRunning: number;
+  checksPassed: number;
+  checksFailed: number;
+  checksSkipped: number;
+  summary: string;
+  currentCheckLabel: string;
+  seenCheckIds: Set<string>;
+}
+
+export interface RunStateSnapshot {
+  runId: string;
+  startedAtMs: number;
+  nowMs: number;
+  mode: string;
+  providerLabel: string;
+  phase: TuiPhase;
+  objective: {
+    label: string;
+    currentPhase: TuiPhase;
+    nextCheckpoint: string;
+  };
+  phaseTransitions: Array<{ atMs: number; from: TuiPhase; to: TuiPhase; note: string }>;
+  timeline: TuiTimelineItem[];
+  changes: { items: TuiChangeItem[]; overflowCount: number };
+  verification: TuiVerificationState;
+  statusNote: string;
+  riskLine: string;
+  terminalIssue?: string;
+  severity: TuiSeverity;
+  terminal: 'running' | 'completed' | 'failed' | 'blocked';
+}
+
+const MAX_TIMELINE_ITEMS = 10;
+const MAX_CHANGE_ITEMS = 8;
+
+export function createInitialRunStateSnapshot(nowMs: number): RunStateSnapshot {
+  return {
+    runId: 'pending',
+    startedAtMs: nowMs,
+    nowMs,
+    mode: 'patch',
+    providerLabel: 'n/a',
+    phase: 'idle',
+    objective: {
+      label: 'Waiting for run start',
+      currentPhase: 'idle',
+      nextCheckpoint: 'awaiting task',
+    },
+    phaseTransitions: [],
+    timeline: [],
+    changes: { items: [], overflowCount: 0 },
+    verification: {
+      state: 'planned',
+      checksPlanned: 0,
+      checksRunning: 0,
+      checksPassed: 0,
+      checksFailed: 0,
+      checksSkipped: 0,
+      summary: 'planned',
+      currentCheckLabel: '',
+      seenCheckIds: new Set(),
+    },
+    statusNote: '',
+    riskLine: 'risk: nominal',
+    severity: 'S0',
+    terminal: 'running',
+  };
+}
+
+export function applyEventToRunState(state: RunStateSnapshot, event: AgentEvent, nowMs: number): RunStateSnapshot {
+  let next = { ...state, nowMs };
+  switch (event.type) {
+    case 'task_started': {
+      const runId = event.timestamp.replace(/[-:.TZ]/g, '').slice(0, 14);
+      next = {
+        ...next,
+        runId,
+        startedAtMs: Date.parse(event.timestamp) || nowMs,
+        mode: event.mode,
+        providerLabel: `${event.model} @ ${event.endpoint}`,
+        objective: {
+          label: event.task.trim() || 'No objective',
+          currentPhase: 'thinking',
+          nextCheckpoint: 'awaiting model output',
+        },
+      };
+      next = withPhase(next, 'thinking', 'task started');
+      return withTimeline(next, 'thinking', 'objective registered', 'S0');
+    }
+    case 'model_step_started': {
+      next = withPhase(next, 'thinking', 'model step');
+      return withTimeline(next, 'thinking', 'model reasoning step', 'S0');
+    }
+    case 'tool_started': {
+      next = withPhase(next, 'tool_execution', `tool ${event.toolName}`);
+      next = withStatus(next, `tool: ${event.toolName}`, 'S0');
+      trackChangeFromToolStart(next, event.toolName, event.summary);
+      return withTimeline(next, 'tool_execution', `${event.toolName} started`, 'S0');
+    }
+    case 'tool_finished': {
+      const severity = event.status === 'error' ? 'S1' : 'S0';
+      next = withPhase(next, event.status === 'error' ? 'error' : 'thinking', `tool ${event.toolName} finished`);
+      if (event.status === 'error') {
+        next = withStatus(next, `${event.toolName} recovered with turbulence`, severity);
+      }
+      return withTimeline(next, next.phase, `${event.toolName} ${event.status === 'ok' ? 'ok' : 'error'}`, severity);
+    }
+    case 'verification_planned': {
+      next = applyVerificationPlanned(next, event.checkId, event.checkLabel, event.summary);
+      next = withPhase(next, 'verifying', 'verification planned');
+      return withTimeline(next, 'verifying', `planned: ${event.checkLabel}`, 'S0');
+    }
+    case 'verification_started': {
+      next = applyVerificationStarted(next, event.checkId, event.checkLabel);
+      next = withPhase(next, 'verifying', `verification running: ${event.checkLabel}`);
+      return withTimeline(next, 'verifying', `verifying: ${event.checkLabel}`, 'S0');
+    }
+    case 'verification_passed': {
+      next = applyVerificationPassed(next, event.checkId, event.summary, event.durationMs);
+      next = withPhase(
+        next,
+        next.terminal === 'running' ? 'thinking' : 'completed',
+        `verification passed: ${event.checkLabel}`,
+      );
+      next = withStatus(next, `passed: ${event.checkLabel}`, 'S0');
+      return withTimeline(next, next.phase, `passed: ${event.checkLabel}`, 'S0');
+    }
+    case 'verification_failed': {
+      next = applyVerificationFailed(next, event.checkId, event.summary, event.severity ?? 'S2', event.durationMs);
+      next = withPhase(next, 'verifying', `verification failed: ${event.checkLabel}`);
+      next = withRisk(next, `verification failed: ${event.summary ?? event.checkLabel}`, event.severity ?? 'S2');
+      if (event.severity !== 'S3') {
+        next = withStatus(next, `failed: ${event.checkLabel}`, 'S2');
+      }
+      return withTimeline(next, 'verifying', `failed: ${event.checkLabel}`, event.severity ?? 'S2');
+    }
+    case 'verification_skipped': {
+      next = applyVerificationSkipped(next, event.checkId, event.summary);
+      next = withStatus(next, `skipped: ${event.checkLabel}`, 'S0');
+      return withTimeline(next, next.phase, `skipped: ${event.checkLabel}`, 'S0');
+    }
+    case 'task_finished': {
+      // Derive aggregate state from lifecycle events, not summary text.
+      // Fallback to summary-derived only when no lifecycle events were emitted.
+      if (next.verification.seenCheckIds.size === 0) {
+        next = { ...next, verification: deriveVerificationFallback(event.verification) };
+      }
+      if (next.verification.state === 'failed') {
+        next = withRisk(next, `verification failed: ${next.verification.summary}`, 'S2');
+      }
+      const phase = terminalStateToPhase(event.status, next.verification.state);
+      next = withPhase(next, phase, `run ${event.status}`);
+      next = {
+        ...next,
+        terminal:
+          event.status === 'completed'
+            ? 'completed'
+            : event.status === 'blocked' || event.status === 'user_input_required'
+              ? 'blocked'
+              : 'failed',
+        objective: {
+          ...next.objective,
+          currentPhase: phase,
+          nextCheckpoint:
+            phase === 'completed'
+              ? 'run finalized'
+              : phase === 'blocked'
+                ? 'operator decision required'
+                : 'inspect terminal issue',
+        },
+      };
+      if (event.error) {
+        next = withRisk(next, `terminal issue: ${event.error}`, 'S3');
+      }
+      return withTimeline(next, phase, `run ${event.status}`, next.severity);
+    }
+    case 'error': {
+      next = withPhase(next, 'error', 'runtime error');
+      next = withRisk(next, event.message, 'S3');
+      return withTimeline(next, 'error', 'runtime error', 'S3');
+    }
+    default:
+      return next;
+  }
+}
+
+export function advanceClock(state: RunStateSnapshot, nowMs: number): RunStateSnapshot {
+  return { ...state, nowMs };
+}
+
+export function compressTimeline(items: TuiTimelineItem[], limit: number = MAX_TIMELINE_ITEMS): TuiTimelineItem[] {
+  if (items.length <= limit) return items;
+  return items.slice(items.length - limit);
+}
+
+export function compressChanges(
+  items: TuiChangeItem[],
+  limit: number = MAX_CHANGE_ITEMS,
+): { items: TuiChangeItem[]; overflowCount: number } {
+  const deduped: TuiChangeItem[] = [];
+  const seen = new Set<string>();
+  for (let i = items.length - 1; i >= 0; i -= 1) {
+    const item = items[i];
+    const key = `${item.op}:${item.path}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    deduped.push(item);
+  }
+  deduped.reverse();
+  const overflowCount = Math.max(0, deduped.length - limit);
+  return {
+    items: deduped.slice(Math.max(0, deduped.length - limit)),
+    overflowCount,
+  };
+}
+
+function withTimeline(
+  state: RunStateSnapshot,
+  phase: TuiPhase,
+  summary: string,
+  severity: TuiSeverity,
+): RunStateSnapshot {
+  const timeline = compressTimeline([
+    ...state.timeline,
+    { atMs: state.nowMs, phase, summary: clipText(summary, 90), severity },
+  ]);
+  return { ...state, timeline, severity: maxSeverity(state.severity, severity) };
+}
+
+function withPhase(state: RunStateSnapshot, phase: TuiPhase, note: string): RunStateSnapshot {
+  if (state.phase === phase) {
+    return {
+      ...state,
+      objective: {
+        ...state.objective,
+        currentPhase: phase,
+        nextCheckpoint: checkpointForPhase(phase),
+      },
+    };
+  }
+  return {
+    ...state,
+    phase,
+    objective: {
+      ...state.objective,
+      currentPhase: phase,
+      nextCheckpoint: checkpointForPhase(phase),
+    },
+    phaseTransitions: [
+      ...state.phaseTransitions,
+      {
+        atMs: state.nowMs,
+        from: state.phase,
+        to: phase,
+        note,
+      },
+    ],
+  };
+}
+
+function withStatus(state: RunStateSnapshot, statusNote: string, severity: TuiSeverity): RunStateSnapshot {
+  return { ...state, statusNote: clipText(statusNote, 120), severity: maxSeverity(state.severity, severity) };
+}
+
+function withRisk(state: RunStateSnapshot, riskLine: string, severity: TuiSeverity): RunStateSnapshot {
+  return {
+    ...state,
+    riskLine: clipText(riskLine, 120),
+    terminalIssue: riskLine,
+    severity: maxSeverity(state.severity, severity),
+  };
+}
+
+function applyVerificationPlanned(
+  state: RunStateSnapshot,
+  checkId: string,
+  checkLabel: string,
+  summary?: string,
+): RunStateSnapshot {
+  const v = { ...state.verification };
+  if (v.seenCheckIds.has(checkId)) return state;
+  v.seenCheckIds = new Set(v.seenCheckIds);
+  v.seenCheckIds.add(checkId);
+  v.checksPlanned += 1;
+  v.currentCheckLabel = checkLabel;
+  v.state = 'planned';
+  v.summary = summary ?? checkLabel;
+  return { ...state, verification: v };
+}
+
+function applyVerificationStarted(state: RunStateSnapshot, _checkId: string, checkLabel: string): RunStateSnapshot {
+  const v = { ...state.verification };
+  v.currentCheckLabel = checkLabel;
+  if (v.checksPlanned > 0) {
+    v.checksPlanned -= 1;
+    v.checksRunning += 1;
+  }
+  v.state = 'running';
+  return { ...state, verification: v };
+}
+
+function applyVerificationPassed(
+  state: RunStateSnapshot,
+  _checkId: string,
+  summary?: string,
+  durationMs?: number,
+): RunStateSnapshot {
+  const v = { ...state.verification };
+  if (v.checksRunning > 0) {
+    v.checksRunning -= 1;
+    v.checksPassed += 1;
+  }
+  if (summary) v.summary = summary;
+  if (durationMs !== undefined) {
+    v.summary = `${v.summary} (${formatDuration(durationMs)})`;
+  }
+  v.state = v.checksFailed > 0 ? 'failed' : v.checksRunning > 0 || v.checksPlanned > 0 ? 'running' : 'passed';
+  return { ...state, verification: v };
+}
+
+function applyVerificationFailed(
+  state: RunStateSnapshot,
+  _checkId: string,
+  summary?: string,
+  _severity?: string,
+  durationMs?: number,
+): RunStateSnapshot {
+  const v = { ...state.verification };
+  if (v.checksRunning > 0) {
+    v.checksRunning -= 1;
+    v.checksFailed += 1;
+  }
+  if (summary) v.summary = summary;
+  if (durationMs !== undefined) {
+    v.summary = `${v.summary} (${formatDuration(durationMs)})`;
+  }
+  v.state = 'failed';
+  return { ...state, verification: v };
+}
+
+function applyVerificationSkipped(state: RunStateSnapshot, checkId: string, summary?: string): RunStateSnapshot {
+  const v = { ...state.verification };
+  v.seenCheckIds = new Set(v.seenCheckIds);
+  v.seenCheckIds.add(checkId);
+  v.checksSkipped += 1;
+  v.currentCheckLabel = checkId;
+  if (summary) v.summary = summary;
+  return { ...state, verification: v };
+}
+
+function formatDuration(ms: number): string {
+  if (ms < 1000) return `${ms}ms`;
+  const s = (ms / 1000).toFixed(1);
+  return `${s}s`;
+}
+
+/**
+ * Fallback for when no verification lifecycle events were emitted.
+ * The TUI should not normally hit this path once the runtime emits events.
+ */
+function deriveVerificationFallback(verification: string): TuiVerificationState {
+  const v = verification.toLowerCase();
+  const base: TuiVerificationState = {
+    state: 'running',
+    checksPlanned: 0,
+    checksRunning: 0,
+    checksPassed: 0,
+    checksFailed: 0,
+    checksSkipped: 0,
+    summary: verification,
+    currentCheckLabel: '',
+    seenCheckIds: new Set(),
+  };
+  if (v.includes('passed')) {
+    return { ...base, state: 'passed', checksPassed: 1 };
+  }
+  if (v.includes('failed')) {
+    return { ...base, state: 'failed', checksFailed: 1 };
+  }
+  if (v.includes('not run')) {
+    return { ...base, state: 'skipped', checksSkipped: 1 };
+  }
+  return { ...base, checksRunning: 1, checksPlanned: 1 };
+}
+
+function terminalStateToPhase(status: TerminalState, verificationState: TuiVerificationState['state']): TuiPhase {
+  if (status === 'completed') return verificationState === 'passed' ? 'completed' : 'verifying';
+  if (status === 'blocked' || status === 'user_input_required') return 'blocked';
+  if (status === 'failed_verification') return 'verifying';
+  return 'error';
+}
+
+function trackChangeFromToolStart(state: RunStateSnapshot, toolName: string, summary: string): void {
+  const path = extractPath(summary);
+  if (!path) return;
+  const op = classifyTool(toolName);
+  const compressed = compressChanges([...state.changes.items, { path, op }]);
+  state.changes = compressed;
+}
+
+function classifyTool(toolName: string): ChangeOp {
+  if (toolName === 'write' || toolName === 'replace_in_file') return 'edit';
+  if (toolName === 'read') return 'read';
+  if (toolName.includes('test') || toolName === 'run_verification') return 'test';
+  return 'other';
+}
+
+function extractPath(summary: string): string | null {
+  const match = /"path"\s*:\s*"([^"]+)"/.exec(summary);
+  if (match) return match[1];
+  return null;
+}
+
+function checkpointForPhase(phase: TuiPhase): string {
+  if (phase === 'thinking') return 'awaiting model output';
+  if (phase === 'tool_execution') return 'awaiting tool result';
+  if (phase === 'verifying') return 'awaiting verification result';
+  if (phase === 'completed') return 'run finalized';
+  if (phase === 'blocked' || phase === 'error') return 'operator decision required';
+  return 'awaiting task';
+}
+
+function maxSeverity(current: TuiSeverity, incoming: TuiSeverity): TuiSeverity {
+  const rank: Record<TuiSeverity, number> = { S0: 0, S1: 1, S2: 2, S3: 3 };
+  return rank[incoming] > rank[current] ? incoming : current;
+}
+
+function clipText(value: string, max: number): string {
+  if (value.length <= max) return value;
+  return `${value.slice(0, Math.max(0, max - 3))}...`;
+}

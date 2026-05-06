@@ -24,6 +24,21 @@ export interface ToolEvent extends AgentEventBase {
   status?: 'ok' | 'error';
 }
 
+export interface VerificationLifecycleEvent extends AgentEventBase {
+  type:
+    | 'verification_planned'
+    | 'verification_started'
+    | 'verification_passed'
+    | 'verification_failed'
+    | 'verification_skipped';
+  checkId: string;
+  checkLabel: string;
+  command?: string;
+  summary?: string;
+  severity?: 'S0' | 'S1' | 'S2' | 'S3';
+  durationMs?: number;
+}
+
 export type AgentEvent =
   | (AgentEventBase & {
       type: 'task_started';
@@ -39,6 +54,7 @@ export type AgentEvent =
     })
   | (AgentEventBase & { type: 'model_step_started' })
   | ToolEvent
+  | VerificationLifecycleEvent
   | (AgentEventBase &
       PatchPreview & {
         type: 'patch_preview';

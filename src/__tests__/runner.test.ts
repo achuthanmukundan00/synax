@@ -915,13 +915,16 @@ describe('shared bounded agent runner', () => {
     expect(result.terminalState).toBe('completed');
     expect(readFileSync(join(TMP, 'a.txt'), 'utf-8')).toBe('hi\n');
     expect(events.map((event) => event.type)).toEqual([
+      'model_step_started',
       'tool_started',
       'tool_finished',
+      'model_step_started',
       'tool_started',
       'patch_preview',
       'tool_finished',
+      'model_step_started',
     ]);
-    expect(events[3]).toMatchObject({
+    expect(events[5]).toMatchObject({
       type: 'patch_preview',
       toolCallId: 'call_2',
       path: 'a.txt',
@@ -954,8 +957,10 @@ describe('shared bounded agent runner', () => {
     });
     expect(readFileSync(join(TMP, 'a.txt'), 'utf-8')).toBe('hello\n');
     expect(events.map((event) => event.type)).toEqual([
+      'model_step_started',
       'tool_started',
       'tool_finished',
+      'model_step_started',
       'tool_started',
       'patch_preview',
       'tool_finished',
@@ -994,13 +999,12 @@ describe('shared bounded agent runner', () => {
 
     // The second model request should have compacted the large read result
     const secondRequest = client.requests[1];
-    const toolMessages = (secondRequest.messages as Array<{ role: string; content: string }>)
-      .filter((m) => m.role === 'tool');
+    const toolMessages = (secondRequest.messages as Array<{ role: string; content: string }>).filter(
+      (m) => m.role === 'tool',
+    );
 
     // At least one tool message should be compacted (the large file read)
-    const hasCompacted = toolMessages.some(
-      (m) => m.content.includes('"_compacted":true'),
-    );
+    const hasCompacted = toolMessages.some((m) => m.content.includes('"_compacted":true'));
     expect(hasCompacted).toBe(true);
   });
 
@@ -1022,13 +1026,12 @@ describe('shared bounded agent runner', () => {
 
     // The second model request should keep the small read verbatim
     const secondRequest = client.requests[1];
-    const toolMessages = (secondRequest.messages as Array<{ role: string; content: string }>)
-      .filter((m) => m.role === 'tool');
+    const toolMessages = (secondRequest.messages as Array<{ role: string; content: string }>).filter(
+      (m) => m.role === 'tool',
+    );
 
     // No tool message should be compacted (small file stays verbatim)
-    const hasCompacted = toolMessages.some(
-      (m) => m.content.includes('"_compacted":true'),
-    );
+    const hasCompacted = toolMessages.some((m) => m.content.includes('"_compacted":true'));
     expect(hasCompacted).toBe(false);
   });
 });
