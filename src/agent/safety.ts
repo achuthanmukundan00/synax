@@ -1,4 +1,5 @@
 import { execFile } from 'child_process';
+import { randomUUID } from 'crypto';
 import { mkdir, readFile, readdir, rename, stat, writeFile } from 'fs/promises';
 import { dirname, join } from 'path';
 import { promisify } from 'util';
@@ -113,7 +114,7 @@ export async function undoLastEdit(repoRoot: string): Promise<{ ok: boolean; mes
 
 export async function atomicWriteFile(path: string, content: string): Promise<void> {
   await mkdir(dirname(path), { recursive: true });
-  const tmpPath = `${path}.synax-tmp-${process.pid}-${Date.now()}`;
+  const tmpPath = `${path}.synax-tmp-${randomUUID()}`;
   await writeFile(tmpPath, content, 'utf-8');
   await rename(tmpPath, path);
 }

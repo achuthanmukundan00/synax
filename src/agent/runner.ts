@@ -541,7 +541,7 @@ function assistantMessage(response: ChatResponse, settings?: ContextBudgetSettin
   // P6: Guard against local models that ignore max_tokens and emit
   // excessively long completions. Truncate before appending to conversation.
   const maxOutputTokens = settings?.reservedOutputTokens ?? 8192;
-  const maxOutputChars = Math.max(200, Math.floor(maxOutputTokens * 3.5));
+  const maxOutputChars = Math.max(200, Math.floor(maxOutputTokens * 3));
   let content = response.content;
   if (content.length > maxOutputChars) {
     content = content.slice(0, maxOutputChars) + '\n[response truncated]';
@@ -1401,11 +1401,6 @@ function buildModelRequest(
     readCounts,
     stats.compactedFilePaths,
   );
-
-  // Update token ledger (estimates based on assembled messages)
-  resetTokenLedger(conversation.tokenLedger);
-  estimateIncrementalTokens(withOrientation, conversation.tokenLedger);
-
   // Read budget warning: fire when approaching the total read limit OR
   // when the model is re-reading files excessively.
   // Placed LAST in the message list for maximum influence on local models.
@@ -1431,8 +1426,17 @@ function buildModelRequest(
         'Do not call any more read or inspect tools. Answer with what you have.',
       ].join('\n'),
     };
-    return [...withOrientation, warning];
+    const finalMessages = [...withOrientation, warning];
+    stats.totalMessagesOut = finalMessages.length;
+    stats.estimatedTokensOut = estimateRequestTokens(finalMessages);
+    resetTokenLedger(conversation.tokenLedger);
+    estimateIncrementalTokens(finalMessages, conversation.tokenLedger);
+    return finalMessages;
   }
 
+  stats.totalMessagesOut = withOrientation.length;
+  stats.estimatedTokensOut = estimateRequestTokens(withOrientation);
+  resetTokenLedger(conversation.tokenLedger);
+  estimateIncrementalTokens(withOrientation, conversation.tokenLedger);
   return withOrientation;
 }
