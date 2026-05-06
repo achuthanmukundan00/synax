@@ -27,7 +27,7 @@ export interface ToolEvent extends AgentEventBase {
 export type AgentEvent =
   | (AgentEventBase & {
       type: 'task_started';
-      mode: 'bounded' | 'interactive';
+      mode: 'read-only' | 'patch' | 'verify' | 'docs' | 'interactive';
       profile: string;
       endpoint: string;
       model: string;

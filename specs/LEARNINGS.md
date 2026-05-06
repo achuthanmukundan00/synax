@@ -29,6 +29,12 @@ Use this file to capture facts learned while testing Synax against local models,
 
 ## 2026-05-05
 
+- A read-before-edit gate is much stronger when the ledger stores exact prior read text, not just file names or line ranges. That lets replacement edits fail closed on stale or uninspected text instead of guessing.
+
+- Task modes need to constrain both the advertised tool surface and the actual execution gate. Hiding write/edit from the model is not enough if the runner still accepts those tool calls.
+
+- Plain-text run reports are easier to trust when they surface budgets, files read, checkpoint IDs, and verification state in one bounded summary rather than dumping raw JSON.
+
 - For non-interactive edit-capable runs, "preview before write" needs an explicit decision policy. Using `--yes` as the accept signal lets `synax run --task` fail closed on replacement edits without adding a prompt loop or changing the model-facing tool shape.
 
 - Planning checklists are easier to keep truthful when completed slices are separated from release-gating verification. Prior successful test runs should stay in `PROGRESS.md` as historical evidence, while unfinished specs should keep final verification boxes open until the milestone is complete.
