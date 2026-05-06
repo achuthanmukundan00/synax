@@ -35,6 +35,13 @@ Validated replacement edits emit a patch preview before Synax writes the file. I
 `synax run --task` sessions, previewed replacement edits are rejected by default; pass `--yes` to accept them for that
 run. Direct runner callers can provide an approval callback.
 Replacement writes are atomic (temp file + rename), so failed writes do not leave partial file content.
+Replacement edits require a prior read of the same file in the current session and exact replacement text from that read.
+The `run` command constrains tool access with `--mode`:
+
+- `read-only`: read and git only.
+- `patch`: read, write, edit, and git.
+- `verify`: read and git only, with verification-focused output.
+- `docs`: docs-oriented mutation only, still using read-before-edit.
 
 ## Bash Policy
 
@@ -64,6 +71,7 @@ Run it inside chat:
 
 `synax run --task` also reports verification state when a command is configured.
 Use `--verification-profile quick|full` and `--repair-attempts <n>` to control verification bounds.
+`/verify quick` and `/verify full` run the configured verification command with bounded output limits for each profile.
 
 ## Dirty Working Trees
 
