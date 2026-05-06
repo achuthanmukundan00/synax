@@ -397,6 +397,32 @@ describe('CLI', () => {
       }
     });
 
+    test('should reject invalid --repair-attempts values cleanly', async () => {
+      const cwd = mkdtempSync(path.join(tmpdir(), 'synax-cli-run-repair-'));
+      try {
+        writeFileSync(
+          path.join(cwd, '.synax.toml'),
+          ['[provider]', 'kind = "openai-compatible"', 'base_url = "http://localhost/v1"', 'model = "test-model"'].join(
+            '\n',
+          ),
+          'utf-8',
+        );
+
+        const invalid = await runSynaxDetailed(['run', '--task', 'test task', '--repair-attempts', 'nope'], { cwd });
+        const negative = await runSynaxDetailed(['run', '--task', 'test task', '--repair-attempts', '-1'], { cwd });
+        const large = await runSynaxDetailed(['run', '--task', 'test task', '--repair-attempts', '11'], { cwd });
+
+        expect(invalid.status).not.toBe(0);
+        expect(invalid.stderr).toContain('--repair-attempts must be a non-negative integer');
+        expect(negative.status).not.toBe(0);
+        expect(negative.stderr).toContain('--repair-attempts must be a non-negative integer');
+        expect(large.status).not.toBe(0);
+        expect(large.stderr).toContain('--repair-attempts must be between 0 and 10');
+      } finally {
+        rmSync(cwd, { recursive: true, force: true });
+      }
+    });
+
     test('should accept --plan option', () => {
       const output = runSynax(['run', '--plan', './plan.md']);
       expect(output).toContain('./plan.md');

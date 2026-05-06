@@ -30,6 +30,16 @@ describe('tool-call parser result API', () => {
     });
   });
 
+  it('ignores malformed fenced JSON when it does not form a valid tool call', () => {
+    const result = parseToolCallsFromContentResult('```json\n{"name":"read","arguments":\n```\n');
+
+    expect(result).toEqual({
+      ok: true,
+      source: 'none',
+      calls: [],
+    });
+  });
+
   it('sanitizes leaked think tags before parsing', () => {
     const result = parseToolCallsFromContentResult(
       '<think>hidden</think><tool_call>{"name":"read","arguments":{"path":"README.md"}}</tool_call>',

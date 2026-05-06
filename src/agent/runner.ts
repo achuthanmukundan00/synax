@@ -16,13 +16,7 @@ import {
 } from './patch';
 import { atomicWriteFile, writeLastEditRecord } from './safety';
 import { eventNow, type AgentEvent, type TerminalState } from './events';
-import {
-  canMutatePath,
-  describeToolCall,
-  guardBroadTask,
-  getAllowedModelTools,
-  type RunMode,
-} from './task-policy';
+import { canMutatePath, describeToolCall, guardBroadTask, getAllowedModelTools, type RunMode } from './task-policy';
 
 export type AgentTerminalState = TerminalState;
 
