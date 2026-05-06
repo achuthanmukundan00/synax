@@ -24,6 +24,7 @@ import { writeFileSync, mkdirSync } from 'fs';
 import { discoverConfigPath, normalizeProviderConfig as normalizeProvider } from '../config/project';
 import type { NormalizedProviderConfig } from '../llm/types';
 import { readLatestCheckpoint, undoLastEdit } from '../agent/safety';
+import { errorMessage, unique } from '../utils';
 
 const execFileAsync = promisify(execFile);
 
@@ -1006,14 +1007,6 @@ function formatVerification(result: VerificationResult, profile?: 'quick' | 'ful
   if (result.stdout.trim()) lines.push(result.stdout.trim());
   if (result.stderr.trim()) lines.push(result.stderr.trim());
   return lines.join('\n');
-}
-
-function unique(values: string[]): string[] {
-  return [...new Set(values)];
-}
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }
 
 function formatBudgetSnapshot(snapshot: AgentBudgetSnapshot): string {

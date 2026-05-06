@@ -4,6 +4,7 @@ import { buildModelFacingTools, runAgentTurn, type AgentActivity, type AgentTerm
 import { runVerification, type VerificationResult } from './verification';
 import { eventNow, type AgentEvent } from './events';
 import { createSafetyCheckpoint, detectDirtyTree, writeRunLog } from './safety';
+import { unique } from '../utils';
 import { normalizeRunMode, type RunMode } from './task-policy';
 
 export interface RunTaskOptions {
@@ -240,6 +241,3 @@ export async function runAgentTask(options: RunTaskOptions): Promise<RunTaskRepo
   };
 }
 
-function unique(values: string[]): string[] {
-  return [...new Set(values)];
-}

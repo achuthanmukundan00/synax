@@ -4,6 +4,7 @@ import { join } from 'path';
 import { promisify } from 'util';
 
 import { normalizeRepoPath } from './policy';
+import { errorMessage } from '../utils';
 import { redactSecrets } from './secrets';
 import { ToolContext, ToolDefinition, ToolResult } from './types';
 
@@ -364,6 +365,3 @@ function failure(toolName: string, error: string): ToolResult {
   return { success: false, toolName, error };
 }
 
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}

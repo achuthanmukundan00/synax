@@ -34,6 +34,7 @@ import {
 import { atomicWriteFile, writeLastEditRecord } from './safety';
 import { eventNow, type AgentEvent, type TerminalState } from './events';
 import { canMutatePath, describeToolCall, guardBroadTask, getAllowedModelTools, type RunMode } from './task-policy';
+import { errorMessage } from '../utils';
 
 export type AgentTerminalState = TerminalState;
 
@@ -1313,10 +1314,6 @@ function systemPrompt(): string {
     'When done, summarize changed files and verification results.',
     'Emit tool calls only — no final-answer preambles around them.',
   ].join('\n');
-}
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }
 
 /**

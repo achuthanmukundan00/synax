@@ -101,26 +101,33 @@ function providerPresetDefaults(preset: ProviderPreset): ProviderConfig {
   }
 }
 
+/** Resolve a value from dual snake_case/camelCase keys on a config object. */
+function pick<V = unknown>(obj: unknown, snake: string, camel: string): V | undefined {
+  const o = obj as Record<string, unknown> | undefined;
+  return (o?.[snake] ?? o?.[camel]) as V | undefined;
+}
+
 export function normalizeProviderConfig(p: ProviderConfig): import('../llm/types').NormalizedProviderConfig {
   const presetDefaults = providerPresetDefaults(p.preset ?? 'relay-local');
-  const headersInput = p.custom_headers ?? p.customHeaders ?? presetDefaults.custom_headers;
+  const headersInput = pick<Record<string, string>>(p, 'custom_headers', 'customHeaders') ?? presetDefaults.custom_headers;
   const customHeaders: Record<string, string> = {};
   for (const [name, value] of Object.entries(headersInput ?? {})) {
-    if (value.startsWith('$')) {
+    if (typeof value === 'string' && value.startsWith('$')) {
       const envName = value.slice(1);
       const resolved = process.env[envName];
       if (resolved) customHeaders[name] = resolved;
       continue;
     }
-    customHeaders[name] = value;
+    if (typeof value === 'string') customHeaders[name] = value;
   }
-  const apiKeyEnv = p.api_key_env ?? p.apiKeyEnv ?? presetDefaults.api_key_env;
-  const apiKey = p.api_key ?? p.apiKey ?? (apiKeyEnv ? process.env[apiKeyEnv] : undefined);
+  const apiKeyEnv: string | undefined = pick(p, 'api_key_env', 'apiKeyEnv') ?? presetDefaults.api_key_env;
+  const apiKey = pick<string>(p, 'api_key', 'apiKey') ?? (apiKeyEnv ? process.env[apiKeyEnv] : undefined);
   const kind = p.kind ?? presetDefaults.kind ?? 'openai-compatible';
-  const baseUrl = p.base_url ?? p.baseUrl ?? presetDefaults.base_url ?? 'http://127.0.0.1:1234/v1';
+  const baseUrl = pick<string>(p, 'base_url', 'baseUrl') ?? presetDefaults.base_url ?? 'http://127.0.0.1:1234/v1';
   const model = p.model ?? presetDefaults.model ?? '';
-  const timeoutMs = p.timeout_ms ?? p.timeoutMs ?? (p.timeout_seconds ?? p.timeoutSeconds ?? 120) * 1000;
-  const toolCallParser = p.tool_call_parser ?? p.toolCallParser;
+  const timeoutSecs = pick<number>(p, 'timeout_seconds', 'timeoutSeconds') ?? 120;
+  const timeoutMs = pick<number>(p, 'timeout_ms', 'timeoutMs') ?? timeoutSecs * 1000;
+  const toolCallParser = pick<string>(p, 'tool_call_parser', 'toolCallParser');
   return { kind, baseUrl, model, toolCallParser, apiKey, customHeaders, timeoutMs };
 }
 
@@ -485,7 +492,6 @@ function validateSameNumericValue(errors: ValidationError[], entries: Array<[str
 function configFromParsedToml(parsed: Record<string, unknown>): ProjectConfig {
   const config: ProjectConfig = {};
   if (parsed.active_profile !== undefined) config.activeProfile = parsed.active_profile as string;
-  if (parsed.activeProfile !== undefined) config.activeProfile = parsed.activeProfile as string;
   const agent = parsed.agent && typeof parsed.agent === 'object' ? (parsed.agent as AgentBudgetConfig) : undefined;
   if (parsed.provider && typeof parsed.provider === 'object') {
     config.provider = parsed.provider as ProviderConfig;
