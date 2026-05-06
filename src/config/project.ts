@@ -25,6 +25,8 @@ export interface ProviderConfig {
   timeout_seconds?: number;
   timeoutMs?: number;
   timeout_ms?: number;
+  tool_call_parser?: string;
+  toolCallParser?: string;
   api_key_env?: string;
   apiKeyEnv?: string;
 }
@@ -36,6 +38,16 @@ export interface AgentBudgetConfig {
   max_model_steps?: number;
   maxToolCalls?: number;
   max_tool_calls?: number;
+  contextWindowTokens?: number;
+  context_window_tokens?: number;
+  reservedOutputTokens?: number;
+  reserved_output_tokens?: number;
+  keepRecentTokens?: number;
+  keep_recent_tokens?: number;
+  maxSingleReadResultTokens?: number;
+  max_single_read_result_tokens?: number;
+  maxTotalReadResultTokensPerTurn?: number;
+  max_total_read_result_tokens_per_turn?: number;
 }
 
 function providerPresetDefaults(preset: ProviderPreset): ProviderConfig {
@@ -108,7 +120,8 @@ export function normalizeProviderConfig(p: ProviderConfig): import('../llm/types
   const baseUrl = p.base_url ?? p.baseUrl ?? presetDefaults.base_url ?? 'http://127.0.0.1:1234/v1';
   const model = p.model ?? presetDefaults.model ?? '';
   const timeoutMs = p.timeout_ms ?? p.timeoutMs ?? (p.timeout_seconds ?? p.timeoutSeconds ?? 120) * 1000;
-  return { kind, baseUrl, model, apiKey, customHeaders, timeoutMs };
+  const toolCallParser = p.tool_call_parser ?? p.toolCallParser;
+  return { kind, baseUrl, model, toolCallParser, apiKey, customHeaders, timeoutMs };
 }
 
 export interface ProjectConfig {
@@ -121,6 +134,16 @@ export interface ProjectConfig {
   max_model_steps?: number;
   maxToolCalls?: number;
   max_tool_calls?: number;
+  contextWindowTokens?: number;
+  context_window_tokens?: number;
+  reservedOutputTokens?: number;
+  reserved_output_tokens?: number;
+  keepRecentTokens?: number;
+  keep_recent_tokens?: number;
+  maxSingleReadResultTokens?: number;
+  max_single_read_result_tokens?: number;
+  maxTotalReadResultTokensPerTurn?: number;
+  max_total_read_result_tokens_per_turn?: number;
   agent?: AgentBudgetConfig;
   subagents?: { enabled?: boolean; mode?: 'sequential' | 'parallel' };
   verification?: { defaultCommand?: string };
@@ -154,6 +177,11 @@ const DEFAULTS: ProjectConfig = {
   model: undefined,
   baseUrl: 'http://127.0.0.1:1234/v1',
   contextBudgetTokens: 131072,
+  contextWindowTokens: 131072,
+  reservedOutputTokens: 8192,
+  keepRecentTokens: 20000,
+  maxSingleReadResultTokens: 12000,
+  maxTotalReadResultTokensPerTurn: 40000,
   maxModelSteps: 32,
   maxToolCalls: 96,
   subagents: { enabled: false, mode: 'sequential' },
@@ -258,6 +286,16 @@ export function validateConfig(config: ProjectConfig): ValidationError[] {
     'max_model_steps',
     'maxToolCalls',
     'max_tool_calls',
+    'contextWindowTokens',
+    'context_window_tokens',
+    'reservedOutputTokens',
+    'reserved_output_tokens',
+    'keepRecentTokens',
+    'keep_recent_tokens',
+    'maxSingleReadResultTokens',
+    'max_single_read_result_tokens',
+    'maxTotalReadResultTokensPerTurn',
+    'max_total_read_result_tokens_per_turn',
     'agent',
     'subagents',
     'verification',
@@ -281,6 +319,20 @@ export function validateConfig(config: ProjectConfig): ValidationError[] {
   validatePositiveInteger(errors, 'max_model_steps', config.max_model_steps);
   validatePositiveInteger(errors, 'maxToolCalls', config.maxToolCalls);
   validatePositiveInteger(errors, 'max_tool_calls', config.max_tool_calls);
+  validatePositiveInteger(errors, 'contextWindowTokens', config.contextWindowTokens);
+  validatePositiveInteger(errors, 'context_window_tokens', config.context_window_tokens);
+  validatePositiveInteger(errors, 'reservedOutputTokens', config.reservedOutputTokens);
+  validatePositiveInteger(errors, 'reserved_output_tokens', config.reserved_output_tokens);
+  validatePositiveInteger(errors, 'keepRecentTokens', config.keepRecentTokens);
+  validatePositiveInteger(errors, 'keep_recent_tokens', config.keep_recent_tokens);
+  validatePositiveInteger(errors, 'maxSingleReadResultTokens', config.maxSingleReadResultTokens);
+  validatePositiveInteger(errors, 'max_single_read_result_tokens', config.max_single_read_result_tokens);
+  validatePositiveInteger(errors, 'maxTotalReadResultTokensPerTurn', config.maxTotalReadResultTokensPerTurn);
+  validatePositiveInteger(
+    errors,
+    'max_total_read_result_tokens_per_turn',
+    config.max_total_read_result_tokens_per_turn,
+  );
   if (config.agent !== undefined) {
     if (typeof config.agent !== 'object') {
       errors.push({ path: 'agent', message: 'must be an object' });
@@ -291,6 +343,28 @@ export function validateConfig(config: ProjectConfig): ValidationError[] {
       validatePositiveInteger(errors, 'agent.max_model_steps', config.agent.max_model_steps);
       validatePositiveInteger(errors, 'agent.maxToolCalls', config.agent.maxToolCalls);
       validatePositiveInteger(errors, 'agent.max_tool_calls', config.agent.max_tool_calls);
+      validatePositiveInteger(errors, 'agent.contextWindowTokens', config.agent.contextWindowTokens);
+      validatePositiveInteger(errors, 'agent.context_window_tokens', config.agent.context_window_tokens);
+      validatePositiveInteger(errors, 'agent.reservedOutputTokens', config.agent.reservedOutputTokens);
+      validatePositiveInteger(errors, 'agent.reserved_output_tokens', config.agent.reserved_output_tokens);
+      validatePositiveInteger(errors, 'agent.keepRecentTokens', config.agent.keepRecentTokens);
+      validatePositiveInteger(errors, 'agent.keep_recent_tokens', config.agent.keep_recent_tokens);
+      validatePositiveInteger(errors, 'agent.maxSingleReadResultTokens', config.agent.maxSingleReadResultTokens);
+      validatePositiveInteger(
+        errors,
+        'agent.max_single_read_result_tokens',
+        config.agent.max_single_read_result_tokens,
+      );
+      validatePositiveInteger(
+        errors,
+        'agent.maxTotalReadResultTokensPerTurn',
+        config.agent.maxTotalReadResultTokensPerTurn,
+      );
+      validatePositiveInteger(
+        errors,
+        'agent.max_total_read_result_tokens_per_turn',
+        config.agent.max_total_read_result_tokens_per_turn,
+      );
     }
   }
   if (config.subagents !== undefined) {
@@ -404,6 +478,35 @@ function configFromParsedToml(parsed: Record<string, unknown>): ProjectConfig {
   if (parsed.max_tool_calls !== undefined) config.maxToolCalls = parsed.max_tool_calls as number;
   if (agent?.maxToolCalls !== undefined) config.maxToolCalls = agent.maxToolCalls;
   if (agent?.max_tool_calls !== undefined) config.maxToolCalls = agent.max_tool_calls;
+  if (parsed.contextWindowTokens !== undefined) config.contextWindowTokens = parsed.contextWindowTokens as number;
+  if (parsed.context_window_tokens !== undefined) config.contextWindowTokens = parsed.context_window_tokens as number;
+  if (agent?.contextWindowTokens !== undefined) config.contextWindowTokens = agent.contextWindowTokens;
+  if (agent?.context_window_tokens !== undefined) config.contextWindowTokens = agent.context_window_tokens;
+  if (parsed.reservedOutputTokens !== undefined) config.reservedOutputTokens = parsed.reservedOutputTokens as number;
+  if (parsed.reserved_output_tokens !== undefined)
+    config.reservedOutputTokens = parsed.reserved_output_tokens as number;
+  if (agent?.reservedOutputTokens !== undefined) config.reservedOutputTokens = agent.reservedOutputTokens;
+  if (agent?.reserved_output_tokens !== undefined) config.reservedOutputTokens = agent.reserved_output_tokens;
+  if (parsed.keepRecentTokens !== undefined) config.keepRecentTokens = parsed.keepRecentTokens as number;
+  if (parsed.keep_recent_tokens !== undefined) config.keepRecentTokens = parsed.keep_recent_tokens as number;
+  if (agent?.keepRecentTokens !== undefined) config.keepRecentTokens = agent.keepRecentTokens;
+  if (agent?.keep_recent_tokens !== undefined) config.keepRecentTokens = agent.keep_recent_tokens;
+  if (parsed.maxSingleReadResultTokens !== undefined)
+    config.maxSingleReadResultTokens = parsed.maxSingleReadResultTokens as number;
+  if (parsed.max_single_read_result_tokens !== undefined)
+    config.maxSingleReadResultTokens = parsed.max_single_read_result_tokens as number;
+  if (agent?.maxSingleReadResultTokens !== undefined)
+    config.maxSingleReadResultTokens = agent.maxSingleReadResultTokens;
+  if (agent?.max_single_read_result_tokens !== undefined)
+    config.maxSingleReadResultTokens = agent.max_single_read_result_tokens;
+  if (parsed.maxTotalReadResultTokensPerTurn !== undefined)
+    config.maxTotalReadResultTokensPerTurn = parsed.maxTotalReadResultTokensPerTurn as number;
+  if (parsed.max_total_read_result_tokens_per_turn !== undefined)
+    config.maxTotalReadResultTokensPerTurn = parsed.max_total_read_result_tokens_per_turn as number;
+  if (agent?.maxTotalReadResultTokensPerTurn !== undefined)
+    config.maxTotalReadResultTokensPerTurn = agent.maxTotalReadResultTokensPerTurn;
+  if (agent?.max_total_read_result_tokens_per_turn !== undefined)
+    config.maxTotalReadResultTokensPerTurn = agent.max_total_read_result_tokens_per_turn;
   if (parsed.subagents !== undefined && typeof parsed.subagents === 'object')
     config.subagents = parsed.subagents as { enabled?: boolean; mode?: 'sequential' | 'parallel' };
   if (parsed.verification !== undefined && typeof parsed.verification === 'object')

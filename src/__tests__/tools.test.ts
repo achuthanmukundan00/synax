@@ -116,7 +116,7 @@ describe('tool registry and inspection tools', () => {
     mkdirSync(join(TMP, 'docs'), { recursive: true });
     writeFileSync(join(TMP, 'package.json'), '{}\n', 'utf-8');
     writeFileSync(join(TMP, 'src', 'nested.ts'), 'export {}\n', 'utf-8');
-    for (let index = 0; index < 100; index += 1) {
+    for (let index = 0; index < 200; index += 1) {
       writeFileSync(join(TMP, `z-${index.toString().padStart(3, '0')}.txt`), 'extra\n', 'utf-8');
     }
     const registry = createToolRegistry({ repoRoot: TMP });
@@ -126,7 +126,7 @@ describe('tool registry and inspection tools', () => {
     expect(result.success).toBe(true);
     expect(result.output).toMatchObject({ path: '.', truncated: true });
     const entries = (result.output as DirectoryListingOutput).entries;
-    expect(entries).toHaveLength(80);
+    expect(entries).toHaveLength(160);
     expect(entries.slice(0, 3)).toEqual([
       { name: 'docs', type: 'directory' },
       { name: 'package.json', type: 'file' },
