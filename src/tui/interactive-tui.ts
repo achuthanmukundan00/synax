@@ -177,11 +177,6 @@ export async function runInteractiveTui(
         finish();
         break;
       }
-      if (event.type === 'redraw') {
-        terminal.clearScreen();
-        paint(true);
-        continue;
-      }
       if (event.type === 'scroll_history_up') {
         historyScrollOffset += 3;
         clampHistoryScroll();

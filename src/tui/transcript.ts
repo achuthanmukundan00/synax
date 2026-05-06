@@ -8,9 +8,18 @@ export interface TranscriptRenderState {
 export function renderTranscript(state: TranscriptRenderState, width: number): string[] {
   const blocks: string[][] = [];
   const history = state.run.debugHistory;
+  let lastKind = '';
 
   for (let i = 0; i < history.length; i += 1) {
     const item = history[i];
+    const blockKind = item.kind === 'model' ? 'model' : item.kind === 'tool_call' ? 'tool' : 'tool';
+
+    // Insert a thin separator when switching between model and tool regions.
+    if (lastKind && lastKind !== blockKind) {
+      blocks.push([dim(separator(width - 4))]);
+    }
+    lastKind = blockKind;
+
     if (item.kind === 'model') {
       blocks.push(renderEventBlock('model', cleanModelOutput(item.detail || item.summary), width));
       continue;
@@ -27,20 +36,29 @@ export function renderTranscript(state: TranscriptRenderState, width: number): s
     blocks.push(renderEventBlock('tool', summarizeOutput(item.detail || item.summary), width));
   }
 
-  if (!history.some((item) => item.kind === 'model')) {
+  // Only scan the most recent entries for a model output; the full history
+  // is already bounded by MAX_DEBUG_HISTORY in the state reducer.
+  const hasModelOutput = history.some((item) => item.kind === 'model');
+  if (!hasModelOutput) {
     const fallbackModel = cleanModelOutput(state.run.lastModelOutput || state.lastModelOutput || '');
-    if (fallbackModel) blocks.push(renderEventBlock('model', fallbackModel, width));
+    if (fallbackModel) {
+      if (lastKind) blocks.push([dim(separator(width - 4))]);
+      blocks.push(renderEventBlock('model', fallbackModel, width));
+    }
   }
 
   if (state.run.patchPreview) {
+    blocks.push(['']);
     blocks.push(renderDiffPreview(state.run.patchPreview.path, state.run.patchPreview.diff, width));
   }
 
   if (state.run.verification.state !== 'planned' || state.run.verification.checksPlanned > 0) {
+    blocks.push(['']);
     blocks.push(renderVerification(state.run, width));
   }
 
   if (shouldShowFinalSummary(state.run)) {
+    blocks.push(['']);
     blocks.push(renderFinalSummary(state.run, width));
   }
 
@@ -109,16 +127,18 @@ function renderCommandEvent(
   if (!result) return block;
 
   const parsed = parseCommandResult(result.detail || result.summary);
-  const status = [`exit ${parsed.exitCode ?? (result.summary.includes('error') ? 1 : 0)}`];
-  if (parsed.duration) status.push(parsed.duration);
-  if (isGitCommand(command)) status.push('git');
-  block.push(`  ${dim(status.join(' · '))}`);
+  const exitOk = parsed.exitCode === 0;
+  const exitLabel = exitOk ? dim(`exit ${parsed.exitCode}`) : `\u001b[1;31mexit ${parsed.exitCode ?? 1}\u001b[0m`;
+  const tags = [exitLabel];
+  if (parsed.duration) tags.push(dim(parsed.duration));
+  if (isGitCommand(command)) tags.push(dim('git'));
+  block.push(`  ${tags.join(' · ')}`);
 
   const output = parsed.output.trim();
   const showOutput = output.length > 0 && (parsed.exitCode !== 0 || output.length < 420);
   if (showOutput) {
-    for (const line of wrapText(output, Math.max(20, width - 4)).slice(0, parsed.exitCode === 0 ? 3 : 6)) {
-      block.push(`  ${clip(line, width - 4)}`);
+    for (const line of wrapText(output, Math.max(20, width - 4)).slice(0, parsed.exitCode === 0 ? 2 : 4)) {
+      block.push(`  ${dim(clip(line, width - 4))}`);
     }
   }
 
@@ -139,13 +159,21 @@ function renderDiffPreview(path: string, diff: string, width: number): string[] 
 }
 
 function renderVerification(run: RunStateSnapshot, width: number): string[] {
+  const stateIcon =
+    run.verification.state === 'passed'
+      ? '\u001b[32m✓\u001b[0m'
+      : run.verification.state === 'failed'
+        ? '\u001b[31m✗\u001b[0m'
+        : run.verification.state === 'running'
+          ? '\u001b[33m◌\u001b[0m'
+          : '·';
   const label = run.verification.state === 'failed' ? red('failed') : run.verification.state;
   const block = [
-    `${eventLabel('verify')}  ${label}  ${clip(run.verification.currentCheckLabel || 'verification', width - 18)}`,
+    `${stateIcon} ${eventLabel('verify')}  ${label}  ${clip(run.verification.currentCheckLabel || 'verification', width - 22)}`,
   ];
-  if (run.verification.summary) block.push(`        ${clip(run.verification.summary, width - 8)}`);
+  if (run.verification.summary) block.push(`         ${dim(clip(run.verification.summary, width - 10))}`);
   if (run.verification.state === 'failed')
-    block.push(`        next blocker: ${clip(run.verification.summary, width - 22)}`);
+    block.push(`         ${dim(`next: ${clip(run.verification.summary, width - 16)}`)}`);
   return block;
 }
 
@@ -197,16 +225,25 @@ function parseToolCall(detail: string): ParsedToolCall {
 
 function parseFirstJson(text: string): Record<string, unknown> | undefined {
   const start = text.indexOf('{');
-  const end = text.lastIndexOf('}');
-  if (start < 0 || end <= start) return undefined;
-  try {
-    const parsed = JSON.parse(text.slice(start, end + 1));
-    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
-      ? (parsed as Record<string, unknown>)
-      : undefined;
-  } catch {
-    return undefined;
+  if (start < 0) return undefined;
+  let depth = 0;
+  for (let i = start; i < text.length; i += 1) {
+    if (text[i] === '{') depth += 1;
+    else if (text[i] === '}') {
+      depth -= 1;
+      if (depth === 0) {
+        try {
+          const parsed = JSON.parse(text.slice(start, i + 1));
+          return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+            ? (parsed as Record<string, unknown>)
+            : undefined;
+        } catch {
+          return undefined;
+        }
+      }
+    }
   }
+  return undefined;
 }
 
 function stringValue(value: Record<string, unknown> | undefined, key: string): string | undefined {
@@ -329,4 +366,8 @@ function red(text: string): string {
 
 function dim(text: string): string {
   return `\u001b[90m${text}\u001b[0m`;
+}
+
+function separator(width: number): string {
+  return '─'.repeat(Math.max(1, width));
 }

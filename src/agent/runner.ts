@@ -436,9 +436,10 @@ export async function runAgentTurn(options: AgentRunnerOptions & { task: string 
 
     if (response.toolCalls.length === 0) {
       // Gate: prevent premature completion when the model claims success
-      // without making any changes in patch/verify mode.
+      // without making any changes in patch mode. Read-only and verify
+      // modes are exempt since they legitimately don't make changes.
       if (
-        mode !== 'read-only' &&
+        mode === 'patch' &&
         changedFiles.length === 0 &&
         completedActions.length === 0 &&
         isPrematureCompletionClaim(response.content)
@@ -465,6 +466,7 @@ export async function runAgentTurn(options: AgentRunnerOptions & { task: string 
 
     const contentToolResults: Array<{ id: string; content: string }> = [];
     for (const call of response.toolCalls) {
+      const callIndex = toolCalls.length;
       if (toolCalls.length >= maxToolCalls) {
         return {
           terminalState: 'budget_exhausted',
@@ -537,15 +539,23 @@ export async function runAgentTurn(options: AgentRunnerOptions & { task: string 
       if (result.changedFile) changedFiles.push(result.changedFile);
       if (result.completedAction) {
         completedActions.push(result.completedAction);
-        flushContentToolResults(conversation, response, contentToolResults);
-        return {
-          terminalState: 'completed',
-          finalAnswer: formatCompletedActionFinalAnswer(result.completedAction, result.toolResult),
-          steps: step,
-          toolCalls,
-          changedFiles,
-          conversation,
-        };
+        // Only auto-complete when this is the last tool call in the
+        // current model response. If the model queued multiple tool
+        // calls (e.g. commit → push → pr create), wait until all
+        // have been processed before deciding terminal state.
+        const isCurrentBatchLast = callIndex >= response.toolCalls.length - 1;
+        if (isCurrentBatchLast) {
+          flushContentToolResults(conversation, response, contentToolResults);
+          return {
+            terminalState: 'completed',
+            finalAnswer: formatCompletedActionFinalAnswer(result.completedAction, result.toolResult),
+            steps: step,
+            toolCalls,
+            changedFiles,
+            conversation,
+          };
+        }
+        // Otherwise: let remaining tool calls execute first.
       }
 
       // Item 7: Budget check after EVERY tool result is appended.
@@ -1036,7 +1046,7 @@ export function buildModelFacingTools(options: ModelToolSurfaceOptions = {}): To
   ];
 
   if (bashEnabled) {
-    tools.splice(3, 0, {
+    tools.push({
       name: 'bash',
       description: 'Execute a shell command in the repository root. Use for git workflows and verification commands.',
       inputSchema: {
@@ -1081,6 +1091,13 @@ async function executeBashTool(input: Record<string, unknown>, repoRoot: string)
   if (!command) {
     return toolFailure('bash', 'command is required');
   }
+
+  // Block obviously catastrophic commands outright rather than just warning.
+  const blockReason = detectBlockedCommand(command);
+  if (blockReason) {
+    return toolFailure('bash', `Blocked: ${blockReason}`);
+  }
+
   const safetyWarnings = detectDangerousCommandWarnings(command);
 
   try {
@@ -1182,24 +1199,50 @@ function formatCompletedActionFinalAnswer(action: string, toolResult: ToolResult
   return lines.join('\n');
 }
 
+function detectBlockedCommand(command: string): string | null {
+  const normalized = command.toLowerCase().replace(/\s+/g, ' ').trim();
+
+  // Remote code execution via pipe-to-shell
+  if (/\bcurl\b.*\|\s*(bash|sh)\b/.test(normalized))
+    return 'remote script execution via curl|bash is blocked';
+  if (/\bwget\b.*\|\s*(bash|sh)\b/.test(normalized))
+    return 'remote script execution via wget|bash is blocked';
+
+  // Destructive root operations
+  if (/\brm\s+-rf\s+\/(?=[\s;|&)"']|$)/.test(normalized))
+    return 'destructive delete of root (rm -rf /) is blocked';
+  if (/\brm\s+-rf\s+~(?=[\s;|&)"']|$)/.test(normalized))
+    return 'destructive delete of home (rm -rf ~) is blocked';
+
+  // Filesystem and block device destruction
+  if (/\bmkfs(\.| )/.test(normalized))
+    return 'filesystem formatting (mkfs) is blocked';
+  if (/\bdd\s+if=.*\s+of=\/dev\//.test(normalized))
+    return 'raw block device write (dd to /dev) is blocked';
+
+  // System power state
+  if (/\bshutdown\b|\breboot\b|\bhalt\b/.test(normalized))
+    return 'system power-state command is blocked';
+
+  return null;
+}
+
 function detectDangerousCommandWarnings(command: string): string[] {
   const normalized = command.toLowerCase().replace(/\s+/g, ' ').trim();
   const warnings: string[] = [];
+  // Patterns that warrant a warning but not outright blocking.
+  // Catastrophic patterns (curl|bash, rm -rf /, mkfs, dd to /dev, shutdown)
+  // are blocked upstream by detectBlockedCommand.
   const patterns: Array<{ pattern: RegExp; warning: string }> = [
-    { pattern: /\brm\s+-rf\s+\/(?=[\s;|&)"']|$)/, warning: 'destructive delete of root path (`rm -rf /`) detected' },
-    { pattern: /\brm\s+-rf\s+~(?=[\s;|&)"']|$)/, warning: 'destructive delete of home path (`rm -rf ~`) detected' },
     {
       pattern: /\brm\s+-rf\s+\.(?=[\s;|&)"']|$)/,
       warning: 'destructive delete of current directory (`rm -rf .`) detected',
     },
     { pattern: /\brm\s+-rf\s+\/etc(?=[\s;|&/)"']|$)/, warning: 'system directory deletion (`rm -rf /etc`) detected' },
-    { pattern: /\bmkfs(\.| )/, warning: 'filesystem formatting command detected' },
-    { pattern: /\bdd\s+if=.*\s+of=\/dev\//, warning: 'raw block device write detected' },
-    { pattern: /\bshutdown\b|\breboot\b|\bhalt\b/, warning: 'system power-state command detected' },
     { pattern: /\bchmod\s+-r\s+0{0,2}\s+\//, warning: 'broad permission reset on root detected' },
     { pattern: /\bchown\s+-r\s+.+\s+\//, warning: 'recursive ownership change on root detected' },
-    { pattern: /\bcurl\b.*\|\s*(bash|sh)\b/, warning: 'remote script pipe-to-shell detected' },
-    { pattern: /\bwget\b.*\|\s*(bash|sh)\b/, warning: 'remote script pipe-to-shell detected' },
+    { pattern: /\brm\s+-rf\s+\/usr\b/, warning: 'system directory deletion (`rm -rf /usr`) detected' },
+    { pattern: /\brm\s+-rf\s+\/var\b/, warning: 'system directory deletion (`rm -rf /var`) detected' },
   ];
   for (const entry of patterns) {
     if (entry.pattern.test(normalized)) warnings.push(entry.warning);
@@ -1469,8 +1512,9 @@ function readPathFromOutput(output: unknown): string | undefined {
 
 /**
  * Detect when a model claims completion/success without actually doing work.
- * Catches phrases like "verified passed", "all tests pass", "everything looks good"
- * when the model hasn't made any file changes.
+ * For short responses (< 60 chars), checks the full text. For longer responses,
+ * only checks the trailing 40% to avoid false positives from mid-response
+ * mentions like "no issues found in the diff, proceeding with edit".
  */
 function isPrematureCompletionClaim(text: string): boolean {
   const normalized = text
@@ -1485,24 +1529,20 @@ function isPrematureCompletionClaim(text: string): boolean {
     'verified passed',
     'verification passed',
     'all tests pass',
-    'all tests passing',
-    'tests are passing',
-    'everything looks good',
-    'everything is fine',
-    'no issues found',
-    'no problems found',
-    'looks correct',
-    'looks good',
-    'confirmed working',
-    'confirmed fixed',
-    'should be fixed',
-    'should work now',
-    'problem solved',
-    'issue resolved',
     'completed successfully',
+    'task complete',
+    'work is complete',
   ];
 
-  return prematurePhrases.some((phrase) => normalized.includes(phrase));
+  // For short responses, check the full text.
+  if (normalized.length < 60) {
+    return prematurePhrases.some((phrase) => normalized.includes(phrase));
+  }
+
+  // For longer responses, only check the trailing portion.
+  const tailStart = Math.floor(normalized.length * 0.6);
+  const tail = normalized.slice(tailStart);
+  return prematurePhrases.some((phrase) => tail.includes(phrase));
 }
 
 function isSafeToolPreamble(text: string): boolean {
