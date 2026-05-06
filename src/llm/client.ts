@@ -7,7 +7,14 @@
 
 import { type NormalizedProviderConfig, type ChatOptions, type ChatResponse, type LlmError } from './types';
 import { type ContextLedger } from '../tools';
-import { parseOpenAIToolCalls, parseToolCallsFromContent, toOpenAIToolDefinition } from './tool-calls';
+import {
+  type ToolCallParserMode,
+  parseOpenAIToolCallsResult,
+  parseQwenToolCallsFromContentResult,
+  parseToolCallsFromContentResult,
+  sanitizeReasoningTags,
+  toOpenAIToolDefinition,
+} from './tool-calls';
 
 // ---------------------------------------------------------------------------
 // Error helpers
@@ -115,7 +122,7 @@ function parseErrorResponse(status: number, bodyText: string): LlmError {
 // Success response parsing
 // ---------------------------------------------------------------------------
 
-function parseSuccessResponse(bodyText: string): ChatResponse {
+function parseSuccessResponse(bodyText: string, parserMode: ToolCallParserMode): ChatResponse {
   const json = JSON.parse(bodyText) as {
     model?: string;
     choices?: Array<{
@@ -126,16 +133,34 @@ function parseSuccessResponse(bodyText: string): ChatResponse {
   };
 
   const choice = json.choices?.[0];
-  const content = choice?.message?.content ?? '';
+  const rawContent = choice?.message?.content ?? '';
+  const content = sanitizeReasoningTags(rawContent);
   const finishReason = choice?.finish_reason ?? null;
-  const standardToolCalls = parseOpenAIToolCalls(choice?.message?.tool_calls);
-  const fallbackToolCalls = standardToolCalls.length > 0 ? [] : parseToolCallsFromContent(content);
+  const standardToolCallResult = parseOpenAIToolCallsResult(choice?.message?.tool_calls);
+  if (!standardToolCallResult.ok) {
+    throw modelToolCallParseError(standardToolCallResult.message);
+  }
+  const fallbackToolCallResult =
+    standardToolCallResult.calls.length > 0
+      ? ({ ok: true, source: 'none', calls: [] } as const)
+      : parserMode === 'qwen3_coder' || parserMode === 'qwen3_xml'
+        ? parseQwenToolCallsFromContentResult(content)
+        : parseToolCallsFromContentResult(content);
+  if (!fallbackToolCallResult.ok) {
+    throw modelToolCallParseError(fallbackToolCallResult.message);
+  }
 
   return {
     content,
     model: json.model ?? '',
     finishReason: finishReason ?? 'stop',
-    toolCalls: [...standardToolCalls, ...fallbackToolCalls],
+    toolCallFormat:
+      standardToolCallResult.calls.length > 0
+        ? 'openai'
+        : fallbackToolCallResult.calls.length > 0
+          ? 'content_xml'
+          : 'none',
+    toolCalls: [...standardToolCallResult.calls, ...fallbackToolCallResult.calls],
     usage: json.usage
       ? {
           promptTokens: json.usage.prompt_tokens ?? 0,
@@ -144,6 +169,12 @@ function parseSuccessResponse(bodyText: string): ChatResponse {
         }
       : null,
   };
+}
+
+function modelToolCallParseError(message: string): Error {
+  const error = new Error(`model emitted malformed tool call output: ${message}`);
+  error.name = 'ModelToolCallParseError';
+  return error;
 }
 
 // ---------------------------------------------------------------------------
@@ -170,6 +201,7 @@ export function createOpenAICompatibleClient(
   const model = cfg.model ?? '';
   const baseUrl = (cfg.baseUrl ?? 'http://127.0.0.1:1234/v1').replace(/\/+$/, '');
   const endpoint = baseUrl + '/chat/completions';
+  const parserMode = selectToolCallParserMode(cfg.model, cfg.toolCallParser);
 
   // Build base headers
   const headers: Record<string, string> = {
@@ -213,7 +245,7 @@ export function createOpenAICompatibleClient(
       const result = await dispatchRequest(endpoint, body, headers, timeoutMs);
 
       if (result.status >= 200 && result.status < 300) {
-        const response = parseSuccessResponse(result.bodyText);
+        const response = parseSuccessResponse(result.bodyText, parserMode);
 
         // Record token usage from the response when a ledger is present.
         if (ledger && response.usage) {
@@ -252,6 +284,18 @@ export function createOpenAICompatibleClient(
       throw parseErrorResponse(result.status, result.bodyText);
     },
   };
+}
+
+function selectToolCallParserMode(model: string, override?: string): ToolCallParserMode {
+  const normalizedOverride = (override ?? '').trim().toLowerCase();
+  if (normalizedOverride === 'qwen3_xml' || normalizedOverride === 'qwen3_coder') return normalizedOverride;
+  if (normalizedOverride === 'generic' || normalizedOverride.length > 0) return 'generic';
+
+  const lowerModel = model.toLowerCase();
+  if (lowerModel.includes('qwen3.6') || lowerModel.includes('qwen3.5') || lowerModel.includes('qwen3-coder')) {
+    return 'qwen3_coder';
+  }
+  return 'generic';
 }
 
 export { providerError, classifyStatus, parseErrorResponse, parseSuccessResponse };
