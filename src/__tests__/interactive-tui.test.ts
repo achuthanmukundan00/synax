@@ -98,7 +98,15 @@ describe('diff renderer', () => {
 
     const out = diff.render(['xy'], 8, 1);
 
-    expect(out).toContain('\u001b[1;1Hxy      ');
+    expect(out).toContain('\u001b[1;1Hxy\u001b[K');
+  });
+
+  it('avoids writing into the last terminal column to prevent prompt autowrap', () => {
+    const diff = new DiffRenderer();
+    const out = diff.render(['abcdefgh'], 8, 1);
+
+    expect(out).toContain('\u001b[1;1Habcdefg\u001b[K');
+    expect(out).not.toContain('\u001b[1;1Habcdefgh');
   });
 });
 
@@ -404,6 +412,43 @@ describe('interactive layout visual agreements', () => {
       30,
     ).join('\n');
 
+    expect(rendered).toContain('\u001b[31m-old line\u001b[0m');
+    expect(rendered).toContain('\u001b[32m+new line\u001b[0m');
+  });
+
+  it('adds ANSI colors to plain git diff command output', () => {
+    const run = {
+      ...createInitialRunStateSnapshot(0),
+      debugHistory: [
+        {
+          atMs: 1,
+          kind: 'tool_call' as const,
+          summary: 'bash call',
+          detail: 'bash\n{"command":"git diff -- src/tui/transcript.ts | head -60"}',
+        },
+        {
+          atMs: 2,
+          kind: 'tool_result' as const,
+          summary: 'bash changed',
+          detail:
+            'exit code: 0\ndiff --git a/src/tui/transcript.ts b/src/tui/transcript.ts\n@@ -1,2 +1,2 @@\n-old line\n+new line',
+        },
+      ],
+    };
+
+    const rendered = renderLayout(
+      {
+        run,
+        objectiveInput: '',
+        coreMode: 'thinking',
+        nowMs: 2000,
+      },
+      100,
+      30,
+    ).join('\n');
+
+    expect(rendered).toContain('\u001b[1;37mdiff --git a/src/tui/transcript.ts b/src/tui/transcript.ts\u001b[0m');
+    expect(rendered).toContain('\u001b[36m@@ -1,2 +1,2 @@\u001b[0m');
     expect(rendered).toContain('\u001b[31m-old line\u001b[0m');
     expect(rendered).toContain('\u001b[32m+new line\u001b[0m');
   });
