@@ -12,13 +12,18 @@ export function renderTranscript(state: TranscriptRenderState, width: number): s
 
   for (let i = 0; i < history.length; i += 1) {
     const item = history[i];
-    const blockKind = item.kind === 'model' ? 'model' : item.kind === 'tool_call' ? 'tool' : 'tool';
+    const blockKind = item.kind === 'user' ? 'user' : item.kind === 'model' ? 'model' : 'tool';
 
     // Insert a thin separator when switching between model and tool regions.
     if (lastKind && lastKind !== blockKind) {
       blocks.push([dim(separator(Math.min(width - 4, 40)))]);
     }
     lastKind = blockKind;
+
+    if (item.kind === 'user') {
+      blocks.push(renderUserPrompt(item.detail || item.summary, width));
+      continue;
+    }
 
     if (item.kind === 'model') {
       blocks.push(renderEventBlock('model', cleanModelOutput(item.detail || item.summary), width));
@@ -88,6 +93,15 @@ function renderEventBlock(label: string, body: string, width: number): string[] 
   );
 }
 
+function renderUserPrompt(body: string, width: number): string[] {
+  const inner = Math.max(12, width - 4);
+  const wrapped = wrapText(body || 'no prompt', inner).slice(0, 4);
+  return [
+    subtleBand(`user  ${clip(wrapped[0] ?? '', inner)}`, width),
+    ...wrapped.slice(1).map((line) => subtleBand(`      ${clip(line, inner - 6)}`, width)),
+  ];
+}
+
 function renderToolEvent(
   call: ParsedToolCall,
   result: { summary: string; detail: string } | undefined,
@@ -134,7 +148,7 @@ function renderCommandEvent(
   if (isGitCommand(command)) tags.push(dim('git'));
   block.push(`  ${tags.join(' · ')}`);
 
-  const output = parsed.output.trim();
+  const output = summarizeCommandDisplay(command, parsed.output).trim();
   const showOutput = output.length > 0 && (parsed.exitCode !== 0 || output.length < 420);
   if (showOutput) {
     for (const line of wrapText(output, Math.max(20, width - 4)).slice(0, parsed.exitCode === 0 ? 2 : 4)) {
@@ -180,7 +194,12 @@ function renderVerification(run: RunStateSnapshot, width: number): string[] {
 function renderFinalSummary(run: RunStateSnapshot, width: number): string[] {
   const commands = commandsRun(run).join(', ') || 'none';
   const tools = toolsUsed(run).join(', ') || 'none';
-  const fileCount = run.changes.items.length + run.changes.overflowCount;
+  const fileCount =
+    run.filesChangedThisRun.length > 0
+      ? run.filesChangedThisRun.length
+      : run.changes.items.filter((item) => item.op !== 'read').length + run.changes.overflowCount;
+  const toolInvocationCount =
+    run.toolInvocationCount || run.debugHistory.filter((item) => item.kind === 'tool_call').length;
   const blockers = run.terminalIssue || (run.verification.state === 'failed' ? run.verification.summary : 'none');
   const completed = run.terminal === 'completed' || run.phase === 'completed';
   const result = completed ? 'completed' : run.terminal;
@@ -190,7 +209,9 @@ function renderFinalSummary(run: RunStateSnapshot, width: number): string[] {
     bold('Final summary'),
     `  objective: ${clip(run.objective.label, width - 15)}`,
     `  result: ${clip(result, width - 10)}`,
-    `  files changed: ${fileCount}`,
+    `  Changed this run: ${plural(fileCount, 'file')}`,
+    `  Working tree: ${run.workingTreeClean === undefined ? 'unknown' : run.workingTreeClean ? 'clean' : 'dirty'}`,
+    `  tool invocations: ${toolInvocationCount}`,
     `  tools used: ${clip(tools, width - 14)}`,
     `  commands run: ${clip(commands, width - 16)}`,
     `  verification: ${clip(run.verification.state, width - 18)}`,
@@ -282,6 +303,30 @@ function parseCommandResult(detail: string): { exitCode?: number; duration?: str
   };
 }
 
+function summarizeCommandDisplay(command: string, output: string): string {
+  if (!/^git\s+diff\b.*--stat\b/.test(command.trim())) return output;
+  const rows = output
+    .split('\n')
+    .map(parseDiffStatLine)
+    .filter((line): line is string => Boolean(line));
+  return rows.length > 0 ? rows.join('\n') : output;
+}
+
+function parseDiffStatLine(line: string): string | undefined {
+  const trimmed = line.trim();
+  if (!trimmed || /^\d+\s+files?\s+changed/.test(trimmed)) return undefined;
+  const match = /^(.+?)\s+\|\s+(\d+)\s+([+\-]+).*$/.exec(trimmed);
+  if (!match) return undefined;
+  const path = match[1]?.trim();
+  const count = Number(match[2]);
+  const marks = match[3] ?? '';
+  if (!path || !Number.isFinite(count)) return undefined;
+  const added = (marks.match(/\+/g) ?? []).length;
+  const removed = (marks.match(/-/g) ?? []).length;
+  const sign = added >= removed ? '+' : '-';
+  return `changed  ${path}  ${sign}${count} ${count === 1 ? 'line' : 'lines'}`;
+}
+
 function commandsRun(run: RunStateSnapshot): string[] {
   const commands: string[] = [];
   for (const item of run.debugHistory) {
@@ -369,6 +414,14 @@ function dim(text: string): string {
   return `\u001b[90m${text}\u001b[0m`;
 }
 
+function subtleBand(text: string, width: number): string {
+  return `\u001b[48;5;236m\u001b[1;37m ${clip(text, Math.max(1, width - 2)).padEnd(Math.max(1, width - 2), ' ')} \u001b[0m`;
+}
+
 function separator(width: number): string {
   return '─'.repeat(Math.max(1, width));
+}
+
+function plural(count: number, singular: string): string {
+  return `${count} ${count === 1 ? singular : `${singular}s`}`;
 }

@@ -25,6 +25,14 @@ export async function runInteractiveTui(
     modelLabel?: string;
     /** Active endpoint for state display. */
     endpointLabel?: string;
+    /** Provider label from config when available. */
+    providerName?: string;
+    /** Working directory label for the input dock. */
+    cwdLabel?: string;
+    /** Current git branch when known. */
+    gitBranch?: string;
+    /** Configured total context window when known. */
+    contextWindowTokens?: number;
   },
 ): Promise<void> {
   const terminal = createTerminalSession({ stdin: options?.stdin, stdout: options?.stdout });
@@ -42,6 +50,16 @@ export async function runInteractiveTui(
   let busy = false;
   let historyScrollOffset = 0;
   const diff = new DiffRenderer();
+  if (options?.modelLabel) {
+    state = {
+      ...state,
+      modelId: options.modelLabel,
+      providerName: options.providerName ?? providerNameFromEndpoint(options.endpointLabel ?? ''),
+      contextWindowTokens: options.contextWindowTokens,
+      coreLoaded: true,
+      sessionSpendLabel: isLocalEndpoint(options.endpointLabel ?? '') ? 'local' : undefined,
+    };
+  }
 
   // Wire the runtime event stream from ChatSession → TUI state reducer.
   // This ensures the TUI reflects REAL runtime state, not fake animation.
@@ -51,6 +69,7 @@ export async function runInteractiveTui(
   });
 
   const coreMode = (): CoreMode => {
+    if (!state.coreLoaded) return 'unloaded';
     if (state.phase === 'error') return 'failure';
     if (state.phase === 'budget_exhausted') return 'blocked';
     if (state.phase === 'blocked') return 'blocked';
@@ -70,6 +89,8 @@ export async function runInteractiveTui(
     lastModelOutput: options?.lastModelOutput?.(),
     modelLabel: options?.modelLabel,
     endpointLabel: options?.endpointLabel,
+    cwdLabel: options?.cwdLabel ?? process.cwd(),
+    gitBranch: options?.gitBranch,
     historyScrollOffset,
   });
 
@@ -123,7 +144,9 @@ export async function runInteractiveTui(
         profile: 'default',
         endpoint: options?.endpointLabel ?? 'local',
         model: options?.modelLabel ?? 'local model',
+        providerName: options?.providerName,
         contextBudgetTokens: 0,
+        contextWindowTokens: options?.contextWindowTokens,
         maxModelSteps: 0,
         maxToolCalls: 0,
         tools: [],
@@ -143,11 +166,12 @@ export async function runInteractiveTui(
           type: 'task_finished',
           timestamp: new Date().toISOString(),
           status: report.terminalState,
-          toolCalls: 0,
+          toolCalls: report.toolCalls ?? 0,
           maxToolCalls: 0,
           modelSteps: report.steps,
           maxModelSteps: report.steps,
           changedFiles: report.changedFiles,
+          workingTreeClean: report.workingTreeClean,
           verification: report.terminalState === 'completed' ? 'passed' : (report.error ?? report.terminalState),
           error: report.error,
         },
@@ -215,6 +239,18 @@ export async function runInteractiveTui(
     stdin?.off('data', onData);
     terminal.stop();
   }
+}
+
+function isLocalEndpoint(endpoint: string): boolean {
+  return /(?:^|\/\/)(?:127\.0\.0\.1|localhost)(?::|\/|$)/i.test(endpoint);
+}
+
+function providerNameFromEndpoint(endpoint: string): string {
+  if (isLocalEndpoint(endpoint)) return 'Relay';
+  if (/api\.openai\.com/i.test(endpoint)) return 'OpenAI';
+  if (/anthropic/i.test(endpoint)) return 'Anthropic';
+  if (/openrouter/i.test(endpoint)) return 'OpenRouter';
+  return endpoint ? 'OpenAI-compatible' : 'unknown';
 }
 
 function inferThinkingMode(state: RunStateSnapshot): CoreMode {

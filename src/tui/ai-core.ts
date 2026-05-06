@@ -9,6 +9,7 @@ export type CoreMode =
   | 'blocked'
   | 'completed'
   | 'failure'
+  | 'unloaded'
   | 'thinking'
   | 'tool_execution'
   | 'error';
@@ -40,7 +41,15 @@ interface MaterialColor {
   b: number;
 }
 
-type NormalizedCoreMode = 'idle' | 'thinking' | 'tool_execution' | 'verifying' | 'blocked' | 'completed' | 'failure';
+type NormalizedCoreMode =
+  | 'idle'
+  | 'thinking'
+  | 'tool_execution'
+  | 'verifying'
+  | 'blocked'
+  | 'completed'
+  | 'failure'
+  | 'unloaded';
 
 const RESET = '\u001b[0m';
 
@@ -82,6 +91,9 @@ export function renderDottedCore(opts: {
   unicode?: boolean;
 }): string[] {
   const normalized = normalizeMode(opts.mode);
+  if (normalized === 'unloaded') {
+    return renderUnloadedCore(clamp(Math.floor(opts.width), 1, 80), clamp(Math.floor(opts.height), 1, 40));
+  }
   const state: FieldState = {
     mode: normalized,
     frame: opts.frame,
@@ -194,6 +206,9 @@ function profileForMode(mode: NormalizedCoreMode): CoreProfile {
   if (mode === 'idle') {
     return { density: 0.21, flow: 0.55, pressure: 0.25, compression: 0.08, sync: 0.24, strain: false, stable: false };
   }
+  if (mode === 'unloaded') {
+    return { density: 0.14, flow: 0, pressure: 0, compression: 0, sync: 0, strain: false, stable: true };
+  }
   if (mode === 'thinking') {
     return { density: 0.43, flow: 1.45, pressure: 0.82, compression: 0.12, sync: 0.56, strain: false, stable: false };
   }
@@ -230,11 +245,13 @@ function paletteForMode(mode: NormalizedCoreMode, frame: number): [MaterialColor
   if (mode === 'completed') return [mix(steel, green, 0.22), mix(blue, green, 0.35), green];
   if (mode === 'blocked') return [mix(steel, amber, 0.28), amber, mix(amber, red, 0.38 + wave * 0.14)];
   if (mode === 'failure') return [mix(steel, red, 0.26), mix(amber, red, 0.62), red];
+  if (mode === 'unloaded') return [steel, steel, steel];
   if (mode === 'idle') return [mix(steel, deepBlue, 0.44), mix(deepBlue, blue, 0.36), mix(blue, steel, 0.2)];
   return [mix(steel, deepBlue, 0.38), blue, mix(blue, { r: 93, g: 140, b: 190 }, 0.35 + wave * 0.14)];
 }
 
 function normalizeMode(mode: CoreMode): NormalizedCoreMode {
+  if (mode === 'unloaded') return 'unloaded';
   if (mode === 'tool_execution' || mode === 'reading' || mode === 'writing' || mode === 'bash') return 'tool_execution';
   if (mode === 'verifying') return 'verifying';
   if (mode === 'completed') return 'completed';
@@ -242,6 +259,27 @@ function normalizeMode(mode: CoreMode): NormalizedCoreMode {
   if (mode === 'failure' || mode === 'error') return 'failure';
   if (mode === 'idle') return 'idle';
   return 'thinking';
+}
+
+function renderUnloadedCore(width: number, height: number): string[] {
+  return Array.from({ length: height }, (_, y) => {
+    let row = '';
+    for (let x = 0; x < width; x += 1) {
+      const nx = ((x + 0.5) / width - 0.5) * 2.1;
+      const ny = ((y + 0.5) / height - 0.5) * 2.45;
+      const radius = Math.sqrt(nx * nx + ny * ny);
+      if (radius > 1.1) {
+        row += ' ';
+      } else if (Math.abs(radius - 0.72) < 0.05 && positiveModulo(x + y, 3) === 0) {
+        row += '\u001b[90m.\u001b[0m';
+      } else if (radius < 0.18) {
+        row += '\u001b[90m·\u001b[0m';
+      } else {
+        row += ' ';
+      }
+    }
+    return row;
+  });
 }
 
 function colorize(ch: string, color: MaterialColor): string {
