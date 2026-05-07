@@ -21,7 +21,7 @@ export type ProviderPreset =
   | 'together';
 
 export interface ProviderConfig {
-  preset?: ProviderPreset;
+  preset?: string;
   kind?: ProviderKind;
   baseUrl?: string;
   base_url?: string;
@@ -63,7 +63,7 @@ export interface AgentBudgetConfig {
   max_total_read_result_tokens_per_turn?: number;
 }
 
-function providerPresetDefaults(preset: ProviderPreset): ProviderConfig {
+function providerPresetDefaults(preset: string): ProviderConfig {
   switch (preset) {
     case 'relay-cloudflare':
       return {
@@ -208,15 +208,15 @@ export function toProviderFactoryInput(config: ProjectConfig): ProviderFactoryIn
     'relay-local': 'relay',
     'relay-cloudflare': 'relay',
     'custom-openai-compatible': 'custom',
-    'openai': 'custom', // OpenAI uses custom base URL
-    'openrouter': 'openrouter',
-    'anthropic': 'anthropic',
-    'deepseek': 'deepseek',
-    'groq': 'groq',
-    'mistral': 'mistral',
-    'together': 'together',
-    'relay': 'relay',
-    'custom': 'custom',
+    openai: 'custom', // OpenAI uses custom base URL
+    openrouter: 'openrouter',
+    anthropic: 'anthropic',
+    deepseek: 'deepseek',
+    groq: 'groq',
+    mistral: 'mistral',
+    together: 'together',
+    relay: 'relay',
+    custom: 'custom',
   };
 
   const providerId = preset ? (providerMap[preset] ?? preset) : undefined;
@@ -755,7 +755,7 @@ function stringValue(value: unknown): string | undefined {
 function projectProviderFromEffectiveProvider(provider: ResolvedProviderConfig, model: string): ProviderConfig {
   const apiKey = provider.apiKey === '••••' ? undefined : provider.apiKey;
   return {
-    preset: provider.id as ProviderPreset,
+    preset: provider.id,
     kind: 'openai-compatible',
     base_url: provider.baseUrl,
     baseUrl: provider.baseUrl,
@@ -824,10 +824,8 @@ export function loadProjectConfig(baseDir?: string): LoadProjectConfigResult {
     const effectiveSettings = loadSynaxConfig(baseDir);
     config = applyEffectiveSynaxConfigToProjectConfig(config, effectiveSettings);
   }
-  const activeProviderPreset = (config.provider?.preset ??
-    userConfig.provider?.preset ??
-    DEFAULTS.provider?.preset ??
-    'relay-local') as ProviderPreset;
+  const activeProviderPreset =
+    config.provider?.preset ?? userConfig.provider?.preset ?? DEFAULTS.provider?.preset ?? 'relay-local';
   const provider = {
     ...DEFAULTS.provider,
     ...providerPresetDefaults(activeProviderPreset),

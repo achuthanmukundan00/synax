@@ -111,6 +111,30 @@ describe('CLI', () => {
       expect(output).toContain('/settings');
     });
 
+    test('should initialize chat mode before hosted-provider credentials are configured', () => {
+      const cwd = mkdtempSync(path.join(tmpdir(), 'synax-cli-chat-provider-'));
+      const originalKey = process.env.ANTHROPIC_API_KEY;
+      delete process.env.ANTHROPIC_API_KEY;
+      try {
+        writeFileSync(
+          path.join(cwd, '.synax.toml'),
+          ['[active]', 'provider = "anthropic"', 'model = "claude-sonnet-4-20250514"'].join('\n'),
+          'utf-8',
+        );
+        const output = runSynax(['chat'], { cwd });
+        expect(output).toContain('[synax] Chat initialized');
+        expect(output).toContain('Synax');
+        expect(output).toContain('/settings');
+      } finally {
+        if (originalKey === undefined) {
+          delete process.env.ANTHROPIC_API_KEY;
+        } else {
+          process.env.ANTHROPIC_API_KEY = originalKey;
+        }
+        rmSync(cwd, { recursive: true, force: true });
+      }
+    });
+
     test('should accept --message option', () => {
       const cwd = mkdtempSync(path.join(tmpdir(), 'synax-cli-chat-'));
       try {

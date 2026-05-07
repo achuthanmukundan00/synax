@@ -386,7 +386,26 @@ async function runFullDoctor(baseDir?: string): Promise<DoctorFullReport> {
   const report = await runQuickDoctor(baseDir);
   const result = loadProjectConfig(baseDir);
   const config = result.config;
-  const factoryResult = createLLMClient(toProviderFactoryInput(config));
+
+  let factoryResult: ReturnType<typeof createLLMClient>;
+  try {
+    factoryResult = createLLMClient(toProviderFactoryInput(config));
+  } catch (err: unknown) {
+    // Provider construction errors (missing API key, unknown provider, etc.)
+    // should be reported as doctor diagnostics, not hard crashes.
+    if (err instanceof Error && err.name === 'ProviderError') {
+      const msg = err.message;
+      return {
+        ...report,
+        providerReachability: fail('provider-reachability', `Provider client creation failed: ${msg}`),
+        modelRequest: skip('model-request', 'Skipped because provider client could not be created'),
+        relayHealth: fail('relay-health', `Provider health check failed: ${msg}`),
+      };
+    }
+    // Unexpected programmer errors — let them propagate.
+    throw err;
+  }
+
   const { client, metadata, normalizedConfig } = factoryResult;
 
   // Skip full checks for non-OpenAI-compatible providers
@@ -396,7 +415,11 @@ async function runFullDoctor(baseDir?: string): Promise<DoctorFullReport> {
 
   const providerReachability = await checkProviderReachability(normalizedConfig);
   const modelRequest = await checkModelRequest(client);
-  const relayHealth = await checkRelayHealth(normalizedConfig.baseUrl, normalizedConfig.apiKey, normalizedConfig.customHeaders);
+  const relayHealth = await checkRelayHealth(
+    normalizedConfig.baseUrl,
+    normalizedConfig.apiKey,
+    normalizedConfig.customHeaders,
+  );
   return { ...report, providerReachability, modelRequest, relayHealth };
 }
 
