@@ -135,7 +135,6 @@ interface AgentToolExecutionResult {
   success: boolean;
   toolResult: ToolResult;
   changedFile?: string;
-  completedAction?: string;
   error?: string;
   terminalState?: AgentTerminalState;
 }
@@ -188,7 +187,6 @@ export async function runAgentTurn(options: AgentRunnerOptions & { task: string 
   const tools = buildModelFacingTools({ ...options.tools, bashEnabled, mode });
   const maxToolCalls = options.maxToolCalls ?? DEFAULT_MAX_TOOL_CALLS;
   const changedFiles: string[] = [];
-  const completedActions: string[] = [];
   const toolCalls: AgentTurnResult['toolCalls'] = [];
   const readCache = new Map<string, ToolResult>();
   const identicalReadCounts = new Map<string, number>();
@@ -352,7 +350,6 @@ export async function runAgentTurn(options: AgentRunnerOptions & { task: string 
       if (
         mode === 'patch' &&
         changedFiles.length === 0 &&
-        completedActions.length === 0 &&
         isPrematureCompletionClaim(response.content)
       ) {
         conversation.messages.push({
@@ -377,7 +374,6 @@ export async function runAgentTurn(options: AgentRunnerOptions & { task: string 
 
     const contentToolResults: Array<{ id: string; content: string }> = [];
     for (const call of response.toolCalls) {
-      const callIndex = toolCalls.length;
       if (toolCalls.length >= maxToolCalls) {
         return {
           terminalState: 'budget_exhausted',
@@ -448,26 +444,6 @@ export async function runAgentTurn(options: AgentRunnerOptions & { task: string 
         detail: formatToolResultDetail(result.toolResult),
       });
       if (result.changedFile) changedFiles.push(result.changedFile);
-      if (result.completedAction) {
-        completedActions.push(result.completedAction);
-        // Only auto-complete when this is the last tool call in the
-        // current model response. If the model queued multiple tool
-        // calls (e.g. commit → push → pr create), wait until all
-        // have been processed before deciding terminal state.
-        const isCurrentBatchLast = callIndex >= response.toolCalls.length - 1;
-        if (isCurrentBatchLast) {
-          flushContentToolResults(conversation, response, contentToolResults);
-          return {
-            terminalState: 'completed',
-            finalAnswer: formatCompletedActionFinalAnswer(result.completedAction, result.toolResult),
-            steps: step,
-            toolCalls,
-            changedFiles,
-            conversation,
-          };
-        }
-        // Otherwise: let remaining tool calls execute first.
-      }
 
       // Item 7: Budget check after EVERY tool result is appended.
       // Check the model-facing assembled request, not the unpruned
@@ -1006,7 +982,6 @@ async function executeBashTool(input: Record<string, unknown>, repoRoot: string)
     });
     return {
       success: true,
-      completedAction: completedShellAction(plan.command),
       toolResult: {
         success: true,
         toolName: 'bash',
@@ -1122,37 +1097,6 @@ function resolveShellCommand(input: Record<string, unknown>): string | null {
 
 function normalizeShellCommand(command: string): string {
   return command.replace(/\s+/g, ' ').trim();
-}
-
-function completedShellAction(command: string): string | undefined {
-  if (/(^|[;&|(){}\s])git\s+commit(?=\s|$)/.test(command)) return 'git commit';
-  if (/(^|[;&|(){}\s])git\s+push(?=\s|$)/.test(command)) return 'git push';
-  if (/(^|[;&|(){}\s])gh\s+pr\s+create(?=\s|$)/.test(command)) return 'gh pr create';
-  if (/(^|[;&|(){}\s])gh\s+pr\s+merge(?=\s|$)/.test(command)) return 'gh pr merge';
-  if (/(^|[;&|(){}\s])gh\s+issue\s+create(?=\s|$)/.test(command)) return 'gh issue create';
-  if (/(^|[;&|(){}\s])gh\s+release\s+create(?=\s|$)/.test(command)) return 'gh release create';
-  return undefined;
-}
-
-function formatCompletedActionFinalAnswer(action: string, toolResult: ToolResult): string {
-  const output = toolResult.output;
-  const command =
-    output && typeof output === 'object' && typeof (output as { command?: unknown }).command === 'string'
-      ? (output as { command: string }).command
-      : undefined;
-  const stdout =
-    output && typeof output === 'object' && typeof (output as { stdout?: unknown }).stdout === 'string'
-      ? (output as { stdout: string }).stdout.trim() || undefined
-      : undefined;
-  const stderr =
-    output && typeof output === 'object' && typeof (output as { stderr?: unknown }).stderr === 'string'
-      ? (output as { stderr: string }).stderr.trim() || undefined
-      : undefined;
-  const evidence = stdout ?? stderr;
-  const lines = [`Completed ${action}.`];
-  if (command) lines.push(`Command: \`${command}\``);
-  if (evidence) lines.push(evidence);
-  return lines.join('\n');
 }
 
 function detectBlockedCommand(command: string): string | null {
@@ -1533,7 +1477,8 @@ function systemPrompt(): string {
     'Use bash for terminal commands, including git and verification.',
     'Use read for local file inspection: list files, search text, or read bounded line ranges.',
     'Use write for new text files and edit for exact replacements in files you have already read.',
-    'Do the smallest useful action, then stop and summarize changed files plus verification.',
+    'Keep working until the task is done, then stop and summarize.',
+    'Be concise. Show file paths clearly when working with files.',
     'When calling a tool, emit only tool calls. Do not mix final-answer prose with tool calls.',
   ].join('\n');
 }
@@ -1603,13 +1548,41 @@ function buildModelRequest(
   // Start with conversation messages
   const baseMessages = conversation.messages;
 
-  // Proactive compaction: compact old tool results
-  const { messages: assembled, stats } = assembleModelMessages(
-    baseMessages,
-    settings,
-    conversation.inspectionLedger,
-    readCounts,
-  );
+  // Budget-aware compaction: only compact old tool results when
+  // estimated tokens exceed the configured threshold fraction of the
+  // effective input limit. Default 0.8 means compaction only fires
+  // when using >80% of budget. For large-context models (DeepSeek 1M)
+  // this means compaction essentially never fires during normal tasks.
+  // Set threshold to 0 for always-compact (useful in tests).
+  const effectiveLimit = settings.contextWindowTokens - settings.reservedOutputTokens;
+  const estimatedTokens = estimateRequestTokens(baseMessages);
+  const threshold = settings.assemblyCompactionThreshold ?? 0.8;
+  const nearBudget = estimatedTokens > effectiveLimit * threshold;
+
+  let assembled: AgentMessage[];
+  let stats: AssemblyStats;
+  if (nearBudget) {
+    const result = assembleModelMessages(
+      baseMessages,
+      settings,
+      conversation.inspectionLedger,
+      readCounts,
+    );
+    assembled = result.messages;
+    stats = result.stats;
+  } else {
+    assembled = baseMessages;
+    stats = {
+      totalMessagesIn: baseMessages.length,
+      totalMessagesOut: baseMessages.length,
+      estimatedTokensIn: estimatedTokens,
+      estimatedTokensOut: estimatedTokens,
+      compactedToolResults: 0,
+      keptRecentTurns: 0,
+      droppedDuplicateReadResults: 0,
+      compactedFilePaths: [],
+    };
+  }
 
   // Store stats for debug visibility
   conversation.assemblyStats = stats;

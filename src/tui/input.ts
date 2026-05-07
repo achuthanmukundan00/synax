@@ -174,9 +174,11 @@ function parseUnsupportedEscapeLength(chunk: string, index: number): number {
   if (chunk[index] !== '\x1b') return 0;
 
   const rest = chunk.slice(index);
+  // eslint-disable-next-line no-control-regex
   const csi = /^\x1b\[[0-?]*[ -/]*[@-~]/.exec(rest);
   if (csi) return csi[0].length;
 
+  // eslint-disable-next-line no-control-regex
   const ss3 = /^\x1bO[ -~]/.exec(rest);
   if (ss3) return ss3[0].length;
 

@@ -3,13 +3,13 @@
 exports[`interactive layout visual agreements matches the active docked-core render snapshot 1`] = `
 "  Synax v0.0.2-alpha  Tool  0:02
 
-  ◇ model                                                                        ┌ Synax Core ──────────────────────┐
-    detail     Inspecting files before editing.                                  │               ˙˙ ˙·              │
-                                                                                 │         · ··˙╲◆│││◆˙˙˙ ·         │
-  › bash       exit 0                                                            │       ˙˙ ╲◆· ╭─────╮˙╱◆··        │
-    command    npm test -- src/__tests__/interactive-tui.test.ts                 │       ● ●─● ●│●●●●●│● ◆● ●       │
-    exit       0                                                                 │       ● ●╱◆●●╰─────╯ ╲◆  ●       │
-    output     PASS                                                              │         ˙  ˙˙╱◆│││◆· ˙˙          │
+  ※ note       Inspecting files before editing.                                  ┌ Synax Core ──────────────────────┐
+                                                                                 │               ˙˙ ˙·              │
+  $ bash       exit 0                                                            │         · ··˙╲◆│││◆˙˙˙ ·         │
+    command    npm test -- src/__tests__/interactive-tui.test.ts                 │       ˙˙ ╲◆· ╭─────╮˙╱◆··        │
+    output     PASS                                                              │       ● ●─● ●│●●●●●│● ◆● ●       │
+                                                                                 │       ● ●╱◆●●╰─────╯ ╲◆  ●       │
+                                                                                 │         ˙  ˙˙╱◆│││◆· ˙˙          │
                                                                                  │               ·· ··              │
                                                                                  │                                  │
                                                                                  │Runtime                           │
@@ -41,7 +41,7 @@ exports[`interactive layout visual agreements matches the blocked budget-exhaust
                                                                                  ┌ Synax Core ──────────────────────┐
                                                                                  │               .  ×               │
     status    blocked: 32/32 model steps, 10 tool calls                          │           ·  ╲│││×╱ ·  .         │
-  ◆ final      blocked                                                           │       ·  ╲×  ╭─────╮.×╱×         │
+  ■ final      blocked                                                           │       ·  ╲×  ╭─────╮.×╱×         │
     objective  Waiting for run start                                             │       •  •  ×│×•×••│• •─ ×       │
     changed    0 files                                                           │         •╱•••╰─────╯ •╲  •       │
     tools      0 calls                                                           │         ·  ×╱╱││││╲╲ .           │
@@ -74,13 +74,13 @@ exports[`interactive layout visual agreements matches the completed render snaps
 "  Synax v0.0.2-alpha  Completed  0:00
 
                                                                                  ┌ Synax Core ──────────────────────┐
-                                                                                 │               ·  .               │
-    status    3 model steps, 4 tool calls, 2 files changed                       │           ..╲╲│  │╱╱.  ·         │
-  ◆ final      completed                                                         │       ·  ╲.  ╭─────╮. ╱.         │
-    objective  Waiting for run start                                             │       ◎ ─◎  ◎│◎◎◎◎◎│  ◎─ ◎       │
+                                                                                 │               ·  ·               │
+    status    3 model steps, 4 tool calls, 2 files changed                       │           ··╲╲│· │╱╱.  .         │
+  ■ final      completed                                                         │       ·  ╲   ╭─────╮  ╱·         │
+    objective  Waiting for run start                                             │         ─◎  ◎│◎◎◎◎◎│  ◎─ ◎       │
     changed    2 files                                                           │         ◎╱ ◎◎╰─────╯ ◎╲  ◎       │
-    tools      4 calls                                                           │         .  .╱╱│·  ╲╲ ·           │
-    commands   none                                                              │                  .               │
+    tools      4 calls                                                           │            .╱╱│.  ╲╲ ·           │
+    commands   none                                                              │                  ·               │
     verify     passed                                                            │                                  │
     blocker    none                                                              │Runtime                           │
     follow-up  none                                                              │Core        Unloaded              │
@@ -108,17 +108,17 @@ exports[`interactive layout visual agreements matches the completed render snaps
 exports[`interactive layout visual agreements matches the idle large-core render snapshot 1`] = `
 "  Synax v0.0.2-alpha  Idle  0:02
 
-                                .  .
-                            ·      .  ·             Runtime
-                        .   .╲╲╲. .   ╱╱╱.  .       Core        Unloaded
-                        ••╲╲  •╭───────╮•  ╱•  •    Model       —
-                       •──••  •│•••••••│•  •─ •     Provider    —
-                      ··─ .  .·│•••••••│·  ··─.     Context     —
-                      ·  ─·  · │••••••·│  · ──      [────────────────────────]
-                     ··  ·╱ ·  ╰───────╯ .╲╲ .  ·
-                        ·  ..╱╱╱. .  .╲╲╲.  .       Session
-                           .  .      .  .           Thinking    —
-                                 ·  .               Spend       —
+                                ·  .
+                            ·   ·  .  .             Runtime
+                        ·   ╲╲╲╲· ·   ╱╱╱╱  .       Core        Unloaded
+                        ◎◎╲╲  ◎╭───────╮◎  ╱◎  ◎    Model       —
+                       ◎──◎   ◎│◎◎◎◎◎◎◎│◎  ◎─ ◎     Provider    —
+                      ··─ .  ..│◎◎◎◎◎◎◎│.  ·.─.     Context     —
+                      .  ─   . │◎◎◎◎◎◎·│  · ──      [────────────────────────]
+                     .   .╱ .  ╰───────╯ ·╲╲ ·  .
+                        .  ·╱╱╱╱. .  ·╲╲╲╲  ·       Session
+                              .      .  ·           Thinking    —
+                                 .  .               Spend       —
                                                     Tools       none
                                                     Steps       —
 
@@ -135,9 +135,9 @@ exports[`interactive layout visual agreements matches the idle large-core render
 exports[`interactive layout visual agreements matches the narrow terminal fallback snapshot 1`] = `
 "  Synax v0.0.2-alpha  Thinking  0:02
 
-  ◇ model
-    detail     Inspecting files before editing.
+  ◌ working  waiting for model response…
 
+  ※ note       Inspecting files before editing.
 
 
 

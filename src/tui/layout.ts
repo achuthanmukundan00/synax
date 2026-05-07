@@ -9,7 +9,9 @@ import {
 import { renderTranscript, toolsUsed } from './transcript';
 import pkg from '../../package.json';
 
-const INPUT_DOCK_HEIGHT = 5;
+const INPUT_DOCK_MAX_BODY_LINES = 12;
+const INPUT_DOCK_MIN_NONEMPTY_BODY_LINES = 2;
+const INPUT_DOCK_MIN_TRANSCRIPT_ROWS = 6;
 
 export interface InteractiveViewState {
   run: RunStateSnapshot;
@@ -37,7 +39,12 @@ export function renderLayout(state: InteractiveViewState, cols: number, rows: nu
   const width = Math.max(40, cols);
   const renderWidth = terminalWriteWidth(width);
   const height = Math.max(14, rows);
-  const panel = renderInputDock(state.objectiveInput, renderWidth, locationLabel(state.cwdLabel, state.gitBranch));
+  const panel = renderInputDock(
+    state.objectiveInput,
+    renderWidth,
+    locationLabel(state.cwdLabel, state.gitBranch),
+    maxInputDockBodyLines(height),
+  );
   const bodyHeight = Math.max(1, height - panel.length);
   const lines = Array.from({ length: bodyHeight }, () => '');
   const hasTranscript =
@@ -70,8 +77,11 @@ export function renderLayout(state: InteractiveViewState, cols: number, rows: nu
 }
 
 export function maxHistoryScrollOffset(state: InteractiveViewState, _cols: number, rows: number): number {
+  const width = Math.max(40, _cols);
+  const renderWidth = terminalWriteWidth(width);
   const height = Math.max(14, rows);
-  const bodyHeight = Math.max(1, height - INPUT_DOCK_HEIGHT);
+  const panelHeight = inputDockHeight(state.objectiveInput, renderWidth, maxInputDockBodyLines(height));
+  const bodyHeight = Math.max(1, height - panelHeight);
   const visibleRows = Math.max(1, bodyHeight - 3);
   const estimatedLines = state.run.debugHistory.length * 4;
   return Math.max(0, estimatedLines - visibleRows);
@@ -134,7 +144,7 @@ function renderOperationalSurface(
   if (showSideCore) {
     putBlock(lines, 2, width - sideWidth, renderCoreModule(state, sideWidth - 2, bodyHeight - 2), width);
   } else if (showHeaderCore) {
-    put(lines, 1, Math.max(2, width - 36), `core ${phaseLabel(state.run.phase).toLowerCase()}`, width);
+    putBlock(lines, 1, Math.max(2, width - 34), renderCompactCoreModule(state), width);
   }
 }
 
@@ -249,17 +259,32 @@ function wrapText(text: string, maxWidth: number): string[] {
   return lines.length > 0 ? lines : [''];
 }
 
-function renderInputDock(objectiveInput: string, width: number, metadataLabel?: string): string[] {
-  return ['', ...renderDirectivePanel(objectiveInput, width, metadataLabel)];
+function renderInputDock(
+  objectiveInput: string,
+  width: number,
+  metadataLabel?: string,
+  maxBodyLines?: number,
+): string[] {
+  return ['', ...renderDirectivePanel(objectiveInput, width, metadataLabel, maxBodyLines)];
 }
 
-function renderDirectivePanel(objectiveInput: string, width: number, metadataLabel?: string): string[] {
+function renderDirectivePanel(
+  objectiveInput: string,
+  width: number,
+  metadataLabel?: string,
+  maxBodyLines = INPUT_DOCK_MAX_BODY_LINES,
+): string[] {
   const inner = Math.max(8, width - 2);
   const trimmed = objectiveInput.trim();
   const wrapped = trimmed ? wrapText(trimmed, inner - 2) : [];
-  // Idle: one line. With content: show up to 2 wrapped lines (expands with content).
+  const bodyLineCount = trimmed
+    ? Math.max(INPUT_DOCK_MIN_NONEMPTY_BODY_LINES, Math.min(maxBodyLines, wrapped.length))
+    : 1;
+  // Keep the tail visible so active typing stays in view at larger input sizes.
   const body = trimmed
-    ? wrapped.slice(0, 2).concat(Array.from({ length: Math.max(0, 2 - wrapped.length) }, () => ''))
+    ? wrapped
+        .slice(-bodyLineCount)
+        .concat(Array.from({ length: Math.max(0, bodyLineCount - wrapped.length) }, () => ''))
     : [''];
 
   const label = metadataLabel ? ` ${truncateMiddle(metadataLabel, Math.max(4, inner - 6))} ` : '';
@@ -276,6 +301,18 @@ function renderDirectivePanel(objectiveInput: string, width: number, metadataLab
 
 function terminalWriteWidth(width: number): number {
   return width > 1 ? width - 1 : width;
+}
+
+function maxInputDockBodyLines(rows: number): number {
+  const viewportLimit = Math.max(
+    INPUT_DOCK_MIN_NONEMPTY_BODY_LINES,
+    rows - INPUT_DOCK_MIN_TRANSCRIPT_ROWS - 3, // spacer + top border + bottom border
+  );
+  return Math.min(INPUT_DOCK_MAX_BODY_LINES, viewportLimit);
+}
+
+function inputDockHeight(objectiveInput: string, width: number, maxBodyLines: number): number {
+  return renderInputDock(objectiveInput, width, undefined, maxBodyLines).length;
 }
 
 function renderCoreModule(state: InteractiveViewState, width: number, maxHeight: number): string[] {
@@ -309,6 +346,17 @@ function renderCoreModule(state: InteractiveViewState, width: number, maxHeight:
   ];
 }
 
+function renderCompactCoreModule(state: InteractiveViewState): string[] {
+  return renderDottedCore({
+    mode: state.coreMode,
+    frame: state.coreMode === 'unloaded' ? 0 : Math.floor((state.nowMs / 1000) * 8),
+    width: 24,
+    height: 1,
+    unicode: true,
+    profile: resolveCoreVisualProfile(coreModelId(state), coreVisualOptions(state.coreVisualProfile)),
+  });
+}
+
 function renderTelemetry(state: InteractiveViewState, width: number): string[] {
   const inner = Math.max(20, width);
   return [
@@ -338,8 +386,13 @@ function runtimeTelemetryRows(state: InteractiveViewState, width: number): strin
 
 function sessionTelemetryRows(run: RunStateSnapshot, width: number): string[] {
   const tools = toolsUsed(run);
+  const skills = run.activeSkills ?? [];
 
-  return [
+  const rows: string[] = [];
+  if (skills.length > 0) {
+    rows.push(instrumentRow('Skills', skills.join(', '), width, { color: '\u001b[32m' }));
+  }
+  rows.push(
     instrumentRow('Thinking', run.thinkingEnabled === undefined ? '—' : run.thinkingEnabled ? 'on' : 'off', width, {
       dimValue: run.thinkingEnabled === undefined,
     }),
@@ -348,7 +401,8 @@ function sessionTelemetryRows(run: RunStateSnapshot, width: number): string[] {
     }),
     instrumentRow('Tools', tools.length > 0 ? tools.join(', ') : 'none', width, { dimValue: tools.length === 0 }),
     instrumentRow('Steps', modelSteps(run.statusNote), width, { dimValue: modelSteps(run.statusNote) === '—' }),
-  ];
+  );
+  return rows;
 }
 
 function putBlock(lines: string[], y: number, x: number, block: string[], width: number): void {

@@ -354,7 +354,13 @@ export function applyEventToRunState(state: RunStateSnapshot, event: AgentEvent,
       // Derive aggregate state from lifecycle events, not summary text.
       // Fallback to summary-derived only when no lifecycle events were emitted.
       if (next.verification.seenCheckIds.size === 0) {
-        next = { ...next, verification: deriveVerificationFallback(event.verification) };
+        next = {
+          ...next,
+          verification:
+            event.status === 'completed' || event.status === 'failed_verification'
+              ? deriveVerificationFallback(event.verification)
+              : deriveSkippedVerification(event.verification),
+        };
       }
       if (next.verification.state === 'failed') {
         next = withRisk(next, `verification failed: ${next.verification.summary}`, 'S2');
@@ -665,27 +671,35 @@ function formatDuration(ms: number): string {
  */
 function deriveVerificationFallback(verification: string): TuiVerificationState {
   const v = verification.toLowerCase();
-  const base: TuiVerificationState = {
-    state: 'running',
-    checksPlanned: 0,
-    checksRunning: 0,
-    checksPassed: 0,
-    checksFailed: 0,
-    checksSkipped: 0,
-    summary: verification,
-    currentCheckLabel: '',
-    seenCheckIds: new Set(),
-  };
-  if (v.includes('passed')) {
-    return { ...base, state: 'passed', checksPassed: 1 };
-  }
+  const base = baseVerificationFallback(verification);
   if (v.includes('failed')) {
     return { ...base, state: 'failed', checksFailed: 1 };
   }
   if (v.includes('not run')) {
     return { ...base, state: 'skipped', checksSkipped: 1 };
   }
+  if (v === 'passed' || /\b(?:verification|test|tests|build|typecheck|lint)\s+passed\b/.test(v)) {
+    return { ...base, state: 'passed', checksPassed: 1 };
+  }
   return { ...base, state: 'skipped', checksSkipped: 1 };
+}
+
+function deriveSkippedVerification(summary: string): TuiVerificationState {
+  return { ...baseVerificationFallback(summary), state: 'skipped', checksSkipped: 1 };
+}
+
+function baseVerificationFallback(summary: string): TuiVerificationState {
+  return {
+    state: 'running',
+    checksPlanned: 0,
+    checksRunning: 0,
+    checksPassed: 0,
+    checksFailed: 0,
+    checksSkipped: 0,
+    summary,
+    currentCheckLabel: '',
+    seenCheckIds: new Set(),
+  };
 }
 
 function terminalStateToPhase(status: TerminalState, verificationState: TuiVerificationState['state']): TuiPhase {

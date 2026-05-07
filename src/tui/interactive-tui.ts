@@ -41,6 +41,8 @@ export async function runInteractiveTui(
     lastModelOutput?: () => string;
     /** Active model ID for input panel label. */
     modelLabel?: string;
+    /** Whether provider-level thinking is enabled in the active model profile. */
+    thinkingEnabled?: boolean;
     /** Active endpoint for state display. */
     endpointLabel?: string;
     /** Provider label from config when available. */
@@ -51,8 +53,22 @@ export async function runInteractiveTui(
     gitBranch?: string;
     /** Configured total context window when known. */
     contextWindowTokens?: number;
+    /** Names of loaded skills currently active for the session. */
+    activeSkills?: string[];
     /** Override core visual profile: 'model' (auto-detect), 'default', 'qwen', 'openai', 'claude', 'deepseek', 'gemini'. */
     coreVisualProfile?: string;
+    /**
+     * Optional callback invoked after settings are persisted.
+     * Return updated runtime labels to apply immediately in the TUI.
+     */
+    onSettingsConfigChanged?: (settingsConfig: EffectiveSynaxConfig) => {
+      modelLabel?: string;
+      thinkingEnabled?: boolean;
+      endpointLabel?: string;
+      providerName?: string;
+      contextWindowTokens?: number;
+      coreVisualProfile?: string;
+    };
   },
 ): Promise<void> {
   const terminal = createTerminalSession({ stdin: options?.stdin, stdout: options?.stdout });
@@ -81,15 +97,25 @@ export async function runInteractiveTui(
   let busy = false;
   let historyScrollOffset = 0;
   const diff = new DiffRenderer();
+  let runtimeLabels = {
+    modelLabel: options?.modelLabel,
+    thinkingEnabled: options?.thinkingEnabled,
+    endpointLabel: options?.endpointLabel,
+    providerName: options?.providerName,
+    contextWindowTokens: options?.contextWindowTokens,
+    coreVisualProfile: options?.coreVisualProfile,
+  };
   const applyOptionsToState = (): void => {
-    if (options?.modelLabel) {
+    if (runtimeLabels.modelLabel) {
       state = {
         ...state,
-        modelId: options.modelLabel,
-        providerName: options.providerName ?? providerNameFromEndpoint(options.endpointLabel ?? ''),
-        contextWindowTokens: options.contextWindowTokens,
+        modelId: runtimeLabels.modelLabel,
+        providerName: runtimeLabels.providerName ?? providerNameFromEndpoint(runtimeLabels.endpointLabel ?? ''),
+        contextWindowTokens: runtimeLabels.contextWindowTokens,
+        thinkingEnabled: runtimeLabels.thinkingEnabled,
+        activeSkills: options?.activeSkills ?? [],
         coreLoaded: true,
-        sessionSpendLabel: isLocalEndpoint(options.endpointLabel ?? '') ? 'local' : undefined,
+        sessionSpendLabel: isLocalEndpoint(runtimeLabels.endpointLabel ?? '') ? 'local' : undefined,
       };
     }
   };
@@ -121,11 +147,11 @@ export async function runInteractiveTui(
     coreMode: coreMode(),
     nowMs: Date.now(),
     lastModelOutput: options?.lastModelOutput?.(),
-    modelLabel: options?.modelLabel,
-    endpointLabel: options?.endpointLabel,
+    modelLabel: runtimeLabels.modelLabel,
+    endpointLabel: runtimeLabels.endpointLabel,
     cwdLabel: options?.cwdLabel ?? process.cwd(),
     gitBranch: options?.gitBranch,
-    coreVisualProfile: options?.coreVisualProfile,
+    coreVisualProfile: runtimeLabels.coreVisualProfile,
     historyScrollOffset,
   });
 
@@ -274,11 +300,11 @@ export async function runInteractiveTui(
         timestamp: new Date().toISOString(),
         mode: 'interactive',
         profile: 'default',
-        endpoint: options?.endpointLabel ?? 'local',
-        model: options?.modelLabel ?? 'local model',
-        providerName: options?.providerName,
+        endpoint: runtimeLabels.endpointLabel ?? 'local',
+        model: runtimeLabels.modelLabel ?? 'local model',
+        providerName: runtimeLabels.providerName,
         contextBudgetTokens: 0,
-        contextWindowTokens: options?.contextWindowTokens,
+        contextWindowTokens: runtimeLabels.contextWindowTokens,
         maxModelSteps: 0,
         maxToolCalls: 0,
         tools: [],
@@ -424,6 +450,14 @@ export async function runInteractiveTui(
     settingsState = settingsReducer(settingsState, { type: 'close' });
     if (settingsState?.dirty) {
       persistSettingsConfig(settingsState.config);
+      const updates = options?.onSettingsConfigChanged?.(settingsState.config);
+      if (updates) {
+        runtimeLabels = {
+          ...runtimeLabels,
+          ...updates,
+        };
+        applyOptionsToState();
+      }
     }
     settingsState = null;
   };
@@ -450,7 +484,11 @@ export async function runInteractiveTui(
       settingsState = settingsReducer(settingsState, { type: 'prev_tab' });
       return;
     }
-    if (event.type === 'submit' || (event.type === 'text' && event.value === ' ')) {
+    if (event.type === 'submit') {
+      settingsState = settingsReducer(settingsState, { type: 'select_row' });
+      return;
+    }
+    if (event.type === 'text' && event.value === ' ') {
       settingsState = settingsReducer(settingsState, { type: 'toggle' });
       return;
     }
@@ -563,7 +601,7 @@ export async function runInteractiveTui(
       // Exit always works
       if (event.type === 'exit') {
         if (settingsState?.active) {
-          settingsState = settingsReducer(settingsState, { type: 'close' });
+          closeSettingsModal();
           paint(true);
           continue;
         }
