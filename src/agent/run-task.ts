@@ -1,4 +1,6 @@
 import { loadProjectConfig, normalizeProviderConfig } from '../config/project';
+import { loadSynaxConfig } from '../config/load-config';
+import { loadSkills } from './skills';
 import { createOpenAICompatibleClient } from '../llm/client';
 import { buildModelFacingTools, runAgentTurn, type AgentActivity, type AgentTerminalState } from './runner';
 import { runVerification, type VerificationResult } from './verification';
@@ -104,6 +106,18 @@ export async function runAgentTask(options: RunTaskOptions): Promise<RunTaskRepo
     tools,
     task: options.task,
   });
+  // Load configured skills for injection into agent context.
+  let skillMessages: string[] | undefined;
+  try {
+    const effectiveConfig = loadSynaxConfig(options.repoRoot);
+    if (effectiveConfig.skills.enabled.length > 0) {
+      const result = loadSkills(effectiveConfig.skills, options.repoRoot);
+      skillMessages = result.systemMessages;
+    }
+  } catch {
+    // best-effort
+  }
+
   const turn = await runAgentTurn({
     repoRoot: options.repoRoot,
     task: options.task,
@@ -112,6 +126,7 @@ export async function runAgentTask(options: RunTaskOptions): Promise<RunTaskRepo
     maxSteps: projectConfig.config.maxModelSteps,
     maxToolCalls: projectConfig.config.maxToolCalls,
     tools: { bashEnabled: projectConfig.config.tools?.bash?.enabled, mode },
+    skillMessages,
     contextBudget: {
       contextBudgetTokens: projectConfig.config.contextBudgetTokens,
       contextWindowTokens: projectConfig.config.contextWindowTokens,
@@ -225,6 +240,7 @@ export async function runAgentTask(options: RunTaskOptions): Promise<RunTaskRepo
         maxSteps: Math.max(4, Math.floor((projectConfig.config.maxModelSteps ?? 64) / 2)),
         maxToolCalls: Math.max(8, Math.floor((projectConfig.config.maxToolCalls ?? 192) / 2)),
         tools: { bashEnabled: projectConfig.config.tools?.bash?.enabled, mode },
+        skillMessages,
         contextBudget: {
           contextBudgetTokens: projectConfig.config.contextBudgetTokens,
           contextWindowTokens: projectConfig.config.contextWindowTokens,

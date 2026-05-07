@@ -97,7 +97,7 @@ describe('LLM client — basic chat', () => {
     expect(resp.usage).toEqual({ promptTokens: 10, completionTokens: 5, totalTokens: 15 });
   });
 
-  test('sanitizes leaked reasoning tags in assistant content', async () => {
+  test('preserves reasoning/thinking tags in content for Qwen context echo', async () => {
     srv.close();
     srv = await createMockServer((_req, res) => {
       res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -110,7 +110,9 @@ describe('LLM client — basic chat', () => {
     });
     const client = createOpenAICompatibleClient(makeConfig({ baseUrl: getServerUrl(srv) }));
     const resp = await client.chat({ messages: [{ role: 'user', content: 'hi' }] });
-    expect(resp.content).toBe('Hello');
+    // Content retains thinking tags so Qwen models get their reasoning echoed back.
+    // The TUI display layer strips tags via sanitizeReasoningTags.
+    expect(resp.content).toBe('<think>secret</think>Hello');
   });
 
   test('sends tools and parses OpenAI-compatible tool calls', async () => {
@@ -399,6 +401,33 @@ describe('LLM client — provider auth and rate limit errors', () => {
     [429, 'rateLimit'],
   ])('classifies %i as %s', (statusCode, type) => {
     expect(classifyStatus(statusCode)).toBe(type);
+  });
+});
+
+describe('LLM client — network errors', () => {
+  let originalFetch: typeof global.fetch;
+
+  beforeEach(() => {
+    originalFetch = global.fetch;
+  });
+
+  afterEach(() => {
+    global.fetch = originalFetch;
+  });
+
+  test('classifies Node fetch failed errors using the underlying cause', async () => {
+    const cause = Object.assign(new Error('connect ECONNREFUSED 127.0.0.1:1234'), { code: 'ECONNREFUSED' });
+    global.fetch = jest.fn(async () => {
+      throw Object.assign(new Error('fetch failed'), { cause });
+    }) as unknown as typeof global.fetch;
+
+    const client = createOpenAICompatibleClient(makeConfig({ baseUrl: 'http://127.0.0.1:1234/v1' }));
+
+    await expect(client.chat({ messages: [{ role: 'user', content: 'hi' }] })).rejects.toMatchObject({
+      type: 'connection',
+      retryable: true,
+      message: expect.stringContaining('ECONNREFUSED'),
+    });
   });
 });
 
