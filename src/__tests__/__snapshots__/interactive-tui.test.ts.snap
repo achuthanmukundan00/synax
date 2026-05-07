@@ -36,7 +36,7 @@ exports[`interactive layout visual agreements matches the active docked-core ren
 `;
 
 exports[`interactive layout visual agreements matches the blocked budget-exhausted render snapshot 1`] = `
-"  Synax v0.4.0  Budget exhausted  0:02
+"  Synax v0.4.0  Budget exhausted  0:00
 
                                                                                  ┌ Core Module ─────────────────────┐
                                                                                  │               .  ×               │
@@ -65,13 +65,13 @@ exports[`interactive layout visual agreements matches the blocked budget-exhaust
 
 
 ┌─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
-│ Awaiting objective                                                                                                  │
+│                                                                                                                     │
 │                                                                                                                     │
 └ Enter submit | Ctrl+C exit | /help | !cmd shell ────────────────────────────────────────────────────────────────────┘"
 `;
 
 exports[`interactive layout visual agreements matches the completed render snapshot 1`] = `
-"  Synax v0.4.0  Completed  0:02
+"  Synax v0.4.0  Completed  0:00
 
                                                                                  ┌ Core Module ─────────────────────┐
                                                                                  │               ·  .               │
@@ -100,7 +100,7 @@ exports[`interactive layout visual agreements matches the completed render snaps
 
 
 ┌─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
-│ Awaiting objective                                                                                                  │
+│                                                                                                                     │
 │                                                                                                                     │
 └ Enter submit | Ctrl+C exit | /help | !cmd shell ────────────────────────────────────────────────────────────────────┘"
 `;
@@ -127,7 +127,7 @@ exports[`interactive layout visual agreements matches the idle large-core render
 
 
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│ Awaiting objective                                                          │
+│                                                                             │
 │                                                                             │
 └ Enter submit | Ctrl+C exit | /help | !cmd shell ────────────────────────────┘"
 `;
