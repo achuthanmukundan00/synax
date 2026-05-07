@@ -1,85 +1,135 @@
 # Configuration
 
-Synax loads configuration from:
+Synax uses a layered config system with clear precedence.
 
-1. Built-in defaults.
-2. Global user config at `~/.config/synax/config.toml`, when present.
-3. The nearest project `.synax.toml`.
-4. Supported environment overrides.
+## Config Files
 
-Project config wins over global config.
+| Level | Path | Purpose |
+|-------|------|---------|
+| Defaults | Built-in | Safe fallback values |
+| Global | `~/.config/synax/config.toml` | Machine-wide defaults |
+| Local | `<repo>/.synax.toml` | Per-project overrides |
 
-## Default Local Shape
+## Precedence
+
+```
+defaults → global config → local .synax.toml
+```
+
+Local always wins over global. Global always wins over defaults.
+
+## Quick Start
+
+```bash
+# Generate a config in the current repo
+synax config init
+
+# Edit directly
+vim .synax.toml
+```
+
+## Config Format (TOML)
+
+### Active Provider and Model
 
 ```toml
-[agent]
-context_budget_tokens = 131072
-max_model_steps = 64
-max_tool_calls = 192
+[active]
+provider = "relay-local"
+model = "Qwen3.6-35B-A3B-UD-IQ3_XXS.gguf"
+thinking = "off"
+```
 
-[subagents]
-enabled = false
-mode = "sequential"
+### Provider Definitions
 
-[verification]
-defaultCommand = "npm run typecheck"
+```toml
+[providers.relay-local]
+enabled = true
+name = "Relay Local"
+compatibility = "openai-compatible"
+base_url = "http://127.0.0.1:1234/v1"
 
+[[providers.relay-local.models]]
+id = "Qwen3.6-35B-A3B-UD-IQ3_XXS.gguf"
+display_name = "Qwen3.6 35B Local"
+context_window = 88000
+supports_thinking = false
+
+[providers.deepseek]
+enabled = true
+name = "DeepSeek"
+compatibility = "openai-compatible"
+base_url = "https://api.deepseek.com/v1"
+api_key_env = "DEEPSEEK_API_KEY"
+
+[[providers.deepseek.models]]
+id = "deepseek-chat"
+display_name = "DeepSeek V3"
+context_window = 128000
+supports_thinking = false
+```
+
+### Custom Headers
+
+```toml
+[providers.relay-local.headers]
+"CF-Access-Client-Id" = "${CF_ACCESS_CLIENT_ID}"
+"CF-Access-Client-Secret" = "${CF_ACCESS_CLIENT_SECRET}"
+```
+
+### Skills
+
+```toml
+[skills]
+enabled = ["context7", "grill-me"]
+```
+
+### MCP Servers
+
+```toml
+[mcp.servers.context7]
+enabled = true
+command = "npx"
+args = ["-y", "@upstash/context7-mcp"]
+```
+
+## Legacy Format (backward compatible)
+
+The single-provider format from v0.1-v0.3 is still supported:
+
+```toml
 [provider]
-preset = "relay-local"
 kind = "openai-compatible"
 base_url = "http://127.0.0.1:1234/v1"
 model = "Qwen3.6-35B-A3B-UD-IQ3_XXS.gguf"
 api_key = "sk-no-key-required"
-timeout_seconds = 120
-
-[tools]
-exposed = ["read", "write", "edit", "bash"]
-shell = "zsh"
-unsafe = false
-
-[tools.bash]
-enabled = true
 ```
 
-## Environment Overrides
+When both formats exist, the multi-provider format takes precedence for provider definitions. The legacy `provider.model` is used as a fallback for `active.model`.
 
-These override agent budget fields:
+## Environment Variables
 
-```sh
-SYNAX_CONTEXT_BUDGET_TOKENS=65536
-SYNAX_MAX_MODEL_STEPS=24
-SYNAX_MAX_TOOL_CALLS=64
-```
-
-Provider keys can be read through `api_key_env`:
-
-```toml
-[provider]
-api_key_env = "OPENROUTER_API_KEY"
-```
-
-## Inspect Config
-
-```sh
-npm run synax -- config show
-npm run synax -- config get provider.model
-npm run synax -- config get provider.baseUrl --json
-```
-
-Initialize a config:
-
-```sh
-npm run synax -- config init
-```
-
-`config init --force` is accepted by the CLI, but current file protection still refuses to overwrite an existing `.synax.toml`. Edit existing configs directly.
+| Variable | Purpose |
+|----------|---------|
+| `SYNAX_CONTEXT_BUDGET_TOKENS` | Override context budget |
+| `SYNAX_MAX_MODEL_STEPS` | Override max steps |
+| `SYNAX_MAX_TOOL_CALLS` | Override max tool calls |
+| `DEEPSEEK_API_KEY` | DeepSeek API key |
+| `OPENAI_API_KEY` | OpenAI API key |
+| `ANTHROPIC_API_KEY` | Anthropic API key |
 
 ## Validation
 
-Synax validates basic shape and types. Unsupported provider kinds fail validation. For v0.3, the operational provider kind is:
+Invalid config is NOT silently ignored. Parse errors produce clear messages:
 
-```toml
-kind = "openai-compatible"
+```
+[synax] Config error:
+providers.my-provider: base_url is required
+active.thinking: must be one of: off, low, medium, high, auto
 ```
 
-Native Anthropic protocol support is not implemented.
+## Setting Config from the TUI
+
+Press `/` in the TUI and type `settings` to open the settings menu.
+Use the Model tab to change provider, model, and thinking levels.
+Use the Providers tab to view configured providers.
+Changes persist to the local `.synax.toml` if one exists, otherwise to the global config.
