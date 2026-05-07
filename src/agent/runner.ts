@@ -1,6 +1,6 @@
 import { existsSync } from 'fs';
 import { mkdir, readFile } from 'fs/promises';
-import { dirname } from 'path';
+import { dirname, isAbsolute, relative, resolve } from 'path';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 
@@ -52,6 +52,8 @@ export interface AgentMessage {
   tool_call_id?: string;
   name?: string;
   tool_calls?: unknown;
+  /** Provider-specific reasoning field required by DeepSeek thinking-mode continuation requests. */
+  reasoning_content?: string;
   // Internal markers for compaction integrity (not serialized to the model).
   _tool_call_ids?: string[];
   _tool_result_ids?: string[];
@@ -83,6 +85,8 @@ export interface AgentRunnerOptions {
   onBudget?: (snapshot: AgentBudgetSnapshot) => void;
   approvePatch?: (preview: PatchPreview) => PatchApprovalDecision | Promise<PatchApprovalDecision>;
   ensureCheckpoint?: () => Promise<unknown>;
+  /** Optional preloaded skill instructions injected as additional system messages. */
+  skillMessages?: string[];
   contextBudget?: Partial<ContextBudgetSettings> & { contextBudgetTokens?: number };
 }
 
@@ -136,9 +140,16 @@ interface AgentToolExecutionResult {
   terminalState?: AgentTerminalState;
 }
 
-export function createAgentConversation(): AgentConversation {
+export function createAgentConversation(options: { skillMessages?: string[] } = {}): AgentConversation {
+  const messages: AgentMessage[] = [{ role: 'system', content: systemPrompt() }];
+  if (options.skillMessages && options.skillMessages.length > 0) {
+    for (const message of options.skillMessages) {
+      if (message.trim().length === 0) continue;
+      messages.push({ role: 'system', content: message });
+    }
+  }
   return {
-    messages: [{ role: 'system', content: systemPrompt() }],
+    messages,
     inspectionLedger: createInspectionLedger(),
     latestCompaction: null,
     tokenLedger: createTokenLedger(),
@@ -146,8 +157,18 @@ export function createAgentConversation(): AgentConversation {
   };
 }
 
-export function resetAgentConversation(conversation: AgentConversation): void {
-  conversation.messages.splice(0, conversation.messages.length, { role: 'system', content: systemPrompt() });
+export function resetAgentConversation(
+  conversation: AgentConversation,
+  options: { skillMessages?: string[] } = {},
+): void {
+  const messages: AgentMessage[] = [{ role: 'system', content: systemPrompt() }];
+  if (options.skillMessages && options.skillMessages.length > 0) {
+    for (const message of options.skillMessages) {
+      if (message.trim().length === 0) continue;
+      messages.push({ role: 'system', content: message });
+    }
+  }
+  conversation.messages.splice(0, conversation.messages.length, ...messages);
   conversation.inspectionLedger = createInspectionLedger();
   conversation.latestCompaction = null;
   conversation.assemblyStats = null;
@@ -155,7 +176,7 @@ export function resetAgentConversation(conversation: AgentConversation): void {
 }
 
 export async function runAgentTurn(options: AgentRunnerOptions & { task: string }): Promise<AgentTurnResult> {
-  const conversation = options.conversation ?? createAgentConversation();
+  const conversation = options.conversation ?? createAgentConversation({ skillMessages: options.skillMessages });
   const registry =
     options.registry ??
     createToolRegistry({
@@ -524,11 +545,14 @@ function assistantMessage(response: ChatResponse, settings?: ContextBudgetSettin
   if (content.length > maxOutputChars) {
     content = content.slice(0, maxOutputChars) + '\n[response truncated]';
   }
+  const reasoningContent = response.reasoningContent?.trim();
+  const reasoningFields = reasoningContent ? { reasoning_content: reasoningContent } : {};
 
   if (toolCallFormat(response) === 'content_xml') {
     return {
       role: 'assistant',
       content,
+      ...reasoningFields,
       // P2: Marker so compaction integrity can match XML tool-call pairs.
       // Not serialized by serializeMessage — model never sees it.
       _tool_call_ids: response.toolCalls.map((c) => c.id),
@@ -538,6 +562,7 @@ function assistantMessage(response: ChatResponse, settings?: ContextBudgetSettin
   return {
     role: 'assistant',
     content,
+    ...reasoningFields,
     tool_calls: response.toolCalls.map((call) => ({
       id: call.id,
       type: 'function',
@@ -970,22 +995,25 @@ async function executeBashTool(input: Record<string, unknown>, repoRoot: string)
     return toolFailure('bash', `Blocked: ${blockReason}`);
   }
 
-  const safetyWarnings = detectDangerousCommandWarnings(command);
+  const plan = planBashCommand(command, repoRoot);
+  const safetyWarnings = detectDangerousCommandWarnings(plan.command);
 
   try {
-    const { stdout, stderr } = await execFileAsync('/bin/bash', ['-lc', command], {
+    const { stdout, stderr } = await execFileAsync('/bin/bash', ['-lc', plan.command], {
       cwd: repoRoot,
       maxBuffer: 256 * 1024,
       timeout: 30_000,
     });
     return {
       success: true,
-      completedAction: completedShellAction(command),
+      completedAction: completedShellAction(plan.command),
       toolResult: {
         success: true,
         toolName: 'bash',
         output: {
-          command,
+          command: plan.command,
+          ...(plan.originalCommand !== plan.command ? { originalCommand: plan.originalCommand } : {}),
+          ...(plan.cwdRecovery ? { cwdRecovery: plan.cwdRecovery } : {}),
           safetyWarnings,
           stdout: String(stdout ?? ''),
           stderr: String(stderr ?? ''),
@@ -1003,7 +1031,9 @@ async function executeBashTool(input: Record<string, unknown>, repoRoot: string)
         toolName: 'bash',
         error: errorMessage(error),
         output: {
-          command,
+          command: plan.command,
+          ...(plan.originalCommand !== plan.command ? { originalCommand: plan.originalCommand } : {}),
+          ...(plan.cwdRecovery ? { cwdRecovery: plan.cwdRecovery } : {}),
           safetyWarnings,
           stdout: typeof e.stdout === 'string' ? e.stdout : (e.stdout?.toString('utf-8') ?? ''),
           stderr: typeof e.stderr === 'string' ? e.stderr : (e.stderr?.toString('utf-8') ?? ''),
@@ -1012,6 +1042,60 @@ async function executeBashTool(input: Record<string, unknown>, repoRoot: string)
       },
     };
   }
+}
+
+interface BashCommandPlan {
+  command: string;
+  originalCommand: string;
+  cwdRecovery?: string;
+}
+
+function planBashCommand(command: string, repoRoot: string): BashCommandPlan {
+  const parsed = parseLeadingAbsoluteCd(command);
+  if (!parsed || !parsed.rest.trim()) return { command, originalCommand: command };
+
+  const root = resolve(repoRoot);
+  const target = resolve(parsed.target);
+  if (!isAbsolute(parsed.target)) return { command, originalCommand: command };
+
+  if (!existsSync(target)) {
+    return {
+      command: parsed.rest.trim(),
+      originalCommand: command,
+      cwdRecovery: `stale leading cd target did not exist: ${target}; running command body from ${root}`,
+    };
+  }
+
+  if (!isPathInside(root, target)) {
+    return {
+      command: parsed.rest.trim(),
+      originalCommand: command,
+      cwdRecovery: `stale leading cd target was outside the repository root: ${target}; running command body from ${root}`,
+    };
+  }
+
+  return { command, originalCommand: command };
+}
+
+function parseLeadingAbsoluteCd(command: string): { target: string; rest: string } | null {
+  const match = /^\s*cd\s+((?:"(?:[^"\\]|\\.)*"|'[^']*'|[^;&|]+?))\s*&&\s*([\s\S]+)$/u.exec(command);
+  if (!match) return null;
+  return { target: unquoteShellPath(match[1].trim()), rest: match[2] };
+}
+
+function unquoteShellPath(path: string): string {
+  if (path.length >= 2 && path.startsWith('"') && path.endsWith('"')) {
+    return path.slice(1, -1).replace(/\\(["\\$`])/g, '$1');
+  }
+  if (path.length >= 2 && path.startsWith("'") && path.endsWith("'")) {
+    return path.slice(1, -1);
+  }
+  return path;
+}
+
+function isPathInside(root: string, candidate: string): boolean {
+  const rel = relative(root, candidate);
+  return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
 }
 
 function detectRepeatedBashCommand(call: ParsedToolCall, counts: Map<string, number>): AgentToolExecutionResult | null {
@@ -1118,6 +1202,7 @@ function detectDangerousCommandWarnings(command: string): string[] {
 function isRecoverableToolError(call: ParsedToolCall, result: { success: boolean; error?: string }): boolean {
   if (result.success) return false;
   if (call.name === 'bash') return !isBashLoopError(result.error);
+  if (call.name === 'edit' || call.name === 'replace_in_file') return isEditRecoverableError(result.error);
   if (call.name !== 'read') return false;
   return isEnoentError(result.error) || isReadPolicyLimitError(result.error);
 }
@@ -1133,6 +1218,11 @@ function isReadPolicyLimitError(error: string | undefined): boolean {
 
 function isBashLoopError(error: string | undefined): boolean {
   return error !== undefined && error.includes('Bash loop detected');
+}
+
+function isEditRecoverableError(error: string | undefined): boolean {
+  if (error === undefined) return false;
+  return error.includes('oldStr no longer matches') || error.includes('oldStr must match exactly once');
 }
 
 function coercePatch(input: Record<string, unknown>): ReplaceInFilePatch | null {

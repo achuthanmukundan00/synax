@@ -13,7 +13,12 @@ function resetTmp(): void {
 }
 
 function fakeClient(
-  responses: Array<{ content?: string; toolCallFormat?: 'openai' | 'content_xml' | 'none'; toolCalls?: any[] }>,
+  responses: Array<{
+    content?: string;
+    reasoningContent?: string;
+    toolCallFormat?: 'openai' | 'content_xml' | 'none';
+    toolCalls?: any[];
+  }>,
 ): AgentClient & { requests: any[] } {
   const requests: any[] = [];
   return {
@@ -25,6 +30,7 @@ function fakeClient(
         content: next.content ?? '',
         model: 'fake',
         finishReason: 'stop',
+        reasoningContent: next.reasoningContent,
         toolCallFormat: next.toolCallFormat,
         toolCalls: next.toolCalls ?? [],
         usage: null,
@@ -187,6 +193,103 @@ describe('shared bounded agent runner', () => {
     expect(result.toolCalls[0]).toMatchObject({ name: 'bash', success: false });
     expect(result.toolCalls[1]).toMatchObject({ name: 'bash', success: true });
     expect(client.requests).toHaveLength(3);
+  });
+
+  it('preserves provider reasoning metadata across tool-call turns', async () => {
+    const client = fakeClient([
+      {
+        reasoningContent: 'private reasoning payload',
+        toolCalls: [{ id: 'call_1', name: 'bash', arguments: { command: 'printf ok' } }],
+      },
+      { content: 'continued after tool result' },
+    ]);
+
+    const result = await runAgentTurn({
+      repoRoot: TMP,
+      task: 'run command',
+      client,
+      maxSteps: 4,
+    });
+
+    expect(result.terminalState).toBe('completed');
+    const secondRequestAssistant = client.requests[1].messages.find(
+      (message: { role: string; tool_calls?: unknown }) => message.role === 'assistant' && message.tool_calls,
+    );
+    expect(secondRequestAssistant).toMatchObject({
+      reasoning_content: 'private reasoning payload',
+    });
+  });
+
+  it('runs bash command bodies when the model prepends a stale missing cd', async () => {
+    const staleWorkspace = join(TMP, 'missing-workspace');
+    const client = fakeClient([
+      {
+        toolCalls: [
+          { id: 'call_1', name: 'bash', arguments: { command: `cd ${staleWorkspace} && pwd` } },
+          { id: 'call_2', name: 'bash', arguments: { command: `cd ${staleWorkspace} && printf two` } },
+          { id: 'call_3', name: 'bash', arguments: { command: `cd ${staleWorkspace} && printf three` } },
+        ],
+      },
+      { content: 'continued after stale cwd recovery' },
+    ]);
+
+    const result = await runAgentTurn({
+      repoRoot: TMP,
+      task: 'run commands despite stale cwd',
+      client,
+      maxSteps: 4,
+    });
+
+    expect(result).toMatchObject({
+      terminalState: 'completed',
+      finalAnswer: 'continued after stale cwd recovery',
+    });
+    expect(result.toolCalls).toEqual([
+      { name: 'bash', success: true, error: undefined },
+      { name: 'bash', success: true, error: undefined },
+      { name: 'bash', success: true, error: undefined },
+    ]);
+    const toolMessages = result.conversation.messages.filter((message) => message.role === 'tool');
+    expect(toolMessages[0].content).toContain('stale leading cd target did not exist');
+    expect(toolMessages[0].content).toContain(TMP);
+  });
+
+  it('runs bash command bodies from repo root when a leading absolute cd points outside the repo', async () => {
+    const outsideWorkspace = join('/private/tmp', 'synax-runner-outside-existing-workspace');
+    rmSync(outsideWorkspace, { recursive: true, force: true });
+    mkdirSync(outsideWorkspace, { recursive: true });
+    execSync('git init', { cwd: TMP, stdio: 'ignore' });
+    const client = fakeClient([
+      {
+        toolCalls: [
+          { id: 'call_1', name: 'bash', arguments: { command: `cd ${outsideWorkspace} && git status --short` } },
+          { id: 'call_2', name: 'bash', arguments: { command: `cd ${outsideWorkspace} && git diff --stat` } },
+          { id: 'call_3', name: 'bash', arguments: { command: `cd ${outsideWorkspace} && git diff --cached --stat` } },
+        ],
+      },
+      { content: 'continued after stale cwd recovery' },
+    ]);
+
+    const result = await runAgentTurn({
+      repoRoot: TMP,
+      task: 'inspect git state despite stale cwd',
+      client,
+      maxSteps: 4,
+    });
+
+    expect(result).toMatchObject({
+      terminalState: 'completed',
+      finalAnswer: 'continued after stale cwd recovery',
+    });
+    expect(result.toolCalls).toEqual([
+      { name: 'bash', success: true, error: undefined },
+      { name: 'bash', success: true, error: undefined },
+      { name: 'bash', success: true, error: undefined },
+    ]);
+    const toolMessages = result.conversation.messages.filter((message) => message.role === 'tool');
+    expect(toolMessages[0].content).toContain('stale leading cd target was outside the repository root');
+    expect(toolMessages[0].content).toContain(TMP);
+    rmSync(outsideWorkspace, { recursive: true, force: true });
   });
 
   it('treats successful git commits as completed work even when no files are edited by Synax', async () => {
@@ -999,6 +1102,27 @@ describe('shared bounded agent runner', () => {
       error: expect.stringContaining('Bash loop detected'),
     });
     expect(result.steps).toBeLessThan(32);
+  });
+
+  it('continues after stale edit mismatches and allows a corrected retry', async () => {
+    writeFileSync(join(TMP, 'a.txt'), 'hello\n', 'utf-8');
+    const client = fakeClient([
+      { toolCalls: [{ id: '1', name: 'edit', arguments: { path: 'a.txt', oldStr: 'helo', newStr: 'hi' } }] },
+      { toolCalls: [{ id: '2', name: 'edit', arguments: { path: 'a.txt', oldStr: 'hello', newStr: 'hi' } }] },
+      { content: 'done' },
+    ]);
+
+    const result = await runAgentTurn({ repoRoot: TMP, task: 'update greeting', client, maxSteps: 6 });
+
+    expect(result.terminalState).toBe('completed');
+    expect(readFileSync(join(TMP, 'a.txt'), 'utf-8')).toBe('hi\n');
+    expect(result.toolCalls).toHaveLength(2);
+    expect(result.toolCalls[0]).toMatchObject({
+      name: 'edit',
+      success: false,
+      error: expect.stringContaining('oldStr no longer matches'),
+    });
+    expect(result.toolCalls[1]).toMatchObject({ name: 'edit', success: true });
   });
 
   it('continues after large bash output when the model-facing context can compact it', async () => {
