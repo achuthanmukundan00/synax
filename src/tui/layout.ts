@@ -245,9 +245,12 @@ function renderInputDock(objectiveInput: string, width: number, metadataLabel?: 
 
 function renderDirectivePanel(objectiveInput: string, width: number, metadataLabel?: string): string[] {
   const inner = Math.max(8, width - 2);
-  const wrapped = wrapText(objectiveInput.trim(), inner - 2);
-  const body = wrapped.slice(0, 2);
-  while (body.length < 2) body.push('');
+  const trimmed = objectiveInput.trim();
+  const wrapped = trimmed ? wrapText(trimmed, inner - 2) : [];
+  // Idle: one line. With content: show up to 2 wrapped lines (expands with content).
+  const body = trimmed
+    ? wrapped.slice(0, 2).concat(Array.from({ length: Math.max(0, 2 - wrapped.length) }, () => ''))
+    : [''];
 
   const label = metadataLabel ? ` ${truncateMiddle(metadataLabel, Math.max(4, inner - 6))} ` : '';
   const topFill = Math.max(0, inner - label.length);
@@ -256,8 +259,7 @@ function renderDirectivePanel(objectiveInput: string, width: number, metadataLab
 
   return [
     `┌${'─'.repeat(topFill)}${label}┐`,
-    `│ ${clip(body[0], inner - 2).padEnd(inner - 2, ' ')} │`,
-    `│ ${clip(body[1], inner - 2).padEnd(inner - 2, ' ')} │`,
+    ...body.map((line) => `│ ${clip(line, inner - 2).padEnd(inner - 2, ' ')} │`),
     `└ ${helpText} ${'─'.repeat(bottomFill)}┘`,
   ];
 }
@@ -291,7 +293,7 @@ function renderCoreModule(state: InteractiveViewState, width: number, maxHeight:
   if (width < 24 || body.length + 2 > maxHeight) return body.map((line) => clip(line, width));
 
   return [
-    panelTop('Core Module', inner),
+    panelTop('Synax Core', inner),
     ...body.map((line) => `${dim('│')}${pad(clip(line, inner), inner)}${dim('│')}`),
     dim(`└${'─'.repeat(inner)}┘`),
   ];

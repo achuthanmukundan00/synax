@@ -4,8 +4,10 @@
  * Pure state reducer for the interactive settings modal.
  * Keyboard-first, tab-based navigation.
  */
+import { existsSync, readdirSync } from 'fs';
+import { join } from 'path';
 import type { EffectiveSynaxConfig, ResolvedMcpServerConfig, ThinkingLevel } from '../config/schema';
-import { buildConfigUpdate } from '../config/load-config';
+import { buildConfigUpdate, globalConfigPath } from '../config/load-config';
 
 // ─── Tab definitions ───────────────────────────────────────
 
@@ -203,12 +205,15 @@ export function settingsReducer(state: SettingsState, action: SettingsAction): S
     case 'text_commit': {
       if (!state.textInput) return state;
       const { rowId, value } = state.textInput;
-      const withoutInput: SettingsState = { ...state, textInput: undefined, focus: 'rows', dirty: true };
+      const withoutInput = clearTextInput(state);
       return applyTextCommit(withoutInput, rowId, value);
     }
 
-    case 'text_cancel':
-      return { ...state, textInput: undefined, focus: 'rows' as const };
+    case 'text_cancel': {
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
+      const { textInput: _textInput, ...rest } = state;
+      return { ...rest, focus: 'rows' as const };
+    }
 
     case 'set_config':
       return { ...state, config: action.config };
@@ -580,6 +585,11 @@ function applyTextCommit(state: SettingsState, rowId: string, value: string): Se
 
 // ─── Helpers ────────────────────────────────────────────────
 
+export function clearTextInput(state: SettingsState): SettingsState {
+  const { textInput: _textInput, ...rest } = state;
+  return { ...rest, focus: 'rows', dirty: true };
+}
+
 function formatContext(tokens: number): string {
   if (tokens >= 1_000_000) return `${(tokens / 1_000_000).toFixed(1)}M`;
   if (tokens >= 1000) return `${(tokens / 1000).toFixed(0)}K`;
@@ -598,8 +608,6 @@ function sanitizeEndpoint(raw: string): string {
 }
 
 function existsGlobalConfig(): boolean {
-  const { existsSync } = require('fs');
-  const { globalConfigPath } = require('../config/load-config');
   return existsSync(globalConfigPath());
 }
 
@@ -618,8 +626,6 @@ function discoverInstalledSkills(): InstalledSkill[] {
   // Check if the skills directory exists under user's .agents
   const home = process.env.HOME || process.env.USERPROFILE || '';
   if (home) {
-    const { existsSync, readdirSync } = require('fs');
-    const { join } = require('path');
     const skillsDir = join(home, '.agents', 'skills');
     if (existsSync(skillsDir)) {
       try {

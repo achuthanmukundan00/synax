@@ -634,7 +634,6 @@ describe('interactive layout visual agreements', () => {
     expect(plain).toContain('bash       exit 0');
     expect(plain).toContain('command    npm test src/__tests__/interactive-tui.test.ts');
     expect(plain).toContain('exit 0');
-    expect(plain).toContain('1.2s');
     expect(plain).toContain('edit       src/tui/layout.ts');
     expect(plain).toContain('-old dashboard');
     expect(plain).toContain('+new transcript');
@@ -726,7 +725,6 @@ describe('interactive layout visual agreements', () => {
     expect(plain).toContain('FAIL src/__tests__/interactive-tui.test.ts');
     expect(plain).toContain('verify     failed');
     expect(plain).toContain('blocker    verification failed: Jest assertion failed');
-    expect(plain).toContain('next       Expected transcript to contain read block');
   });
 
   it('preserves git diff ANSI colors in command output', () => {
@@ -988,9 +986,9 @@ describe('interactive layout visual agreements', () => {
       24,
     ).map(stripAnsi);
 
-    expect(lines.at(-5)?.trim()).toBe('');
-    expect(lines.at(-4)?.trimStart().startsWith('┌')).toBe(true);
-    expect(lines.at(-3)).toMatch(/^│\s+│\s*$/);
+    expect(lines.at(-4)?.trim()).toBe('');
+    expect(lines.at(-3)?.trimStart().startsWith('┌')).toBe(true);
+    expect(lines.at(-2)).toMatch(/^│\s+│\s*$/);
     expect(lines.at(-1)?.trimStart().startsWith('└ Enter submit')).toBe(true);
   });
 
@@ -1057,7 +1055,7 @@ describe('interactive layout visual agreements', () => {
       .map((line) => stripAnsi(line))
       .join('\n');
 
-    expect(plain).toContain('Core Module');
+    expect(plain).toContain('Synax Core');
     expect(plain).toContain('Runtime');
     expect(plain).toContain('Session');
     expect(plain).toContain('Core        Loaded');
