@@ -30,6 +30,10 @@ export interface ProviderPreset {
   contextWindow?: number;
   supportsStreaming?: boolean;
   supportsToolCalling?: boolean;
+  /** Price per 1M input tokens in USD. */
+  inputPricePer1MTokens?: number;
+  /** Price per 1M output tokens in USD. */
+  outputPricePer1MTokens?: number;
 }
 
 export interface ProviderMetadata {
@@ -44,6 +48,10 @@ export interface ProviderMetadata {
   streamingSupported: boolean;
   toolCallingSupported: boolean;
   apiKeyConfigured: boolean;
+  /** Price per 1M input tokens in USD. */
+  inputPricePer1MTokens?: number;
+  /** Price per 1M output tokens in USD. */
+  outputPricePer1MTokens?: number;
 }
 
 export interface ChatCompletionRequest {
