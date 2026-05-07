@@ -78,9 +78,13 @@ supports_thinking = false
 
 ### Skills
 
+Skill entries are filesystem paths. Use `~/...` for home-relative paths,
+`./...` for project-relative, or absolute paths.
+
 ```toml
 [skills]
-enabled = ["context7", "grill-me"]
+enabled = ["~/.agents/skills/coderabbit-review"]
+disabled = ["~/.agents/skills/grill-me"]
 ```
 
 ### MCP Servers
