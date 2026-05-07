@@ -16,21 +16,6 @@ export function renderTranscript(state: TranscriptRenderState, width: number): s
   const completed = state.run.terminal === 'completed' || state.run.phase === 'completed';
   const isWorking = state.run.phase === 'thinking' && state.run.terminal === 'running';
 
-  // Working indicator and activity preview.
-  if (isWorking) {
-    const frameIdx = Math.floor((state.run.nowMs / 1000) * 3) % BREATHING_GLYPHS.length;
-    const glyph = `\u001b[34m${BREATHING_GLYPHS[frameIdx]}\u001b[0m`;
-    const label = '\u001b[34mworking\u001b[0m';
-    const preview = activityPreviewText(state.run);
-    const previewLine = `${glyph} ${label}  ${dimI(truncate(preview, Math.max(1, width - 22)))}`;
-    blocks.push([previewLine]);
-
-    if (state.activityExpanded) {
-      blocks.push(renderExpandedActivity(state.run, width));
-      blocks.push(['']);
-    }
-  }
-
   for (let i = 0; i < history.length; i += 1) {
     const item = history[i];
 
@@ -122,6 +107,22 @@ export function renderTranscript(state: TranscriptRenderState, width: number): s
   if (willShowFinalSummary) {
     blocks.push(['']);
     blocks.push(renderFinalSummary(state.run, width, fallbackModel, lastModelDetail));
+  }
+
+  // Working indicator and activity preview — placed at the bottom so it remains
+  // visible when the transcript autoscrolls during long workloads.
+  if (isWorking) {
+    const frameIdx = Math.floor((state.run.nowMs / 1000) * 3) % BREATHING_GLYPHS.length;
+    const glyph = `\u001b[34m${BREATHING_GLYPHS[frameIdx]}\u001b[0m`;
+    const label = '\u001b[34mworking\u001b[0m';
+    const preview = activityPreviewText(state.run);
+    const previewLine = `${glyph} ${label}  ${dimI(truncate(preview, Math.max(1, width - 22)))}`;
+    blocks.push([previewLine]);
+
+    if (state.activityExpanded) {
+      blocks.push(renderExpandedActivity(state.run, width));
+      blocks.push(['']);
+    }
   }
 
   if (blocks.length === 0) {
