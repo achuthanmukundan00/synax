@@ -77,6 +77,7 @@ export interface SynaxConfig {
   providers?: Record<string, ProviderConfig>;
   skills?: SkillsConfig;
   mcp?: McpConfig;
+  coreVisualProfile?: string;
 }
 
 // ─── Resolved / effective types ────────────────────────────
@@ -129,6 +130,7 @@ export interface EffectiveSynaxConfig {
   providers: Record<string, ResolvedProviderConfig>;
   skills: ResolvedSkillsConfig;
   mcp: ResolvedMcpConfig;
+  coreVisualProfile?: string;
   /** The source path that provided the effective config, or null for defaults. */
   source: string | null;
   /** Validation errors encountered during loading/merging. */

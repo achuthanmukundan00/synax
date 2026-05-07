@@ -6,9 +6,9 @@ exports[`interactive layout visual agreements matches the active docked-core ren
   ◇ model                                                                        ┌ Synax Core ──────────────────────┐
     detail     Inspecting files before editing.                                  │               ˙˙ ˙·              │
                                                                                  │         · ··˙╲◆│││◆˙˙˙ ·         │
-  › bash       exit 0                                                            │       ˙˙ ╲◆· ···˙╱ ˙˙╱◆··        │
-    command    npm test -- src/__tests__/interactive-tui.test.ts                 │       ● ●─● ●●●●●●●●● ◆● ●       │
-    exit       0                                                                 │       ● ●╱◆●●● ●● ●● ╲◆  ●       │
+  › bash       exit 0                                                            │       ˙˙ ╲◆· ╭─────╮˙╱◆··        │
+    command    npm test -- src/__tests__/interactive-tui.test.ts                 │       ● ●─● ●│●●●●●│● ◆● ●       │
+    exit       0                                                                 │       ● ●╱◆●●╰─────╯ ╲◆  ●       │
     output     PASS                                                              │         ˙  ˙˙╱◆│││◆· ˙˙          │
                                                                                  │               ·· ··              │
                                                                                  │                                  │
@@ -41,9 +41,9 @@ exports[`interactive layout visual agreements matches the blocked budget-exhaust
                                                                                  ┌ Synax Core ──────────────────────┐
                                                                                  │               .  ×               │
     status    blocked: 32/32 model steps, 10 tool calls                          │           ·  ╲│││×╱ ·  .         │
-  ◆ final      blocked                                                           │       ·  ╲×  ·.... ·.×╱×         │
-    objective  Waiting for run start                                             │       •  •  ×•×•×•••• •─ ×       │
-    changed    0 files                                                           │         •╱•••  •× ×• •╲  •       │
+  ◆ final      blocked                                                           │       ·  ╲×  ╭─────╮.×╱×         │
+    objective  Waiting for run start                                             │       •  •  ×│×•×••│• •─ ×       │
+    changed    0 files                                                           │         •╱•••╰─────╯ •╲  •       │
     tools      0 calls                                                           │         ·  ×╱╱││││╲╲ .           │
     commands   none                                                              │               .  .               │
     verify     planned                                                           │                                  │
@@ -76,9 +76,9 @@ exports[`interactive layout visual agreements matches the completed render snaps
                                                                                  ┌ Synax Core ──────────────────────┐
                                                                                  │               ·  .               │
     status    3 model steps, 4 tool calls, 2 files changed                       │           ..╲╲│  │╱╱.  ·         │
-  ◆ final      completed                                                         │       ·  ╲.  · ..  .. ╱.         │
-    objective  Waiting for run start                                             │       ◎ ─◎  ◎◎◎◎◎◎◎◎  ◎─ ◎       │
-    changed    2 files                                                           │         ◎╱ ◎◎  ◎◎ ◎◎ ◎╲  ◎       │
+  ◆ final      completed                                                         │       ·  ╲.  ╭─────╮. ╱.         │
+    objective  Waiting for run start                                             │       ◎ ─◎  ◎│◎◎◎◎◎│  ◎─ ◎       │
+    changed    2 files                                                           │         ◎╱ ◎◎╰─────╯ ◎╲  ◎       │
     tools      4 calls                                                           │         .  .╱╱│·  ╲╲ ·           │
     commands   none                                                              │                  .               │
     verify     passed                                                            │                                  │
@@ -111,11 +111,11 @@ exports[`interactive layout visual agreements matches the idle large-core render
                                 .  .
                             ·      .  ·             Runtime
                         .   .╲╲╲. .   ╱╱╱.  .       Core        Unloaded
-                        ••╲╲  ••  •  •  •  ╱•  •    Model       —
-                       •──••  ••••••••• •  •─ •     Provider    —
-                      ··─ .  .·••••••••··  ··─.     Context     —
-                      ·  ─·  · .••••••··  · ──      [────────────────────────]
-                     ··  ·╱ ·  ..  .  ·  .╲╲ .  ·
+                        ••╲╲  •╭───────╮•  ╱•  •    Model       —
+                       •──••  •│•••••••│•  •─ •     Provider    —
+                      ··─ .  .·│•••••••│·  ··─.     Context     —
+                      ·  ─·  · │••••••·│  · ──      [────────────────────────]
+                     ··  ·╱ ·  ╰───────╯ .╲╲ .  ·
                         ·  ..╱╱╱. .  .╲╲╲.  .       Session
                            .  .      .  .           Thinking    —
                                  ·  .               Spend       —

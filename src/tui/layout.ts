@@ -1,7 +1,11 @@
 import type { RunStateSnapshot } from '../agent/tui-state';
 import type { CoreMode } from './ai-core';
 import { CORE_HEIGHT, CORE_WIDTH, modeColor, renderAiCore, renderDottedCore } from './ai-core';
-import { resolveCoreVisualProfile } from './core-visual-profile';
+import {
+  resolveCoreVisualProfile,
+  type CoreVisualResolverOptions,
+  type CoreVisualProfileId,
+} from './core-visual-profile';
 import { renderTranscript, toolsUsed } from './transcript';
 import pkg from '../../package.json';
 
@@ -23,6 +27,8 @@ export interface InteractiveViewState {
   cwdLabel?: string;
   /** Current git branch displayed in the input dock when available. */
   gitBranch?: string;
+  /** Override core visual profile: 'model' (auto-detect), 'default', 'qwen', 'openai', 'claude', 'deepseek', 'gemini'. */
+  coreVisualProfile?: string;
   /** Number of wrapped history lines hidden below the viewport. */
   historyScrollOffset?: number;
 }
@@ -72,7 +78,11 @@ export function maxHistoryScrollOffset(state: InteractiveViewState, _cols: numbe
 }
 
 function renderWelcome(lines: string[], width: number, bodyHeight: number, state: InteractiveViewState): void {
-  const core = renderAiCore(state.coreMode, state.nowMs / 1000, resolveCoreVisualProfile(coreModelId(state)));
+  const core = renderAiCore(
+    state.coreMode,
+    state.nowMs / 1000,
+    resolveCoreVisualProfile(coreModelId(state), coreVisualOptions(state.coreVisualProfile)),
+  );
   const coreX = Math.max(0, Math.floor(width * 0.45 - CORE_WIDTH / 2));
   const coreY = Math.max(2, Math.floor((bodyHeight - CORE_HEIGHT) / 2) - 2);
   const telemetryWidth = Math.min(34, Math.max(24, width - (coreX + CORE_WIDTH + 4)));
@@ -277,7 +287,7 @@ function renderCoreModule(state: InteractiveViewState, width: number, maxHeight:
     width: coreWidth,
     height: 7,
     unicode: true,
-    profile: resolveCoreVisualProfile(coreModelId(state)),
+    profile: resolveCoreVisualProfile(coreModelId(state), coreVisualOptions(state.coreVisualProfile)),
   }).map((line) => centerVisible(line, inner));
   const body = [
     ...core,
@@ -379,6 +389,15 @@ function providerLabel(endpointLabel: string | undefined, run: RunStateSnapshot)
 
 function coreModelId(state: InteractiveViewState): string {
   return state.modelLabel || state.run.modelId || modelFromProvider(state.run.providerLabel);
+}
+
+function coreVisualOptions(profile?: string): CoreVisualResolverOptions {
+  if (!profile || profile === 'model') return {};
+  const valid: CoreVisualProfileId[] = ['default', 'qwen', 'openai', 'claude', 'deepseek', 'gemini'];
+  if (valid.includes(profile as CoreVisualProfileId)) {
+    return { profile: profile as CoreVisualProfileId };
+  }
+  return {};
 }
 
 function contextLine(run: RunStateSnapshot): string {
