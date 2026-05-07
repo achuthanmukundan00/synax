@@ -277,7 +277,7 @@ function numberValue(value: Record<string, unknown> | undefined, key: string): n
 }
 
 function summarizeOutput(output: string): string {
-  return output
+  return stripTerminalControl(output)
     .replace(/^command:\s*/im, '')
     .replace(/^stdout:\s*/im, '')
     .replace(/^stderr:\s*/im, '')
@@ -419,7 +419,7 @@ function parseFrozenFinalSummary(detail: string): FrozenFinalFields {
 }
 
 function cleanModelOutput(output: string): string {
-  return output
+  return stripTerminalControl(output)
     .replace(/<think>[\s\S]*?<\/think>/gi, '')
     .replace(/<thinking>[\s\S]*?<\/thinking>/gi, '')
     .replace(/<tool_call>[\s\S]*?<\/tool_call>/gi, '')
@@ -463,6 +463,15 @@ function pad(text: string, width: number): string {
 function stripAnsi(input: string): string {
   // eslint-disable-next-line no-control-regex
   return input.replace(/\u001b\[[0-9;]*m/g, '');
+}
+
+function stripTerminalControl(input: string): string {
+  return input
+    .replace(/\u001b\][^\u0007]*(?:\u0007|\u001b\\)/g, '')
+    .replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, '')
+    .replace(/\u001b[()][0-2AB]/g, '')
+    .replace(/\u001b[@-Z\\-_]/g, '')
+    .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/g, '');
 }
 
 function hasAnsi(input: string): boolean {
