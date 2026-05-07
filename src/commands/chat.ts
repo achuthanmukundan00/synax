@@ -6,6 +6,7 @@ import { execFile } from 'child_process';
 import { promisify } from 'util';
 
 import { loadProjectConfig, normalizeProviderConfig, type ProjectConfig } from '../config/project';
+import pkg from '../../package.json';
 import { createOpenAICompatibleClient } from '../llm/client';
 import {
   createAgentConversation,
@@ -15,6 +16,7 @@ import {
   type AgentConversation,
   type AgentTerminalState,
   type AgentBudgetSnapshot,
+  type AgentActivity,
 } from '../agent/runner';
 import { runVerification, type VerificationResult } from '../agent/verification';
 import { buildProjectProfile, formatTextProfile } from '../config/profile';
@@ -23,7 +25,8 @@ import { join } from 'path';
 import { writeFileSync, mkdirSync } from 'fs';
 import { discoverConfigPath, normalizeProviderConfig as normalizeProvider } from '../config/project';
 import type { NormalizedProviderConfig } from '../llm/types';
-import { readLatestCheckpoint, undoLastEdit } from '../agent/safety';
+import { detectDirtyTree, readLatestCheckpoint, undoLastEdit } from '../agent/safety';
+import { runInteractiveTui } from '../tui/interactive-tui';
 
 const execFileAsync = promisify(execFile);
 
@@ -31,13 +34,18 @@ export interface ChatSession {
   conversation: AgentConversation;
   handleUserMessage(message: string): Promise<ChatTurnReport>;
   handleSlashCommand(command: string): Promise<SlashCommandReport>;
+  handleShellCommand?(command: string): Promise<ShellCommandReport>;
+  /** Install a runtime event sink for real-time TUI state updates. */
+  setEventSink?: (sink: ((event: import('../agent/events').AgentEvent) => void) | null) => void;
 }
 
 export interface ChatTurnReport {
   terminalState: AgentTerminalState;
   finalAnswer: string;
   changedFiles: string[];
+  workingTreeClean?: boolean;
   steps: number;
+  toolCalls?: number;
   error?: string;
 }
 
@@ -46,6 +54,15 @@ export interface SlashCommandReport {
   exit?: boolean;
   output: string;
   verification?: VerificationResult;
+  newSession?: boolean;
+}
+
+export interface ShellCommandReport {
+  command: string;
+  exitCode: number;
+  stdout: string;
+  stderr: string;
+  durationMs: number;
 }
 
 export type InlineInputSegment = InlineTextSegment | InlinePasteAttachment;
@@ -78,14 +95,25 @@ export interface InlinePasteInputSession {
   hasPaste(): boolean;
 }
 
-export function createChatSession(options: { repoRoot: string; config: ProjectConfig }): ChatSession {
+export function createChatSession(options: {
+  repoRoot: string;
+  config: ProjectConfig;
+  onActivity?: (activity: AgentActivity) => void;
+  /** Suppress stdout writes (for TUI mode). */
+  tui?: boolean;
+}): ChatSession {
   const conversation = createAgentConversation();
+  let eventSink: ((event: import('../agent/events').AgentEvent) => void) | null = null;
 
   return {
     conversation,
+    setEventSink: (sink) => {
+      eventSink = sink;
+    },
     async handleUserMessage(message: string): Promise<ChatTurnReport> {
       const providerConfig = normalizeProviderConfig(options.config.provider ?? {});
       const client = createOpenAICompatibleClient(providerConfig);
+      const beforeHead = await gitHead(options.repoRoot);
       const result = await runAgentTurn({
         repoRoot: options.repoRoot,
         task: message,
@@ -103,26 +131,55 @@ export function createChatSession(options: { repoRoot: string; config: ProjectCo
           maxTotalReadResultTokensPerTurn: options.config.maxTotalReadResultTokensPerTurn,
         },
         onActivity(activity) {
-          if (activity.kind === 'model_response') {
-            // Show model thoughts/output inline for debugging local-model behavior.
-            const label = `[synax] model step resp`;
-            if (activity.message) {
-              console.log(`${label}:\n${activity.message.replace(/^/gm, '  ')}`);
+          options.onActivity?.(activity);
+          if (options.tui && activity.kind === 'model_response' && activity.message.trim().length > 0) {
+            eventSink?.({
+              type: 'assistant_message',
+              timestamp: new Date().toISOString(),
+              content: activity.message,
+            });
+          }
+          if (!options.tui) {
+            if (activity.kind === 'model_response') {
+              const label = `[synax] model step resp`;
+              if (activity.message) {
+                console.log(`${label}:\n${activity.message.replace(/^/gm, '  ')}`);
+              }
+            } else {
+              console.log(`[synax] ${activity.kind}: ${activity.message}`);
             }
-          } else {
-            console.log(`[synax] ${activity.kind}: ${activity.message}`);
           }
         },
+        onEvent: (event) => eventSink?.(event),
         onBudget(snapshot) {
-          console.log(formatBudgetSnapshot(snapshot));
+          eventSink?.({
+            type: 'context_budget_updated',
+            timestamp: new Date().toISOString(),
+            estimatedInputTokens: snapshot.estimatedInputTokens,
+            inputLimit: snapshot.inputLimit,
+            contextWindowTokens: snapshot.contextWindowTokens,
+            reservedOutputTokens: snapshot.reservedOutputTokens,
+            step: snapshot.step,
+          });
+          if (!options.tui) {
+            console.log(formatBudgetSnapshot(snapshot));
+          }
         },
       });
+      const afterHead = await gitHead(options.repoRoot);
+      const changedByCommit =
+        beforeHead && afterHead && beforeHead !== afterHead
+          ? await changedFilesBetween(options.repoRoot, beforeHead, afterHead)
+          : [];
+      const finalDirtyTree = await detectDirtyTree(options.repoRoot);
       saveContextState(options.repoRoot, result.conversation);
       return {
         terminalState: result.terminalState,
         finalAnswer: result.finalAnswer,
-        changedFiles: result.changedFiles,
+        changedFiles: unique([...result.changedFiles, ...changedByCommit]),
+        workingTreeClean: !finalDirtyTree.dirty,
         steps: result.steps,
+        toolCalls: result.toolCalls.length,
         error: result.error,
       };
     },
@@ -131,6 +188,12 @@ export function createChatSession(options: { repoRoot: string; config: ProjectCo
         repoRoot: options.repoRoot,
         config: options.config,
         conversation,
+      });
+    },
+    async handleShellCommand(command: string): Promise<ShellCommandReport> {
+      return runLocalShellCommand(command, {
+        repoRoot: options.repoRoot,
+        shell: options.config.tools?.shell ?? 'zsh',
       });
     },
   };
@@ -216,7 +279,8 @@ export function chatCommand(program: Command): void {
   chat
     .description('Start an interactive Synax agent shell')
     .option('-m, --message <message>', 'Run one chat turn and exit')
-    .action(async (options: { message?: string }) => {
+    .option('--plain', 'Use plain line-mode chat instead of full-screen TUI')
+    .action(async (options: { message?: string; plain?: boolean }) => {
       const repoRoot = process.cwd();
       const loaded = loadProjectConfig(repoRoot);
       if (loaded.errors.length > 0) {
@@ -226,14 +290,38 @@ export function chatCommand(program: Command): void {
       }
 
       const provider = normalizeProviderConfig(loaded.config.provider ?? {});
-      if (!provider.model.trim()) {
-        console.error('[synax] Config error: provider.model is required for chat.');
-        process.exitCode = 1;
-        return;
-      }
+      const useTui = shouldUseInteractiveTui({
+        plain: Boolean(options.plain),
+        message: options.message,
+        stdinIsTTY: input.isTTY,
+        stdoutIsTTY: output.isTTY,
+      });
 
-      const session = createChatSession({ repoRoot, config: loaded.config });
+      // Shared state so the TUI can observe model output in real time.
+      let lastModelOutput = '';
+
+      const modelLabel = provider.model.trim() || undefined;
+      const cwdLabel = compactHome(repoRoot);
+      const gitBranch = await currentGitBranch(repoRoot);
+
+      const session = createChatSession({
+        repoRoot,
+        config: loaded.config,
+        onActivity: useTui
+          ? (activity) => {
+              if (activity.kind === 'model_response' && activity.modelOutput) {
+                lastModelOutput = activity.modelOutput;
+              }
+            }
+          : undefined,
+        tui: useTui,
+      });
       if (options.message) {
+        if (!provider.model.trim()) {
+          console.error('[synax] Config error: provider.model is required for chat.');
+          process.exitCode = 1;
+          return;
+        }
         const report = await session.handleUserMessage(options.message);
         console.log(options.message);
         if (report.finalAnswer) console.log(report.finalAnswer);
@@ -242,9 +330,22 @@ export function chatCommand(program: Command): void {
         return;
       }
 
+      if (useTui) {
+        await runInteractiveTui(session, {
+          blockedMessage: !provider.model.trim() ? 'provider.model is required' : undefined,
+          lastModelOutput: () => lastModelOutput,
+          modelLabel,
+          endpointLabel: provider.baseUrl || undefined,
+          providerName: providerNameFromPreset(loaded.config.provider?.preset),
+          cwdLabel,
+          gitBranch,
+          contextWindowTokens: loaded.config.contextWindowTokens ?? loaded.config.contextBudgetTokens,
+        });
+        return;
+      }
+
       console.log('[synax] Chat initialized');
       printBanner(repoRoot, provider.model);
-
       try {
         if (input.isTTY) {
           await runInlinePasteChat(session);
@@ -275,6 +376,17 @@ export function chatCommand(program: Command): void {
       }
     });
   program.addCommand(chat);
+}
+
+export function shouldUseInteractiveTui(options: {
+  plain: boolean;
+  message?: string;
+  stdinIsTTY?: boolean;
+  stdoutIsTTY?: boolean;
+}): boolean {
+  if (options.plain) return false;
+  if (options.message) return false;
+  return Boolean(options.stdinIsTTY && options.stdoutIsTTY);
 }
 
 export async function promptInteractiveLine(
@@ -375,6 +487,60 @@ function printTurnReport(report: ChatTurnReport): void {
   if (report.changedFiles.length > 0) {
     console.log(`[synax] changed files: ${unique(report.changedFiles).join(', ')}`);
   }
+}
+
+export async function currentGitBranch(repoRoot: string): Promise<string | undefined> {
+  try {
+    const { stdout } = await execFileAsync('git', ['branch', '--show-current'], {
+      cwd: repoRoot,
+      maxBuffer: 64 * 1024,
+    });
+    return stdout.trim() || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+async function gitHead(repoRoot: string): Promise<string | null> {
+  try {
+    const { stdout } = await execFileAsync('git', ['rev-parse', 'HEAD'], {
+      cwd: repoRoot,
+      maxBuffer: 64 * 1024,
+    });
+    return stdout.trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+async function changedFilesBetween(repoRoot: string, before: string, after: string): Promise<string[]> {
+  try {
+    const { stdout } = await execFileAsync('git', ['diff', '--name-only', `${before}..${after}`], {
+      cwd: repoRoot,
+      maxBuffer: 256 * 1024,
+    });
+    return stdout
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+export function compactHome(path: string): string {
+  const home = process.env.HOME;
+  if (!home) return path;
+  return path === home ? '~' : path.startsWith(`${home}/`) ? `~/${path.slice(home.length + 1)}` : path;
+}
+
+export function providerNameFromPreset(preset: string | undefined): string | undefined {
+  if (!preset) return undefined;
+  if (preset === 'relay-local' || preset === 'relay-cloudflare') return 'Relay';
+  if (preset === 'openai') return 'OpenAI';
+  if (preset === 'anthropic') return 'Anthropic';
+  if (preset === 'openrouter') return 'OpenRouter';
+  return undefined;
 }
 
 export async function runInlinePasteChat(
@@ -582,6 +748,10 @@ async function handleSlashCommand(
     resetAgentConversation(context.conversation);
     return { handled: true, output: '[synax] conversation cleared' };
   }
+  if (command === '/new') {
+    resetAgentConversation(context.conversation);
+    return { handled: true, output: '[synax] new session started', newSession: true };
+  }
   if (command === '/settings') {
     return { handled: true, output: renderSettingsPanel(context.repoRoot, context.config) };
   }
@@ -618,8 +788,8 @@ async function handleSlashCommand(
         '------',
         `Context window:  ${context.config.contextBudgetTokens ?? 131072}`,
         `Reserved output:  ${context.config.reservedOutputTokens ?? 8192}`,
-        `Max model steps:  ${context.config.maxModelSteps ?? 32}`,
-        `Max tool calls:   ${context.config.maxToolCalls ?? 96}`,
+        `Max model steps:  ${context.config.maxModelSteps ?? 64}`,
+        `Max tool calls:   ${context.config.maxToolCalls ?? 192}`,
         `Max single read:  ${context.config.maxSingleReadResultTokens ?? 12000}`,
         `Max total reads:  ${context.config.maxTotalReadResultTokensPerTurn ?? 40000}`,
         `Keep recent:      ${context.config.keepRecentTokens ?? 20000}`,
@@ -688,6 +858,51 @@ async function handleSlashCommand(
     return { handled: true, output: undone.ok ? `[synax] ${undone.message}` : `[synax] ${undone.message}` };
   }
   return { handled: false, output: `[synax] unknown command: ${rawCommand}` };
+}
+
+async function runLocalShellCommand(
+  command: string,
+  context: { repoRoot: string; shell: string },
+): Promise<ShellCommandReport> {
+  const startedAt = Date.now();
+  try {
+    const result = await execFileAsync(context.shell, ['-lc', command], {
+      cwd: context.repoRoot,
+      timeout: 30000,
+      maxBuffer: 1024 * 1024,
+    });
+    return {
+      command,
+      exitCode: 0,
+      stdout: truncateShellOutput(result.stdout),
+      stderr: truncateShellOutput(result.stderr),
+      durationMs: Date.now() - startedAt,
+    };
+  } catch (error) {
+    const shellError = error as {
+      code?: number | string;
+      signal?: string;
+      stdout?: string;
+      stderr?: string;
+      message?: string;
+    };
+    const exitCode = typeof shellError.code === 'number' ? shellError.code : 1;
+    const stderr =
+      shellError.stderr ??
+      (shellError.signal ? `terminated by signal ${shellError.signal}` : (shellError.message ?? ''));
+    return {
+      command,
+      exitCode,
+      stdout: truncateShellOutput(shellError.stdout ?? ''),
+      stderr: truncateShellOutput(stderr),
+      durationMs: Date.now() - startedAt,
+    };
+  }
+}
+
+function truncateShellOutput(output: string, limit = 6000): string {
+  if (output.length <= limit) return output;
+  return `${output.slice(0, limit)}\n[synax] output truncated to ${limit} chars`;
 }
 
 async function renderGitDiff(repoRoot: string): Promise<string> {
@@ -775,8 +990,8 @@ function invalidSettingsPath(): string {
     '  /settings set provider.model Qwen3.6-35B-A3B-UD-IQ3_XXS.gguf',
     '  /settings set provider.header.Authorization Bearer <token>',
     '  /settings set agent.context_budget_tokens 16000',
-    '  /settings set agent.max_model_steps 32',
-    '  /settings set agent.max_tool_calls 96',
+    '  /settings set agent.max_model_steps 64',
+    '  /settings set agent.max_tool_calls 192',
   ].join('\n');
 }
 
@@ -879,7 +1094,7 @@ async function probeChat(provider: NormalizedProviderConfig): Promise<ProviderPr
 }
 
 function providerHeaders(provider: NormalizedProviderConfig): Record<string, string> {
-  const headers: Record<string, string> = { Accept: 'application/json', 'User-Agent': 'synax-chat/0.3.0' };
+  const headers: Record<string, string> = { Accept: 'application/json', 'User-Agent': `synax-chat/${pkg.version}` };
   if (provider.apiKey) headers.Authorization = `Bearer ${provider.apiKey}`;
   for (const [key, value] of Object.entries(provider.customHeaders ?? {})) headers[key] = value;
   return headers;
@@ -930,8 +1145,9 @@ function printBanner(repoRoot: string, model: string): void {
   console.log(`Repo: ${repoRoot}`);
   console.log(`Model: ${model}`);
   console.log(
-    'Commands: /help /settings /tools /budget /test-provider /inspect /verify /verify quick /verify full /diff /undo-last-edit /clear /status /exit',
+    'Commands: /help /settings /tools /budget /test-provider /inspect /verify /verify quick /verify full /diff /undo-last-edit /clear /new /status /exit',
   );
+  console.log('TUI shell: !<command>');
   console.log('');
 }
 
@@ -951,8 +1167,10 @@ function renderHelpPanel(): string {
     '/diff                      Show bounded git diff',
     '/undo-last-edit            Revert last Synax-owned edit when unchanged',
     '/clear                     Reset the conversation',
+    '/new                       Start a fresh session',
     '/status                    Show git and budget status',
     '/exit, /quit               Exit chat',
+    '!<command>                 Run a local shell command from the TUI',
     '',
     'Session Settings',
     '----------------',
@@ -985,8 +1203,8 @@ function renderSettingsPanel(repoRoot: string, config: ProjectConfig): string {
     '',
     'Agent',
     `  context:      ${config.contextBudgetTokens ?? 131072}`,
-    `  max_steps:    ${config.maxModelSteps ?? 32}`,
-    `  max_tools:    ${config.maxToolCalls ?? 96}`,
+    `  max_steps:    ${config.maxModelSteps ?? 64}`,
+    `  max_tools:    ${config.maxToolCalls ?? 192}`,
     '',
     'Tools',
     `  exposed:      ${exposed.join(', ')}`,

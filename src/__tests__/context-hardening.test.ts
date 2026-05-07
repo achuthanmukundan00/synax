@@ -460,6 +460,18 @@ describe('incremental token estimation', () => {
     expect(ledger.lastMeasuredIndex).toBe(4);
   });
 
+  it('re-estimates when a previously measured message list shrinks', () => {
+    const ledger = createTokenLedger();
+    const expanded = [makeMsg('system', 'sys'), ...makeBulkMessages(8, 'user', 120)];
+    const compacted = expanded.slice(0, 4);
+
+    estimateIncrementalTokens(expanded, ledger);
+    const tokensAfterShrink = estimateIncrementalTokens(compacted, ledger);
+
+    expect(tokensAfterShrink).toBe(estimateRequestTokens(compacted));
+    expect(ledger.lastMeasuredIndex).toBe(compacted.length - 1);
+  });
+
   it('reset clears state', () => {
     const ledger = createTokenLedger();
     estimateIncrementalTokens([makeMsg('user', 'hi')], ledger);
@@ -1111,9 +1123,9 @@ describe('model message assembly', () => {
 
     const client = fakeClient([
       { toolCalls: [{ id: '1', name: 'read', arguments: { path: 'a.txt' } }] },
-      { toolCalls: [{ id: '2', name: 'git', arguments: { action: 'status' } }] },
+      { toolCalls: [{ id: '2', name: 'bash', arguments: { command: 'git status --short' } }] },
       { toolCalls: [{ id: '3', name: 'read', arguments: { path: 'a.txt' } }] },
-      { toolCalls: [{ id: '4', name: 'git', arguments: { action: 'diff' } }] },
+      { toolCalls: [{ id: '4', name: 'bash', arguments: { command: 'git diff --no-ext-diff' } }] },
       { content: 'done' },
     ]);
 

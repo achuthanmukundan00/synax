@@ -1,6 +1,10 @@
 import { Command } from 'commander';
 import { runAgentTask } from '../agent/run-task';
 import { normalizeRunMode, type RunMode } from '../agent/task-policy';
+import { TuiRenderer } from '../agent/renderers';
+import { loadProjectConfig, normalizeProviderConfig } from '../config/project';
+import { createChatSession, compactHome, currentGitBranch, providerNameFromPreset } from './chat';
+import { runInteractiveTui } from '../tui/interactive-tui';
 
 const MAX_REPAIR_ATTEMPTS = 10;
 
@@ -14,6 +18,7 @@ export function runCommand(program: Command): void {
     .option('-y, --yes', 'Accept previewed replacement edits in non-interactive runs')
     .option('--verification-profile <profile>', 'Verification profile: quick or full')
     .option('--repair-attempts <count>', 'Bounded verification repair attempts')
+    .option('--tui', 'Render run control surface TUI')
     .action(
       async (options: {
         task?: string;
@@ -22,13 +27,16 @@ export function runCommand(program: Command): void {
         yes?: boolean;
         verificationProfile?: 'quick' | 'full';
         repairAttempts?: string;
+        tui?: boolean;
       }) => {
         if (options.task) {
           const activities: string[] = [];
+          const renderer = options.tui ? new TuiRenderer() : null;
           try {
             const repairAttemptsResult = parseRepairAttempts(options.repairAttempts);
             if (!repairAttemptsResult.ok) {
               console.error(`[synax] ${repairAttemptsResult.error}`);
+              renderer?.finish?.();
               process.exitCode = 1;
               return;
             }
@@ -40,21 +48,34 @@ export function runCommand(program: Command): void {
               verificationProfile: options.verificationProfile,
               repairAttempts: repairAttemptsResult.value,
               onActivity(activity) {
+                if (activity.kind === 'model_response' && activity.message.trim().length > 0) {
+                  renderer?.onEvent({
+                    type: 'assistant_message',
+                    timestamp: new Date().toISOString(),
+                    content: activity.message,
+                  });
+                }
+                if (renderer) return;
                 activities.push(activity.message);
                 console.log(`[synax] ${activity.kind}: ${activity.message}`);
               },
               onEvent(event) {
-                if (event.type === 'patch_preview') {
+                renderer?.onEvent(event);
+                if (!renderer && event.type === 'patch_preview') {
                   console.log(`[synax] patch preview: ${event.path}`);
                   console.log(event.diff || '(no changes)');
                 }
               },
             });
-            printReport(report, activities);
+            renderer?.finish?.();
+            if (!renderer) {
+              printReport(report, activities);
+            }
             if (report.terminalState !== 'completed') {
               process.exitCode = 1;
             }
           } catch (error) {
+            renderer?.finish?.();
             const message = error instanceof Error ? error.message : String(error);
             console.error(`[synax] Provider or task failure: ${message}`);
             process.exitCode = 1;
@@ -62,6 +83,39 @@ export function runCommand(program: Command): void {
         } else if (options.plan) {
           console.log(`[synax] Run plan received: "${options.plan}"`);
           console.log('[synax] Placeholder: Plan execution engine not yet implemented.');
+        } else if (options.tui) {
+          const repoRoot = process.cwd();
+          const loaded = loadProjectConfig(repoRoot);
+          if (loaded.errors.length > 0) {
+            console.error(`[synax] Config error:\n${loaded.errors.map((e) => `${e.path}: ${e.message}`).join('\n')}`);
+            process.exitCode = 1;
+            return;
+          }
+          const provider = normalizeProviderConfig(loaded.config.provider ?? {});
+          let lastModelOutput = '';
+          const session = createChatSession({
+            repoRoot,
+            config: loaded.config,
+            onActivity: (activity) => {
+              if (activity.kind === 'model_response' && activity.modelOutput) {
+                lastModelOutput = activity.modelOutput;
+              }
+            },
+            tui: true,
+          });
+          const modelLabel = provider.model.trim() || undefined;
+          const cwdLabel = compactHome(repoRoot);
+          const gitBranch = await currentGitBranch(repoRoot);
+          await runInteractiveTui(session, {
+            blockedMessage: !provider.model.trim() ? 'provider.model is required' : undefined,
+            lastModelOutput: () => lastModelOutput,
+            modelLabel,
+            endpointLabel: provider.baseUrl || undefined,
+            providerName: providerNameFromPreset(loaded.config.provider?.preset),
+            cwdLabel,
+            gitBranch,
+            contextWindowTokens: loaded.config.contextWindowTokens ?? loaded.config.contextBudgetTokens,
+          });
         } else {
           console.log('[synax] Run command initialized. Use --task or --plan to specify work.');
         }
