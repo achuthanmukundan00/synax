@@ -13,11 +13,7 @@ import { createOpenAICompatibleClient } from './client';
 import { createAnthropicAdapter } from './anthropic-adapter';
 import { getAllProviderPresets, getProviderPreset, isKnownProviderId } from './provider-presets';
 import type { AgentClient } from '../agent/runner';
-import type {
-  NormalizedProviderConfig,
-  ProviderMetadata,
-  ProviderProtocol,
-} from './types';
+import type { NormalizedProviderConfig, ProviderMetadata, ProviderPreset, ProviderProtocol } from './types';
 import type { ContextLedger } from '../tools';
 
 // ─── Config input (what callers pass) ──────────────────
@@ -47,6 +43,13 @@ export interface ProviderFactoryResult {
   client: AgentClient;
   metadata: ProviderMetadata;
   normalizedConfig: NormalizedProviderConfig;
+}
+
+interface ResolvedProviderFactoryConfig {
+  preset: ProviderPreset;
+  metadata: ProviderMetadata;
+  normalizedConfig: NormalizedProviderConfig;
+  apiKey?: string;
 }
 
 // ─── Normalization ─────────────────────────────────────
@@ -84,46 +87,32 @@ function resolveApiKey(input: ProviderFactoryInput, presetApiKeyEnv?: string): s
 
 // ─── Factory ───────────────────────────────────────────
 
-export function createLLMClient(
+export function describeLLMProvider(
   input: ProviderFactoryInput,
-  opts?: { ledger?: ContextLedger },
-): ProviderFactoryResult {
+): Pick<ProviderFactoryResult, 'metadata' | 'normalizedConfig'> {
+  const { metadata, normalizedConfig } = resolveProviderConfig(input);
+  return { metadata, normalizedConfig };
+}
+
+function resolveProviderConfig(input: ProviderFactoryInput): ResolvedProviderFactoryConfig {
   const providerId = resolveProviderId(input);
   const preset = getProviderPreset(providerId);
 
   if (!preset) {
     throw Object.assign(
-      new Error(`Unknown provider: "${providerId}". Known providers: ${getAllProviderPresets().map(p => p.id).join(', ')}`),
+      new Error(
+        `Unknown provider: "${providerId}". Known providers: ${getAllProviderPresets()
+          .map((p) => p.id)
+          .join(', ')}`,
+      ),
       { name: 'ProviderError', type: 'invalidRequest', statusCode: 400, retryable: false },
     );
   }
 
   const protocol: ProviderProtocol = preset.protocol;
   const baseUrl = input.baseUrl ?? preset.baseUrl ?? '';
+  const apiKeyEnv = input.apiKeyEnv ?? preset.apiKeyEnv;
   const apiKey = resolveApiKey(input, preset.apiKeyEnv);
-
-  // Validate required config
-  if (!baseUrl && protocol === 'openai-compatible' && providerId === 'custom') {
-    throw Object.assign(
-      new Error('baseUrl is required for custom provider. Set base_url in your config.'),
-      { name: 'ProviderError', type: 'invalidRequest', statusCode: 400, retryable: false },
-    );
-  }
-
-  if (preset.apiKeyRequired && !apiKey) {
-    const envHint = preset.apiKeyEnv ? ` Set the ${preset.apiKeyEnv} environment variable or provide api_key in config.` : '';
-    throw Object.assign(
-      new Error(`API key is required for ${preset.displayName}.${envHint}`),
-      { name: 'ProviderError', type: 'auth', statusCode: 401, retryable: false },
-    );
-  }
-
-  if (!input.model && !preset.defaultModel) {
-    throw Object.assign(
-      new Error(`Model is required for ${preset.displayName}. Set model in your config.`),
-      { name: 'ProviderError', type: 'invalidRequest', statusCode: 400, retryable: false },
-    );
-  }
 
   const model = input.model ?? preset.defaultModel ?? '';
   const contextWindow = input.contextWindow ?? preset.contextWindow ?? 131072;
@@ -158,20 +147,63 @@ export function createLLMClient(
     contextWindow,
     streamingSupported: preset.supportsStreaming ?? false,
     toolCallingSupported: preset.supportsToolCalling ?? false,
+    apiKeyRequired: preset.apiKeyRequired || Boolean(apiKeyEnv?.trim()),
     apiKeyConfigured: !!apiKey,
     inputPricePer1MTokens: input.inputPricePer1MTokens ?? preset.inputPricePer1MTokens,
     outputPricePer1MTokens: input.outputPricePer1MTokens ?? preset.outputPricePer1MTokens,
   };
+
+  return { preset, metadata, normalizedConfig, apiKey };
+}
+
+export function createLLMClient(input: ProviderFactoryInput, opts?: { ledger?: ContextLedger }): ProviderFactoryResult {
+  const { preset, metadata, normalizedConfig, apiKey } = resolveProviderConfig(input);
+  const protocol: ProviderProtocol = preset.protocol;
+  const model = normalizedConfig.model;
+  const baseUrl = normalizedConfig.baseUrl;
+
+  if (!baseUrl && protocol === 'openai-compatible' && metadata.providerId === 'custom') {
+    throw Object.assign(new Error('baseUrl is required for custom provider. Set base_url in your config.'), {
+      name: 'ProviderError',
+      type: 'invalidRequest',
+      statusCode: 400,
+      retryable: false,
+    });
+  }
+
+  if (!model) {
+    throw Object.assign(new Error(`Model is required for ${preset.displayName}. Set model in your config.`), {
+      name: 'ProviderError',
+      type: 'invalidRequest',
+      statusCode: 400,
+      retryable: false,
+    });
+  }
+
+  if (metadata.apiKeyRequired && !apiKey) {
+    const envHint =
+      (input.apiKeyEnv ?? preset.apiKeyEnv)
+        ? ` Set the ${input.apiKeyEnv ?? preset.apiKeyEnv} environment variable or provide api_key in config.`
+        : '';
+    throw Object.assign(new Error(`API key is required for ${preset.displayName}.${envHint}`), {
+      name: 'ProviderError',
+      type: 'auth',
+      statusCode: 401,
+      retryable: false,
+    });
+  }
 
   // Route to correct protocol
   let client: AgentClient;
 
   if (protocol === 'anthropic-messages') {
     if (!apiKey) {
-      throw Object.assign(
-        new Error(`API key is required for Anthropic. Set ANTHROPIC_API_KEY.`),
-        { name: 'ProviderError', type: 'auth', statusCode: 401, retryable: false },
-      );
+      throw Object.assign(new Error(`API key is required for Anthropic. Set ANTHROPIC_API_KEY.`), {
+        name: 'ProviderError',
+        type: 'auth',
+        statusCode: 401,
+        retryable: false,
+      });
     }
     const anthropicAdapter = createAnthropicAdapter({
       apiKey,

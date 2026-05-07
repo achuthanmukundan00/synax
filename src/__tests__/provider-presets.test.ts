@@ -3,11 +3,7 @@
  * Covers: preset lookup, known provider IDs, preset properties.
  */
 
-import {
-  getAllProviderPresets,
-  getProviderPreset,
-  isKnownProviderId,
-} from '../llm/provider-presets';
+import { getAllProviderPresets, getProviderPreset, isKnownProviderId } from '../llm/provider-presets';
 
 describe('Provider presets registry', () => {
   describe('getProviderPreset', () => {
@@ -102,18 +98,12 @@ describe('Provider presets registry', () => {
   });
 
   describe('isKnownProviderId', () => {
-    it.each([
-      'relay',
-      'custom',
-      'deepseek',
-      'openrouter',
-      'groq',
-      'anthropic',
-      'mistral',
-      'together',
-    ])('recognizes %s', (id) => {
-      expect(isKnownProviderId(id)).toBe(true);
-    });
+    it.each(['relay', 'custom', 'deepseek', 'openrouter', 'groq', 'anthropic', 'mistral', 'together'])(
+      'recognizes %s',
+      (id) => {
+        expect(isKnownProviderId(id)).toBe(true);
+      },
+    );
 
     it.each(['gemini', 'vertex', 'bedrock', 'azure', ''])('rejects %s', (id) => {
       expect(isKnownProviderId(id)).toBe(false);
