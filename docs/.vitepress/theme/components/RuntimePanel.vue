@@ -1,21 +1,24 @@
 <template>
-  <div class="runtime-panel">
+  <div class="runtime-panel" :style="panelStyle">
     <div class="runtime-row">
       <div class="runtime-item">
-        <span class="runtime-label">core</span>
-        <span class="runtime-value" :class="valueClass">{{ core.name }}</span>
+        <span class="runtime-label">CORE</span>
+        <span class="runtime-value value-core">{{ core.coreName }}</span>
       </div>
+      <span class="runtime-separator">|</span>
       <div class="runtime-item">
-        <span class="runtime-label">provider</span>
+        <span class="runtime-label">PROVIDER</span>
         <span class="runtime-value">{{ core.provider }}</span>
       </div>
+      <span class="runtime-separator">|</span>
       <div class="runtime-item">
-        <span class="runtime-label">state</span>
-        <span class="runtime-value state-value" :class="stateClass">{{ core.state }}</span>
+        <span class="runtime-label">STATE</span>
+        <span class="runtime-value state-value">{{ core.state }}</span>
       </div>
+      <span class="runtime-separator">|</span>
       <div class="runtime-item">
-        <span class="runtime-label">ctx</span>
-        <span class="runtime-value">{{ core.context }}</span>
+        <span class="runtime-label">CTX</span>
+        <span class="runtime-value" :class="{ 'ctx-pressure': core.contextPressure }">{{ core.context }}</span>
       </div>
     </div>
   </div>
@@ -23,65 +26,49 @@
 
 <script setup lang="ts">
 import { computed } from 'vue'
+import type { RuntimeScene } from '../runtime-core'
 
-interface CoreDef {
-  id: string
-  name: string
-  model: string
-  provider: string
-  state: string
-  context: string
-  headline: string
-  subcopy: string
-  terminal: [string, string][]
-  modelProfile: string
-  runtimeState: string
-  chamberColor: string
-}
+const props = defineProps<{ core: RuntimeScene }>()
 
-const props = defineProps<{ core: CoreDef }>()
-
-const valueClass = computed(() => `value-${props.core.modelProfile}`)
-
-const stateClass = computed(() => {
-  const s = props.core.runtimeState
-  if (s === 'unloaded') return 'state-unloaded'
-  if (s === 'working') return 'state-working'
-  if (s === 'error') return 'state-error'
-  if (s === 'succeeded') return 'state-succeeded'
-  return 'state-idle'
-})
+const panelStyle = computed(() => ({
+  '--state-rgb': props.core.palette.stateRgb,
+  '--state-hot-rgb': props.core.palette.hotRgb,
+  '--profile-rgb': props.core.profile.accentRgb,
+}))
 </script>
 
 <style scoped>
 .runtime-panel {
   display: inline-flex;
-  background: var(--synax-surface);
-  border: 1px solid var(--synax-border);
+  background: rgb(17 17 21 / 0.92);
+  border: 1px solid rgb(var(--state-rgb) / 0.34);
   border-radius: 6px;
-  padding: 0.5rem 1rem;
-  transition: border-color 0.8s ease;
+  padding: 0.52rem 0.95rem;
+  box-shadow: 0 0 24px rgb(var(--state-rgb) / 0.08);
+  transition:
+    border-color 0.7s ease,
+    box-shadow 0.7s ease;
 }
 
 .runtime-row {
   display: flex;
-  gap: 1.5rem;
+  gap: 0.75rem;
   align-items: center;
   flex-wrap: wrap;
   justify-content: center;
 }
 
 .runtime-item {
-  display: flex;
+  display: inline-flex;
   gap: 0.35rem;
   align-items: baseline;
+  white-space: nowrap;
 }
 
 .runtime-label {
   font-family: var(--synax-font);
   font-size: 0.65rem;
   color: var(--synax-text-dim);
-  text-transform: uppercase;
   letter-spacing: 0.05em;
 }
 
@@ -89,34 +76,37 @@ const stateClass = computed(() => {
   font-family: var(--synax-font);
   font-size: 0.72rem;
   color: var(--synax-text);
-  transition: color 0.6s ease;
+  transition: color 0.7s ease;
 }
 
-.value-unloaded { color: var(--synax-text-dim); }
-.value-local,
-.value-qwen,
-.value-deepseek,
-.value-openai,
-.value-claude,
-.value-gemini {
-  color: rgb(86, 141, 208);
+.runtime-separator {
+  color: rgb(var(--state-rgb) / 0.32);
+  font-family: var(--synax-font);
+  font-size: 0.65rem;
 }
 
-.state-value { font-weight: 500; }
-.state-unloaded { color: var(--synax-text-dim); }
-.state-working { color: rgba(140, 200, 240, 0.9); }
-.state-error { color: #f87171; }
-.state-succeeded { color: rgba(86, 180, 140, 0.8); }
-.state-idle { color: var(--synax-text-muted); }
+.value-core,
+.state-value {
+  color: rgb(var(--state-hot-rgb));
+  font-weight: 500;
+}
+
+.ctx-pressure {
+  color: rgb(253 224 71);
+}
 
 @media (max-width: 640px) {
   .runtime-row {
-    gap: 0.8rem;
+    gap: 0.55rem;
+  }
+
+  .runtime-separator {
+    display: none;
   }
 
   .runtime-item {
     flex-direction: column;
-    gap: 0.1rem;
+    gap: 0.08rem;
     align-items: center;
   }
 }
