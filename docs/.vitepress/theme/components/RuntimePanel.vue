@@ -1,5 +1,5 @@
 <template>
-  <div class="runtime-panel" :style="panelStyle">
+  <div class="runtime-panel">
     <div class="runtime-row">
       <div class="runtime-item">
         <span class="runtime-label">core</span>
@@ -31,27 +31,25 @@ interface CoreDef {
   provider: string
   state: string
   context: string
-  color: string
   headline: string
   subcopy: string
   terminal: [string, string][]
-  motion: string
+  modelProfile: string
+  runtimeState: string
+  chamberColor: string
 }
 
 const props = defineProps<{ core: CoreDef }>()
 
-const panelStyle = computed(() => ({
-  '--panel-rgb': props.core.color,
-  '--panel-color': `rgb(${props.core.color})`,
-}))
-
-const valueClass = computed(() => `value-${props.core.id}`)
+const valueClass = computed(() => `value-${props.core.modelProfile}`)
 
 const stateClass = computed(() => {
-  if (props.core.state === 'blocked') return 'state-blocked'
-  if (props.core.state === 'active') return 'state-active'
-  if (props.core.state === 'fault') return 'state-fault'
-  return 'state-ready'
+  const s = props.core.runtimeState
+  if (s === 'unloaded') return 'state-unloaded'
+  if (s === 'working') return 'state-working'
+  if (s === 'error') return 'state-error'
+  if (s === 'succeeded') return 'state-succeeded'
+  return 'state-idle'
 })
 </script>
 
@@ -62,7 +60,7 @@ const stateClass = computed(() => {
   border: 1px solid var(--synax-border);
   border-radius: 6px;
   padding: 0.5rem 1rem;
-  transition: border-color 0.6s ease;
+  transition: border-color 0.8s ease;
 }
 
 .runtime-row {
@@ -95,18 +93,21 @@ const stateClass = computed(() => {
 }
 
 .value-unloaded { color: var(--synax-text-dim); }
-.value-qwen { color: var(--panel-color); }
-.value-deepseek { color: var(--panel-color); }
-.value-openai { color: var(--panel-color); }
-.value-kimi { color: var(--panel-color); }
-.value-working { color: var(--panel-color); }
-.value-error { color: var(--panel-color); }
+.value-local,
+.value-qwen,
+.value-deepseek,
+.value-openai,
+.value-claude,
+.value-gemini {
+  color: rgb(86, 141, 208);
+}
 
 .state-value { font-weight: 500; }
-.state-blocked { color: #f87171; }
-.state-active { color: #a3e635; }
-.state-fault { color: #f87171; }
-.state-ready { color: var(--synax-text-muted); }
+.state-unloaded { color: var(--synax-text-dim); }
+.state-working { color: rgba(140, 200, 240, 0.9); }
+.state-error { color: #f87171; }
+.state-succeeded { color: rgba(86, 180, 140, 0.8); }
+.state-idle { color: var(--synax-text-muted); }
 
 @media (max-width: 640px) {
   .runtime-row {

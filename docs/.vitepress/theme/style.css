@@ -1,12 +1,12 @@
 /* Synax Landing Page — Core Variables & Global Styles */
 
 :root {
-  --core-rgb: 120 120 120;
+  --core-rgb: 90 90 90;
   --core-color: rgb(var(--core-rgb));
-  --core-glow: 0 0 40px rgba(var(--core-rgb) / 0.4),
-    0 0 80px rgba(var(--core-rgb) / 0.15);
-  --core-glow-soft: 0 0 25px rgba(var(--core-rgb) / 0.25);
-  --core-border: rgba(var(--core-rgb) / 0.5);
+  --core-glow: 0 0 40px rgba(var(--core-rgb) / 0.3),
+    0 0 80px rgba(var(--core-rgb) / 0.1);
+  --core-glow-soft: 0 0 25px rgba(var(--core-rgb) / 0.2);
+  --core-border: rgba(var(--core-rgb) / 0.4);
 
   --synax-bg: #0a0a0c;
   --synax-surface: #111115;
@@ -14,6 +14,9 @@
   --synax-text: #d4d4d8;
   --synax-text-muted: #71717a;
   --synax-text-dim: #52525b;
+
+  --synax-steel: 86, 141, 208;
+  --synax-steel-hex: #568dd0;
 
   --synax-font: 'JetBrains Mono', 'Fira Code', ui-monospace, monospace;
   --synax-font-sans: 'Inter', system-ui, -apple-system, sans-serif;
@@ -69,7 +72,7 @@
 }
 
 .landing-nav-links a:hover {
-  color: var(--core-color);
+  color: rgb(var(--synax-steel));
 }
 
 /* Hero section */
@@ -85,16 +88,16 @@
   overflow: hidden;
 }
 
-/* Background ambient glow that shifts with core */
+/* Background ambient glow — subtle blue-steel halo */
 .landing-ambient {
   position: absolute;
   inset: 0;
   pointer-events: none;
   z-index: 0;
-  opacity: 0.12;
+  opacity: 0.1;
   background: radial-gradient(
     ellipse 60% 40% at 50% 40%,
-    var(--core-color),
+    rgb(var(--synax-steel)),
     transparent 70%
   );
   transition: background 1.2s ease;
@@ -125,7 +128,7 @@
   font-family: var(--synax-font-sans);
   font-size: 1rem;
   color: var(--synax-text-muted);
-  max-width: 480px;
+  max-width: 520px;
   margin: 0 auto 2rem;
   line-height: 1.6;
   transition: color 0.6s ease;
@@ -144,8 +147,7 @@
   margin-bottom: 2.5rem;
 }
 
-.landing-ctas a,
-.landing-ctas .cta-btn {
+.landing-ctas a {
   display: inline-flex;
   align-items: center;
   gap: 0.4rem;
@@ -160,15 +162,15 @@
 }
 
 .cta-primary {
-  background: var(--core-color);
+  background: rgb(var(--synax-steel));
   color: #0a0a0c;
-  border-color: var(--core-color);
+  border-color: rgb(var(--synax-steel));
   font-weight: 600;
 }
 
 .cta-primary:hover {
-  filter: brightness(1.2);
-  box-shadow: var(--core-glow-soft);
+  filter: brightness(1.15);
+  box-shadow: 0 0 25px rgba(var(--synax-steel) / 0.25);
 }
 
 .cta-secondary {
@@ -178,8 +180,8 @@
 }
 
 .cta-secondary:hover {
-  border-color: var(--core-border);
-  background: rgba(var(--core-rgb) / 0.06);
+  border-color: rgba(var(--synax-steel) / 0.4);
+  background: rgba(var(--synax-steel) / 0.06);
 }
 
 /* Runtime status strip */
@@ -219,8 +221,8 @@
 }
 
 .principle-card:hover {
-  border-color: var(--core-border);
-  box-shadow: var(--core-glow-soft);
+  border-color: rgba(var(--synax-steel) / 0.35);
+  box-shadow: 0 0 25px rgba(var(--synax-steel) / 0.1);
 }
 
 .principle-card h3 {
@@ -259,23 +261,21 @@
   font-size: 0.875rem;
   color: var(--synax-text-muted);
   margin: 0 0 1.5rem;
+  max-width: 600px;
+  margin-left: auto;
+  margin-right: auto;
 }
 
 .landing-docs-entry a {
   font-family: var(--synax-font);
   font-size: 0.85rem;
-  color: var(--core-color);
+  color: rgb(var(--synax-steel));
   text-decoration: none;
   transition: opacity 0.3s;
 }
 
 .landing-docs-entry a:hover {
   opacity: 0.8;
-}
-
-/* Top nav overrides */
-.landing-nav-placeholder {
-  height: 0;
 }
 
 /* Reduced motion */
