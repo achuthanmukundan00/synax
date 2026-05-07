@@ -3,6 +3,49 @@ export interface ChatMessage {
   content: string;
 }
 
+// ─── Provider protocol types ───────────────────────────
+
+export type ProviderProtocol = 'openai-compatible' | 'anthropic-messages';
+
+export type ProviderId =
+  | 'relay'
+  | 'custom'
+  | 'deepseek'
+  | 'openrouter'
+  | 'groq'
+  | 'anthropic'
+  | 'mistral'
+  | 'together';
+
+export interface ProviderPreset {
+  id: ProviderId;
+  protocol: ProviderProtocol;
+  displayName: string;
+  baseUrl?: string;
+  apiKeyEnv?: string;
+  apiKeyRequired: boolean;
+  cloud: boolean;
+  defaultHeaders?: Record<string, string>;
+  defaultModel?: string;
+  contextWindow?: number;
+  supportsStreaming?: boolean;
+  supportsToolCalling?: boolean;
+}
+
+export interface ProviderMetadata {
+  providerId: string;
+  displayName: string;
+  modelId: string;
+  protocol: ProviderProtocol;
+  baseUrl: string;
+  cloud: boolean;
+  contextWindow: number;
+  contextUsed?: number;
+  streamingSupported: boolean;
+  toolCallingSupported: boolean;
+  apiKeyConfigured: boolean;
+}
+
 export interface ChatCompletionRequest {
   messages: ChatMessage[];
   model?: string;
