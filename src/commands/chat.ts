@@ -789,7 +789,7 @@ async function handleSlashCommand(
         '------',
         `Context window:  ${context.config.contextBudgetTokens ?? 131072}`,
         `Reserved output:  ${context.config.reservedOutputTokens ?? 8192}`,
-        `Max model steps:  ${context.config.maxModelSteps ?? 64}`,
+        'Model steps:      unlimited',
         `Max tool calls:   ${context.config.maxToolCalls ?? 192}`,
         `Max single read:  ${context.config.maxSingleReadResultTokens ?? 12000}`,
         `Max total reads:  ${context.config.maxTotalReadResultTokensPerTurn ?? 40000}`,
@@ -829,7 +829,7 @@ async function handleSlashCommand(
         `Branch: ${git.branch}`,
         `Dirty: ${git.isDirty ? 'yes' : 'no'}`,
         `Context budget: ${liveTokenLine}`,
-        `Max model steps: ${context.config.maxModelSteps ?? 'not configured'}`,
+        'Model steps: unlimited',
         `Max tool calls: ${context.config.maxToolCalls ?? 'not configured'}`,
         `Files read this session: ${filesRead.length > 0 ? filesRead.join(', ') : '(none)'}`,
         `Latest checkpoint: ${checkpoint ? `${checkpoint.id} (${checkpoint.statusPath})` : '(none)'}`,
@@ -972,7 +972,7 @@ function applySettingsSet(rawCommand: string, config: ProjectConfig): string {
   if (normalizedPath === 'agent.max_model_steps') {
     if (numeric === null) return '[synax] Invalid settings value: agent.max_model_steps must be a positive integer';
     config.maxModelSteps = numeric;
-    return '[synax] agent.max_model_steps updated for current session only';
+    return '[synax] agent.max_model_steps is deprecated and no longer limits the agent loop';
   }
   if (normalizedPath === 'agent.max_tool_calls') {
     if (numeric === null) return '[synax] Invalid settings value: agent.max_tool_calls must be a positive integer';
@@ -991,7 +991,6 @@ function invalidSettingsPath(): string {
     '  /settings set provider.model Qwen3.6-35B-A3B-UD-IQ3_XXS.gguf',
     '  /settings set provider.header.Authorization Bearer <token>',
     '  /settings set agent.context_budget_tokens 16000',
-    '  /settings set agent.max_model_steps 64',
     '  /settings set agent.max_tool_calls 192',
   ].join('\n');
 }
@@ -1161,7 +1160,7 @@ function renderHelpPanel(): string {
     '/settings set <path> <value>',
     '                           Change a supported setting for the current session',
     '/tools                     Show model-facing tools',
-    '/budget                    Show context and loop limits',
+    '/budget                    Show context and tool-call limits',
     '/test-provider             Probe provider models and chat endpoints',
     '/inspect                   Show project profile',
     '/verify [quick|full]       Run configured verification command',
@@ -1179,7 +1178,6 @@ function renderHelpPanel(): string {
     '/settings set provider.model Qwen3.6-35B-A3B-UD-IQ3_XXS.gguf',
     '/settings set provider.header.Authorization Bearer <token>',
     '/settings set agent.context_budget_tokens 65536',
-    '/settings set agent.max_model_steps 24',
     '/settings set agent.max_tool_calls 64',
   ].join('\n');
 }
@@ -1204,7 +1202,7 @@ function renderSettingsPanel(repoRoot: string, config: ProjectConfig): string {
     '',
     'Agent',
     `  context:      ${config.contextBudgetTokens ?? 131072}`,
-    `  max_steps:    ${config.maxModelSteps ?? 64}`,
+    '  max_steps:    unlimited',
     `  max_tools:    ${config.maxToolCalls ?? 192}`,
     '',
     'Tools',

@@ -183,7 +183,6 @@ const DEFAULTS: ProjectConfig = {
   keepRecentTokens: 20000,
   maxSingleReadResultTokens: 12000,
   maxTotalReadResultTokensPerTurn: 40000,
-  maxModelSteps: 64,
   maxToolCalls: 192,
   subagents: { enabled: false, mode: 'sequential' },
   verification: { defaultCommand: undefined },
@@ -233,7 +232,6 @@ export function generateDefaultConfig(): string {
     '[agent]',
     '# 16000 is minimal/safe, 65536 is normal, 131072 is a high-context local profile.',
     'context_budget_tokens = 131072',
-    'max_model_steps = 64',
     'max_tool_calls = 192',
     '',
     '[subagents]',
@@ -593,13 +591,11 @@ function stringValue(value: unknown): string | undefined {
 function applyEnvOverrides(config: ProjectConfig, errors: ValidationError[]): ProjectConfig {
   const overrides: ProjectConfig = {};
   const contextBudgetTokens = readEnvPositiveInteger('SYNAX_CONTEXT_BUDGET_TOKENS', errors);
-  const maxModelSteps = readEnvPositiveInteger('SYNAX_MAX_MODEL_STEPS', errors);
   const maxToolCalls = readEnvPositiveInteger('SYNAX_MAX_TOOL_CALLS', errors);
   if (contextBudgetTokens !== undefined) {
     overrides.contextBudgetTokens = contextBudgetTokens;
     overrides.contextWindowTokens = contextBudgetTokens;
   }
-  if (maxModelSteps !== undefined) overrides.maxModelSteps = maxModelSteps;
   if (maxToolCalls !== undefined) overrides.maxToolCalls = maxToolCalls;
   return { ...config, ...overrides };
 }

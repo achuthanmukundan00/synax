@@ -151,7 +151,7 @@ function printReport(report: Awaited<ReturnType<typeof runAgentTask>>, activitie
   if (report.terminalState !== 'completed') {
     console.log(`Terminal state: ${report.terminalState}`);
   }
-  console.log(`Model steps: ${report.steps} / ${report.maxModelSteps}`);
+  console.log(`Model steps: ${report.steps}`);
   console.log(`Tool calls: ${report.toolCalls.length} / ${report.maxToolCalls}`);
   console.log(`Context budget: ${report.contextBudgetTokens}`);
   console.log(`Changed files: ${report.filesChanged.length > 0 ? report.filesChanged.join(', ') : 'none'}`);
