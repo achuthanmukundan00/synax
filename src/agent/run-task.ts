@@ -108,6 +108,8 @@ export async function runAgentTask(options: RunTaskOptions): Promise<RunTaskRepo
     maxToolCalls: projectConfig.config.maxToolCalls ?? 192,
     tools,
     task: options.task,
+    inputPricePer1MTokens: metadata.inputPricePer1MTokens,
+    outputPricePer1MTokens: metadata.outputPricePer1MTokens,
   });
   // Load configured skills for injection into agent context.
   let skillMessages: string[] | undefined;

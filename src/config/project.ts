@@ -38,6 +38,10 @@ export interface ProviderConfig {
   toolCallParser?: string;
   api_key_env?: string;
   apiKeyEnv?: string;
+  input_price_per_1m_tokens?: number;
+  inputPricePer1MTokens?: number;
+  output_price_per_1m_tokens?: number;
+  outputPricePer1MTokens?: number;
 }
 
 export interface AgentBudgetConfig {
@@ -171,6 +175,8 @@ export interface ProviderFactoryInput {
   contextWindow?: number;
   preset?: string;
   kind?: string;
+  inputPricePer1MTokens?: number;
+  outputPricePer1MTokens?: number;
 }
 
 export function toProviderFactoryInput(config: ProjectConfig): ProviderFactoryInput {
@@ -230,6 +236,8 @@ export function toProviderFactoryInput(config: ProjectConfig): ProviderFactoryIn
     contextWindow: config.contextWindowTokens ?? config.contextBudgetTokens,
     preset: preset ?? undefined,
     kind: kind ?? undefined,
+    inputPricePer1MTokens: p.inputPricePer1MTokens ?? p.input_price_per_1m_tokens,
+    outputPricePer1MTokens: p.outputPricePer1MTokens ?? p.output_price_per_1m_tokens,
   };
 }
 

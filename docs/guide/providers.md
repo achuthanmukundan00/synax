@@ -48,6 +48,9 @@ provider = "deepseek"
 model = "deepseek-chat"
 api_key_env = "DEEPSEEK_API_KEY"
 context_window = 64000
+# Optional: override token pricing (defaults are preset)
+input_price_per_1m_tokens = 0.27
+output_price_per_1m_tokens = 1.10
 ```
 
 ### OpenRouter
@@ -126,6 +129,30 @@ Only use `api_key` for local servers that don't need auth:
 ```toml
 api_key = "sk-no-key-required"  # local relay servers
 ```
+
+## Token Pricing & Session Spend
+
+Cloud providers have preset token pricing. You can override pricing in config:
+
+```toml
+[provider]
+provider = "deepseek"
+input_price_per_1m_tokens = 0.27   # USD per 1M input tokens
+output_price_per_1m_tokens = 1.10  # USD per 1M output tokens
+```
+
+Default pricing per provider:
+
+| Provider | Input ($/1M) | Output ($/1M) |
+|----------|-------------|---------------|
+| DeepSeek | $0.27 | $1.10 |
+| Groq | $0.59 | $0.79 |
+| Anthropic | $3.00 | $15.00 |
+| OpenRouter | varies | varies |
+
+When pricing is configured, the TUI shows a session spend indicator
+at the bottom of the screen: `Spend: $0.004`. Local providers show
+`Spend: local`.
 
 ## Custom Headers
 

@@ -35,6 +35,10 @@ export interface ProviderFactoryInput {
   preset?: string;
   /** Legacy: kind from old format */
   kind?: string;
+  /** Price per 1M input tokens in USD (overrides preset default). */
+  inputPricePer1MTokens?: number;
+  /** Price per 1M output tokens in USD (overrides preset default). */
+  outputPricePer1MTokens?: number;
 }
 
 // ─── Factory result ────────────────────────────────────
@@ -155,6 +159,8 @@ export function createLLMClient(
     streamingSupported: preset.supportsStreaming ?? false,
     toolCallingSupported: preset.supportsToolCalling ?? false,
     apiKeyConfigured: !!apiKey,
+    inputPricePer1MTokens: input.inputPricePer1MTokens ?? preset.inputPricePer1MTokens,
+    outputPricePer1MTokens: input.outputPricePer1MTokens ?? preset.outputPricePer1MTokens,
   };
 
   // Route to correct protocol
