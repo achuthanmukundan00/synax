@@ -5,7 +5,7 @@
  */
 
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'http';
-import { createLLMClient, type ProviderFactoryInput } from '../llm/provider-factory';
+import { createLLMClient, describeLLMProvider, type ProviderFactoryInput } from '../llm/provider-factory';
 
 interface MockRequest {
   method: string;
@@ -139,9 +139,7 @@ describe('Provider factory — openrouter preset', () => {
     const originalKey = process.env.OPENROUTER_API_KEY;
     process.env.OPENROUTER_API_KEY = 'sk-or-test';
     try {
-      const { metadata, normalizedConfig } = createLLMClient(
-        makeInput({ provider: 'openrouter', baseUrl: undefined }),
-      );
+      const { metadata, normalizedConfig } = createLLMClient(makeInput({ provider: 'openrouter', baseUrl: undefined }));
       expect(metadata.baseUrl).toBe('https://openrouter.ai/api/v1');
       expect(metadata.displayName).toBe('OpenRouter');
       expect(metadata.cloud).toBe(true);
@@ -214,6 +212,27 @@ describe('Provider factory — groq preset', () => {
 });
 
 describe('Provider factory — anthropic preset', () => {
+  it('describes provider metadata without requiring an API key', () => {
+    const originalKey = process.env.ANTHROPIC_API_KEY;
+    delete process.env.ANTHROPIC_API_KEY;
+    try {
+      const { metadata, normalizedConfig } = describeLLMProvider(
+        makeInput({ provider: 'anthropic', baseUrl: undefined }),
+      );
+      expect(metadata.protocol).toBe('anthropic-messages');
+      expect(metadata.displayName).toBe('Anthropic');
+      expect(metadata.apiKeyRequired).toBe(true);
+      expect(metadata.apiKeyConfigured).toBe(false);
+      expect(normalizedConfig.kind).toBe('anthropic-messages');
+    } finally {
+      if (originalKey === undefined) {
+        delete process.env.ANTHROPIC_API_KEY;
+      } else {
+        process.env.ANTHROPIC_API_KEY = originalKey;
+      }
+    }
+  });
+
   it('creates an anthropic-messages client when key is present', () => {
     const originalKey = process.env.ANTHROPIC_API_KEY;
     process.env.ANTHROPIC_API_KEY = 'sk-ant-test';
@@ -233,9 +252,7 @@ describe('Provider factory — anthropic preset', () => {
     const originalKey = process.env.ANTHROPIC_API_KEY;
     delete process.env.ANTHROPIC_API_KEY;
     try {
-      expect(() => createLLMClient(makeInput({ provider: 'anthropic' }))).toThrow(
-        /API key is required for Anthropic/,
-      );
+      expect(() => createLLMClient(makeInput({ provider: 'anthropic' }))).toThrow(/API key is required for Anthropic/);
     } finally {
       process.env.ANTHROPIC_API_KEY = originalKey;
     }

@@ -7,15 +7,16 @@ import { promisify } from 'util';
 
 import {
   applyEffectiveSynaxConfigToProjectConfig,
+  discoverConfigPath,
   loadProjectConfig,
-  toProviderFactoryInput,
   normalizeProviderConfig,
+  toProviderFactoryInput,
   type ProjectConfig,
 } from '../config/project';
 import { loadSynaxConfig } from '../config/load-config';
 import { loadSkills, type SkillDiagnostic } from '../agent/skills';
 import pkg from '../../package.json';
-import { createLLMClient } from '../llm/provider-factory';
+import { createLLMClient, describeLLMProvider } from '../llm/provider-factory';
 import {
   createAgentConversation,
   buildModelFacingTools,
@@ -31,8 +32,7 @@ import { buildProjectProfile, formatTextProfile } from '../config/profile';
 import { buildInspectConfigProfile } from './inspect';
 import { join } from 'path';
 import { writeFileSync, mkdirSync } from 'fs';
-import { discoverConfigPath, normalizeProviderConfig as normalizeProvider } from '../config/project';
-import type { NormalizedProviderConfig } from '../llm/types';
+import type { NormalizedProviderConfig, ProviderMetadata } from '../llm/types';
 import { detectDirtyTree, readLatestCheckpoint, undoLastEdit } from '../agent/safety';
 import { runInteractiveTui } from '../tui/interactive-tui';
 
@@ -317,9 +317,10 @@ export function chatCommand(program: Command): void {
         return;
       }
 
-      const factoryResult = createLLMClient(toProviderFactoryInput(loaded.config));
-      const metadata = factoryResult.metadata;
-      const provider = factoryResult.normalizedConfig;
+      const providerDescription = describeLLMProvider(toProviderFactoryInput(loaded.config));
+      const metadata = providerDescription.metadata;
+      const provider = providerDescription.normalizedConfig;
+      const blockedMessage = providerRuntimeBlockedMessage(metadata, provider);
 
       // Extract thinking level from the effective multi-provider config.
       let thinkingLevel: 'off' | 'low' | 'medium' | 'high' | 'auto' = 'off';
@@ -368,8 +369,8 @@ export function chatCommand(program: Command): void {
         tui: useTui,
       });
       if (options.message) {
-        if (!metadata.modelId) {
-          console.error('[synax] Config error: provider.model is required for chat.');
+        if (blockedMessage) {
+          console.error(`[synax] Config error: ${blockedMessage}`);
           process.exitCode = 1;
           return;
         }
@@ -383,7 +384,7 @@ export function chatCommand(program: Command): void {
 
       if (useTui) {
         await runInteractiveTui(session, {
-          blockedMessage: !metadata.modelId ? 'provider.model is required' : undefined,
+          blockedMessage,
           lastModelOutput: () => lastModelOutput,
           modelLabel,
           thinkingEnabled: thinkingLevel !== 'off',
@@ -393,6 +394,7 @@ export function chatCommand(program: Command): void {
           gitBranch,
           contextWindowTokens: loaded.config.contextWindowTokens ?? loaded.config.contextBudgetTokens,
           coreVisualProfile: loaded.config.coreVisualProfile,
+          coreLoaded: blockedMessage === undefined,
           activeSkills: skillDiagnostics?.filter((d) => d.loaded).map((d) => d.id),
           onSettingsConfigChanged: (settingsConfig) => {
             loaded.config = applyEffectiveSynaxConfigToProjectConfig(loaded.config, settingsConfig);
@@ -402,16 +404,22 @@ export function chatCommand(program: Command): void {
             const nextProvider = normalizeProviderConfig(loaded.config.provider ?? {}, {
               thinkingLevel: nextThinkingLevel,
             });
+            const nextDescription = describeLLMProvider(toProviderFactoryInput(loaded.config));
+            const nextBlockedMessage = providerRuntimeBlockedMessage(nextDescription.metadata, nextProvider);
             const activeProvider = settingsConfig.providers[settingsConfig.active.provider];
             const activeModel = activeProvider?.models.find((model) => model.id === settingsConfig.active.model);
             return {
               modelLabel: nextProvider.model.trim() || undefined,
               endpointLabel: nextProvider.baseUrl || undefined,
-              providerName: activeProvider?.name ?? providerNameFromPreset(loaded.config.provider?.preset),
+              providerName:
+                activeProvider?.name ??
+                nextDescription.metadata.displayName ??
+                providerNameFromPreset(loaded.config.provider?.preset),
               contextWindowTokens:
                 activeModel?.contextWindow ?? loaded.config.contextWindowTokens ?? loaded.config.contextBudgetTokens,
               coreVisualProfile: loaded.config.coreVisualProfile,
               thinkingEnabled: nextThinkingLevel !== 'off',
+              coreLoaded: nextBlockedMessage === undefined,
             };
           },
         });
@@ -615,6 +623,18 @@ export function providerNameFromPreset(preset: string | undefined): string | und
   if (preset === 'openai') return 'OpenAI';
   if (preset === 'anthropic') return 'Anthropic';
   if (preset === 'openrouter') return 'OpenRouter';
+  return undefined;
+}
+
+export function providerRuntimeBlockedMessage(
+  metadata: ProviderMetadata,
+  provider: NormalizedProviderConfig,
+): string | undefined {
+  if (!provider.model.trim()) return 'provider.model is required';
+  if (!provider.baseUrl.trim()) return 'provider.base_url is required';
+  if (metadata.apiKeyRequired && !metadata.apiKeyConfigured) {
+    return `${metadata.displayName} API key is required`;
+  }
   return undefined;
 }
 
@@ -1089,7 +1109,7 @@ interface ProviderProbe {
 }
 
 async function renderProviderTest(config: ProjectConfig): Promise<string> {
-  const provider = normalizeProvider(config.provider ?? {});
+  const provider = normalizeProviderConfig(config.provider ?? {});
   if (!provider.baseUrl.trim() || !provider.model.trim()) {
     return formatProviderTest(config, provider, 'blocked', [
       provider.baseUrl.trim() ? '[ok] endpoint configured' : '[blocked] endpoint missing',
@@ -1262,7 +1282,7 @@ function renderHelpPanel(): string {
 }
 
 function renderSettingsPanel(repoRoot: string, config: ProjectConfig): string {
-  const provider = normalizeProvider(config.provider ?? {});
+  const provider = normalizeProviderConfig(config.provider ?? {});
   const headers = Object.keys(config.provider?.custom_headers ?? config.provider?.customHeaders ?? {});
   const configPath = discoverConfigPath(repoRoot) ?? '(defaults)';
   const exposed = buildModelFacingTools({ bashEnabled: config.tools?.bash?.enabled }).map((tool) => tool.name);
