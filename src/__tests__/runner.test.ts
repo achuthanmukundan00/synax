@@ -1,3 +1,4 @@
+import { execSync } from 'child_process';
 import { existsSync, mkdirSync, rmSync, writeFileSync, readFileSync } from 'fs';
 import { join } from 'path';
 
@@ -46,34 +47,39 @@ describe('shared bounded agent runner', () => {
       'read',
       'write',
       'edit',
-      'git',
+      'bash',
     ]);
   });
 
-  it('constrains read-only and verify modes to read and git tools only', async () => {
+  it('keeps the system prompt focused on the four model-facing tools', async () => {
+    const client = fakeClient([{ content: 'done' }]);
+
+    await runAgentTurn({ repoRoot: TMP, task: 'hello', client });
+
+    const system = client.requests[0].messages[0].content as string;
+    expect(system).toContain('Tools: read, write, edit, bash.');
+    expect(system).not.toContain('GIT WORKFLOWS');
+    expect(system).not.toContain('git tool');
+  });
+
+  it('constrains read-only and verify modes to read and bash tools', async () => {
     expect(buildModelFacingTools({ mode: 'read-only', bashEnabled: true }).map((tool) => tool.name)).toEqual([
       'read',
-      'git',
+      'bash',
     ]);
     expect(buildModelFacingTools({ mode: 'verify', bashEnabled: true }).map((tool) => tool.name)).toEqual([
       'read',
-      'git',
+      'bash',
     ]);
   });
 
-  it('includes bash in model-facing tools only when explicitly enabled', async () => {
-    expect(buildModelFacingTools({ bashEnabled: false }).map((tool) => tool.name)).toEqual([
-      'read',
-      'write',
-      'edit',
-      'git',
-    ]);
+  it('does not expose a legacy git surface when bash is disabled', async () => {
+    expect(buildModelFacingTools({ bashEnabled: false }).map((tool) => tool.name)).toEqual(['read', 'write', 'edit']);
     expect(buildModelFacingTools({ bashEnabled: true }).map((tool) => tool.name)).toEqual([
       'read',
       'write',
       'edit',
       'bash',
-      'git',
     ]);
   });
 
@@ -87,7 +93,6 @@ describe('shared bounded agent runner', () => {
       'write',
       'edit',
       'bash',
-      'git',
     ]);
   });
 
@@ -136,18 +141,154 @@ describe('shared bounded agent runner', () => {
     expect(client.requests).toHaveLength(0);
   });
 
-  it('still returns a clear tool error when disabled bash is called directly', async () => {
-    const client = fakeClient([{ toolCalls: [{ id: 'call_1', name: 'bash', arguments: { command: 'npm test' } }] }]);
+  it('blocks commit/push intent when bash is disabled', async () => {
+    const client = fakeClient([{ content: 'should not be reached' }]);
+
+    const result = await runAgentTurn({
+      repoRoot: TMP,
+      task: 'Please commit the unstaged changes with a commit message that makes sense.',
+      client,
+      tools: { bashEnabled: false },
+    });
+
+    expect(result.terminalState).toBe('blocked');
+    expect(result.error).toContain('cannot create commits');
+    expect(result.finalAnswer).toContain('Suggested first step');
+    expect(client.requests).toHaveLength(0);
+  });
+
+  it('executes bash tool commands', async () => {
+    const client = fakeClient([{ toolCalls: [{ id: 'call_1', name: 'bash', arguments: { command: 'echo synax' } }] }]);
 
     const result = await runAgentTurn({ repoRoot: TMP, task: 'run tests', client });
 
-    expect(result).toMatchObject({
-      terminalState: 'tool_error',
-      error: 'bash tool is not enabled in this scaffold',
-    });
-    expect(result.toolCalls).toEqual([
-      { name: 'bash', success: false, error: 'bash tool is not enabled in this scaffold' },
+    expect(result.toolCalls).toContainEqual({ name: 'bash', success: true, error: undefined });
+  });
+
+  it('lets the model recover from failed bash commands', async () => {
+    const client = fakeClient([
+      { toolCalls: [{ id: 'call_1', name: 'bash', arguments: { command: 'git commit -m "missing stage"' } }] },
+      { toolCalls: [{ id: 'call_2', name: 'bash', arguments: { command: 'git status --short' } }] },
+      { content: 'reported commit precondition failure' },
     ]);
+
+    const result = await runAgentTurn({
+      repoRoot: TMP,
+      task: 'commit the unstaged changes',
+      client,
+      maxSteps: 4,
+    });
+
+    expect(result).toMatchObject({
+      terminalState: 'completed',
+      finalAnswer: 'reported commit precondition failure',
+    });
+    expect(result.toolCalls).toHaveLength(2);
+    expect(result.toolCalls[0]).toMatchObject({ name: 'bash', success: false });
+    expect(result.toolCalls[1]).toMatchObject({ name: 'bash', success: true });
+    expect(client.requests).toHaveLength(3);
+  });
+
+  it('treats successful git commits as completed work even when no files are edited by Synax', async () => {
+    execSync('git init', { cwd: TMP, stdio: 'ignore' });
+    execSync('git config user.email "synax@example.test"', { cwd: TMP, stdio: 'ignore' });
+    execSync('git config user.name "Synax Test"', { cwd: TMP, stdio: 'ignore' });
+    writeFileSync(join(TMP, 'a.txt'), 'hello\n', 'utf-8');
+    const client = fakeClient([
+      {
+        toolCalls: [
+          {
+            id: 'call_1',
+            name: 'bash',
+            arguments: { command: 'git add a.txt && git commit -m "Add a.txt"' },
+          },
+        ],
+      },
+      { content: 'completed successfully' },
+    ]);
+
+    const result = await runAgentTurn({
+      repoRoot: TMP,
+      task: 'commit the unstaged changes',
+      client,
+      maxSteps: 2,
+    });
+
+    expect(result.terminalState).toBe('completed');
+    expect(execSync('git rev-list --count HEAD', { cwd: TMP, encoding: 'utf-8' }).trim()).toBe('1');
+  });
+
+  it('stops immediately after a successful git commit instead of spending more model steps', async () => {
+    execSync('git init', { cwd: TMP, stdio: 'ignore' });
+    execSync('git config user.email "synax@example.test"', { cwd: TMP, stdio: 'ignore' });
+    execSync('git config user.name "Synax Test"', { cwd: TMP, stdio: 'ignore' });
+    writeFileSync(join(TMP, 'a.txt'), 'hello\n', 'utf-8');
+    const client = fakeClient([
+      {
+        toolCalls: [
+          {
+            id: 'call_1',
+            name: 'bash',
+            arguments: { command: 'git add a.txt && git commit -m "Add a.txt"' },
+          },
+        ],
+      },
+      { toolCalls: [{ id: 'call_2', name: 'bash', arguments: { command: 'git status --short' } }] },
+    ]);
+
+    const result = await runAgentTurn({
+      repoRoot: TMP,
+      task: 'commit the unstaged changes',
+      client,
+      maxSteps: 32,
+    });
+
+    expect(result).toMatchObject({
+      terminalState: 'completed',
+      steps: 1,
+      toolCalls: [{ name: 'bash', success: true, error: undefined }],
+    });
+    expect(client.requests).toHaveLength(1);
+    expect(execSync('git rev-list --count HEAD', { cwd: TMP, encoding: 'utf-8' }).trim()).toBe('1');
+  });
+
+  it('treats successful gh publishing commands as completed work', async () => {
+    const client = fakeClient([
+      {
+        toolCalls: [
+          {
+            id: 'call_1',
+            name: 'bash',
+            arguments: { command: 'gh() { return 0; }; gh pr create --draft --fill' },
+          },
+        ],
+      },
+      { content: 'completed successfully' },
+    ]);
+
+    const result = await runAgentTurn({
+      repoRoot: TMP,
+      task: 'open a draft pull request',
+      client,
+      maxSteps: 2,
+    });
+
+    expect(result.terminalState).toBe('completed');
+  });
+
+  it('adds a safety warning for dangerous bash commands while still executing', async () => {
+    const client = fakeClient([
+      { toolCalls: [{ id: 'call_1', name: 'bash', arguments: { command: 'echo "rm -rf ."' } }] },
+    ]);
+
+    const result = await runAgentTurn({ repoRoot: TMP, task: 'danger test', client });
+    expect(result.toolCalls[0]).toMatchObject({ name: 'bash', success: true });
+    const toolMessage = result.conversation.messages.find((m) => m.role === 'tool' && m.name === 'bash');
+    expect(toolMessage).toBeDefined();
+    const parsed = JSON.parse(toolMessage?.content ?? '{}');
+    expect(parsed.output.safetyWarnings).toEqual(
+      expect.arrayContaining([expect.stringContaining('destructive delete of current directory')]),
+    );
   });
 
   it('executes a requested tool, appends the result, then continues', async () => {
@@ -821,6 +962,64 @@ describe('shared bounded agent runner', () => {
     expect(result.toolCalls).toHaveLength(1);
   });
 
+  it('stops repeated identical bash commands before exhausting model steps', async () => {
+    const client = fakeClient([
+      { toolCalls: [{ id: '1', name: 'bash', arguments: { command: 'git status --short' } }] },
+      { toolCalls: [{ id: '2', name: 'bash', arguments: { command: 'git status --short' } }] },
+      { toolCalls: [{ id: '3', name: 'bash', arguments: { command: 'git status --short' } }] },
+      { toolCalls: [{ id: '4', name: 'bash', arguments: { command: 'git status --short' } }] },
+      { content: 'should not be reached' },
+    ]);
+
+    const result = await runAgentTurn({ repoRoot: TMP, task: 'commit all unstaged changes', client, maxSteps: 32 });
+
+    expect(result).toMatchObject({
+      terminalState: 'tool_error',
+      error: expect.stringContaining('Bash loop detected'),
+    });
+    expect(result.steps).toBeLessThan(32);
+  });
+
+  it('continues after large bash output when the model-facing context can compact it', async () => {
+    const client = fakeClient([
+      {
+        toolCalls: [
+          {
+            id: 'call_1',
+            name: 'bash',
+            arguments: { command: 'node -e "console.log(\'x\'.repeat(10000))"' },
+          },
+        ],
+      },
+      { content: 'reviewed the shell output' },
+    ]);
+
+    const result = await runAgentTurn({
+      repoRoot: TMP,
+      task: 'inspect shell output and summarize it',
+      client,
+      maxSteps: 4,
+      contextBudget: {
+        contextWindowTokens: 1500,
+        reservedOutputTokens: 300,
+        keepRecentTokens: 200,
+        maxSingleReadResultTokens: 6000,
+        keepRecentToolTurns: 1,
+      },
+    });
+
+    expect(result).toMatchObject({
+      terminalState: 'completed',
+      finalAnswer: 'reviewed the shell output',
+    });
+    expect(client.requests).toHaveLength(2);
+    const secondRequest = client.requests[1].messages as Array<{ role: string; name?: string; content: string }>;
+    const bashResult = secondRequest.find((message) => message.role === 'tool' && message.name === 'bash');
+    expect(bashResult?.content).toContain('"_compacted":true');
+    expect(bashResult?.content).toContain('"command"');
+    expect(bashResult?.content).not.toContain('x'.repeat(1000));
+  });
+
   it('asks for a final answer on the final allowed model step', async () => {
     writeFileSync(join(TMP, 'package.json'), '{}\n', 'utf-8');
     const client = fakeClient([
@@ -915,13 +1114,16 @@ describe('shared bounded agent runner', () => {
     expect(result.terminalState).toBe('completed');
     expect(readFileSync(join(TMP, 'a.txt'), 'utf-8')).toBe('hi\n');
     expect(events.map((event) => event.type)).toEqual([
+      'model_step_started',
       'tool_started',
       'tool_finished',
+      'model_step_started',
       'tool_started',
       'patch_preview',
       'tool_finished',
+      'model_step_started',
     ]);
-    expect(events[3]).toMatchObject({
+    expect(events[5]).toMatchObject({
       type: 'patch_preview',
       toolCallId: 'call_2',
       path: 'a.txt',
@@ -954,8 +1156,10 @@ describe('shared bounded agent runner', () => {
     });
     expect(readFileSync(join(TMP, 'a.txt'), 'utf-8')).toBe('hello\n');
     expect(events.map((event) => event.type)).toEqual([
+      'model_step_started',
       'tool_started',
       'tool_finished',
+      'model_step_started',
       'tool_started',
       'patch_preview',
       'tool_finished',
@@ -994,13 +1198,12 @@ describe('shared bounded agent runner', () => {
 
     // The second model request should have compacted the large read result
     const secondRequest = client.requests[1];
-    const toolMessages = (secondRequest.messages as Array<{ role: string; content: string }>)
-      .filter((m) => m.role === 'tool');
+    const toolMessages = (secondRequest.messages as Array<{ role: string; content: string }>).filter(
+      (m) => m.role === 'tool',
+    );
 
     // At least one tool message should be compacted (the large file read)
-    const hasCompacted = toolMessages.some(
-      (m) => m.content.includes('"_compacted":true'),
-    );
+    const hasCompacted = toolMessages.some((m) => m.content.includes('"_compacted":true'));
     expect(hasCompacted).toBe(true);
   });
 
@@ -1022,13 +1225,80 @@ describe('shared bounded agent runner', () => {
 
     // The second model request should keep the small read verbatim
     const secondRequest = client.requests[1];
-    const toolMessages = (secondRequest.messages as Array<{ role: string; content: string }>)
-      .filter((m) => m.role === 'tool');
+    const toolMessages = (secondRequest.messages as Array<{ role: string; content: string }>).filter(
+      (m) => m.role === 'tool',
+    );
 
     // No tool message should be compacted (small file stays verbatim)
-    const hasCompacted = toolMessages.some(
-      (m) => m.content.includes('"_compacted":true'),
-    );
+    const hasCompacted = toolMessages.some((m) => m.content.includes('"_compacted":true'));
     expect(hasCompacted).toBe(false);
+  });
+
+  it('rejects premature completion claims when no files were changed in patch mode', async () => {
+    writeFileSync(join(TMP, 'README.md'), '# Test\n', 'utf-8');
+    // Model reads a file then claims "verified passed" without making changes
+    const client = fakeClient([
+      { toolCalls: [{ id: 'call_1', name: 'read', arguments: { path: 'README.md' } }] },
+      { content: 'Verified passed. All tests pass.' },
+      { content: 'No changes needed — README already correct.', toolCalls: [] },
+    ]);
+
+    const result = await runAgentTurn({
+      repoRoot: TMP,
+      task: 'fix the broken test in README.md',
+      client,
+      mode: 'patch',
+      maxSteps: 5,
+    });
+
+    // The first "verified passed" should be blocked; the second response
+    // (acknowledging no changes needed) should be accepted.
+    expect(result.terminalState).toBe('completed');
+    expect(client.requests).toHaveLength(3);
+    // The third request's messages should contain the gate nudge (added after step 2)
+    const messages3 = client.requests[2].messages as Array<{ role: string; content: string }>;
+    const userMessages3 = messages3.filter((m) => m.role === 'user');
+    expect(userMessages3.some((m) => m.content.includes('claimed completion without taking action'))).toBe(true);
+  });
+
+  it('accepts legitimate read-only completion without changes', async () => {
+    writeFileSync(join(TMP, 'README.md'), '# A repo\n', 'utf-8');
+    const client = fakeClient([
+      { toolCalls: [{ id: 'call_1', name: 'read', arguments: { path: 'README.md' } }] },
+      { content: 'The README says "A repo". There are no issues to fix.' },
+    ]);
+
+    const result = await runAgentTurn({
+      repoRoot: TMP,
+      task: 'check the README for issues',
+      client,
+      mode: 'read-only',
+      maxSteps: 4,
+    });
+
+    // Read-only mode should never block completion claims
+    expect(result.terminalState).toBe('completed');
+    expect(result.finalAnswer).toContain('no issues to fix');
+  });
+
+  it('allows completion after files were changed (legitimate completion)', async () => {
+    writeFileSync(join(TMP, 'a.txt'), 'old\n', 'utf-8');
+    const client = fakeClient([
+      { toolCalls: [{ id: 'call_1', name: 'read', arguments: { path: 'a.txt' } }] },
+      { toolCalls: [{ id: 'call_2', name: 'edit', arguments: { path: 'a.txt', oldStr: 'old', newStr: 'new' } }] },
+      { content: 'Edit applied. Verified passed.' },
+    ]);
+
+    const result = await runAgentTurn({
+      repoRoot: TMP,
+      task: 'change old to new in a.txt',
+      client,
+      mode: 'patch',
+      maxSteps: 5,
+    });
+
+    // After making changes, the premature completion gate should NOT block
+    expect(result.terminalState).toBe('completed');
+    expect(result.changedFiles).toContain('a.txt');
   });
 });

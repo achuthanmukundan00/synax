@@ -13,15 +13,14 @@ Synax uses a bounded model-tool loop:
 
 The model-facing tool names are intentionally small:
 
-| Tool | Purpose |
-| --- | --- |
-| `read` | List files, read a bounded file range, or search text |
-| `edit` | Exact `replace_in_file` edit |
-| `write` | Create a new repo-local text file |
-| `git` | Show bounded git status or diff |
-| `bash` | Hidden unless enabled; disabled by default |
+| Tool    | Purpose                                               |
+| ------- | ----------------------------------------------------- |
+| `read`  | List files, read a bounded file range, or search text |
+| `edit`  | Exact `replace_in_file` edit                          |
+| `write` | Create a new repo-local text file                     |
+| `bash`  | Run terminal commands, including git and verification |
 
-Internally, read and git calls map to more specific tools such as `list_files`, `read_file_range`, `search_text`, `show_git_status`, and `show_git_diff`.
+Internally, read calls map to more specific tools such as `list_files`, `read_file_range`, and `search_text`.
 
 ## Editing Rules
 
@@ -50,8 +49,8 @@ Defaults:
 ```toml
 [agent]
 context_budget_tokens = 131072
-max_model_steps = 32
-max_tool_calls = 96
+max_model_steps = 64
+max_tool_calls = 192
 ```
 
 When the model keeps asking for tools at the final step or exceeds limits, Synax returns a terminal state instead of continuing indefinitely.

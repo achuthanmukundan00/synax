@@ -1,4 +1,5 @@
 import { DebugRenderer, JsonlRenderer, NormalRenderer, QuietRenderer } from '../agent/renderers';
+import { applyEventToRunState, createInitialRunStateSnapshot } from '../agent/tui-state';
 import type { AgentEvent } from '../agent/events';
 
 function captureWrites(fn: () => void): { stdout: string; stderr: string } {
@@ -24,6 +25,124 @@ function captureWrites(fn: () => void): { stdout: string; stderr: string } {
 }
 
 describe('renderers', () => {
+  it('normal renderer handles verification lifecycle events', () => {
+    const output = captureWrites(() => {
+      const renderer = new NormalRenderer();
+      renderer.onEvent({
+        type: 'task_started',
+        timestamp: new Date().toISOString(),
+        mode: 'patch',
+        profile: 'default',
+        endpoint: 'http://127.0.0.1:1234/v1',
+        model: 'x',
+        contextBudgetTokens: 1,
+        maxModelSteps: 2,
+        maxToolCalls: 3,
+        tools: ['read'],
+        task: 'inspect package.json',
+      });
+      renderer.onEvent({
+        type: 'verification_planned',
+        timestamp: new Date().toISOString(),
+        checkId: 'chk-1',
+        checkLabel: 'npm test',
+        command: 'npm test',
+        summary: '3 file(s) changed',
+      });
+      renderer.onEvent({
+        type: 'verification_started',
+        timestamp: new Date().toISOString(),
+        checkId: 'chk-1',
+        checkLabel: 'npm test',
+        command: 'npm test',
+      });
+      renderer.onEvent({
+        type: 'verification_passed',
+        timestamp: new Date().toISOString(),
+        checkId: 'chk-1',
+        checkLabel: 'npm test',
+        summary: 'all tests passed',
+        durationMs: 1234,
+      });
+      renderer.onEvent({
+        type: 'verification_failed',
+        timestamp: new Date().toISOString(),
+        checkId: 'chk-2',
+        checkLabel: 'npm run lint',
+        summary: '2 lint errors',
+        severity: 'S2',
+        durationMs: 500,
+      });
+      renderer.onEvent({
+        type: 'verification_skipped',
+        timestamp: new Date().toISOString(),
+        checkId: 'chk-3',
+        checkLabel: 'npm run build',
+        summary: 'skipped by config',
+      });
+    });
+    expect(output.stdout).toContain('Verif plan:');
+    expect(output.stdout).toContain('Verif start:');
+    expect(output.stdout).toContain('Verif ✓:');
+    expect(output.stdout).toContain('Verif ✗:');
+    expect(output.stdout).toContain('Verif skip:');
+  });
+
+  it('tui state handles long objective and check labels without throwing', () => {
+    const longText = 'A'.repeat(500);
+    let state = createInitialRunStateSnapshot(0);
+    state = applyEventToRunState(
+      state,
+      {
+        type: 'task_started',
+        timestamp: new Date(0).toISOString(),
+        mode: 'patch',
+        profile: 'default',
+        endpoint: 'http://127.0.0.1:1234/v1',
+        model: 'qwen',
+        contextBudgetTokens: 1000,
+        maxModelSteps: 10,
+        maxToolCalls: 10,
+        tools: ['read'],
+        task: longText,
+      },
+      1,
+    );
+    // Should not throw; label is clipped internally
+    expect(state.objective.label.length).toBeLessThanOrEqual(longText.length);
+
+    state = applyEventToRunState(
+      state,
+      {
+        type: 'verification_planned',
+        timestamp: new Date(2).toISOString(),
+        checkId: 'chk-1',
+        checkLabel: 'npm run ' + 'x'.repeat(200),
+        summary: 'very long check label',
+      },
+      3,
+    );
+    // Should not throw
+    expect(state.verification.currentCheckLabel).toBeTruthy();
+  });
+
+  it('tui state clips status and risk lines without expanding layout', () => {
+    let state = createInitialRunStateSnapshot(0);
+    const longError = 'E'.repeat(500);
+    state = applyEventToRunState(
+      state,
+      {
+        type: 'error',
+        timestamp: new Date(0).toISOString(),
+        message: longError,
+      },
+      1,
+    );
+    // Status note and risk line should be clipped at reasonable lengths
+    expect(state.riskLine.length).toBeLessThanOrEqual(123);
+    expect(state.statusNote.length).toBeLessThanOrEqual(123);
+  });
+
   it('normal renderer emits readable sections and avoids raw objects', () => {
     const output = captureWrites(() => {
       const renderer = new NormalRenderer();

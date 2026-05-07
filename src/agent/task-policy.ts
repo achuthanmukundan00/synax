@@ -8,15 +8,20 @@ export interface BroadTaskGuardResult {
   suggestedFirstStep: string;
 }
 
+export interface UnsupportedTaskGuardResult {
+  blocked: boolean;
+  message: string;
+  suggestedFirstStep: string;
+}
+
 const DOCS_MUTATION_ROOTS = ['README.md', 'AGENTS.md', 'docs/', 'specs/'];
 
 export function getAllowedModelTools(mode: RunMode, bashEnabled: boolean): string[] {
-  const base = ['read', 'git'];
-  const shell = mode === 'patch' || mode === 'docs' ? (bashEnabled ? ['bash'] : []) : [];
+  const base = bashEnabled ? ['read', 'bash'] : ['read'];
   if (mode === 'read-only' || mode === 'verify') {
     return base;
   }
-  return [...base, 'write', 'edit', ...shell];
+  return [...base, 'write', 'edit'];
 }
 
 export function normalizeRunMode(mode: string | undefined): RunMode {
@@ -82,6 +87,30 @@ export function guardBroadTask(task: string): BroadTaskGuardResult | null {
         suggestedFirstStep: entry.firstStep,
       };
     }
+  }
+
+  return null;
+}
+
+export function guardUnsupportedTask(task: string, shellEnabled: boolean): UnsupportedTaskGuardResult | null {
+  const normalized = task.toLowerCase().trim();
+  if (!normalized) return null;
+
+  const commitIntent =
+    /\b(commit|git commit)\b/.test(normalized) &&
+    (/\b(push|pr|pull request|merge)\b/.test(normalized) ||
+      /\bunstaged changes\b/.test(normalized) ||
+      /\bstaged changes\b/.test(normalized) ||
+      /\bworking tree\b/.test(normalized) ||
+      /\bchanges\b/.test(normalized));
+
+  if (commitIntent && !shellEnabled) {
+    return {
+      blocked: true,
+      message: 'This run cannot create commits because bash is disabled.',
+      suggestedFirstStep:
+        'Enable bash for Synax or run `git status` and `git commit -m "<message>"` manually in your shell.',
+    };
   }
 
   return null;

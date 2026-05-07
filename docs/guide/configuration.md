@@ -14,8 +14,8 @@ Project config wins over global config.
 ```toml
 [agent]
 context_budget_tokens = 131072
-max_model_steps = 32
-max_tool_calls = 96
+max_model_steps = 64
+max_tool_calls = 192
 
 [subagents]
 enabled = false
@@ -33,12 +33,12 @@ api_key = "sk-no-key-required"
 timeout_seconds = 120
 
 [tools]
-exposed = ["read", "write", "edit", "git"]
+exposed = ["read", "write", "edit", "bash"]
 shell = "zsh"
 unsafe = false
 
 [tools.bash]
-enabled = false
+enabled = true
 ```
 
 ## Environment Overrides
