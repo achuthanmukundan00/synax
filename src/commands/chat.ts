@@ -6,6 +6,7 @@ import { execFile } from 'child_process';
 import { promisify } from 'util';
 
 import { loadProjectConfig, normalizeProviderConfig, type ProjectConfig } from '../config/project';
+import pkg from '../../package.json';
 import { createOpenAICompatibleClient } from '../llm/client';
 import {
   createAgentConversation,
@@ -1093,7 +1094,7 @@ async function probeChat(provider: NormalizedProviderConfig): Promise<ProviderPr
 }
 
 function providerHeaders(provider: NormalizedProviderConfig): Record<string, string> {
-  const headers: Record<string, string> = { Accept: 'application/json', 'User-Agent': 'synax-chat/0.3.0' };
+  const headers: Record<string, string> = { Accept: 'application/json', 'User-Agent': `synax-chat/${pkg.version}` };
   if (provider.apiKey) headers.Authorization = `Bearer ${provider.apiKey}`;
   for (const [key, value] of Object.entries(provider.customHeaders ?? {})) headers[key] = value;
   return headers;
