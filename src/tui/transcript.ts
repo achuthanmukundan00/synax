@@ -193,7 +193,7 @@ function renderFinalSummary(run: RunStateSnapshot, width: number): string[] {
   const followUp = completed && run.verification.state !== 'failed' ? 'none' : 'resolve blocker and rerun verification';
   return [
     ...(run.statusNote ? [completionActivity(run.statusNote, width)] : []),
-    eventHeader('final', result, width),
+    finalBanner(result, width, finalTone(result, run.verification.state)),
     detailRow('objective', run.objective.label, width),
     detailRow('changed', plural(fileCount, 'file'), width),
     detailRow('tools', `${toolInvocationCount} calls`, width),
@@ -208,7 +208,7 @@ function renderFrozenFinalSummary(detail: string, width: number): string[] {
   const fields = parseFrozenFinalSummary(detail);
   return [
     ...(fields.completed ? [completionActivity(fields.completed, width)] : []),
-    eventHeader('final', fields.result || 'blocked', width),
+    finalBanner(fields.result || 'blocked', width, finalTone(fields.result || 'blocked', fields.verify)),
     detailRow('objective', fields.objective || '—', width),
     detailRow('changed', fields.changed || '0 files', width),
     detailRow('tools', fields.tools || '0 calls', width),
@@ -454,6 +454,12 @@ function clip(text: string, width: number): string {
   return closeAnsi(`${sliceAnsi(text, 0, Math.max(0, width - 1))}…`);
 }
 
+function pad(text: string, width: number): string {
+  const visible = visibleLength(text);
+  if (visible >= width) return text;
+  return `${text}${' '.repeat(width - visible)}`;
+}
+
 function stripAnsi(input: string): string {
   // eslint-disable-next-line no-control-regex
   return input.replace(/\u001b\[[0-9;]*m/g, '');
@@ -512,6 +518,24 @@ function eventHeader(label: string, state: string, width: number = 120): string 
   const available = Math.max(1, width - 14);
   const glyph = eventGlyph(label);
   return `${glyph} ${bold(label.padEnd(10, ' '))} ${clip(state, available)}`;
+}
+
+type FinalTone = 'success' | 'caution' | 'failure';
+
+function finalTone(result: string, verification?: string): FinalTone {
+  const normalized = result.toLowerCase();
+  if (verification === 'failed' || normalized === 'failed' || normalized === 'error') return 'failure';
+  if (normalized === 'blocked' || normalized === 'budget_exhausted' || normalized === 'user_input_required') {
+    return 'caution';
+  }
+  return 'success';
+}
+
+function finalBanner(result: string, width: number, tone: FinalTone): string {
+  const bg = tone === 'success' ? '\u001b[48;5;22m' : tone === 'caution' ? '\u001b[48;5;58m' : '\u001b[48;5;52m';
+  const text = `◆ ${'final'.padEnd(10, ' ')} ${result}`;
+  const clipped = clip(text, Math.max(1, width));
+  return `${bg}\u001b[1;37m${pad(clipped, width)}\u001b[0m`;
 }
 
 function detailRow(label: string, value: string, width: number): string {

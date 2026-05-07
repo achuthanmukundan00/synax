@@ -299,6 +299,60 @@ describe('interactive layout visual agreements', () => {
     ).toMatchSnapshot();
   });
 
+  it('freezes the header timer after a run reaches a terminal state', () => {
+    const run = {
+      ...createInitialRunStateSnapshot(0),
+      phase: 'completed' as const,
+      terminal: 'completed' as const,
+      nowMs: 25_000,
+    };
+
+    const plain = renderLayout(
+      {
+        run,
+        objectiveInput: '',
+        coreMode: 'completed',
+        nowMs: 90_000,
+      },
+      100,
+      24,
+    )
+      .map(stripAnsi)
+      .join('\n');
+
+    expect(plain).toContain('Synax v0.4.0  Completed  0:25');
+  });
+
+  it('renders final summaries with full-width status color bars', () => {
+    const success = {
+      ...createInitialRunStateSnapshot(0),
+      phase: 'completed' as const,
+      terminal: 'completed' as const,
+    };
+    const blocked = {
+      ...createInitialRunStateSnapshot(0),
+      phase: 'blocked' as const,
+      terminal: 'blocked' as const,
+      terminalIssue: 'operator input required',
+    };
+    const failed = {
+      ...createInitialRunStateSnapshot(0),
+      phase: 'error' as const,
+      terminal: 'failed' as const,
+      terminalIssue: 'runtime error',
+    };
+
+    expect(
+      renderLayout({ run: success, objectiveInput: '', coreMode: 'completed', nowMs: 0 }, 100, 24).join('\n'),
+    ).toContain('\u001b[48;5;22m');
+    expect(
+      renderLayout({ run: blocked, objectiveInput: '', coreMode: 'blocked', nowMs: 0 }, 100, 24).join('\n'),
+    ).toContain('\u001b[48;5;58m');
+    expect(
+      renderLayout({ run: failed, objectiveInput: '', coreMode: 'failure', nowMs: 0 }, 100, 24).join('\n'),
+    ).toContain('\u001b[48;5;52m');
+  });
+
   it('matches the blocked budget-exhausted render snapshot', () => {
     const run = {
       ...createInitialRunStateSnapshot(0),
@@ -800,7 +854,7 @@ describe('interactive layout visual agreements', () => {
 
     expect(lines.at(-5)?.trim()).toBe('');
     expect(lines.at(-4)?.trimStart().startsWith('┌')).toBe(true);
-    expect(lines.at(-3)).toContain('Awaiting objective');
+    expect(lines.at(-3)).toMatch(/^│\s+│\s*$/);
     expect(lines.at(-1)?.trimStart().startsWith('└ Enter submit')).toBe(true);
   });
 
