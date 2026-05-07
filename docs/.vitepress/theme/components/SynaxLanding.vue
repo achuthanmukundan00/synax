@@ -23,7 +23,7 @@
       <h1 class="landing-headline">{{ currentCore.headline }}</h1>
 
       <!-- Subcopy -->
-      <p class="landing-subcopy">{{ currentCore.subcopy }}</p>
+      <p class="landing-subcopy">{{ currentCore.subheadline }}</p>
 
       <!-- CTAs -->
       <div class="landing-ctas">
@@ -73,204 +73,28 @@ import { ref, computed, onMounted, onUnmounted } from 'vue'
 import AiCore from './AiCore.vue'
 import RuntimePanel from './RuntimePanel.vue'
 import TerminalPreview from './TerminalPreview.vue'
-
-interface CoreDef {
-  id: string
-  name: string
-  model: string
-  provider: string
-  state: string
-  context: string
-  headline: string
-  subcopy: string
-  terminal: [string, string][]
-  modelProfile: string
-  runtimeState: string
-  chamberColor: string
-}
-
-const cores: CoreDef[] = [
-  {
-    id: 'unloaded',
-    name: 'Synax',
-    model: 'none',
-    provider: '—',
-    state: 'unloaded',
-    context: '—',
-    headline: 'No model loaded.',
-    subcopy: 'Configure a local, open, or compatible model to activate the runtime.',
-    terminal: [
-      ['core', 'unloaded'],
-      ['state', 'unloaded'],
-      ['action', 'synax config'],
-    ],
-    modelProfile: 'unloaded',
-    runtimeState: 'unloaded',
-    chamberColor: '90 90 90',
-  },
-  {
-    id: 'local-idle',
-    name: 'Synax',
-    model: 'local-model',
-    provider: 'relay (local)',
-    state: 'idle',
-    context: '0 / 32768',
-    headline: 'Local models, real work.',
-    subcopy: 'Open-weight models running on consumer GPUs. No cloud required. Practical, unfancy, effective.',
-    terminal: [
-      ['core', 'local-model'],
-      ['provider', 'relay (local)'],
-      ['state', 'idle'],
-      ['ctx', '0 / 32768'],
-    ],
-    modelProfile: 'local',
-    runtimeState: 'idle',
-    chamberColor: '58 109 176',
-  },
-  {
-    id: 'qwen-idle',
-    name: 'Qwen',
-    model: 'qwen-coder',
-    provider: 'relay (local)',
-    state: 'idle',
-    context: '0 / 32768',
-    headline: 'Sharp, lattice-like cognition.',
-    subcopy: 'Qwen feels nimble and surgical inside the Synax containment runtime.',
-    terminal: [
-      ['core', 'qwen-coder'],
-      ['provider', 'relay (local)'],
-      ['state', 'idle'],
-      ['ctx', '0 / 32768'],
-    ],
-    modelProfile: 'qwen',
-    runtimeState: 'idle',
-    chamberColor: '58 109 176',
-  },
-  {
-    id: 'qwen-working',
-    name: 'Qwen',
-    model: 'qwen-coder',
-    provider: 'relay (local)',
-    state: 'working',
-    context: '12420 / 32768',
-    headline: 'The runtime is working.',
-    subcopy: 'Tools are active. Watch the agent read, edit, and verify. Local models need observability.',
-    terminal: [
-      ['core', 'qwen-coder'],
-      ['state', 'working'],
-      ['phase', 'tool.read → tool.edit'],
-      ['ctx', '12420 / 32768'],
-    ],
-    modelProfile: 'qwen',
-    runtimeState: 'working',
-    chamberColor: '58 109 176',
-  },
-  {
-    id: 'deepseek-idle',
-    name: 'DeepSeek',
-    model: 'deepseek-coder',
-    provider: 'relay (local)',
-    state: 'idle',
-    context: '0 / 65536',
-    headline: 'Dense, compressed reasoning.',
-    subcopy: 'DeepSeek brings deeper inference pressure under the Synax containment chamber.',
-    terminal: [
-      ['core', 'deepseek-coder'],
-      ['provider', 'relay (local)'],
-      ['state', 'idle'],
-      ['ctx', '0 / 65536'],
-    ],
-    modelProfile: 'deepseek',
-    runtimeState: 'idle',
-    chamberColor: '58 109 176',
-  },
-  {
-    id: 'openai-idle',
-    name: 'OpenAI',
-    model: 'gpt-4o',
-    provider: 'openai',
-    state: 'idle',
-    context: '0 / 128000',
-    headline: 'Clean, centered, compatible.',
-    subcopy: 'OpenAI models work inside Synax when you need cloud-grade fallback. The chamber stays Synax.',
-    terminal: [
-      ['core', 'gpt-4o'],
-      ['provider', 'openai'],
-      ['state', 'idle'],
-      ['ctx', '0 / 128000'],
-    ],
-    modelProfile: 'openai',
-    runtimeState: 'idle',
-    chamberColor: '58 109 176',
-  },
-  {
-    id: 'qwen-error',
-    name: 'Qwen',
-    model: 'qwen-coder',
-    provider: 'relay (local)',
-    state: 'error',
-    context: '12420 / 32768',
-    headline: 'Failure is surfaced, not hidden.',
-    subcopy: 'Synax keeps errors visible, contained, and actionable. The chamber holds even when the model faults.',
-    terminal: [
-      ['core', 'qwen-coder'],
-      ['state', 'error'],
-      ['error', 'tool.parse_failure'],
-      ['action', 'retry / inspect'],
-    ],
-    modelProfile: 'qwen',
-    runtimeState: 'error',
-    chamberColor: '58 109 176',
-  },
-  {
-    id: 'local-working',
-    name: 'Synax',
-    model: 'local-model',
-    provider: 'relay (local)',
-    state: 'working',
-    context: '8420 / 32768',
-    headline: 'Consumer GPU. Real agent. Real work.',
-    subcopy: 'Local models are powerful, but you need observability. Synax shows you what your agent is doing.',
-    terminal: [
-      ['core', 'local-model'],
-      ['state', 'working'],
-      ['tool', 'bash → verify'],
-      ['ctx', '8420 / 32768'],
-    ],
-    modelProfile: 'local',
-    runtimeState: 'working',
-    chamberColor: '58 109 176',
-  },
-  {
-    id: 'qwen-succeeded',
-    name: 'Qwen',
-    model: 'qwen-coder',
-    provider: 'relay (local)',
-    state: 'succeeded',
-    context: '31200 / 32768',
-    headline: 'Run complete. Resolved.',
-    subcopy: 'The agent finished cleanly. Verification passed. The chamber returns to idle.',
-    terminal: [
-      ['core', 'qwen-coder'],
-      ['state', 'succeeded'],
-      ['result', 'verification passed'],
-      ['ctx', '31200 / 32768'],
-    ],
-    modelProfile: 'qwen',
-    runtimeState: 'succeeded',
-    chamberColor: '58 109 176',
-  },
-]
+import { buildRuntimeScene, runtimeScenes } from '../runtime-core'
 
 const currentIndex = ref(0)
-const currentCore = computed(() => cores[currentIndex.value])
+const currentCore = computed(() => buildRuntimeScene(runtimeScenes[currentIndex.value]))
 const prefersReducedMotion = ref(false)
 
 let intervalId: ReturnType<typeof setInterval> | null = null
 
 const pageStyle = computed(() => {
-  const rgb = currentCore.value.chamberColor
+  const rgb = currentCore.value.palette.stateRgb
+  const hotRgb = currentCore.value.palette.hotRgb
+  const shellRgb = currentCore.value.palette.shellRgb
+  const lowRgb = currentCore.value.palette.lowRgb
+  const profileRgb = currentCore.value.profile.accentRgb
+
   return {
+    '--state-rgb': rgb,
+    '--state-hot-rgb': hotRgb,
+    '--state-shell-rgb': shellRgb,
+    '--state-low-rgb': lowRgb,
+    '--profile-rgb': profileRgb,
+    '--scene-intensity': String(currentCore.value.intensity),
     '--core-rgb': rgb,
     '--core-color': `rgb(${rgb})`,
     '--core-glow': `0 0 40px rgba(${rgb} / 0.3), 0 0 80px rgba(${rgb} / 0.1)`,
@@ -280,7 +104,7 @@ const pageStyle = computed(() => {
 })
 
 function nextCore() {
-  currentIndex.value = (currentIndex.value + 1) % cores.length
+  currentIndex.value = (currentIndex.value + 1) % runtimeScenes.length
 }
 
 onMounted(() => {
