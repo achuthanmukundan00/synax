@@ -8,6 +8,7 @@ export interface TranscriptRenderState {
 export function renderTranscript(state: TranscriptRenderState, width: number): string[] {
   const blocks: string[][] = [];
   const history = state.run.debugHistory;
+  const completed = state.run.terminal === 'completed' || state.run.phase === 'completed';
 
   for (let i = 0; i < history.length; i += 1) {
     const item = history[i];
@@ -28,7 +29,7 @@ export function renderTranscript(state: TranscriptRenderState, width: number): s
     }
 
     if (item.kind === 'local_command') {
-      blocks.push(renderCommandEvent(item.summary, { summary: item.summary, detail: item.detail }, width));
+      blocks.push(renderCommandEvent(item.summary, { summary: item.summary, detail: item.detail }, width, completed));
       continue;
     }
 
@@ -40,7 +41,7 @@ export function renderTranscript(state: TranscriptRenderState, width: number): s
     if (item.kind === 'tool_call') {
       const parsed = parseToolCall(item.detail);
       const next = history[i + 1]?.kind === 'tool_result' ? history[i + 1] : undefined;
-      blocks.push(renderToolEvent(parsed, next, width));
+      blocks.push(renderToolEvent(parsed, next, width, completed));
       if (next) i += 1;
       continue;
     }
@@ -48,14 +49,16 @@ export function renderTranscript(state: TranscriptRenderState, width: number): s
     blocks.push(renderEventBlock('tool', summarizeOutput(item.detail || item.summary), width));
   }
 
-  // Only scan the most recent entries for a model output; the full history
-  // is already bounded by MAX_DEBUG_HISTORY in the state reducer.
+  // Collect the last model output for inclusion in final summary.
+  // Don't render it as a separate event block when a final summary will render.
   const hasModelOutput = history.some((item) => item.kind === 'model');
-  if (!hasModelOutput) {
-    const fallbackModel = cleanModelOutput(state.run.lastModelOutput || state.lastModelOutput || '');
-    if (fallbackModel) {
-      blocks.push(renderEventBlock('model', fallbackModel, width));
-    }
+  const fallbackModel = !hasModelOutput
+    ? cleanModelOutput(state.run.lastModelOutput || state.lastModelOutput || '')
+    : '';
+  const willShowFinalSummary = shouldShowFinalSummary(state.run) && !hasFrozenFinalSummary(state.run);
+
+  if (fallbackModel && !willShowFinalSummary) {
+    blocks.push(renderEventBlock('model', fallbackModel, width));
   }
 
   if (state.run.patchPreview) {
@@ -63,14 +66,15 @@ export function renderTranscript(state: TranscriptRenderState, width: number): s
     blocks.push(renderDiffPreview(state.run.patchPreview.path, state.run.patchPreview.diff, width));
   }
 
-  if (state.run.verification.state !== 'planned' || state.run.verification.checksPlanned > 0) {
+  const hasVerificationEvents = state.run.verification.seenCheckIds.size > 0;
+  if (hasVerificationEvents) {
     blocks.push(['']);
     blocks.push(renderVerification(state.run, width));
   }
 
-  if (shouldShowFinalSummary(state.run) && !hasFrozenFinalSummary(state.run)) {
+  if (willShowFinalSummary) {
     blocks.push(['']);
-    blocks.push(renderFinalSummary(state.run, width));
+    blocks.push(renderFinalSummary(state.run, width, fallbackModel));
   }
 
   if (blocks.length === 0) {
@@ -104,6 +108,7 @@ function renderToolEvent(
   call: ParsedToolCall,
   result: { summary: string; detail: string } | undefined,
   width: number,
+  compressed = false,
 ): string[] {
   if (call.name === 'read') {
     const path = call.path || '—';
@@ -125,7 +130,7 @@ function renderToolEvent(
   }
 
   if (call.name === 'bash' || call.name === 'shell' || call.command) {
-    return renderCommandEvent(call.command || call.summary || call.name, result, width);
+    return renderCommandEvent(call.command || call.summary || call.name, result, width, compressed);
   }
 
   return renderEventBlock('tool', `${call.name} ${call.summary}`.trim(), width);
@@ -135,21 +140,44 @@ function renderCommandEvent(
   command: string,
   result: { summary: string; detail: string } | undefined,
   width: number,
+  compressed = false,
 ): string[] {
   const parsed = result ? parseCommandResult(result.detail || result.summary) : undefined;
-  const state = parsed ? `exit ${parsed.exitCode ?? 1}` : 'requested';
+  const exitCode = parsed?.exitCode;
+  const failed = exitCode !== undefined && exitCode !== 0;
+
+  // Compressed mode (after completion): show command + exit code on header line.
+  if (compressed && !failed && parsed) {
+    const exitPart = exitCode !== undefined ? `exit ${exitCode}` : '';
+    const headerState = exitPart ? exitPart : 'ok';
+    const block = [eventHeader('bash', headerState, width)];
+    block.push(detailRow('command', command, width));
+
+    // For git diff --stat, extract changed-files summary.
+    if (isGitDiffCommand(command)) {
+      const changedSummary = extractChangedSummary(parsed.output);
+      if (changedSummary) block.push(detailRow('changed', changedSummary, width));
+    }
+    return block;
+  }
+
+  // Expanded mode: full detail (active execution or failed commands).
+  const state = parsed ? `exit ${exitCode ?? 1}` : 'requested';
   const block = [eventHeader('bash', state, width)];
   block.push(detailRow('command', command, width));
   if (!result) return block;
-  block.push(detailRow('exit', String(parsed?.exitCode ?? 1), width));
+
+  if (!compressed || failed) {
+    block.push(detailRow('exit', String(exitCode ?? 1), width));
+  }
 
   const meta = [parsed?.duration, isGitCommand(command) ? 'git' : ''].filter(Boolean).join(' · ');
-  if (meta) block.push(detailRow('meta', meta, width));
+  if (meta && (!compressed || failed)) block.push(detailRow('meta', meta, width));
 
   const output = colorizeCommandOutput(command, summarizeCommandDisplay(command, parsed?.output ?? '')).trim();
-  const showOutput = output.length > 0 && ((parsed?.exitCode ?? 1) !== 0 || output.length < 420);
+  const showOutput = output.length > 0 && (failed || output.length < 420);
   if (showOutput) {
-    const maxOutputLines = isGitDiffCommand(command) ? 6 : parsed?.exitCode === 0 ? 2 : 4;
+    const maxOutputLines = isGitDiffCommand(command) ? 6 : failed ? 4 : 2;
     const outputWidth = Math.max(20, width - 14);
     for (const line of wrapText(output, outputWidth).slice(0, maxOutputLines)) {
       const clipped = clip(line, outputWidth);
@@ -179,7 +207,7 @@ function renderVerification(run: RunStateSnapshot, width: number): string[] {
   return block;
 }
 
-function renderFinalSummary(run: RunStateSnapshot, width: number): string[] {
+function renderFinalSummary(run: RunStateSnapshot, width: number, modelMessage?: string): string[] {
   const commands = commandsRun(run).join(', ') || 'none';
   const fileCount =
     run.filesChangedThisRun.length > 0
@@ -191,32 +219,51 @@ function renderFinalSummary(run: RunStateSnapshot, width: number): string[] {
   const completed = run.terminal === 'completed' || run.phase === 'completed';
   const result = completed ? 'completed' : run.terminal;
   const followUp = completed && run.verification.state !== 'failed' ? 'none' : 'resolve blocker and rerun verification';
-  return [
+  const hasVerificationEvents = run.verification.seenCheckIds.size > 0;
+  const rows: string[] = [
     ...(run.statusNote ? [completionActivity(run.statusNote, width)] : []),
     finalBanner(result, width, finalTone(result, run.verification.state)),
+  ];
+  if (modelMessage) {
+    rows.push(detailRow('message', modelMessage, width));
+  }
+  rows.push(
     detailRow('objective', run.objective.label, width),
     detailRow('changed', plural(fileCount, 'file'), width),
     detailRow('tools', `${toolInvocationCount} calls`, width),
     detailRow('commands', commands, width),
-    detailRow('verify', run.verification.state, width),
-    detailRow('blocker', blockers, width),
-    detailRow('follow-up', followUp, width),
-  ];
+  );
+  // Only include verify in final summary when no dedicated verification block exists.
+  if (!hasVerificationEvents) {
+    rows.push(detailRow('verify', run.verification.state, width));
+  }
+  rows.push(detailRow('blocker', blockers, width), detailRow('follow-up', followUp, width));
+  return rows;
 }
 
 function renderFrozenFinalSummary(detail: string, width: number): string[] {
   const fields = parseFrozenFinalSummary(detail);
-  return [
+  const rows: string[] = [
     ...(fields.completed ? [completionActivity(fields.completed, width)] : []),
     finalBanner(fields.result || 'blocked', width, finalTone(fields.result || 'blocked', fields.verify)),
+  ];
+  if (fields.message) {
+    rows.push(detailRow('message', fields.message, width));
+  }
+  rows.push(
     detailRow('objective', fields.objective || '—', width),
     detailRow('changed', fields.changed || '0 files', width),
     detailRow('tools', fields.tools || '0 calls', width),
     detailRow('commands', fields.commands || 'none', width),
-    detailRow('verify', fields.verify || '—', width),
+  );
+  if (fields.verify && fields.verify !== '—') {
+    rows.push(detailRow('verify', fields.verify, width));
+  }
+  rows.push(
     detailRow('blocker', fields.blocker || 'none', width),
     detailRow('follow-up', fields.followUp || 'none', width),
-  ];
+  );
+  return rows;
 }
 
 interface ParsedToolCall {
@@ -353,6 +400,33 @@ function parseDiffStatLine(line: string): string | undefined {
   return `changed  ${path}  ${sign}${count} ${count === 1 ? 'line' : 'lines'}`;
 }
 
+/** Extract a human-readable changed-files summary from git diff --stat output. */
+function extractChangedSummary(output: string): string {
+  const lines = output
+    .split('\n')
+    .map((l) => l.trim())
+    .filter(Boolean);
+  // Look for summary line like "4 files changed, 120 insertions(+), 40 deletions(-)"
+  for (const line of lines) {
+    const match = /^(\d+)\s+files?\s+changed/.exec(line);
+    if (match) {
+      const fileCount = Number(match[1]);
+      const insertMatch = /(\d+)\s+insertions?\(\+\)/.exec(line);
+      const deleteMatch = /(\d+)\s+deletions?\(-\)/.exec(line);
+      const parts: string[] = [plural(fileCount, 'file')];
+      if (insertMatch) parts.push(`${insertMatch[1]} +`);
+      if (deleteMatch) parts.push(`${deleteMatch[1]} -`);
+      return parts.join(', ');
+    }
+  }
+  // Fallback: count changed files from stat lines
+  const statLines = lines.filter((l) => /\|\s+\d+\s+[+-]+/.test(l));
+  if (statLines.length > 0) {
+    return plural(statLines.length, 'file');
+  }
+  return '';
+}
+
 function commandsRun(run: RunStateSnapshot): string[] {
   const commands: string[] = [];
   for (const item of run.debugHistory) {
@@ -386,6 +460,7 @@ function completionActivity(statusNote: string, width: number): string {
 
 interface FrozenFinalFields {
   completed?: string;
+  message?: string;
   objective?: string;
   result?: string;
   changed?: string;
