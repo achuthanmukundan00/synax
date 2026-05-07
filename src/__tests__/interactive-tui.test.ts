@@ -578,7 +578,7 @@ describe('interactive layout visual agreements', () => {
     ).toMatchSnapshot();
   });
 
-  it('keeps the core large only for the empty idle surface', () => {
+  it('uses the compact core on the empty idle surface at medium widths', () => {
     const run = createInitialRunStateSnapshot(0);
     const lines = renderLayout(
       {
@@ -695,11 +695,9 @@ describe('interactive layout visual agreements', () => {
     expect(plain).toContain('Provider    Relay');
     expect(plain).toContain('Context');
     expect(plain).not.toContain('hidden chain');
-    expect(plain).toContain('read       src/tui/layout.ts');
-    expect(plain).toContain('lines      1–120');
-    expect(plain).toContain('bash       exit 0');
-    expect(plain).toContain('command    npm test src/__tests__/interactive-tui.test.ts');
-    expect(plain).toContain('exit 0');
+    expect(plain).toContain('read, bash');
+    expect(plain).toContain('read src/tui/layout.ts');
+    expect(plain).toContain('npm test src/__tests__/interactive-tui.test.ts');
     expect(plain).toContain('edit       src/tui/layout.ts');
     expect(plain).toContain('-old dashboard');
     expect(plain).toContain('+new transcript');
@@ -787,7 +785,6 @@ describe('interactive layout visual agreements', () => {
       .join('\n');
 
     expect(plain).toContain('commands   npm test');
-    expect(plain).toContain('exit       1');
     expect(plain).toContain('FAIL src/__tests__/interactive-tui.test.ts');
     expect(plain).toContain('verify     failed');
     expect(plain).toContain('blocker    verification failed: Jest assertion failed');
@@ -970,8 +967,9 @@ describe('interactive layout visual agreements', () => {
       .map((line) => stripAnsi(line))
       .join('\n');
 
-    expect(mediumPlain).toContain('core');
     expect(mediumPlain).toContain('Inspecting files before editing.');
+    // Compact core renders a mini dotted visual and context bar instead of text label.
+    expect(mediumPlain).toMatch(/[·•◎╱╲]/);
     expect(smallPlain).toContain('Synax');
     expect(smallPlain).toContain('Inspecting files before editing.');
     expect(smallPlain).not.toMatch(/[·•◎╱╲◆━×]/);
@@ -1306,7 +1304,7 @@ describe('interactive layout visual agreements', () => {
     const plain = lines.map((line) => stripAnsi(line)).join('\n');
 
     expect(plain).not.toContain('Transcript');
-    expect(plain).toContain('model');
+    expect(plain).toContain('note');
     expect(plain).toContain('I will check git status.');
     expect(plain).toContain('bash       exit 1');
     expect(plain).toContain('command    git status --short');
@@ -1397,7 +1395,64 @@ describe('interactive layout visual agreements', () => {
     expect(run.terminal).toBe('running');
     expect(summaryIndex).toBeGreaterThanOrEqual(0);
     expect(nextPromptIndex).toBeGreaterThan(summaryIndex);
-    expect(plain.match(/final      completed/g)).toHaveLength(1);
+    expect(plain.match(/final {6}completed/g)).toHaveLength(1);
+  });
+
+  it('renders wrapped user prompts with the prompt label only on the first line', () => {
+    let run = createInitialRunStateSnapshot(0);
+    run = applyEventToRunState(
+      run,
+      {
+        type: 'task_started',
+        timestamp: '2026-05-06T12:00:00.000Z',
+        mode: 'interactive',
+        profile: 'default',
+        endpoint: 'http://127.0.0.1:1234/v1',
+        model: 'local-model',
+        providerName: 'Relay',
+        contextBudgetTokens: 0,
+        maxModelSteps: 0,
+        maxToolCalls: 0,
+        tools: [],
+        task: 'can you please commit the unstaged work on the branch into an organized set of commits? one swath of work is for the documentation and another is for settings UI/TUI bug fixes.',
+      },
+      1,
+    );
+
+    const plain = renderLayout(
+      {
+        run,
+        objectiveInput: '',
+        coreMode: 'thinking',
+        nowMs: 2000,
+      },
+      100,
+      28,
+    )
+      .map((line) => stripAnsi(line))
+      .join('\n');
+
+    expect(plain.match(/prompt\s+/g)).toHaveLength(1);
+    expect(plain).toMatch(/settings\s+UI\/TUI bug fixes\./);
+  });
+
+  it('uses the compact core visual on the welcome screen at medium widths', () => {
+    const mediumPlain = renderLayout(
+      {
+        run: createInitialRunStateSnapshot(0),
+        objectiveInput: '',
+        coreMode: 'idle',
+        nowMs: 2000,
+      },
+      92,
+      24,
+    )
+      .map((line) => stripAnsi(line))
+      .join('\n');
+
+    expect(mediumPlain).toContain('Synax v');
+    expect(mediumPlain).toMatch(/[·•◎╱╲]/);
+    expect(mediumPlain).toContain('Core        Unloaded');
   });
 
   it('renders multi-line slash command output without 3-line cap', () => {
@@ -1434,7 +1489,8 @@ describe('interactive layout visual agreements', () => {
       .join('\n');
 
     expect(plain).toContain('Show this help panel');
-    expect(plain).toContain('Show provider, agent, tool, and verification settings');
+    expect(plain).toContain('Show provider, agent, tool, and');
+    expect(plain).toContain('verification settings');
     expect(plain).toContain('Show model-facing tools');
     expect(plain).toContain('Show context and loop limits');
     expect(plain).toContain('Probe provider models and chat endpoints');
@@ -1738,6 +1794,62 @@ describe('interactive tui runtime', () => {
     expect(session.handleUserMessage).not.toHaveBeenCalled();
     expect(plain).toContain('command    echo hello');
     expect(plain).toContain('hello');
+  });
+
+  it('applies saved settings to runtime labels before the next submitted task', async () => {
+    const stdin = createTtyInput();
+    const stdout = new CapturingWritable();
+    let resolveSubmitted: (() => void) | undefined;
+    const submitted = new Promise<void>((resolve) => {
+      resolveSubmitted = resolve;
+    });
+    const session: ChatSession = {
+      conversation: createChatSession({
+        repoRoot: process.cwd(),
+        config: { provider: { kind: 'openai-compatible', base_url: 'http://localhost/v1', model: 'qwen' } },
+      }).conversation,
+      handleUserMessage: jest.fn(async () => {
+        resolveSubmitted?.();
+        return {
+          terminalState: 'completed' as const,
+          finalAnswer: 'done',
+          changedFiles: [],
+          workingTreeClean: true,
+          steps: 1,
+          toolCalls: 0,
+        };
+      }),
+      handleSlashCommand: jest.fn(),
+    };
+
+    const runPromise = runInteractiveTui(session, {
+      stdin,
+      stdout,
+      modelLabel: 'qwen',
+      endpointLabel: 'http://localhost/v1',
+      providerName: 'Relay',
+      onSettingsConfigChanged: () => ({
+        modelLabel: 'deepseek-reasoner',
+        endpointLabel: 'https://api.deepseek.com/v1',
+        providerName: 'DeepSeek',
+        contextWindowTokens: 65536,
+        coreVisualProfile: 'model',
+      }),
+    });
+    stdin.write(Buffer.from('/settings\n', 'utf8'));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    stdin.write(Buffer.from('\x1b[A\n', 'utf8'));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    stdin.write(Buffer.from('\x1b', 'utf8'));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    stdin.write(Buffer.from('run after settings\n', 'utf8'));
+    await submitted;
+    stdin.write(Buffer.from('\u0003', 'utf8'));
+    await runPromise;
+
+    const plain = stripAnsi(stdout.text());
+    expect(plain).toContain('DeepSeek');
+    expect(plain).toContain('deepseek-');
   });
 
   it('resets state and conversation on /new command', async () => {

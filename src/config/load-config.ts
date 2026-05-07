@@ -40,6 +40,65 @@ const DEFAULT_MODELS: Record<string, ResolvedModelConfig[]> = {
       thinkingLevels: [],
     },
   ],
+  deepseek: [
+    {
+      id: 'deepseek-v4-pro',
+      displayName: 'DeepSeek V4 Pro',
+      contextWindow: 1_000_000,
+      supportsThinking: true,
+      thinkingLevels: ['off', 'low', 'medium', 'high'],
+      defaultThinkingLevel: 'off',
+    },
+    {
+      id: 'deepseek-chat',
+      displayName: 'DeepSeek Chat (V3)',
+      contextWindow: 1_000_000,
+      supportsThinking: false,
+      thinkingLevels: [],
+    },
+    {
+      id: 'deepseek-reasoner',
+      displayName: 'DeepSeek Reasoner (R1)',
+      contextWindow: 1_000_000,
+      supportsThinking: true,
+      thinkingLevels: ['off', 'low', 'medium', 'high'],
+      defaultThinkingLevel: 'medium',
+    },
+  ],
+  openai: [
+    {
+      id: 'gpt-4o',
+      displayName: 'GPT-4o',
+      contextWindow: 128_000,
+      supportsThinking: false,
+      thinkingLevels: [],
+    },
+    {
+      id: 'o3-mini',
+      displayName: 'o3-mini',
+      contextWindow: 200_000,
+      supportsThinking: true,
+      thinkingLevels: ['off', 'low', 'medium', 'high'],
+      defaultThinkingLevel: 'medium',
+    },
+  ],
+  anthropic: [
+    {
+      id: 'claude-sonnet-4-20250514',
+      displayName: 'Claude Sonnet 4',
+      contextWindow: 200_000,
+      supportsThinking: true,
+      thinkingLevels: ['off', 'low', 'medium', 'high'],
+      defaultThinkingLevel: 'off',
+    },
+    {
+      id: 'claude-3-5-haiku-20241022',
+      displayName: 'Claude 3.5 Haiku',
+      contextWindow: 200_000,
+      supportsThinking: false,
+      thinkingLevels: [],
+    },
+  ],
 };
 
 const DEFAULT_PROVIDERS: Record<string, ResolvedProviderConfig> = {
@@ -52,6 +111,36 @@ const DEFAULT_PROVIDERS: Record<string, ResolvedProviderConfig> = {
     apiKeyEnv: undefined,
     headers: {},
     models: DEFAULT_MODELS['relay-local'] ?? [],
+  },
+  deepseek: {
+    id: 'deepseek',
+    name: 'DeepSeek',
+    compatibility: 'openai-compatible',
+    enabled: true,
+    baseUrl: 'https://api.deepseek.com/v1',
+    apiKeyEnv: 'DEEPSEEK_API_KEY',
+    headers: {},
+    models: DEFAULT_MODELS.deepseek ?? [],
+  },
+  openai: {
+    id: 'openai',
+    name: 'OpenAI',
+    compatibility: 'openai-compatible',
+    enabled: true,
+    baseUrl: 'https://api.openai.com/v1',
+    apiKeyEnv: 'OPENAI_API_KEY',
+    headers: {},
+    models: DEFAULT_MODELS.openai ?? [],
+  },
+  anthropic: {
+    id: 'anthropic',
+    name: 'Anthropic',
+    compatibility: 'anthropic-compatible',
+    enabled: true,
+    baseUrl: 'https://api.anthropic.com/v1',
+    apiKeyEnv: 'ANTHROPIC_API_KEY',
+    headers: {},
+    models: DEFAULT_MODELS.anthropic ?? [],
   },
 };
 
@@ -161,13 +250,14 @@ function parseModelConfig(raw: Record<string, unknown>): ModelConfig | null {
   const thinkingLevels = Array.isArray(raw.thinking_levels ?? raw.thinkingLevels)
     ? ((raw.thinking_levels ?? raw.thinkingLevels) as string[]).filter(isThinkingLevel)
     : undefined;
+  const contextWindow = parseContextWindow(raw);
 
   return {
     id: raw.id as string,
     displayName: (raw.display_name ?? raw.displayName) as string | undefined,
     display_name: (raw.display_name ?? raw.displayName) as string | undefined,
-    contextWindow: (raw.context_window ?? raw.contextWindow) as number | undefined,
-    context_window: (raw.context_window ?? raw.contextWindow) as number | undefined,
+    contextWindow,
+    context_window: contextWindow,
     supportsThinking: (raw.supports_thinking ?? raw.supportsThinking) as boolean | undefined,
     supports_thinking: (raw.supports_thinking ?? raw.supportsThinking) as boolean | undefined,
     thinkingLevels,
@@ -179,6 +269,51 @@ function parseModelConfig(raw: Record<string, unknown>): ModelConfig | null {
 
 function isThinkingLevel(value: string): value is ThinkingLevel {
   return ['off', 'low', 'medium', 'high', 'auto'].includes(value);
+}
+
+function parseContextWindow(raw: Record<string, unknown>): number | undefined {
+  const candidates = [
+    raw.context_window,
+    raw.contextWindow,
+    raw.context_length,
+    raw.contextLength,
+    raw.max_context_length,
+    raw.maxContextLength,
+    raw.max_context_tokens,
+    raw.maxContextTokens,
+    raw.max_input_tokens,
+    raw.maxInputTokens,
+  ];
+  for (const candidate of candidates) {
+    const parsed = parsePositiveInteger(candidate);
+    if (parsed !== undefined) return parsed;
+  }
+  return undefined;
+}
+
+function parsePositiveInteger(value: unknown): number | undefined {
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value)) return undefined;
+    const integer = Math.floor(value);
+    return integer > 0 ? integer : undefined;
+  }
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (!trimmed) return undefined;
+    const compact = trimmed.replace(/,/g, '');
+    const suffixMatch = /^(\d+(?:\.\d+)?)([kKmMgG])$/.exec(compact);
+    if (suffixMatch) {
+      const base = Number(suffixMatch[1]);
+      if (!Number.isFinite(base)) return undefined;
+      const multiplier = suffixMatch[2].toLowerCase() === 'k' ? 1_000 : 1_000_000;
+      const expanded = Math.floor(base * multiplier);
+      return expanded > 0 ? expanded : undefined;
+    }
+    if (!/^\d+$/.test(compact)) return undefined;
+    const parsed = Number(compact);
+    return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : undefined;
+  }
+  return undefined;
 }
 
 // ─── Config from parsed TOML ────────────────────────────────
