@@ -44,7 +44,8 @@ Lists all configured providers with:
 
 ### Skills
 
-Lists discovered skills from `~/.agents/skills/`:
+Lists discovered skills from `~/.agents/skills/`. Skill entries in config
+use filesystem paths (e.g. `~/.agents/skills/coderabbit-review`):
 - ✓ — Enabled
 - ○ — Disabled
 - ! — Broken (missing manifest)
