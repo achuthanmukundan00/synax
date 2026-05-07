@@ -18,7 +18,6 @@ Use `.synax.toml`:
 ```toml
 [agent]
 context_budget_tokens = 131072
-max_model_steps = 64
 max_tool_calls = 192
 
 [subagents]
@@ -118,6 +117,5 @@ Inside `synax chat`, settings changes are session-only:
 /settings set provider.model Qwen3.6-35B-A3B-UD-IQ3_XXS.gguf
 /settings set provider.header.Authorization Bearer sk-no-key-required
 /settings set agent.context_budget_tokens 65536
-/settings set agent.max_model_steps 24
 /settings set agent.max_tool_calls 64
 ```

@@ -144,7 +144,6 @@ Session-only settings changes are available:
 /settings set provider.endpoint http://127.0.0.1:1234/v1
 /settings set provider.model Qwen3.6-35B-A3B-UD-IQ3_XXS.gguf
 /settings set agent.context_budget_tokens 65536
-/settings set agent.max_model_steps 24
 /settings set agent.max_tool_calls 64
 ```
 
@@ -163,7 +162,6 @@ Useful project config:
 ```toml
 [agent]
 context_budget_tokens = 131072
-max_model_steps = 32
 max_tool_calls = 96
 
 [subagents]
@@ -194,7 +192,6 @@ Environment overrides:
 
 ```sh
 SYNAX_CONTEXT_BUDGET_TOKENS=65536
-SYNAX_MAX_MODEL_STEPS=24
 SYNAX_MAX_TOOL_CALLS=64
 ```
 

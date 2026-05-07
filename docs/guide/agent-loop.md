@@ -49,8 +49,7 @@ Defaults:
 ```toml
 [agent]
 context_budget_tokens = 131072
-max_model_steps = 64
 max_tool_calls = 192
 ```
 
-When the model keeps asking for tools at the final step or exceeds limits, Synax returns a terminal state instead of continuing indefinitely.
+Synax keeps the model loop running until the model completes, the user stops it, or a guardrail such as context-window or tool-call limits blocks further progress.

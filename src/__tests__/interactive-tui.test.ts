@@ -5,7 +5,7 @@ import { CORE_HEIGHT, CORE_WIDTH, modeColor, renderAiCore, renderDottedCore } fr
 import { DiffRenderer } from '../tui/diff-renderer';
 import { runInteractiveTui } from '../tui/interactive-tui';
 import { maxHistoryScrollOffset, renderLayout } from '../tui/layout';
-import { parseInputChunk } from '../tui/input';
+import { createInputParser, parseInputChunk } from '../tui/input';
 import { createTerminalSession } from '../tui/terminal';
 import { renderSettings } from '../settings/settings-renderer';
 import { createSettingsState, settingsReducer } from '../settings/settings-state';
@@ -121,6 +121,23 @@ describe('tui input parser', () => {
     const pasteEvent = events.find((e) => e.type === 'paste');
     expect(pasteEvent?.value).toBe('paste');
   });
+
+  it('keeps bracketed paste state across terminal chunks', () => {
+    const parser = createInputParser();
+
+    expect(parser.parse('\x1b[200~first line\n')).toEqual([]);
+    expect(parser.parse('second line')).toEqual([]);
+    expect(parser.parse('\x1b[201~ after\n')).toEqual([
+      { type: 'paste', value: 'first line\nsecond line' },
+      { type: 'text', value: ' ' },
+      { type: 'text', value: 'a' },
+      { type: 'text', value: 'f' },
+      { type: 'text', value: 't' },
+      { type: 'text', value: 'e' },
+      { type: 'text', value: 'r' },
+      { type: 'submit' },
+    ]);
+  });
 });
 
 describe('terminal session', () => {
@@ -146,7 +163,7 @@ describe('terminal session', () => {
     expect(output).toContain('\u001b[?1000l');
   });
 
-  it('does not enable bracketed paste for the TUI input dock', () => {
+  it('enables bracketed paste for the TUI input dock', () => {
     const stdout = new CapturingWritable();
     const stdin = createTtyInput();
     const terminal = createTerminalSession({ stdin, stdout });
@@ -155,7 +172,7 @@ describe('terminal session', () => {
     terminal.stop();
 
     const output = stdout.chunks.join('');
-    expect(output).not.toContain('\u001b[?2004h');
+    expect(output).toContain('\u001b[?2004h');
     expect(output).toContain('\u001b[?2004l');
   });
 });
@@ -1207,6 +1224,53 @@ describe('interactive layout visual agreements', () => {
     expect(plain).toContain('+++ src/tui/layout.ts');
     expect(plain).toContain('-old');
     expect(plain).toContain('+new');
+    expect(lines.join('\n')).toContain('\u001b[31m-old\u001b[0m');
+    expect(lines.join('\n')).toContain('\u001b[32m+new\u001b[0m');
+  });
+
+  it('renders edit tool result diffs with ANSI colors', () => {
+    const run = {
+      ...createInitialRunStateSnapshot(0),
+      debugHistory: [
+        {
+          atMs: 1,
+          kind: 'tool_call' as const,
+          summary: 'edit call',
+          detail: 'edit\n{"path":"src/tui/layout.ts","oldStr":"old","newStr":"new"}',
+        },
+        {
+          atMs: 2,
+          kind: 'tool_result' as const,
+          summary: 'edit ok',
+          detail: JSON.stringify(
+            {
+              success: true,
+              toolName: 'edit',
+              output: {
+                path: 'src/tui/layout.ts',
+                diff: '--- src/tui/layout.ts\n+++ src/tui/layout.ts\n-old\n+new',
+              },
+            },
+            null,
+            2,
+          ),
+        },
+      ],
+    };
+
+    const rendered = renderLayout(
+      {
+        run,
+        objectiveInput: '',
+        coreMode: 'thinking',
+        nowMs: 2000,
+      },
+      100,
+      32,
+    ).join('\n');
+
+    expect(rendered).toContain('\u001b[31m-old\u001b[0m');
+    expect(rendered).toContain('\u001b[32m+new\u001b[0m');
   });
 
   it('renders debug history as segmented transcript blocks', () => {
@@ -1543,6 +1607,57 @@ describe('interactive tui runtime', () => {
     await runPromise;
 
     expect(session.handleUserMessage).toHaveBeenCalledWith('x'.repeat(EXPECTED_MAX_INPUT_CHARS));
+  });
+
+  it('masks multiline paste and preserves typed text around it until Enter', async () => {
+    const stdin = createTtyInput();
+    const stdout = new CapturingWritable();
+    let resolveSubmitted: (() => void) | undefined;
+    const submitted = new Promise<void>((resolve) => {
+      resolveSubmitted = resolve;
+    });
+    const session: ChatSession = {
+      conversation: createChatSession({
+        repoRoot: process.cwd(),
+        config: { provider: { kind: 'openai-compatible', base_url: 'http://localhost/v1', model: 'fake' } },
+      }).conversation,
+      handleUserMessage: jest.fn(async () => {
+        resolveSubmitted?.();
+        return {
+          terminalState: 'completed' as const,
+          finalAnswer: 'done',
+          changedFiles: [],
+          workingTreeClean: true,
+          steps: 1,
+          toolCalls: 0,
+        };
+      }),
+      handleSlashCommand: jest.fn(),
+    };
+
+    const runPromise = runInteractiveTui(session, { stdin, stdout });
+    stdin.write(Buffer.from('prefix ', 'utf8'));
+    stdin.write(Buffer.from('\x1b[200~first line\n', 'utf8'));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(session.handleUserMessage).not.toHaveBeenCalled();
+
+    stdin.write(Buffer.from('second line\x1b[201~ suffix', 'utf8'));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(session.handleUserMessage).not.toHaveBeenCalled();
+
+    stdin.write(Buffer.from('\n', 'utf8'));
+    await submitted;
+    stdin.write(Buffer.from('\u0003', 'utf8'));
+    await runPromise;
+
+    const plain = stripAnsi(stdout.text());
+    expect(plain).toContain('[pasted: 2 lines, 22 chars]');
+    expect(plain).not.toContain('first line');
+    expect(plain).not.toContain('second line');
+    expect(session.handleUserMessage).toHaveBeenCalledWith(
+      'prefix \n\n--- BEGIN PASTED CONTENT 1: 2 lines, 22 chars ---\n\nfirst line\nsecond line\n\n--- END PASTED CONTENT 1 ---\n\n suffix',
+    );
+    expect(session.handleUserMessage).toHaveBeenCalledTimes(1);
   });
 
   it('keeps slash commands local after a completed turn', async () => {

@@ -168,7 +168,7 @@ describe('loadProjectConfig', () => {
     expect(result.source).toBe('default');
     expect(result.config.baseUrl).toBe('http://127.0.0.1:1234/v1');
     expect(result.config.contextBudgetTokens).toBe(131072);
-    expect(result.config.maxModelSteps).toBe(64);
+    expect(result.config.maxModelSteps).toBeUndefined();
     expect(result.config.maxToolCalls).toBe(192);
   });
 
@@ -183,20 +183,17 @@ describe('loadProjectConfig', () => {
 
   it('applies budget environment overrides', () => {
     const previousContext = process.env.SYNAX_CONTEXT_BUDGET_TOKENS;
-    const previousSteps = process.env.SYNAX_MAX_MODEL_STEPS;
     const previousTools = process.env.SYNAX_MAX_TOOL_CALLS;
     process.env.SYNAX_CONTEXT_BUDGET_TOKENS = '64000';
-    process.env.SYNAX_MAX_MODEL_STEPS = '12';
     process.env.SYNAX_MAX_TOOL_CALLS = '24';
     try {
       const result = loadProjectConfig(TMP);
       expect(result.errors).toHaveLength(0);
       expect(result.config.contextBudgetTokens).toBe(64000);
-      expect(result.config.maxModelSteps).toBe(12);
+      expect(result.config.maxModelSteps).toBeUndefined();
       expect(result.config.maxToolCalls).toBe(24);
     } finally {
       restoreEnv('SYNAX_CONTEXT_BUDGET_TOKENS', previousContext);
-      restoreEnv('SYNAX_MAX_MODEL_STEPS', previousSteps);
       restoreEnv('SYNAX_MAX_TOOL_CALLS', previousTools);
     }
   });
@@ -233,7 +230,7 @@ describe('generateDefaultConfig', () => {
     expect(config).toContain('baseUrl =');
     expect(config).toContain('[agent]');
     expect(config).toContain('context_budget_tokens = 131072');
-    expect(config).toContain('max_model_steps = 64');
+    expect(config).not.toContain('max_model_steps');
     expect(config).toContain('max_tool_calls = 192');
     expect(config).toContain('kind =');
   });
