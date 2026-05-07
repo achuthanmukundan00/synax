@@ -135,9 +135,9 @@ exports[`interactive layout visual agreements matches the idle large-core render
 exports[`interactive layout visual agreements matches the narrow terminal fallback snapshot 1`] = `
 "  Synax v0.0.2-alpha  Thinking  0:02
 
-  ◌ working  waiting for model response…
-
   ※ note       Inspecting files before editing.
+
+  ◌ working  waiting for model response…
 
 
 
