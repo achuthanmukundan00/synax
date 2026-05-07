@@ -1,5 +1,5 @@
 <template>
-  <div class="terminal-preview" :style="terminalStyle">
+  <div class="terminal-preview">
     <div class="terminal-header">
       <span class="terminal-dot dot-red"></span>
       <span class="terminal-dot dot-yellow"></span>
@@ -25,8 +25,6 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
-
 interface CoreDef {
   id: string
   name: string
@@ -34,26 +32,27 @@ interface CoreDef {
   provider: string
   state: string
   context: string
-  color: string
   headline: string
   subcopy: string
   terminal: [string, string][]
-  motion: string
+  modelProfile: string
+  runtimeState: string
+  chamberColor: string
 }
 
 const props = defineProps<{ core: CoreDef }>()
 
-const terminalStyle = computed(() => ({
-  '--term-rgb': props.core.color,
-}))
-
-function valClass(key: string, _val: string): string {
-  if (key === 'state' && _val === 'blocked') return 'val-blocked'
-  if (key === 'state' && _val === 'fault') return 'val-fault'
-  if (key === 'state' && _val === 'active') return 'val-active'
+function valClass(key: string, val: string): string {
+  if (key === 'state' && val === 'unloaded') return 'val-dim'
+  if (key === 'state' && val === 'error') return 'val-error'
+  if (key === 'state' && val === 'working') return 'val-working'
+  if (key === 'state' && val === 'succeeded') return 'val-succeeded'
   if (key === 'core') return 'val-core'
-  if (key === 'reason') return 'val-reason'
-  if (key === 'next') return 'val-next'
+  if (key === 'error') return 'val-error'
+  if (key === 'action') return 'val-action'
+  if (key === 'result') return 'val-succeeded'
+  if (key === 'phase') return 'val-working'
+  if (key === 'tool') return 'val-working'
   return ''
 }
 </script>
@@ -129,15 +128,15 @@ function valClass(key: string, _val: string): string {
   transition: color 0.6s ease;
 }
 
-.val-core { color: rgb(var(--term-rgb)); }
-.val-blocked { color: #f87171; }
-.val-fault { color: #f87171; }
-.val-active { color: #a3e635; }
-.val-reason { color: #fbbf24; }
-.val-next { color: #34d399; }
+.val-core { color: rgb(86, 141, 208); }
+.val-dim { color: #52525b; }
+.val-error { color: #f87171; }
+.val-working { color: rgba(140, 200, 240, 0.9); }
+.val-succeeded { color: rgba(86, 180, 140, 0.8); }
+.val-action { color: rgba(140, 200, 240, 0.8); }
 
 .terminal-cursor {
-  color: rgb(var(--term-rgb));
+  color: rgb(86, 141, 208);
   font-size: 0.75rem;
   margin-top: 0.3rem;
   animation: cursor-blink 1s step-end infinite;
