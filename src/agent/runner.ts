@@ -1203,26 +1203,19 @@ function detectBlockedCommand(command: string): string | null {
   const normalized = command.toLowerCase().replace(/\s+/g, ' ').trim();
 
   // Remote code execution via pipe-to-shell
-  if (/\bcurl\b.*\|\s*(bash|sh)\b/.test(normalized))
-    return 'remote script execution via curl|bash is blocked';
-  if (/\bwget\b.*\|\s*(bash|sh)\b/.test(normalized))
-    return 'remote script execution via wget|bash is blocked';
+  if (/\bcurl\b.*\|\s*(bash|sh)\b/.test(normalized)) return 'remote script execution via curl|bash is blocked';
+  if (/\bwget\b.*\|\s*(bash|sh)\b/.test(normalized)) return 'remote script execution via wget|bash is blocked';
 
   // Destructive root operations
-  if (/\brm\s+-rf\s+\/(?=[\s;|&)"']|$)/.test(normalized))
-    return 'destructive delete of root (rm -rf /) is blocked';
-  if (/\brm\s+-rf\s+~(?=[\s;|&)"']|$)/.test(normalized))
-    return 'destructive delete of home (rm -rf ~) is blocked';
+  if (/\brm\s+-rf\s+\/(?=[\s;|&)"']|$)/.test(normalized)) return 'destructive delete of root (rm -rf /) is blocked';
+  if (/\brm\s+-rf\s+~(?=[\s;|&)"']|$)/.test(normalized)) return 'destructive delete of home (rm -rf ~) is blocked';
 
   // Filesystem and block device destruction
-  if (/\bmkfs(\.| )/.test(normalized))
-    return 'filesystem formatting (mkfs) is blocked';
-  if (/\bdd\s+if=.*\s+of=\/dev\//.test(normalized))
-    return 'raw block device write (dd to /dev) is blocked';
+  if (/\bmkfs(\.| )/.test(normalized)) return 'filesystem formatting (mkfs) is blocked';
+  if (/\bdd\s+if=.*\s+of=\/dev\//.test(normalized)) return 'raw block device write (dd to /dev) is blocked';
 
   // System power state
-  if (/\bshutdown\b|\breboot\b|\bhalt\b/.test(normalized))
-    return 'system power-state command is blocked';
+  if (/\bshutdown\b|\breboot\b|\bhalt\b/.test(normalized)) return 'system power-state command is blocked';
 
   return null;
 }
