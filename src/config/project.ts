@@ -1,6 +1,8 @@
 import { readFileSync, existsSync, writeFileSync } from 'fs';
 import { basename, dirname, join } from 'path';
 import { parse as parseToml } from 'toml';
+import { loadSynaxConfig } from './load-config';
+import type { EffectiveSynaxConfig, ResolvedProviderConfig } from './schema';
 
 export type ProviderKind = 'openai-compatible';
 export type ProviderPreset =
@@ -101,7 +103,10 @@ function providerPresetDefaults(preset: ProviderPreset): ProviderConfig {
   }
 }
 
-export function normalizeProviderConfig(p: ProviderConfig): import('../llm/types').NormalizedProviderConfig {
+export function normalizeProviderConfig(
+  p: ProviderConfig,
+  opts?: { thinkingLevel?: 'off' | 'low' | 'medium' | 'high' | 'auto' },
+): import('../llm/types').NormalizedProviderConfig {
   const presetDefaults = providerPresetDefaults(p.preset ?? 'relay-local');
   const headersInput = p.custom_headers ?? p.customHeaders ?? presetDefaults.custom_headers;
   const customHeaders: Record<string, string> = {};
@@ -121,7 +126,7 @@ export function normalizeProviderConfig(p: ProviderConfig): import('../llm/types
   const model = p.model ?? presetDefaults.model ?? '';
   const timeoutMs = p.timeout_ms ?? p.timeoutMs ?? (p.timeout_seconds ?? p.timeoutSeconds ?? 120) * 1000;
   const toolCallParser = p.tool_call_parser ?? p.toolCallParser;
-  return { kind, baseUrl, model, toolCallParser, apiKey, customHeaders, timeoutMs };
+  return { kind, baseUrl, model, toolCallParser, apiKey, customHeaders, timeoutMs, thinkingLevel: opts?.thinkingLevel };
 }
 
 export interface ProjectConfig {
@@ -171,6 +176,27 @@ export interface LoadProjectConfigResult {
   errors: ValidationError[];
   path: string | null;
   source: ConfigSource;
+}
+
+export function applyEffectiveSynaxConfigToProjectConfig(
+  current: ProjectConfig,
+  effective: EffectiveSynaxConfig,
+): ProjectConfig {
+  const activeProvider = effective.providers[effective.active.provider];
+  if (!activeProvider) return current;
+  const activeModel = activeProvider.models.find((model) => model.id === effective.active.model);
+  const contextWindow =
+    activeModel?.contextWindow ??
+    current.contextWindowTokens ??
+    current.contextBudgetTokens ??
+    DEFAULTS.contextWindowTokens;
+  return {
+    ...current,
+    provider: projectProviderFromEffectiveProvider(activeProvider, effective.active.model),
+    contextWindowTokens: contextWindow,
+    contextBudgetTokens: contextWindow,
+    coreVisualProfile: effective.coreVisualProfile ?? current.coreVisualProfile,
+  };
 }
 
 const DEFAULTS: ProjectConfig = {
@@ -588,6 +614,23 @@ function stringValue(value: unknown): string | undefined {
   return typeof value === 'string' ? value : undefined;
 }
 
+function projectProviderFromEffectiveProvider(provider: ResolvedProviderConfig, model: string): ProviderConfig {
+  const apiKey = provider.apiKey === '••••' ? undefined : provider.apiKey;
+  return {
+    preset: provider.id as ProviderPreset,
+    kind: 'openai-compatible',
+    base_url: provider.baseUrl,
+    baseUrl: provider.baseUrl,
+    model,
+    api_key_env: provider.apiKeyEnv,
+    apiKeyEnv: provider.apiKeyEnv,
+    api_key: apiKey,
+    apiKey,
+    custom_headers: provider.headers,
+    customHeaders: provider.headers,
+  };
+}
+
 function applyEnvOverrides(config: ProjectConfig, errors: ValidationError[]): ProjectConfig {
   const overrides: ProjectConfig = {};
   const contextBudgetTokens = readEnvPositiveInteger('SYNAX_CONTEXT_BUDGET_TOKENS', errors);
@@ -617,9 +660,12 @@ export function loadProjectConfig(baseDir?: string): LoadProjectConfigResult {
   const errors: ValidationError[] = [];
   const userConfigPath = process.env.HOME ? join(process.env.HOME, '.config', 'synax', 'config.toml') : null;
   let userConfig: ProjectConfig = {};
+  let hasExtendedSettings = false;
   if (userConfigPath && existsSync(userConfigPath)) {
     try {
-      userConfig = configFromParsedToml(parseToml(readFileSync(userConfigPath, 'utf-8')) as Record<string, unknown>);
+      const parsed = parseToml(readFileSync(userConfigPath, 'utf-8')) as Record<string, unknown>;
+      hasExtendedSettings ||= hasExtendedSettingsKeys(parsed);
+      userConfig = configFromParsedToml(parsed);
     } catch {
       userConfig = {};
     }
@@ -630,10 +676,15 @@ export function loadProjectConfig(baseDir?: string): LoadProjectConfigResult {
     try {
       const raw = readFileSync(discoveredPath, 'utf-8');
       const parsed = parseToml(raw) as Record<string, unknown>;
+      hasExtendedSettings ||= hasExtendedSettingsKeys(parsed);
       config = configFromParsedToml(parsed);
     } catch (err) {
       errors.push({ path: discoveredPath, message: `Failed to parse TOML: ${(err as Error).message}` });
     }
+  }
+  if (hasExtendedSettings) {
+    const effectiveSettings = loadSynaxConfig(baseDir);
+    config = applyEffectiveSynaxConfigToProjectConfig(config, effectiveSettings);
   }
   const activeProviderPreset = (config.provider?.preset ??
     userConfig.provider?.preset ??
@@ -683,6 +734,13 @@ export function loadProjectConfig(baseDir?: string): LoadProjectConfigResult {
     source:
       path === null ? 'default' : basename(path) === '.synax.toml' && dirname(path) !== baseDir ? 'file' : 'explicit',
   };
+}
+
+function hasExtendedSettingsKeys(parsed: Record<string, unknown>): boolean {
+  return (
+    (parsed.active !== undefined && typeof parsed.active === 'object') ||
+    (parsed.providers !== undefined && typeof parsed.providers === 'object')
+  );
 }
 
 export default loadProjectConfig;

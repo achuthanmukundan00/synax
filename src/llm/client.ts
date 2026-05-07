@@ -12,7 +12,6 @@ import {
   parseOpenAIToolCallsResult,
   parseQwenToolCallsFromContentResult,
   parseToolCallsFromContentResult,
-  sanitizeReasoningTags,
   toOpenAIToolDefinition,
 } from './tool-calls';
 
@@ -72,7 +71,7 @@ async function dispatchRequest(
     return { status: res.status, bodyText, headers: respHeaders };
   } catch (err) {
     clearTimeout(timer);
-    const msg = err instanceof Error ? err.message : String(err);
+    const msg = describeNetworkError(err);
     if (err instanceof DOMException && err.name === 'AbortError') {
       throw providerError('timeout', `Request timed out after ${timeoutMs}ms`, { detail: msg });
     }
@@ -81,6 +80,18 @@ async function dispatchRequest(
     }
     throw providerError('connection', `Network error: ${msg}`, { retryable: true, detail: msg });
   }
+}
+
+function describeNetworkError(err: unknown): string {
+  const message = err instanceof Error ? err.message : String(err);
+  const cause = err instanceof Error && 'cause' in err ? err.cause : undefined;
+  if (!cause) return message;
+
+  const causeMessage = cause instanceof Error ? cause.message : String(cause);
+  const code = typeof cause === 'object' && cause !== null && 'code' in cause ? String(cause.code) : '';
+  const detail = [code, causeMessage].filter(Boolean).join(': ');
+  if (!detail || message.includes(detail)) return message;
+  return `${message}: ${detail}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -126,7 +137,12 @@ function parseSuccessResponse(bodyText: string, parserMode: ToolCallParserMode):
   const json = JSON.parse(bodyText) as {
     model?: string;
     choices?: Array<{
-      message?: { content?: string; role?: string; tool_calls?: unknown };
+      message?: {
+        content?: string;
+        role?: string;
+        tool_calls?: unknown;
+        reasoning_content?: string;
+      };
       finish_reason?: string | null;
     }>;
     usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number };
@@ -134,7 +150,11 @@ function parseSuccessResponse(bodyText: string, parserMode: ToolCallParserMode):
 
   const choice = json.choices?.[0];
   const rawContent = choice?.message?.content ?? '';
-  const content = sanitizeReasoningTags(rawContent);
+  // Preserve raw content: thinking tags (<think>/<thinking>) are kept in the
+  // stored content so Qwen-style reasoning is echoed back to the model.
+  // Tool-call parsers sanitize internally; the TUI display layer strips tags.
+  const content = rawContent;
+  const reasoningContent = choice?.message?.reasoning_content?.trim() || undefined;
   const finishReason = choice?.finish_reason ?? null;
   const standardToolCallResult = parseOpenAIToolCallsResult(choice?.message?.tool_calls);
   if (!standardToolCallResult.ok) {
@@ -154,6 +174,7 @@ function parseSuccessResponse(bodyText: string, parserMode: ToolCallParserMode):
     content,
     model: json.model ?? '',
     finishReason: finishReason ?? 'stop',
+    reasoningContent,
     toolCallFormat:
       standardToolCallResult.calls.length > 0
         ? 'openai'
@@ -231,6 +252,7 @@ export function createOpenAICompatibleClient(
      * 3. Enforces budget policy (warn or hard-stop).
      */
     async chat(opts: ChatOptions): Promise<ChatResponse> {
+      const thinkingEnabled = cfg.thinkingLevel && cfg.thinkingLevel !== 'off';
       const body = {
         model,
         messages: opts.messages,
@@ -240,6 +262,9 @@ export function createOpenAICompatibleClient(
         ...(opts.tools && opts.tools.length > 0
           ? { tools: opts.tools.map(toOpenAIToolDefinition), tool_choice: 'auto' }
           : {}),
+        // DeepSeek & future providers: enable extended thinking when config says so.
+        // Non-DeepSeek providers ignore unknown fields.
+        ...(thinkingEnabled ? { thinking: { type: 'enabled' } } : {}),
       };
 
       const result = await dispatchRequest(endpoint, body, headers, timeoutMs);
