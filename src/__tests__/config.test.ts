@@ -114,6 +114,13 @@ describe('parseTomlString', () => {
     expect(result.config.contextBudgetTokens).toBe(8000);
   });
 
+  it('parses legacy provider-scoped core visual profile aliases', () => {
+    const result = parseTomlString(['[provider]', 'core_visual_profile = "Claude"'].join('\n'));
+
+    expect(result.errors).toHaveLength(0);
+    expect(result.config.coreVisualProfile).toBe('claude');
+  });
+
   it('parses agent snake_case budget settings', () => {
     const toml = ['[agent]', 'context_budget_tokens = 131072', 'max_model_steps = 32', 'max_tool_calls = 96'].join(
       '\n',
@@ -477,6 +484,20 @@ thinking_levels = ["off", "auto"]
     expect(config.providers?.test?.models[0]?.supportsThinking).toBe(true);
     expect(config.providers?.test?.models[0]?.thinkingLevels).toEqual(['off', 'auto']);
   });
+
+  it('parses core visual profile overrides for the TUI', () => {
+    const { config, errors } = parseSynaxToml('coreVisualProfile = "claude"\n');
+
+    expect(errors).toHaveLength(0);
+    expect(config.coreVisualProfile).toBe('claude');
+  });
+
+  it('parses legacy provider-scoped core visual profile overrides case-insensitively', () => {
+    const { config, errors } = parseSynaxToml(['[provider]', 'coreVisualProfile = "openAI"'].join('\n'));
+
+    expect(errors).toHaveLength(0);
+    expect(config.coreVisualProfile).toBe('openai');
+  });
 });
 
 describe('loadSynaxConfig (local override)', () => {
@@ -537,6 +558,44 @@ id = "deepseek-chat"
     expect(effective.active.provider).toBe('deepseek');
     expect(effective.active.model).toBe('deepseek-chat');
     expect(effective.active.thinking).toBe('off'); // not set, so default
+  });
+
+  it('preserves core visual profile through effective config loading', () => {
+    const localPath = join(TMP, '.synax.toml');
+    writeFileSync(
+      localPath,
+      `
+core_visual_profile = "deepseek"
+
+[active]
+provider = "relay-local"
+model = "Qwen3.6-35B-A3B-UD-IQ3_XXS.gguf"
+`,
+      'utf-8',
+    );
+
+    const effective = loadSynaxConfig(TMP);
+
+    expect(effective.coreVisualProfile).toBe('deepseek');
+  });
+
+  it('preserves provider-scoped core visual profile through effective config loading', () => {
+    const localPath = join(TMP, '.synax.toml');
+    writeFileSync(
+      localPath,
+      `
+[provider]
+kind = "openai-compatible"
+base_url = "http://127.0.0.1:1234/v1"
+model = "Qwen3.6-35B-A3B-UD-IQ3_XXS.gguf"
+coreVisualProfile = "Claude"
+`,
+      'utf-8',
+    );
+
+    const effective = loadSynaxConfig(TMP);
+
+    expect(effective.coreVisualProfile).toBe('claude');
   });
 
   it('falls back to first enabled provider when active is missing', () => {
@@ -729,6 +788,32 @@ describe('serializeEffectiveConfig (TOML hardening)', () => {
     const toml = serializeEffectiveConfig(config);
     expect(toml).toContain('••••');
     expect(toml).not.toContain('secret-12345');
+  });
+
+  it('serializes core visual profile for settings persistence', () => {
+    const config: EffectiveSynaxConfig = {
+      active: { provider: 'relay-local', model: 'qwen', thinking: 'off' },
+      providers: {
+        'relay-local': {
+          id: 'relay-local',
+          name: 'Relay',
+          compatibility: 'openai-compatible',
+          enabled: true,
+          baseUrl: 'http://127.0.0.1:1234/v1',
+          headers: {},
+          models: [{ id: 'qwen', supportsThinking: false, thinkingLevels: [] }],
+        },
+      },
+      skills: { enabled: [], disabled: [] },
+      mcp: { servers: {} },
+      coreVisualProfile: 'claude',
+      source: null,
+      errors: [],
+    };
+
+    const toml = serializeEffectiveConfig(config);
+
+    expect(toml).toContain('coreVisualProfile = "claude"');
   });
 });
 

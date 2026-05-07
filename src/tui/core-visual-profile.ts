@@ -18,6 +18,7 @@ export interface CoreVisualProfile {
 
 export interface CoreVisualResolverOptions {
   mode?: CoreVisualMode;
+  profile?: CoreVisualProfileId;
   overrides?: Record<string, CoreVisualProfileId>;
 }
 
@@ -103,6 +104,7 @@ const PROFILES: Record<CoreVisualProfileId, CoreVisualProfile> = {
 };
 
 export function resolveCoreVisualProfile(modelId: string, options: CoreVisualResolverOptions = {}): CoreVisualProfile {
+  if (options.profile && PROFILES[options.profile]) return PROFILES[options.profile];
   if (options.mode === 'off' || options.mode === 'default') return PROFILES.default;
 
   const normalized = modelId.trim().toLowerCase();

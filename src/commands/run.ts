@@ -115,6 +115,7 @@ export function runCommand(program: Command): void {
             cwdLabel,
             gitBranch,
             contextWindowTokens: loaded.config.contextWindowTokens ?? loaded.config.contextBudgetTokens,
+            coreVisualProfile: loaded.config.coreVisualProfile,
           });
         } else {
           console.log('[synax] Run command initialized. Use --task or --plan to specify work.');
