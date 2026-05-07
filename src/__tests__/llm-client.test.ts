@@ -115,6 +115,73 @@ describe('LLM client — basic chat', () => {
     expect(resp.content).toBe('<think>secret</think>Hello');
   });
 
+  test('parses provider reasoning fields separately from visible content', async () => {
+    srv.close();
+    srv = await createMockServer((_req, res) => {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(
+        JSON.stringify({
+          model: 'test-model',
+          choices: [{ message: { role: 'assistant', content: 'Hello', reasoning: 'hidden chain' } }],
+        }),
+      );
+    });
+    const client = createOpenAICompatibleClient(makeConfig({ baseUrl: getServerUrl(srv) }));
+    const resp = await client.chat({ messages: [{ role: 'user', content: 'hi' }] });
+
+    expect(resp.content).toBe('Hello');
+    expect(resp.reasoningContent).toBe('hidden chain');
+  });
+
+  test('echoes DeepSeek reasoning metadata and thinking parameters only for DeepSeek-like providers', async () => {
+    srv.close();
+    srv = await createMockServer((_req, res) => {
+      captured = _req;
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ model: 'deepseek-reasoner', choices: [{ message: { content: 'ok' } }] }));
+    });
+    const client = createOpenAICompatibleClient({
+      ...makeConfig({ baseUrl: getServerUrl(srv), model: 'deepseek-reasoner' }),
+      thinkingLevel: 'high',
+    });
+
+    await client.chat({
+      messages: [
+        { role: 'assistant', content: 'prior', reasoning_content: 'must echo' },
+        { role: 'assistant', content: 'older assistant' },
+        { role: 'user', content: 'continue' },
+      ],
+    });
+
+    const body = JSON.parse(captured!.body);
+    expect(body.thinking).toEqual({ type: 'enabled' });
+    expect(body.reasoning_effort).toBe('high');
+    expect(body.messages[0].reasoning_content).toBe('must echo');
+    expect(body.messages[1].reasoning_content).toBe('');
+  });
+
+  test('does not send DeepSeek thinking fields or reasoning metadata to local Relay models', async () => {
+    srv.close();
+    srv = await createMockServer((_req, res) => {
+      captured = _req;
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ model: 'qwen-local', choices: [{ message: { content: 'ok' } }] }));
+    });
+    const client = createOpenAICompatibleClient({
+      ...makeConfig({ baseUrl: getServerUrl(srv), model: 'Qwen3.6-local.gguf' }),
+      thinkingLevel: 'high',
+    });
+
+    await client.chat({
+      messages: [{ role: 'assistant', content: 'prior', reasoning_content: 'deepseek-only' }],
+    });
+
+    const body = JSON.parse(captured!.body);
+    expect(body.thinking).toBeUndefined();
+    expect(body.reasoning_effort).toBeUndefined();
+    expect(body.messages[0].reasoning_content).toBeUndefined();
+  });
+
   test('sends tools and parses OpenAI-compatible tool calls', async () => {
     srv.close();
     srv = await createMockServer((_req, res) => {

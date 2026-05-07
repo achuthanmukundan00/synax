@@ -142,6 +142,8 @@ function parseSuccessResponse(bodyText: string, parserMode: ToolCallParserMode):
         role?: string;
         tool_calls?: unknown;
         reasoning_content?: string;
+        reasoning?: string;
+        reasoning_text?: string;
       };
       finish_reason?: string | null;
     }>;
@@ -154,7 +156,7 @@ function parseSuccessResponse(bodyText: string, parserMode: ToolCallParserMode):
   // stored content so Qwen-style reasoning is echoed back to the model.
   // Tool-call parsers sanitize internally; the TUI display layer strips tags.
   const content = rawContent;
-  const reasoningContent = choice?.message?.reasoning_content?.trim() || undefined;
+  const reasoningContent = firstReasoningContent(choice?.message);
   const finishReason = choice?.finish_reason ?? null;
   const standardToolCallResult = parseOpenAIToolCallsResult(choice?.message?.tool_calls);
   if (!standardToolCallResult.ok) {
@@ -223,6 +225,7 @@ export function createOpenAICompatibleClient(
   const baseUrl = (cfg.baseUrl ?? 'http://127.0.0.1:1234/v1').replace(/\/+$/, '');
   const endpoint = baseUrl + '/chat/completions';
   const parserMode = selectToolCallParserMode(cfg.model, cfg.toolCallParser);
+  const isDeepSeek = isDeepSeekProvider(cfg, baseUrl);
 
   // Build base headers
   const headers: Record<string, string> = {
@@ -255,16 +258,17 @@ export function createOpenAICompatibleClient(
       const thinkingEnabled = cfg.thinkingLevel && cfg.thinkingLevel !== 'off';
       const body = {
         model,
-        messages: opts.messages,
+        messages: normalizeMessagesForProvider(opts.messages, {
+          preserveReasoningContent: isDeepSeek,
+          requireReasoningContent: Boolean(isDeepSeek && thinkingEnabled),
+        }),
         temperature: opts.temperature ?? 0,
         stream: false,
         ...(opts.maxTokens !== undefined ? { max_tokens: opts.maxTokens } : {}),
         ...(opts.tools && opts.tools.length > 0
           ? { tools: opts.tools.map(toOpenAIToolDefinition), tool_choice: 'auto' }
           : {}),
-        // DeepSeek & future providers: enable extended thinking when config says so.
-        // Non-DeepSeek providers ignore unknown fields.
-        ...(thinkingEnabled ? { thinking: { type: 'enabled' } } : {}),
+        ...(isDeepSeek ? deepSeekThinkingParams(cfg.thinkingLevel) : {}),
       };
 
       const result = await dispatchRequest(endpoint, body, headers, timeoutMs);
@@ -309,6 +313,61 @@ export function createOpenAICompatibleClient(
       throw parseErrorResponse(result.status, result.bodyText);
     },
   };
+}
+
+function firstReasoningContent(
+  message:
+    | {
+        reasoning_content?: string;
+        reasoning?: string;
+        reasoning_text?: string;
+      }
+    | undefined,
+): string | undefined {
+  const fields = [message?.reasoning_content, message?.reasoning, message?.reasoning_text];
+  for (const field of fields) {
+    const value = field?.trim();
+    if (value) return value;
+  }
+  return undefined;
+}
+
+function isDeepSeekProvider(cfg: NormalizedProviderConfig, baseUrl: string): boolean {
+  const haystack = `${cfg.model} ${baseUrl}`.toLowerCase();
+  return haystack.includes('deepseek');
+}
+
+function deepSeekThinkingParams(level: NormalizedProviderConfig['thinkingLevel']): Record<string, unknown> {
+  if (!level || level === 'off') return {};
+  const effort = level === 'auto' ? 'high' : level;
+  return {
+    thinking: { type: 'enabled' },
+    reasoning_effort: effort,
+  };
+}
+
+function normalizeMessagesForProvider(
+  messages: ChatOptions['messages'],
+  options: { preserveReasoningContent: boolean; requireReasoningContent: boolean },
+): ChatOptions['messages'] {
+  const hasReasoningHistory = messages.some(
+    (message) => message.role === 'assistant' && typeof message.reasoning_content === 'string',
+  );
+  return messages.map((message) => {
+    const normalized = { ...message };
+    if (!options.preserveReasoningContent) {
+      delete normalized.reasoning_content;
+      return normalized;
+    }
+    if (
+      normalized.role === 'assistant' &&
+      (options.requireReasoningContent || hasReasoningHistory) &&
+      normalized.reasoning_content === undefined
+    ) {
+      normalized.reasoning_content = '';
+    }
+    return normalized;
+  });
 }
 
 function selectToolCallParserMode(model: string, override?: string): ToolCallParserMode {
