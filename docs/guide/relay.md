@@ -18,8 +18,8 @@ Use `.synax.toml`:
 ```toml
 [agent]
 context_budget_tokens = 131072
-max_model_steps = 32
-max_tool_calls = 96
+max_model_steps = 64
+max_tool_calls = 192
 
 [subagents]
 enabled = false
@@ -37,12 +37,12 @@ api_key = "sk-no-key-required"
 timeout_seconds = 120
 
 [tools]
-exposed = ["read", "write", "edit", "git"]
+exposed = ["read", "write", "edit", "bash"]
 shell = "zsh"
 unsafe = false
 
 [tools.bash]
-enabled = false
+enabled = true
 ```
 
 Set `model` to the exact ID Relay reports from `/models`.
@@ -51,14 +51,14 @@ Set `model` to the exact ID Relay reports from `/models`.
 
 Synax currently normalizes these provider presets:
 
-| Preset | Use |
-| --- | --- |
-| `relay-local` | Default local Relay endpoint at `127.0.0.1:1234` |
-| `relay-cloudflare` | Relay behind Cloudflare Access headers |
-| `openai` | OpenAI-compatible cloud endpoint |
-| `anthropic` | Experimental OpenAI-compatible config shape only |
-| `openrouter` | OpenRouter-compatible endpoint |
-| `custom-openai-compatible` | Any custom OpenAI-compatible server |
+| Preset                     | Use                                              |
+| -------------------------- | ------------------------------------------------ |
+| `relay-local`              | Default local Relay endpoint at `127.0.0.1:1234` |
+| `relay-cloudflare`         | Relay behind Cloudflare Access headers           |
+| `openai`                   | OpenAI-compatible cloud endpoint                 |
+| `anthropic`                | Experimental OpenAI-compatible config shape only |
+| `openrouter`               | OpenRouter-compatible endpoint                   |
+| `custom-openai-compatible` | Any custom OpenAI-compatible server              |
 
 Normal local use should not require OpenAI-hosted APIs.
 

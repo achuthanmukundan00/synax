@@ -129,7 +129,6 @@ describe('extension interfaces', () => {
       'read',
       'write',
       'edit',
-      'git',
     ]);
 
     await expect(

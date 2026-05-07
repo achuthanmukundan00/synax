@@ -433,8 +433,8 @@ describe('chat session', () => {
       config: {
         provider: { kind: 'openai-compatible', base_url: 'http://localhost/v1', model: 'fake', preset: 'relay-local' },
         contextBudgetTokens: 131072,
-        maxModelSteps: 32,
-        maxToolCalls: 96,
+        maxModelSteps: 64,
+        maxToolCalls: 192,
       },
     });
     const report = await session.handleSlashCommand('/settings');
@@ -482,7 +482,7 @@ describe('chat session', () => {
       repoRoot: TMP,
       config: {
         provider: { kind: 'openai-compatible', base_url: 'http://localhost/v1', model: 'fake' },
-        maxModelSteps: 32,
+        maxModelSteps: 64,
       },
     });
 
@@ -493,7 +493,7 @@ describe('chat session', () => {
     expect(badPath.output).toContain('Invalid settings path');
     expect(badPath.output).toContain('provider.endpoint');
     expect(badNumber.output).toContain('must be a positive integer');
-    expect(budget.output).toContain('Max model steps:  32');
+    expect(budget.output).toContain('Max model steps:  64');
   });
 
   it('/status includes context and checkpoint visibility', async () => {

@@ -151,8 +151,8 @@ describe('loadProjectConfig', () => {
     expect(result.source).toBe('default');
     expect(result.config.baseUrl).toBe('http://127.0.0.1:1234/v1');
     expect(result.config.contextBudgetTokens).toBe(131072);
-    expect(result.config.maxModelSteps).toBe(32);
-    expect(result.config.maxToolCalls).toBe(96);
+    expect(result.config.maxModelSteps).toBe(64);
+    expect(result.config.maxToolCalls).toBe(192);
   });
 
   it('returns parsed config when file exists at explicit path', () => {
@@ -186,20 +186,17 @@ describe('loadProjectConfig', () => {
 
   it('supports restricting exposed tool list', () => {
     const configPath = join(TMP, '.synax.toml');
-    writeFileSync(
-      configPath,
-      ['[tools]', 'exposed = ["read","write","edit","bash","git"]', 'shell = "zsh"'].join('\n'),
-    );
+    writeFileSync(configPath, ['[tools]', 'exposed = ["read","write","edit","bash"]', 'shell = "zsh"'].join('\n'));
     const result = loadProjectConfig(TMP);
     expect(result.errors).toHaveLength(0);
-    expect(result.config.tools?.exposed).toEqual(['read', 'write', 'edit', 'bash', 'git']);
+    expect(result.config.tools?.exposed).toEqual(['read', 'write', 'edit', 'bash']);
   });
 
-  it('defaults bash tool execution to disabled', () => {
+  it('defaults bash tool execution to enabled', () => {
     const result = loadProjectConfig(TMP);
     expect(result.errors).toHaveLength(0);
-    expect(result.config.tools?.exposed).toEqual(['read', 'write', 'edit', 'git']);
-    expect(result.config.tools?.bash?.enabled).toBe(false);
+    expect(result.config.tools?.exposed).toEqual(['read', 'write', 'edit', 'bash']);
+    expect(result.config.tools?.bash?.enabled).toBe(true);
   });
 
   it('supports explicitly enabling bash in tool config', () => {
@@ -219,8 +216,8 @@ describe('generateDefaultConfig', () => {
     expect(config).toContain('baseUrl =');
     expect(config).toContain('[agent]');
     expect(config).toContain('context_budget_tokens = 131072');
-    expect(config).toContain('max_model_steps = 32');
-    expect(config).toContain('max_tool_calls = 96');
+    expect(config).toContain('max_model_steps = 64');
+    expect(config).toContain('max_tool_calls = 192');
     expect(config).toContain('kind =');
   });
 });

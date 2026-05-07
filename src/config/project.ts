@@ -182,8 +182,8 @@ const DEFAULTS: ProjectConfig = {
   keepRecentTokens: 20000,
   maxSingleReadResultTokens: 12000,
   maxTotalReadResultTokensPerTurn: 40000,
-  maxModelSteps: 32,
-  maxToolCalls: 96,
+  maxModelSteps: 64,
+  maxToolCalls: 192,
   subagents: { enabled: false, mode: 'sequential' },
   verification: { defaultCommand: undefined },
   provider: {
@@ -195,7 +195,7 @@ const DEFAULTS: ProjectConfig = {
     customHeaders: undefined,
     timeoutSeconds: 120,
   },
-  tools: { exposed: ['read', 'write', 'edit', 'git'], shell: 'zsh', unsafe: false, bash: { enabled: false } },
+  tools: { exposed: ['read', 'write', 'edit', 'bash'], shell: 'zsh', unsafe: false, bash: { enabled: true } },
 };
 
 export function discoverConfigPath(baseDir?: string): string | null {
@@ -232,8 +232,8 @@ export function generateDefaultConfig(): string {
     '[agent]',
     '# 16000 is minimal/safe, 65536 is normal, 131072 is a high-context local profile.',
     'context_budget_tokens = 131072',
-    'max_model_steps = 32',
-    'max_tool_calls = 96',
+    'max_model_steps = 64',
+    'max_tool_calls = 192',
     '',
     '[subagents]',
     'enabled = false',
@@ -243,12 +243,12 @@ export function generateDefaultConfig(): string {
     'defaultCommand = ""',
     '',
     '[tools]',
-    'exposed = ["read", "write", "edit", "git"]',
+    'exposed = ["read", "write", "edit", "bash"]',
     'shell = "zsh"',
     'unsafe = false',
     '',
     '[tools.bash]',
-    'enabled = false',
+    'enabled = true',
     '',
     '[provider]',
     'kind = "openai-compatible"',
@@ -549,8 +549,12 @@ function configFromParsedToml(parsed: Record<string, unknown>): ProjectConfig {
     config.maxTotalReadResultTokensPerTurn = agent.max_total_read_result_tokens_per_turn;
   if (parsed.subagents !== undefined && typeof parsed.subagents === 'object')
     config.subagents = parsed.subagents as { enabled?: boolean; mode?: 'sequential' | 'parallel' };
-  if (parsed.verification !== undefined && typeof parsed.verification === 'object')
-    config.verification = parsed.verification as { defaultCommand?: string };
+  if (parsed.verification !== undefined && typeof parsed.verification === 'object') {
+    const v = parsed.verification as Record<string, unknown>;
+    config.verification = {
+      defaultCommand: (v.defaultCommand ?? v.default_command) as string | undefined,
+    };
+  }
   if (parsed.tools !== undefined && typeof parsed.tools === 'object') config.tools = parsed.tools as ToolSurfaceConfig;
   return config;
 }

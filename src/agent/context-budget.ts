@@ -111,6 +111,15 @@ export function estimateIncrementalTokens(messages: AgentMessage[], ledger: Toke
     return full;
   }
 
+  if (messages.length - 1 < ledger.lastMeasuredIndex) {
+    // Message history shrank (e.g. compaction or transient assembly-only messages
+    // were previously measured). Re-estimate from scratch to avoid stale inflation.
+    const full = estimateRequestTokens(messages);
+    ledger.lastKnownTokenCount = full;
+    ledger.lastMeasuredIndex = messages.length - 1;
+    return full;
+  }
+
   if (ledger.lastMeasuredIndex >= messages.length - 1) {
     // No new messages; reuse known count but verify with a cheap fallback
     // to guard against subtle drift (only re-estimate last few messages).
@@ -951,6 +960,10 @@ function summarizeToolOutput(
     return summarizeGitDiffOutput(out);
   }
 
+  if (toolName === 'bash') {
+    return summarizeBashOutput(out);
+  }
+
   if (toolName === 'edit' || toolName === 'replace_in_file') {
     // Edit results are small (path + diff), keep compact
     return {
@@ -1073,6 +1086,41 @@ function summarizeGitDiffOutput(out: Record<string, unknown>): Record<string, un
   };
 }
 
+function summarizeBashOutput(out: Record<string, unknown>): Record<string, unknown> {
+  const command = typeof out.command === 'string' ? out.command : undefined;
+  const stdout = typeof out.stdout === 'string' ? out.stdout : '';
+  const stderr = typeof out.stderr === 'string' ? out.stderr : '';
+  const exitCode = typeof out.exitCode === 'number' ? out.exitCode : undefined;
+  const safetyWarnings = Array.isArray(out.safetyWarnings) ? out.safetyWarnings.filter(isString) : undefined;
+
+  const totalBytes = Buffer.byteLength(stdout, 'utf-8') + Buffer.byteLength(stderr, 'utf-8');
+
+  // Keep full output for small results so the model can inspect details.
+  const FULL_OUTPUT_THRESHOLD = 2048;
+  if (totalBytes <= FULL_OUTPUT_THRESHOLD) {
+    return {
+      command,
+      exitCode,
+      stdout: stdout.trim() || undefined,
+      stderr: stderr.trim() || undefined,
+      safetyWarnings,
+    };
+  }
+
+  // Large outputs get a compact summary with previews.
+  return {
+    command,
+    exitCode,
+    stdoutBytes: Buffer.byteLength(stdout, 'utf-8'),
+    stderrBytes: Buffer.byteLength(stderr, 'utf-8'),
+    stdoutPreview: clipped(stdout.trim(), 400) || undefined,
+    stderrPreview: clipped(stderr.trim(), 300) || undefined,
+    safetyWarnings,
+    _compacted: true,
+    _compactionReason: `output exceeds ${FULL_OUTPUT_THRESHOLD} bytes`,
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Utility
 // ---------------------------------------------------------------------------
@@ -1088,4 +1136,8 @@ function tryParseJson(value: string): unknown {
   } catch {
     return null;
   }
+}
+
+function isString(value: unknown): value is string {
+  return typeof value === 'string';
 }

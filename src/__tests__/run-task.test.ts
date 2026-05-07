@@ -129,4 +129,83 @@ describe('runAgentTask patch approval', () => {
     expect(report.finalAnswer).toContain('Suggested first step');
     expect(requests).toHaveLength(0);
   });
+
+  it('emits verification lifecycle events in correct order', async () => {
+    // Configure a verification command in the project config
+    writeFileSync(
+      join(TMP, '.synax.toml'),
+      [
+        '[provider]',
+        'kind = "openai-compatible"',
+        'base_url = "http://localhost/v1"',
+        'model = "fake"',
+        '',
+        '[verification]',
+        'default_command = "echo tests passed"',
+      ].join('\n'),
+      'utf-8',
+    );
+    mkdirSync(join(TMP, 'src'), { recursive: true });
+    const events: AgentEvent[] = [];
+    responses = [
+      {
+        toolCalls: [
+          { id: 'call_1', name: 'write', arguments: { path: 'src/app.ts', content: 'console.log("hello");\n' } },
+        ],
+      },
+      { content: 'Created src/app.ts' },
+    ];
+
+    const report = await runAgentTask({
+      repoRoot: TMP,
+      task: 'Create src/app.ts',
+      yes: true,
+      recordRunArtifacts: false,
+      onEvent: (event) => events.push(event),
+    });
+
+    const eventTypes = events.map((e) => e.type);
+    // Should contain verification lifecycle events
+    expect(eventTypes).toContain('verification_planned');
+    expect(eventTypes).toContain('verification_started');
+
+    const passedOrFailed = eventTypes.includes('verification_passed') || eventTypes.includes('verification_failed');
+    expect(passedOrFailed).toBe(true);
+
+    // Verification planned should come before started
+    const plannedIdx = eventTypes.indexOf('verification_planned');
+    const startedIdx = eventTypes.indexOf('verification_started');
+    expect(plannedIdx).toBeLessThan(startedIdx);
+
+    // task_finished should come last
+    const finishedIdx = eventTypes.indexOf('task_finished');
+    expect(finishedIdx).toBeGreaterThan(startedIdx);
+
+    expect(report.verification.state).toBe('passed');
+  });
+
+  it('emits verification skipped when no command is configured even with changes', async () => {
+    const events: AgentEvent[] = [];
+    mkdirSync(join(TMP, 'src'), { recursive: true });
+    responses = [
+      {
+        toolCalls: [
+          { id: 'call_1', name: 'write', arguments: { path: 'src/app.ts', content: 'console.log("hello");\n' } },
+        ],
+      },
+      { content: 'Created src/app.ts' },
+    ];
+
+    const report = await runAgentTask({
+      repoRoot: TMP,
+      task: 'Create src/app.ts',
+      yes: true,
+      recordRunArtifacts: false,
+      onEvent: (event) => events.push(event),
+    });
+
+    const eventTypes = events.map((e) => e.type);
+    expect(eventTypes).toContain('verification_skipped');
+    expect(report.verification.state).toBe('skipped');
+  });
 });
