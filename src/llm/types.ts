@@ -82,12 +82,16 @@ export interface NormalizedProviderConfig {
   apiKey?: string;
   customHeaders?: Record<string, string>;
   timeoutMs?: number;
+  /** Thinking level from active config. When not 'off', providers may enable extended reasoning. */
+  thinkingLevel?: 'off' | 'low' | 'medium' | 'high' | 'auto';
 }
 
 export interface ChatResponse {
   content: string;
   model: string;
   finishReason: string;
+  /** DeepSeek thinking mode: reasoning_content that must be passed back in subsequent requests. */
+  reasoningContent?: string;
   toolCallFormat?: 'openai' | 'content_xml' | 'none';
   toolCalls: Array<{
     id: string;
@@ -102,7 +106,15 @@ export interface ChatResponse {
 }
 
 export interface ChatOptions {
-  messages: Array<{ role: string; content: string; tool_call_id?: string; name?: string; tool_calls?: unknown }>;
+  messages: Array<{
+    role: string;
+    content: string;
+    tool_call_id?: string;
+    name?: string;
+    tool_calls?: unknown;
+    /** DeepSeek thinking mode: must echo reasoning_content from prior assistant response. */
+    reasoning_content?: string;
+  }>;
   tools?: Array<{
     name: string;
     description: string;
