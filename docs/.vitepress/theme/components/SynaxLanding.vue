@@ -27,7 +27,7 @@
 
       <!-- CTAs -->
       <div class="landing-ctas">
-        <a href="/guide/getting-started" class="cta-primary">Install</a>
+        <a href="/guide/getting-started" class="cta-primary">Get started</a>
         <a href="/guide/getting-started" class="cta-secondary">Read the docs</a>
         <a href="https://github.com/achuthanmukundan00/synax" class="cta-secondary" target="_blank" rel="noopener">GitHub</a>
       </div>
@@ -46,23 +46,23 @@
     <!-- Principle cards -->
     <section class="landing-principles">
       <div class="principle-card">
-        <h3>Stateful, not chatty.</h3>
-        <p>Synax shows what the agent is doing without turning the interface into log sludge.</p>
+        <h3>Observable runtime.</h3>
+        <p>See when the model is loaded. See when it is working. See when tools are active. See when the run succeeds or fails.</p>
+      </div>
+      <div class="principle-card">
+        <h3>Local models, real work.</h3>
+        <p>Run agent workflows on open-weight models and consumer GPUs. No cloud required. Compatible with any OpenAI-compatible endpoint.</p>
       </div>
       <div class="principle-card">
         <h3>Contained, not chaotic.</h3>
-        <p>Failures are surfaced as runtime states, not buried in noise.</p>
-      </div>
-      <div class="principle-card">
-        <h3>Local-first, cloud-compatible.</h3>
-        <p>Use Qwen, DeepSeek, OpenAI, Kimi, or anything behind a compatible endpoint.</p>
+        <p>Failures are surfaced as runtime states, not buried in noise. The chamber holds &mdash; the model thinks &mdash; the state shows.</p>
       </div>
     </section>
 
     <!-- Docs entry -->
     <section class="landing-docs-entry">
-      <h2>Contained intelligence runtime.</h2>
-      <p>Synax gives coding agents a stateful shell: model identity, tool execution, verification, and failure containment.</p>
+      <h2>Make local models useful.</h2>
+      <p>Synax is a local-first coding agent that gives local, open, and low-cost models a stateful runtime: containment, tool execution, verification, and failure handling. Provider-compatible when you need a fallback, local-first by default.</p>
       <a href="/guide/getting-started">→ Read the docs</a>
     </section>
   </div>
@@ -81,139 +81,184 @@ interface CoreDef {
   provider: string
   state: string
   context: string
-  color: string
   headline: string
   subcopy: string
   terminal: [string, string][]
-  motion: string
+  modelProfile: string
+  runtimeState: string
+  chamberColor: string
 }
 
 const cores: CoreDef[] = [
   {
     id: 'unloaded',
-    name: 'Core unloaded',
+    name: 'Synax',
     model: 'none',
-    provider: 'none',
-    state: 'blocked',
-    context: '0 / 0',
-    color: '120 120 120',
-    headline: 'No core loaded.',
-    subcopy: 'Synax does not pretend to be ready before a model is configured.',
+    provider: '—',
+    state: 'unloaded',
+    context: '—',
+    headline: 'No model loaded.',
+    subcopy: 'Configure a local, open, or compatible model to activate the runtime.',
     terminal: [
       ['core', 'unloaded'],
-      ['state', 'blocked'],
-      ['reason', 'provider.model is required'],
-      ['next', 'configure synax.toml'],
+      ['state', 'unloaded'],
+      ['action', 'synax config'],
     ],
-    motion: 'still',
+    modelProfile: 'unloaded',
+    runtimeState: 'unloaded',
+    chamberColor: '90 90 90',
   },
   {
-    id: 'qwen',
+    id: 'local-idle',
+    name: 'Synax',
+    model: 'local-model',
+    provider: 'relay (local)',
+    state: 'idle',
+    context: '0 / 32768',
+    headline: 'Local models, real work.',
+    subcopy: 'Open-weight models running on consumer GPUs. No cloud required. Practical, unfancy, effective.',
+    terminal: [
+      ['core', 'local-model'],
+      ['provider', 'relay (local)'],
+      ['state', 'idle'],
+      ['ctx', '0 / 32768'],
+    ],
+    modelProfile: 'local',
+    runtimeState: 'idle',
+    chamberColor: '58 109 176',
+  },
+  {
+    id: 'qwen-idle',
     name: 'Qwen',
     model: 'qwen-coder',
-    provider: 'relay',
-    state: 'ready',
+    provider: 'relay (local)',
+    state: 'idle',
     context: '0 / 32768',
-    color: '236 72 153',
-    headline: 'Fast local cognition.',
-    subcopy: 'Qwen feels nimble, surgical, and close to the metal.',
+    headline: 'Sharp, lattice-like cognition.',
+    subcopy: 'Qwen feels nimble and surgical inside the Synax containment runtime.',
     terminal: [
       ['core', 'qwen-coder'],
       ['provider', 'relay (local)'],
-      ['state', 'ready'],
+      ['state', 'idle'],
       ['ctx', '0 / 32768'],
     ],
-    motion: 'lattice',
+    modelProfile: 'qwen',
+    runtimeState: 'idle',
+    chamberColor: '58 109 176',
   },
   {
-    id: 'deepseek',
+    id: 'qwen-working',
+    name: 'Qwen',
+    model: 'qwen-coder',
+    provider: 'relay (local)',
+    state: 'working',
+    context: '12420 / 32768',
+    headline: 'The runtime is working.',
+    subcopy: 'Tools are active. Watch the agent read, edit, and verify. Local models need observability.',
+    terminal: [
+      ['core', 'qwen-coder'],
+      ['state', 'working'],
+      ['phase', 'tool.read → tool.edit'],
+      ['ctx', '12420 / 32768'],
+    ],
+    modelProfile: 'qwen',
+    runtimeState: 'working',
+    chamberColor: '58 109 176',
+  },
+  {
+    id: 'deepseek-idle',
     name: 'DeepSeek',
     model: 'deepseek-coder',
-    provider: 'relay',
-    state: 'ready',
+    provider: 'relay (local)',
+    state: 'idle',
     context: '0 / 65536',
-    color: '56 189 248',
-    headline: 'Deep reasoning under containment.',
-    subcopy: 'DeepSeek feels heavier, deeper, and more deliberate.',
+    headline: 'Dense, compressed reasoning.',
+    subcopy: 'DeepSeek brings deeper inference pressure under the Synax containment chamber.',
     terminal: [
       ['core', 'deepseek-coder'],
       ['provider', 'relay (local)'],
-      ['state', 'ready'],
+      ['state', 'idle'],
       ['ctx', '0 / 65536'],
     ],
-    motion: 'furnace',
+    modelProfile: 'deepseek',
+    runtimeState: 'idle',
+    chamberColor: '58 109 176',
   },
   {
-    id: 'openai',
+    id: 'openai-idle',
     name: 'OpenAI',
     model: 'gpt-4o',
     provider: 'openai',
-    state: 'ready',
+    state: 'idle',
     context: '0 / 128000',
-    color: '212 212 216',
-    headline: 'Cloud-grade reasoning, locally orchestrated.',
-    subcopy: 'OpenAI feels clean, stable, and precise inside Synax.',
+    headline: 'Clean, centered, compatible.',
+    subcopy: 'OpenAI models work inside Synax when you need cloud-grade fallback. The chamber stays Synax.',
     terminal: [
       ['core', 'gpt-4o'],
       ['provider', 'openai'],
-      ['state', 'ready'],
+      ['state', 'idle'],
       ['ctx', '0 / 128000'],
     ],
-    motion: 'lens',
+    modelProfile: 'openai',
+    runtimeState: 'idle',
+    chamberColor: '58 109 176',
   },
   {
-    id: 'kimi',
-    name: 'Kimi',
-    model: 'kimi-k2',
-    provider: 'moonshot',
-    state: 'ready',
-    context: '0 / 131072',
-    color: '180 180 200',
-    headline: 'Wide-context intelligence.',
-    subcopy: 'Kimi feels like a long-range scanner for large codebases and dense docs.',
-    terminal: [
-      ['core', 'kimi-k2'],
-      ['provider', 'moonshot'],
-      ['state', 'ready'],
-      ['ctx', '0 / 131072'],
-    ],
-    motion: 'moon',
-  },
-  {
-    id: 'working',
-    name: 'Synax',
+    id: 'qwen-error',
+    name: 'Qwen',
     model: 'qwen-coder',
-    provider: 'relay',
-    state: 'active',
+    provider: 'relay (local)',
+    state: 'error',
     context: '12420 / 32768',
-    color: '163 230 53',
-    headline: 'The runtime is alive.',
-    subcopy: 'Watch the system move through planning, tool use, edits, and verification.',
-    terminal: [
-      ['core', 'qwen-coder'],
-      ['state', 'active'],
-      ['phase', 'tool.run'],
-      ['tool', 'read / verify'],
-    ],
-    motion: 'breathe',
-  },
-  {
-    id: 'error',
-    name: 'Synax',
-    model: 'qwen-coder',
-    provider: 'relay',
-    state: 'fault',
-    context: '12420 / 32768',
-    color: '239 68 68',
     headline: 'Failure is surfaced, not hidden.',
-    subcopy: 'Synax keeps faults visible, contained, and actionable.',
+    subcopy: 'Synax keeps errors visible, contained, and actionable. The chamber holds even when the model faults.',
     terminal: [
       ['core', 'qwen-coder'],
-      ['state', 'fault'],
+      ['state', 'error'],
       ['error', 'tool.parse_failure'],
       ['action', 'retry / inspect'],
     ],
-    motion: 'jitter',
+    modelProfile: 'qwen',
+    runtimeState: 'error',
+    chamberColor: '58 109 176',
+  },
+  {
+    id: 'local-working',
+    name: 'Synax',
+    model: 'local-model',
+    provider: 'relay (local)',
+    state: 'working',
+    context: '8420 / 32768',
+    headline: 'Consumer GPU. Real agent. Real work.',
+    subcopy: 'Local models are powerful, but you need observability. Synax shows you what your agent is doing.',
+    terminal: [
+      ['core', 'local-model'],
+      ['state', 'working'],
+      ['tool', 'bash → verify'],
+      ['ctx', '8420 / 32768'],
+    ],
+    modelProfile: 'local',
+    runtimeState: 'working',
+    chamberColor: '58 109 176',
+  },
+  {
+    id: 'qwen-succeeded',
+    name: 'Qwen',
+    model: 'qwen-coder',
+    provider: 'relay (local)',
+    state: 'succeeded',
+    context: '31200 / 32768',
+    headline: 'Run complete. Resolved.',
+    subcopy: 'The agent finished cleanly. Verification passed. The chamber returns to idle.',
+    terminal: [
+      ['core', 'qwen-coder'],
+      ['state', 'succeeded'],
+      ['result', 'verification passed'],
+      ['ctx', '31200 / 32768'],
+    ],
+    modelProfile: 'qwen',
+    runtimeState: 'succeeded',
+    chamberColor: '58 109 176',
   },
 ]
 
@@ -223,13 +268,16 @@ const prefersReducedMotion = ref(false)
 
 let intervalId: ReturnType<typeof setInterval> | null = null
 
-const pageStyle = computed(() => ({
-  '--core-rgb': currentCore.value.color,
-  '--core-color': `rgb(${currentCore.value.color})`,
-  '--core-glow': `0 0 40px rgba(${currentCore.value.color} / 0.4), 0 0 80px rgba(${currentCore.value.color} / 0.15)`,
-  '--core-glow-soft': `0 0 25px rgba(${currentCore.value.color} / 0.25)`,
-  '--core-border': `rgba(${currentCore.value.color} / 0.5)`,
-}))
+const pageStyle = computed(() => {
+  const rgb = currentCore.value.chamberColor
+  return {
+    '--core-rgb': rgb,
+    '--core-color': `rgb(${rgb})`,
+    '--core-glow': `0 0 40px rgba(${rgb} / 0.3), 0 0 80px rgba(${rgb} / 0.1)`,
+    '--core-glow-soft': `0 0 25px rgba(${rgb} / 0.2)`,
+    '--core-border': `rgba(${rgb} / 0.4)`,
+  }
+})
 
 function nextCore() {
   currentIndex.value = (currentIndex.value + 1) % cores.length
