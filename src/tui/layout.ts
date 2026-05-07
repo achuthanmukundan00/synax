@@ -87,9 +87,13 @@ function renderHeader(lines: string[], width: number, state: InteractiveViewStat
   const header = [
     `\u001b[1;37mSynax v${pkg.version}\u001b[0m`,
     `${modeColor(state.coreMode)}${phaseLabel(run.phase)}\u001b[0m`,
-    elapsed(run.startedAtMs, state.nowMs),
+    elapsed(run.startedAtMs, elapsedEndMs(state)),
   ].join('  ');
   put(lines, 0, 2, clip(header, width - 4), width);
+}
+
+function elapsedEndMs(state: InteractiveViewState): number {
+  return state.run.terminal === 'running' ? state.nowMs : state.run.nowMs;
 }
 
 function renderOperationalSurface(
@@ -240,7 +244,7 @@ function renderInputDock(objectiveInput: string, width: number, metadataLabel?: 
 
 function renderDirectivePanel(objectiveInput: string, width: number, metadataLabel?: string): string[] {
   const inner = Math.max(8, width - 2);
-  const wrapped = wrapText(objectiveInput.trim() || 'Awaiting objective', inner - 2);
+  const wrapped = wrapText(objectiveInput.trim(), inner - 2);
   const body = wrapped.slice(0, 2);
   while (body.length < 2) body.push('');
 
