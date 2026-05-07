@@ -8,6 +8,8 @@ export interface ContextBudgetSettings {
   maxSingleReadResultTokens: number;
   maxTotalReadResultTokensPerTurn: number;
   keepRecentToolTurns?: number;
+  /** Fraction of effective input limit at which proactive assembly compaction triggers. 0 = always, 1 = never. Default 0.8. */
+  assemblyCompactionThreshold?: number;
 }
 
 export interface CompactionRecord {
@@ -61,6 +63,7 @@ export function resolveContextBudgetSettings(config: {
   maxSingleReadResultTokens?: number;
   maxTotalReadResultTokensPerTurn?: number;
   keepRecentToolTurns?: number;
+  assemblyCompactionThreshold?: number;
 }): ContextBudgetSettings {
   return {
     contextWindowTokens:
@@ -71,6 +74,7 @@ export function resolveContextBudgetSettings(config: {
     maxTotalReadResultTokensPerTurn:
       config.maxTotalReadResultTokensPerTurn ?? DEFAULT_SETTINGS.maxTotalReadResultTokensPerTurn,
     keepRecentToolTurns: config.keepRecentToolTurns ?? DEFAULT_SETTINGS.keepRecentToolTurns,
+    assemblyCompactionThreshold: config.assemblyCompactionThreshold ?? 0.8,
   };
 }
 
@@ -427,6 +431,7 @@ function serializeMessage(message: AgentMessage): string {
     tool_call_id: message.tool_call_id,
     name: message.name,
     tool_calls: message.tool_calls,
+    reasoning_content: message.reasoning_content,
   });
 }
 

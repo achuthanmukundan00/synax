@@ -92,6 +92,8 @@ export interface RunStateSnapshot {
   };
   /** Scrollable transcript/debug history for model output, tool calls, and tool results. */
   debugHistory: TuiDebugHistoryItem[];
+  /** Names of active skills loaded into the agent context (e.g. ['coderabbit-review']). */
+  activeSkills: string[];
 }
 
 const MAX_TIMELINE_ITEMS = 10;
@@ -130,6 +132,7 @@ export function createInitialRunStateSnapshot(nowMs: number): RunStateSnapshot {
     terminal: 'running',
     lastModelOutput: '',
     debugHistory: [],
+    activeSkills: [],
   };
 }
 
@@ -180,6 +183,7 @@ export function applyEventToRunState(state: RunStateSnapshot, event: AgentEvent,
         terminal: 'running',
         lastModelOutput: '',
         patchPreview: undefined,
+        activeSkills: event.activeSkills ?? [],
       };
       next = withPhase(next, 'thinking', 'task started');
       next = withDebugHistory(next, {
@@ -248,7 +252,6 @@ export function applyEventToRunState(state: RunStateSnapshot, event: AgentEvent,
       next = {
         ...next,
         toolInvocationCount: next.toolInvocationCount + 1,
-        changes: trackChangeFromToolStart(next.changes, event.toolName, event.summary),
       };
       next = withDebugHistory(next, {
         atMs: nowMs,
@@ -267,8 +270,28 @@ export function applyEventToRunState(state: RunStateSnapshot, event: AgentEvent,
         summary: `${event.toolName} ${event.status === 'ok' ? 'ok' : 'error'}`,
         detail: event.detail ?? event.summary,
       });
-      if (event.status === 'error') {
-        next = withStatus(next, `${event.toolName} recovered with turbulence`, severity);
+      if (event.status === 'ok') {
+        // Only track file changes for successful mutating tools.
+        // Patch previews handle edit preview tracking separately;
+        // this catches writes and other successful mutations.
+        const op = classifyTool(event.toolName);
+        if (op !== 'read') {
+          // tool_finished summary is 'completed' on success; the path is in the
+          // tool result detail (e.g. {"success":true,"toolName":"write","output":{"path":"..."}}).
+          const path = extractPath(event.summary) ?? extractPath(event.detail ?? '');
+          if (path) {
+            next = {
+              ...next,
+              changes: compressChanges([...next.changes.items, { path, op }]),
+            };
+          }
+        }
+      } else {
+        // Surface the actual tool error rather than claiming recovery.
+        next = withStatus(next, `${event.toolName} error: ${event.summary}`, severity);
+      }
+      if (event.status === 'ok') {
+        next = withStatus(next, `${event.toolName} ok`, 'S0');
       }
       return withTimeline(
         next,
@@ -331,7 +354,13 @@ export function applyEventToRunState(state: RunStateSnapshot, event: AgentEvent,
       // Derive aggregate state from lifecycle events, not summary text.
       // Fallback to summary-derived only when no lifecycle events were emitted.
       if (next.verification.seenCheckIds.size === 0) {
-        next = { ...next, verification: deriveVerificationFallback(event.verification) };
+        next = {
+          ...next,
+          verification:
+            event.status === 'completed' || event.status === 'failed_verification'
+              ? deriveVerificationFallback(event.verification)
+              : deriveSkippedVerification(event.verification),
+        };
       }
       if (next.verification.state === 'failed') {
         next = withRisk(next, `verification failed: ${next.verification.summary}`, 'S2');
@@ -358,7 +387,7 @@ export function applyEventToRunState(state: RunStateSnapshot, event: AgentEvent,
         },
       };
       if (event.error) {
-        next = withRisk(next, `terminal issue: ${event.error}`, 'S3');
+        next = withRisk(next, `blocker: ${event.error}`, 'S3');
       }
       if (event.status === 'completed') {
         const filesChangedThisRun = unique(event.changedFiles);
@@ -642,27 +671,35 @@ function formatDuration(ms: number): string {
  */
 function deriveVerificationFallback(verification: string): TuiVerificationState {
   const v = verification.toLowerCase();
-  const base: TuiVerificationState = {
-    state: 'running',
-    checksPlanned: 0,
-    checksRunning: 0,
-    checksPassed: 0,
-    checksFailed: 0,
-    checksSkipped: 0,
-    summary: verification,
-    currentCheckLabel: '',
-    seenCheckIds: new Set(),
-  };
-  if (v.includes('passed')) {
-    return { ...base, state: 'passed', checksPassed: 1 };
-  }
+  const base = baseVerificationFallback(verification);
   if (v.includes('failed')) {
     return { ...base, state: 'failed', checksFailed: 1 };
   }
   if (v.includes('not run')) {
     return { ...base, state: 'skipped', checksSkipped: 1 };
   }
-  return { ...base, checksRunning: 1, checksPlanned: 1 };
+  if (v === 'passed' || /\b(?:verification|test|tests|build|typecheck|lint)\s+passed\b/.test(v)) {
+    return { ...base, state: 'passed', checksPassed: 1 };
+  }
+  return { ...base, state: 'skipped', checksSkipped: 1 };
+}
+
+function deriveSkippedVerification(summary: string): TuiVerificationState {
+  return { ...baseVerificationFallback(summary), state: 'skipped', checksSkipped: 1 };
+}
+
+function baseVerificationFallback(summary: string): TuiVerificationState {
+  return {
+    state: 'running',
+    checksPlanned: 0,
+    checksRunning: 0,
+    checksPassed: 0,
+    checksFailed: 0,
+    checksSkipped: 0,
+    summary,
+    currentCheckLabel: '',
+    seenCheckIds: new Set(),
+  };
 }
 
 function terminalStateToPhase(status: TerminalState, verificationState: TuiVerificationState['state']): TuiPhase {
@@ -672,18 +709,6 @@ function terminalStateToPhase(status: TerminalState, verificationState: TuiVerif
   if (status === 'failed_verification') return 'verifying';
   if (status === 'model_error' || status === 'tool_error') return 'error';
   return 'error';
-}
-
-function trackChangeFromToolStart(
-  changes: RunStateSnapshot['changes'],
-  toolName: string,
-  summary: string,
-): RunStateSnapshot['changes'] {
-  const path = extractPath(summary);
-  if (!path) return changes;
-  const op = classifyTool(toolName);
-  if (op === 'read') return changes;
-  return compressChanges([...changes.items, { path, op }]);
 }
 
 function classifyTool(toolName: string): ChangeOp {

@@ -54,6 +54,7 @@ export type AgentEvent =
       maxToolCalls: number;
       tools: string[];
       task: string;
+      activeSkills?: string[];
     })
   | (AgentEventBase & { type: 'model_step_started' })
   | (AgentEventBase & {

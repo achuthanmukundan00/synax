@@ -1,15 +1,9 @@
 import { readFile } from 'fs/promises';
 
-import { type InspectionLedger } from '../tools/ledger';
 import { normalizeRepoPath } from '../tools/policy';
 import { atomicWriteFile } from './safety';
 
-export type PatchFailureState =
-  | 'invalid-patch'
-  | 'unread-file-patch'
-  | 'stale-read'
-  | 'replacement-match-failure'
-  | 'unsafe-path';
+export type PatchFailureState = 'invalid-patch' | 'stale-read' | 'replacement-match-failure' | 'unsafe-path';
 
 export interface ReplaceInFilePatch {
   path: string;
@@ -19,7 +13,6 @@ export interface ReplaceInFilePatch {
 
 export interface PatchContext {
   repoRoot: string;
-  ledger: InspectionLedger;
 }
 
 export interface PatchValidationSuccess {
@@ -56,28 +49,13 @@ export async function validateReplaceInFile(
     return { ok: false, failureState: 'unsafe-path', message: target.reason ?? 'invalid path' };
   }
 
-  if (!context.ledger.hasInspectedFile(target.path)) {
-    return {
-      ok: false,
-      failureState: 'unread-file-patch',
-      message: `patch target was not inspected: ${target.path}`,
-    };
-  }
-
   const before = await readFile(target.absolutePath, 'utf-8');
-  if (!context.ledger.hasReadTextFromCompleteRead(target.path, patch.oldStr)) {
-    return {
-      ok: false,
-      failureState: 'stale-read',
-      message: `oldStr must match a prior read of ${target.path}`,
-    };
-  }
   const matchCount = countOccurrences(before, patch.oldStr);
   if (matchCount === 0) {
     return {
       ok: false,
       failureState: 'stale-read',
-      message: `oldStr no longer matches the current contents of ${target.path}`,
+      message: `oldStr no longer matches the current contents of ${target.path}; re-read the file and retry with an exact snippet`,
     };
   }
   if (matchCount > 1) {

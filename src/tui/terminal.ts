@@ -11,6 +11,8 @@ const SYNC_START = '\u001b[?2026h';
 const SYNC_END = '\u001b[?2026l';
 const ENABLE_MOUSE = '\u001b[?1000h\u001b[?1006h';
 const DISABLE_MOUSE = '\u001b[?1006l\u001b[?1000l';
+const ENABLE_BRACKETED_PASTE = '\u001b[?2004h';
+const DISABLE_BRACKETED_PASTE = '\u001b[?2004l';
 
 export interface InputStreamLike {
   isTTY?: boolean;
@@ -56,11 +58,11 @@ export function createTerminalSession(streams?: {
       if (!isTTY) return;
       stdin.setRawMode?.(true);
       stdin.resume();
-      stdout.write(`${ALT_SCREEN}${HIDE_CURSOR}${ENABLE_MOUSE}${CLEAR}${HOME}`);
+      stdout.write(`${ALT_SCREEN}${HIDE_CURSOR}${ENABLE_MOUSE}${ENABLE_BRACKETED_PASTE}${CLEAR}${HOME}`);
     },
     stop(): void {
       if (!isTTY) return;
-      stdout.write(`\u001b[?2004l${DISABLE_MOUSE}${SHOW_CURSOR}${MAIN_SCREEN}`);
+      stdout.write(`${DISABLE_BRACKETED_PASTE}${DISABLE_MOUSE}${SHOW_CURSOR}${MAIN_SCREEN}`);
       stdin.setRawMode?.(false);
       stdin.pause();
     },

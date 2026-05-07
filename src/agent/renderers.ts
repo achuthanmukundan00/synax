@@ -114,7 +114,7 @@ export class DebugRenderer implements AgentRenderer {
       process.stdout.write(`  model: ${event.model}\n`);
       process.stdout.write(`  tools: ${event.tools.join(', ')}\n`);
       process.stdout.write(
-        `  budgets: context=${event.contextBudgetTokens} model_steps=${event.maxModelSteps} tool_calls=${event.maxToolCalls}\n`,
+        `  budgets: context=${event.contextBudgetTokens} model_steps=unlimited tool_calls=${event.maxToolCalls}\n`,
       );
       process.stdout.write(`  content: ${preview(event.task)}\n`);
       return;
@@ -145,7 +145,7 @@ export class DebugRenderer implements AgentRenderer {
 
     if (event.type === 'task_finished') {
       process.stdout.write(`  terminal: ${event.status}\n`);
-      process.stdout.write(`  model_steps: ${event.modelSteps} / ${event.maxModelSteps}\n`);
+      process.stdout.write(`  model_steps: ${event.modelSteps}\n`);
       process.stdout.write(`  tool_calls: ${event.toolCalls} / ${event.maxToolCalls}\n`);
       process.stdout.write(`  changed_files: ${event.changedFiles.length}\n`);
       process.stdout.write(`  verification: ${event.verification}\n`);

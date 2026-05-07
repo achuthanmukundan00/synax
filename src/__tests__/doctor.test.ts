@@ -115,7 +115,7 @@ describe('checkContextBudget', () => {
     const result = checkContextBudget({ contextBudgetTokens: 131072, maxModelSteps: 64, maxToolCalls: 192 });
     expect(result.status).toBe('pass');
     expect(result.message).toContain('contextBudgetTokens set to 131072');
-    expect(result.message).toContain('maxModelSteps set to 64');
+    expect(result.message).toContain('modelSteps unlimited');
     expect(result.message).toContain('maxToolCalls set to 192');
   });
 
@@ -255,7 +255,7 @@ describe('formatReport', () => {
       contextBudget: {
         check: 'context-budget',
         status: 'pass',
-        message: 'contextBudgetTokens set to 131072; maxModelSteps set to 64; maxToolCalls set to 192',
+        message: 'contextBudgetTokens set to 131072; modelSteps unlimited; maxToolCalls set to 192',
       },
       relayHealth: { check: 'relay-health', status: 'skip', message: undefined },
     };
