@@ -427,6 +427,7 @@ function serializeMessage(message: AgentMessage): string {
     tool_call_id: message.tool_call_id,
     name: message.name,
     tool_calls: message.tool_calls,
+    reasoning_content: message.reasoning_content,
   });
 }
 

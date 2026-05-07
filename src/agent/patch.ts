@@ -55,7 +55,7 @@ export async function validateReplaceInFile(
     return {
       ok: false,
       failureState: 'stale-read',
-      message: `oldStr no longer matches the current contents of ${target.path}`,
+      message: `oldStr no longer matches the current contents of ${target.path}; re-read the file and retry with an exact snippet`,
     };
   }
   if (matchCount > 1) {
