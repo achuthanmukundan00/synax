@@ -47,6 +47,8 @@ const providerPresets: Record<ProviderId, ProviderPreset> = {
     contextWindow: 64000,
     supportsStreaming: true,
     supportsToolCalling: true,
+    inputPricePer1MTokens: 0.27,
+    outputPricePer1MTokens: 1.10,
   },
 
   openrouter: {
@@ -78,6 +80,8 @@ const providerPresets: Record<ProviderId, ProviderPreset> = {
     contextWindow: 128000,
     supportsStreaming: true,
     supportsToolCalling: true,
+    inputPricePer1MTokens: 0.59,
+    outputPricePer1MTokens: 0.79,
   },
 
   anthropic: {
@@ -92,6 +96,8 @@ const providerPresets: Record<ProviderId, ProviderPreset> = {
     contextWindow: 200000,
     supportsStreaming: true,
     supportsToolCalling: false, // tool use adapter not implemented yet in this PR
+    inputPricePer1MTokens: 3.00,
+    outputPricePer1MTokens: 15.00,
   },
 
   mistral: {
