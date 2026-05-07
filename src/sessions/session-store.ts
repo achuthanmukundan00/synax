@@ -13,7 +13,7 @@
  *         <MM>/
  *           <session-id>.jsonl   — append-only event log
  */
-import { existsSync, mkdirSync, readFileSync, writeFileSync, appendFileSync } from 'fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync, appendFileSync, unlinkSync } from 'fs';
 import { join, dirname } from 'path';
 
 // ─── Types ──────────────────────────────────────────────────
@@ -290,7 +290,6 @@ export function pruneOldSessions(maxSessions = 200): void {
   // Best-effort: remove old event files
   for (const session of toRemove) {
     try {
-      const { unlinkSync } = require('fs');
       const path = sessionEventsPath(session.id);
       if (existsSync(path)) unlinkSync(path);
     } catch {
