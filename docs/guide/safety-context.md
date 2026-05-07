@@ -110,7 +110,6 @@ The main budget controls are:
 | `agent.keep_recent_tokens`                    | `20000`  | Verbatim tail preserved when compacting old history   |
 | `agent.max_single_read_result_tokens`         | `12000`  | Per-read result cap before tool output enters history |
 | `agent.max_total_read_result_tokens_per_turn` | `40000`  | Per-turn aggregate cap for read result payloads       |
-| `agent.max_model_steps`                       | `32`     | Maximum model turns per task                          |
 | `agent.max_tool_calls`                        | `96`     | Maximum tool calls per task                           |
 
 Useful profiles:

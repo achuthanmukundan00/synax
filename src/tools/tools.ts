@@ -1,10 +1,8 @@
 import { execFile } from 'child_process';
 import { readdir, readFile, stat } from 'fs/promises';
-import { join } from 'path';
+import { isAbsolute, normalize, resolve } from 'path';
 import { promisify } from 'util';
 
-import { normalizeRepoPath } from './policy';
-import { redactSecrets } from './secrets';
 import { ToolContext, ToolDefinition, ToolResult } from './types';
 
 const execFileAsync = promisify(execFile);
@@ -14,8 +12,6 @@ const DEFAULT_MAX_READ_LINES = 1000;
 const DEFAULT_MAX_MATCHES = 80;
 const DEFAULT_MAX_GIT_LINES = 1000;
 const DEFAULT_MAX_DIRECTORY_ENTRIES = 160;
-
-const SKIPPED_DIRECTORY_LISTING_NAMES = new Set(['cache']);
 
 interface ListFilesInput {
   path?: string;
@@ -54,24 +50,30 @@ interface DirectoryEntryOutput {
   type: 'file' | 'directory';
 }
 
+interface ReadTarget {
+  path: string;
+  absolutePath: string;
+}
+
+type ReadTargetResult = ({ ok: true } & ReadTarget) | { ok: false; reason: string };
+
 export function createInspectionTools(): ToolDefinition[] {
   return [listFilesTool, readFileRangeTool, searchTextTool, showGitStatusTool, showGitDiffTool];
 }
 
 const readOnlySafety = {
   readOnly: true,
-  rejectsUnsafePaths: true,
+  rejectsUnsafePaths: false,
   boundedOutput: true,
 };
 
 const listFilesTool: ToolDefinition<ListFilesInput> = {
   name: 'list_files',
-  description:
-    'List safe, non-generated repository files under an optional repo-relative directory. Use before reading files when you need candidate paths.',
+  description: 'List files under an optional path. Output is bounded, but read paths are not policy-filtered.',
   inputSchema: {
     type: 'object',
     properties: {
-      path: { type: 'string', description: 'Optional repo-relative directory to list. Defaults to repository root.' },
+      path: { type: 'string', description: 'Optional directory or file path to list. Defaults to repository root.' },
       maxFiles: { type: 'number', description: `Maximum files to return. Default ${DEFAULT_MAX_FILES}.` },
     },
   },
@@ -79,14 +81,14 @@ const listFilesTool: ToolDefinition<ListFilesInput> = {
   ledgerBehavior: 'records-file-list',
   async execute(input: ListFilesInput, context: ToolContext): Promise<ToolResult> {
     const maxFiles = boundedPositiveInteger(input.maxFiles, DEFAULT_MAX_FILES, DEFAULT_MAX_FILES);
-    const target = normalizeRepoPath(context.repoRoot, repoRootPath(input.path));
-    if (!target.ok || !target.absolutePath || target.path === undefined) {
-      return failure('list_files', target.reason ?? 'invalid path');
+    const target = resolveReadTarget(context.repoRoot, repoRootPath(input.path));
+    if (!target.ok) {
+      return failure('list_files', target.reason);
     }
 
     try {
       const files: string[] = [];
-      await collectFiles(context.repoRoot, target.path, files, maxFiles);
+      await collectFiles(target.absolutePath, target.path, files, maxFiles);
       files.sort();
       return success('list_files', { files, truncated: files.length >= maxFiles });
     } catch (error) {
@@ -97,13 +99,12 @@ const listFilesTool: ToolDefinition<ListFilesInput> = {
 
 const readFileRangeTool: ToolDefinition<ReadFileRangeInput> = {
   name: 'read_file_range',
-  description:
-    'Read a bounded, line-numbered range from one safe repo-relative text file. Use this before proposing edits to that file.',
+  description: 'Read a bounded, line-numbered range from one text file. Use this before proposing edits to that file.',
   inputSchema: {
     type: 'object',
     required: ['path'],
     properties: {
-      path: { type: 'string', description: 'Repo-relative file path to read.' },
+      path: { type: 'string', description: 'File path to read.' },
       startLine: { type: 'number', description: '1-based first line to include. Defaults to 1.' },
       endLine: {
         type: 'number',
@@ -118,9 +119,9 @@ const readFileRangeTool: ToolDefinition<ReadFileRangeInput> = {
       return failure('read_file_range', 'path is required');
     }
 
-    const target = normalizeRepoPath(context.repoRoot, input.path);
-    if (!target.ok || !target.absolutePath || target.path === undefined) {
-      return failure('read_file_range', target.reason ?? 'invalid path');
+    const target = resolveReadTarget(context.repoRoot, input.path);
+    if (!target.ok) {
+      return failure('read_file_range', target.reason);
     }
 
     const startLine = boundedPositiveInteger(input.startLine, 1, Number.MAX_SAFE_INTEGER);
@@ -134,10 +135,10 @@ const readFileRangeTool: ToolDefinition<ReadFileRangeInput> = {
     try {
       const targetStat = await stat(target.absolutePath);
       if (targetStat.isDirectory()) {
-        return success('read_file_range', await listDirectory(context.repoRoot, target.path));
+        return success('read_file_range', await listDirectory(target.absolutePath, target.path));
       }
 
-      const text = redactSecrets(await readFile(target.absolutePath, 'utf-8'));
+      const text = await readFile(target.absolutePath, 'utf-8');
       const lines = splitLines(text);
       const selected = lines.slice(startLine - 1, endLine).map<LineOutput>((line, index) => ({
         lineNumber: startLine + index,
@@ -166,14 +167,13 @@ const readFileRangeTool: ToolDefinition<ReadFileRangeInput> = {
 
 const searchTextTool: ToolDefinition<SearchTextInput> = {
   name: 'search_text',
-  description:
-    'Search safe repository text files for a literal string. Returns bounded repo-relative matches with line numbers.',
+  description: 'Search text files for a literal string. Output is bounded, but read paths are not policy-filtered.',
   inputSchema: {
     type: 'object',
     required: ['query'],
     properties: {
       query: { type: 'string', description: 'Literal text to search for.' },
-      path: { type: 'string', description: 'Optional safe repo-relative directory or file to search.' },
+      path: { type: 'string', description: 'Optional directory or file path to search.' },
       maxMatches: { type: 'number', description: `Maximum matches to return. Default ${DEFAULT_MAX_MATCHES}.` },
     },
   },
@@ -184,9 +184,9 @@ const searchTextTool: ToolDefinition<SearchTextInput> = {
       return failure('search_text', 'query is required');
     }
 
-    const target = normalizeRepoPath(context.repoRoot, repoRootPath(input.path));
-    if (!target.ok || target.path === undefined) {
-      return failure('search_text', target.reason ?? 'invalid path');
+    const target = resolveReadTarget(context.repoRoot, repoRootPath(input.path));
+    if (!target.ok) {
+      return failure('search_text', target.reason);
     }
 
     const maxMatches = boundedPositiveInteger(input.maxMatches, DEFAULT_MAX_MATCHES, DEFAULT_MAX_MATCHES);
@@ -194,10 +194,10 @@ const searchTextTool: ToolDefinition<SearchTextInput> = {
     const matches: SearchMatchOutput[] = [];
 
     try {
-      await collectFiles(context.repoRoot, target.path, files, DEFAULT_MAX_FILES);
+      await collectFiles(target.absolutePath, target.path, files, DEFAULT_MAX_FILES);
       files.sort();
       for (const file of files) {
-        const text = redactSecrets(await readFile(join(context.repoRoot, file), 'utf-8'));
+        const text = await readFile(resolveDisplayPath(target.absolutePath, target.path, file), 'utf-8');
         const lines = splitLines(text);
         for (let index = 0; index < lines.length; index += 1) {
           if (!lines[index].includes(input.query)) {
@@ -271,68 +271,59 @@ const showGitDiffTool: ToolDefinition<GitDiffInput> = {
   },
 };
 
-async function collectFiles(repoRoot: string, relativeDir: string, files: string[], maxFiles: number): Promise<void> {
+async function collectFiles(
+  absolutePath: string,
+  displayPath: string,
+  files: string[],
+  maxFiles: number,
+): Promise<void> {
   if (files.length >= maxFiles) {
     return;
   }
 
-  const absolute = join(repoRoot, relativeDir);
-  const entryStat = await stat(absolute);
+  const entryStat = await stat(absolutePath);
   if (entryStat.isFile()) {
-    if (normalizeRepoPath(repoRoot, relativeDir).ok) {
-      files.push(relativeDir);
-    }
+    files.push(displayPath);
     return;
   }
 
-  const entries = await readdir(absolute, { withFileTypes: true });
+  const entries = await readdir(absolutePath, { withFileTypes: true });
   for (const entry of entries) {
     if (files.length >= maxFiles) {
       return;
     }
 
-    const child = relativeDir ? `${relativeDir}/${entry.name}` : entry.name;
-    if (!normalizeRepoPath(repoRoot, child).ok) {
-      continue;
-    }
+    const childDisplayPath = displayPath ? `${displayPath}/${entry.name}` : entry.name;
+    const childAbsolutePath = resolve(absolutePath, entry.name);
 
     if (entry.isDirectory()) {
-      await collectFiles(repoRoot, child, files, maxFiles);
+      await collectFiles(childAbsolutePath, childDisplayPath, files, maxFiles);
     } else if (entry.isFile()) {
-      files.push(child);
+      files.push(childDisplayPath);
     }
   }
 }
 
 async function listDirectory(
-  repoRoot: string,
-  relativeDir: string,
+  absolutePath: string,
+  displayPath: string,
 ): Promise<{ path: string; entries: DirectoryEntryOutput[]; truncated: boolean }> {
-  const entries = await readdir(join(repoRoot, relativeDir), { withFileTypes: true });
-  const safeEntries: DirectoryEntryOutput[] = [];
+  const entries = await readdir(absolutePath, { withFileTypes: true });
+  const directoryEntries: DirectoryEntryOutput[] = [];
 
   for (const entry of entries.sort((left, right) => left.name.localeCompare(right.name))) {
-    if (entry.isDirectory() && SKIPPED_DIRECTORY_LISTING_NAMES.has(entry.name)) {
-      continue;
-    }
-
-    const child = relativeDir ? `${relativeDir}/${entry.name}` : entry.name;
-    if (!normalizeRepoPath(repoRoot, child).ok) {
-      continue;
-    }
-
     if (entry.isDirectory()) {
-      safeEntries.push({ name: entry.name, type: 'directory' });
+      directoryEntries.push({ name: entry.name, type: 'directory' });
     } else if (entry.isFile()) {
-      safeEntries.push({ name: entry.name, type: 'file' });
+      directoryEntries.push({ name: entry.name, type: 'file' });
     }
 
-    if (safeEntries.length >= DEFAULT_MAX_DIRECTORY_ENTRIES) {
-      return { path: relativeDir || '.', entries: safeEntries, truncated: true };
+    if (directoryEntries.length >= DEFAULT_MAX_DIRECTORY_ENTRIES) {
+      return { path: displayPath || '.', entries: directoryEntries, truncated: true };
     }
   }
 
-  return { path: relativeDir || '.', entries: safeEntries, truncated: false };
+  return { path: displayPath || '.', entries: directoryEntries, truncated: false };
 }
 
 function boundedPositiveInteger(value: number | undefined, defaultValue: number, maxValue: number): number {
@@ -349,6 +340,32 @@ function boundedPositiveInteger(value: number | undefined, defaultValue: number,
 
 function repoRootPath(value: string | undefined): string {
   return value === undefined || value.trim().length === 0 ? '.' : value;
+}
+
+function resolveReadTarget(repoRoot: string, inputPath: string): ReadTargetResult {
+  const trimmed = inputPath.trim();
+  if (trimmed.length === 0) {
+    return { ok: false, reason: 'path is required' };
+  }
+
+  const normalized = normalize(trimmed).replace(/\\/g, '/');
+  return {
+    ok: true,
+    path: normalized === '.' ? '' : normalized,
+    absolutePath: isAbsolute(trimmed) ? resolve(trimmed) : resolve(repoRoot, trimmed),
+  };
+}
+
+function resolveDisplayPath(rootAbsolutePath: string, rootDisplayPath: string, fileDisplayPath: string): string {
+  if (fileDisplayPath === rootDisplayPath) {
+    return rootAbsolutePath;
+  }
+
+  const relativeToRoot =
+    rootDisplayPath && fileDisplayPath.startsWith(`${rootDisplayPath}/`)
+      ? fileDisplayPath.slice(rootDisplayPath.length + 1)
+      : fileDisplayPath;
+  return resolve(rootAbsolutePath, relativeToRoot);
 }
 
 function splitLines(text: string): string[] {

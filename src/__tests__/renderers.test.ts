@@ -243,7 +243,7 @@ describe('renderers', () => {
     });
 
     expect(output.stdout).toContain('[debug] event: task_started');
-    expect(output.stdout).toContain('budgets: context=100 model_steps=2 tool_calls=3');
+    expect(output.stdout).toContain('budgets: context=100 model_steps=unlimited tool_calls=3');
     expect(output.stdout).toContain('tool: read args=');
     expect(output.stdout).toContain('content: raw content preview');
     expect(output.stdout).toContain('terminal: completed');

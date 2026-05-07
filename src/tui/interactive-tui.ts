@@ -4,11 +4,17 @@ import {
   createInitialRunStateSnapshot,
   type RunStateSnapshot,
 } from '../agent/tui-state';
-import type { ChatSession } from '../commands/chat';
+import {
+  classifyInlineSubmission,
+  createInlinePasteInputSession,
+  draftPlainText,
+  flattenInlinePasteDraft,
+  type ChatSession,
+} from '../commands/chat';
 import { stdin as defaultStdin } from 'node:process';
 import { DiffRenderer } from './diff-renderer';
 import { maxHistoryScrollOffset, renderLayout, type InteractiveViewState } from './layout';
-import { MAX_INPUT_CHARS, parseInputChunk } from './input';
+import { createInputParser, MAX_INPUT_CHARS } from './input';
 import { createTerminalSession, type InputStreamLike } from './terminal';
 import type { Writable } from 'node:stream';
 import type { CoreMode } from './ai-core';
@@ -52,8 +58,7 @@ export async function runInteractiveTui(
   const terminal = createTerminalSession({ stdin: options?.stdin, stdout: options?.stdout });
   if (!terminal.isTTY) return;
 
-  let inputBuffer = '';
-  const pendingPastes: string[] = [];
+  let inputDraft = createInlinePasteInputSession();
   let state: RunStateSnapshot = options?.blockedMessage
     ? createBlockedRunStateSnapshot(
         Date.now(),
@@ -111,7 +116,7 @@ export async function runInteractiveTui(
 
   const viewState = (): InteractiveViewState => ({
     run: { ...state, nowMs: Date.now() },
-    objectiveInput: inputBuffer,
+    objectiveInput: inputDraft.getVisibleBody(),
     blockedMessage: options?.blockedMessage,
     coreMode: coreMode(),
     nowMs: Date.now(),
@@ -187,34 +192,17 @@ export async function runInteractiveTui(
     exiting = true;
   };
 
-  const appendPendingPaste = (text: string): void => {
-    pendingPastes.push(text);
-  };
-
-  const flushPendingPastes = (): string => {
-    if (pendingPastes.length === 0) return '';
-    const parts: string[] = [];
-    for (let i = 0; i < pendingPastes.length; i += 1) {
-      const pasteText = pendingPastes[i];
-      const lines = countLines(pasteText);
-      parts.push(`--- BEGIN PASTED CONTENT ${i + 1}: ${lines} lines, ${pasteText.length} chars ---`);
-      parts.push(pasteText);
-      parts.push(`--- END PASTED CONTENT ${i + 1} ---`);
-    }
-    pendingPastes.length = 0;
-    return parts.join('\n\n');
-  };
-
   const submit = async (): Promise<void> => {
-    const pasteContent = flushPendingPastes();
-    const text = (inputBuffer.trim() + (pasteContent ? `\n\n${pasteContent}` : '')).trim();
-    if (!text || busy) return;
-    inputBuffer = '';
-    pendingPastes.length = 0;
+    const currentDraft = inputDraft.getDraft();
+    const plainText = draftPlainText(currentDraft).trim();
+    const kind = classifyInlineSubmission(currentDraft);
+    if (kind === 'empty' || busy) return;
+    const text = kind === 'slash' ? plainText : flattenInlinePasteDraft(currentDraft);
+    inputDraft = createInlinePasteInputSession();
     busy = true;
     paint(true);
 
-    if (text.startsWith('/')) {
+    if (kind === 'slash') {
       const slash = await session.handleSlashCommand(text);
       if (slash.newSession) {
         state = createInitialRunStateSnapshot(Date.now());
@@ -340,8 +328,9 @@ export async function runInteractiveTui(
   // ─── Autocomplete ───────────────────────────────────────────
 
   const updateAutocomplete = (): void => {
-    if (inputBuffer.startsWith('/') && !inputBuffer.includes(' ')) {
-      const query = inputBuffer.slice(1);
+    const plainText = draftPlainText(inputDraft.getDraft());
+    if (!inputDraft.hasPaste() && plainText.startsWith('/') && !plainText.includes(' ')) {
+      const query = plainText.slice(1);
       const filtered = filterCommands(query);
       autocomplete = {
         active: true,
@@ -355,7 +344,7 @@ export async function runInteractiveTui(
   };
 
   const executeAutocompleteCommand = async (cmd: SlashCommand): Promise<void> => {
-    inputBuffer = '';
+    inputDraft = createInlinePasteInputSession();
     autocomplete = { active: false, visible: false, selection: 0, filtered: [] };
 
     const result: SlashCommandResult = await Promise.resolve(cmd.handler());
@@ -567,8 +556,9 @@ export async function runInteractiveTui(
   };
 
   const stdin = options?.stdin ?? (defaultStdin as unknown as InputStreamLike);
+  const inputParser = createInputParser();
   const onData = (chunk: Buffer): void => {
-    const events = parseInputChunk(chunk.toString('utf8'));
+    const events = inputParser.parse(chunk.toString('utf8'));
     for (const event of events) {
       // Exit always works
       if (event.type === 'exit') {
@@ -617,7 +607,7 @@ export async function runInteractiveTui(
         continue;
       }
       if (event.type === 'backspace') {
-        inputBuffer = inputBuffer.slice(0, -1);
+        inputDraft.handleBackspace();
         updateAutocomplete();
         continue;
       }
@@ -632,7 +622,8 @@ export async function runInteractiveTui(
         if (autocomplete.visible && autocomplete.filtered.length > 0) {
           // Auto-complete to first match
           const cmd = autocomplete.filtered[autocomplete.selection] ?? autocomplete.filtered[0];
-          inputBuffer = `/${cmd.name} `;
+          inputDraft = createInlinePasteInputSession();
+          inputDraft.handleText(`/${cmd.name} `);
           autocomplete.visible = false;
           continue;
         }
@@ -648,16 +639,16 @@ export async function runInteractiveTui(
         continue;
       }
       if (event.type === 'paste' && event.value) {
-        const lines = countLines(event.value);
-        const chars = event.value.length;
-        const pasteBlob = `[pasted: ${lines} lines, ${chars} chars]`;
-        inputBuffer = `${inputBuffer}${pasteBlob}`.slice(0, MAX_INPUT_CHARS);
-        appendPendingPaste(event.value);
+        if (inputDraft.getVisibleBody().length < MAX_INPUT_CHARS) {
+          inputDraft.handlePasteStart();
+          inputDraft.handlePasteChunk(event.value);
+          inputDraft.handlePasteEnd();
+        }
         updateAutocomplete();
         continue;
       }
       if (event.type === 'text' && event.value) {
-        inputBuffer = `${inputBuffer}${event.value}`.slice(0, MAX_INPUT_CHARS);
+        if (inputDraft.getVisibleBody().length < MAX_INPUT_CHARS) inputDraft.handleText(event.value);
         updateAutocomplete();
       }
     }
@@ -705,9 +696,4 @@ function inferToolExecutionMode(state: RunStateSnapshot): CoreMode {
   if (hint.includes('write') || hint.includes('edit') || hint.includes('replace')) return 'writing';
   if (hint.includes('bash') || hint.includes('git') || hint.includes('command')) return 'bash';
   return 'reasoning';
-}
-
-function countLines(text: string): number {
-  if (!text) return 0;
-  return text.split(/\r?\n/).length;
 }

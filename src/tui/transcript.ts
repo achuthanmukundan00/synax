@@ -124,6 +124,12 @@ function renderToolEvent(
     const label = call.name === 'write' ? 'write' : 'edit';
     const path = call.path || '—';
     const block = [eventHeader(label, path, width)];
+    const diff = result ? extractToolResultDiff(result.detail || result.summary) : undefined;
+    if (diff) {
+      block.push(detailRow('preview', `Diff: ${path}`, width));
+      block.push(...renderDiffRows(diff, width, 8));
+      return block;
+    }
     const summary = result ? summarizeOutput(result.detail || result.summary) : '';
     if (summary) block.push(detailRow('result', summary, width));
     return block;
@@ -190,12 +196,18 @@ function renderCommandEvent(
 
 function renderDiffPreview(path: string, diff: string, width: number): string[] {
   const block = [eventHeader('edit', path, width), detailRow('preview', `Diff preview: ${path}`, width)];
-  for (const line of diff.split('\n').slice(0, 8)) {
-    const color =
-      line.startsWith('+') && !line.startsWith('+++') ? '\u001b[32m' : line.startsWith('-') ? '\u001b[31m' : '';
-    block.push(`  ${' '.repeat(11)}${color}${clip(line, width - 14)}${color ? '\u001b[0m' : ''}`);
-  }
+  block.push(...renderDiffRows(diff, width, 8));
   return block;
+}
+
+function renderDiffRows(diff: string, width: number, maxLines: number): string[] {
+  return diff
+    .split('\n')
+    .slice(0, maxLines)
+    .map((line) => {
+      const colored = colorizeGitDiffLine(line);
+      return `  ${' '.repeat(11)}${clip(colored, width - 14)}`;
+    });
 }
 
 function renderVerification(run: RunStateSnapshot, width: number): string[] {
@@ -316,6 +328,16 @@ function parseFirstJson(text: string): Record<string, unknown> | undefined {
 function stringValue(value: Record<string, unknown> | undefined, key: string): string | undefined {
   const item = value?.[key];
   return typeof item === 'string' ? item : undefined;
+}
+
+function objectValue(value: Record<string, unknown> | undefined, key: string): Record<string, unknown> | undefined {
+  const item = value?.[key];
+  return item && typeof item === 'object' && !Array.isArray(item) ? (item as Record<string, unknown>) : undefined;
+}
+
+function extractToolResultDiff(detail: string): string | undefined {
+  const parsed = parseFirstJson(detail);
+  return stringValue(objectValue(parsed, 'output'), 'diff') ?? stringValue(parsed, 'diff');
 }
 
 function numberValue(value: Record<string, unknown> | undefined, key: string): number | undefined {
