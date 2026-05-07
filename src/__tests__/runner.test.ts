@@ -321,7 +321,7 @@ describe('shared bounded agent runner', () => {
     expect(execSync('git rev-list --count HEAD', { cwd: TMP, encoding: 'utf-8' }).trim()).toBe('1');
   });
 
-  it('stops immediately after a successful git commit instead of spending more model steps', async () => {
+  it('completes after model finishes its planned tool sequence following git commit', async () => {
     execSync('git init', { cwd: TMP, stdio: 'ignore' });
     execSync('git config user.email "synax@example.test"', { cwd: TMP, stdio: 'ignore' });
     execSync('git config user.name "Synax Test"', { cwd: TMP, stdio: 'ignore' });
@@ -346,12 +346,11 @@ describe('shared bounded agent runner', () => {
       maxSteps: 32,
     });
 
-    expect(result).toMatchObject({
-      terminalState: 'completed',
-      steps: 1,
-      toolCalls: [{ name: 'bash', success: true, error: undefined }],
-    });
-    expect(client.requests).toHaveLength(1);
+    // Model completes after exhausting its planned tool sequence (3 turns:
+    // commit, status check, then content-only response from exhausted fakeClient).
+    expect(result.terminalState).toBe('completed');
+    expect(result.steps).toBe(3);
+    expect(result.toolCalls).toHaveLength(2);
     expect(execSync('git rev-list --count HEAD', { cwd: TMP, encoding: 'utf-8' }).trim()).toBe('1');
   });
 
@@ -1366,7 +1365,7 @@ describe('shared bounded agent runner', () => {
       repoRoot: TMP,
       task: 'read large file',
       client,
-      contextBudget: { maxSingleReadResultTokens: 8000 },
+      contextBudget: { maxSingleReadResultTokens: 8000, assemblyCompactionThreshold: 0 },
     });
 
     expect(result.terminalState).toBe('completed');

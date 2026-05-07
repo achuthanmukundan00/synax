@@ -598,16 +598,16 @@ thinking_levels = ["off", "low", "medium", "high"]
       localPath,
       `
 [active]
-provider = "deepseek"
-model = "deepseek-v4-pro"
+provider = "test-provider"
+model = "test-model-no-context"
 
-[providers.deepseek]
-name = "DeepSeek"
+[providers.test-provider]
+name = "Test Provider"
 compatibility = "openai-compatible"
-base_url = "https://api.deepseek.com/v1"
+base_url = "https://test.example.com/v1"
 
-[[providers.deepseek.models]]
-id = "deepseek-v4-pro"
+[[providers.test-provider.models]]
+id = "test-model-no-context"
 supports_thinking = false
 `,
       'utf-8',
@@ -618,6 +618,35 @@ supports_thinking = false
     expect(loaded.errors).toEqual([]);
     expect(loaded.config.contextBudgetTokens).toBe(131072);
     expect(loaded.config.contextWindowTokens).toBe(131072);
+  });
+
+  it('accepts model context window aliases from provider model metadata', () => {
+    const localPath = join(TMP, '.synax.toml');
+    writeFileSync(
+      localPath,
+      `
+[active]
+provider = "deepseek"
+model = "deepseek-v4-pro"
+
+[providers.deepseek]
+name = "DeepSeek"
+compatibility = "openai-compatible"
+base_url = "https://api.deepseek.com/v1"
+
+[[providers.deepseek.models]]
+id = "deepseek-v4-pro"
+max_context_tokens = "1M"
+supports_thinking = false
+`,
+      'utf-8',
+    );
+
+    const loaded = loadProjectConfig(TMP);
+
+    expect(loaded.errors).toEqual([]);
+    expect(loaded.config.contextWindowTokens).toBe(1_000_000);
+    expect(loaded.config.contextBudgetTokens).toBe(1_000_000);
   });
 
   it('preserves core visual profile through effective config loading', () => {

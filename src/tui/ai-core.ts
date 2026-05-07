@@ -403,12 +403,13 @@ function innerMorphologyGlyph(
 ): string | undefined {
   if (!state.unicode) return undefined;
   const profile = state.visualProfile;
+  const stableFrame = state.profile.stable ? 0 : state.frame;
   if (profile.nucleusLayout === 'twin') {
-    const phase = Math.sin(state.frame * 0.22) * 0.025;
+    const phase = Math.sin(stableFrame * 0.22) * 0.025;
     const left = Math.hypot(nx + 0.2 + phase, ny);
     const right = Math.hypot(nx - 0.2 - phase, ny);
-    if (left < 0.13 || right < 0.13) return state.frame % 2 === 0 ? '●' : '◉';
-    if (Math.abs(left - right) < 0.035 && radius < 0.55 && positiveModulo(x + y + state.frame, 4) === 0) return '·';
+    if (left < 0.13 || right < 0.13) return stableFrame % 2 === 0 ? '●' : '◉';
+    if (Math.abs(left - right) < 0.035 && radius < 0.55 && positiveModulo(x + y + stableFrame, 4) === 0) return '·';
   }
   if (profile.nucleusLayout === 'soft' && central > 0.58) {
     return central > 0.78 ? '◉' : '○';
@@ -417,8 +418,8 @@ function innerMorphologyGlyph(
     return central > 0.7 ? '◆' : '◈';
   }
   if (profile.morphology === 'lattice' && radius > 0.24 && radius < 0.74) {
-    const diagonalA = Math.abs(Math.sin((nx + ny) * 7 + state.frame * 0.08));
-    const diagonalB = Math.abs(Math.sin((nx - ny) * 7 - state.frame * 0.08));
+    const diagonalA = Math.abs(Math.sin((nx + ny) * 7 + stableFrame * 0.08));
+    const diagonalB = Math.abs(Math.sin((nx - ny) * 7 - stableFrame * 0.08));
     if (diagonalA < 0.12 || diagonalB < 0.12) return Math.sin(angle) * Math.cos(angle) > 0 ? '╲' : '╱';
   }
   if (profile.morphology === 'lens' && central > 0.68) return central > 0.82 ? '◎' : '●';
@@ -427,7 +428,7 @@ function innerMorphologyGlyph(
     profile.morphology === 'furnace' &&
     Math.abs(ny) < 0.18 &&
     radius < 0.68 &&
-    positiveModulo(x + state.frame, 2) === 0
+    positiveModulo(x + stableFrame, 2) === 0
   ) {
     return Math.abs(ny) < 0.08 ? '═' : '━';
   }
@@ -435,7 +436,7 @@ function innerMorphologyGlyph(
     profile.morphology === 'twin' &&
     Math.abs(nx) < 0.05 &&
     radius < 0.62 &&
-    positiveModulo(y + state.frame, 3) === 0
+    positiveModulo(y + stableFrame, 3) === 0
   ) {
     return '│';
   }
@@ -462,7 +463,7 @@ function isToolScanCell(
 
 function profileForMode(mode: NormalizedCoreMode): CoreProfile {
   if (mode === 'idle') {
-    return { density: 0.21, flow: 0.55, pressure: 0.25, compression: 0.08, sync: 0.24, strain: false, stable: false };
+    return { density: 0.18, flow: 0.04, pressure: 0.18, compression: 0.06, sync: 0.12, strain: false, stable: true };
   }
   if (mode === 'unloaded') {
     return { density: 0.14, flow: 0, pressure: 0, compression: 0, sync: 0, strain: false, stable: true };
@@ -477,10 +478,13 @@ function profileForMode(mode: NormalizedCoreMode): CoreProfile {
     return { density: 0.35, flow: 0.72, pressure: 0.62, compression: 0.18, sync: 0.9, strain: false, stable: true };
   }
   if (mode === 'completed') {
-    return { density: 0.26, flow: 0.36, pressure: 0.34, compression: 0.1, sync: 0.25, strain: false, stable: true };
+    return { density: 0.22, flow: 0.04, pressure: 0.28, compression: 0.08, sync: 0.12, strain: false, stable: true };
   }
   if (mode === 'blocked') {
     return { density: 0.34, flow: 0.52, pressure: 0.78, compression: 0.32, sync: 0.42, strain: true, stable: false };
+  }
+  if (mode === 'failure') {
+    return { density: 0.43, flow: 0.64, pressure: 1.0, compression: 0.4, sync: 0.62, strain: true, stable: true };
   }
   return { density: 0.43, flow: 0.64, pressure: 1.0, compression: 0.4, sync: 0.62, strain: true, stable: false };
 }
