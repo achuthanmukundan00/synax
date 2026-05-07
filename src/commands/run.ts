@@ -2,6 +2,9 @@ import { Command } from 'commander';
 import { runAgentTask } from '../agent/run-task';
 import { normalizeRunMode, type RunMode } from '../agent/task-policy';
 import { TuiRenderer } from '../agent/renderers';
+import { loadProjectConfig, normalizeProviderConfig } from '../config/project';
+import { createChatSession, compactHome, currentGitBranch, providerNameFromPreset } from './chat';
+import { runInteractiveTui } from '../tui/interactive-tui';
 
 const MAX_REPAIR_ATTEMPTS = 10;
 
@@ -80,6 +83,39 @@ export function runCommand(program: Command): void {
         } else if (options.plan) {
           console.log(`[synax] Run plan received: "${options.plan}"`);
           console.log('[synax] Placeholder: Plan execution engine not yet implemented.');
+        } else if (options.tui) {
+          const repoRoot = process.cwd();
+          const loaded = loadProjectConfig(repoRoot);
+          if (loaded.errors.length > 0) {
+            console.error(`[synax] Config error:\n${loaded.errors.map((e) => `${e.path}: ${e.message}`).join('\n')}`);
+            process.exitCode = 1;
+            return;
+          }
+          const provider = normalizeProviderConfig(loaded.config.provider ?? {});
+          let lastModelOutput = '';
+          const session = createChatSession({
+            repoRoot,
+            config: loaded.config,
+            onActivity: (activity) => {
+              if (activity.kind === 'model_response' && activity.modelOutput) {
+                lastModelOutput = activity.modelOutput;
+              }
+            },
+            tui: true,
+          });
+          const modelLabel = provider.model.trim() || undefined;
+          const cwdLabel = compactHome(repoRoot);
+          const gitBranch = await currentGitBranch(repoRoot);
+          await runInteractiveTui(session, {
+            blockedMessage: !provider.model.trim() ? 'provider.model is required' : undefined,
+            lastModelOutput: () => lastModelOutput,
+            modelLabel,
+            endpointLabel: provider.baseUrl || undefined,
+            providerName: providerNameFromPreset(loaded.config.provider?.preset),
+            cwdLabel,
+            gitBranch,
+            contextWindowTokens: loaded.config.contextWindowTokens ?? loaded.config.contextBudgetTokens,
+          });
         } else {
           console.log('[synax] Run command initialized. Use --task or --plan to specify work.');
         }
