@@ -5,7 +5,14 @@ import type { Writable } from 'node:stream';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 
-import { loadProjectConfig, normalizeProviderConfig, type ProjectConfig } from '../config/project';
+import {
+  applyEffectiveSynaxConfigToProjectConfig,
+  loadProjectConfig,
+  normalizeProviderConfig,
+  type ProjectConfig,
+} from '../config/project';
+import { loadSynaxConfig } from '../config/load-config';
+import { loadSkills, type SkillDiagnostic } from '../agent/skills';
 import pkg from '../../package.json';
 import { createOpenAICompatibleClient } from '../llm/client';
 import {
@@ -37,6 +44,8 @@ export interface ChatSession {
   handleShellCommand?(command: string): Promise<ShellCommandReport>;
   /** Install a runtime event sink for real-time TUI state updates. */
   setEventSink?: (sink: ((event: import('../agent/events').AgentEvent) => void) | null) => void;
+  /** Refresh the session's config reference (called after settings changes). */
+  refreshConfig?: (config: ProjectConfig) => void;
 }
 
 export interface ChatTurnReport {
@@ -95,23 +104,70 @@ export interface InlinePasteInputSession {
   hasPaste(): boolean;
 }
 
+/**
+ * Strip provider-specific message fields when switching between incompatible providers.
+ * Removes: reasoning_content (DeepSeek-specific), and OpenAI tool_calls format
+ * when switching to a Qwen/Relay provider that prefers content_xml.
+ */
+function sanitizeConversationForProvider(
+  conversation: AgentConversation,
+  providerConfig: import('../llm/types').NormalizedProviderConfig,
+): void {
+  const isDeepSeek = /deepseek/i.test(providerConfig.model);
+  for (const msg of conversation.messages) {
+    // Strip reasoning_content unless the new provider is DeepSeek.
+    if (!isDeepSeek && 'reasoning_content' in msg) {
+      delete msg.reasoning_content;
+    }
+    // Internal markers are never sent to the model but clean them for safety.
+    delete msg._tool_call_ids;
+    delete msg._tool_result_ids;
+  }
+}
+
 export function createChatSession(options: {
   repoRoot: string;
   config: ProjectConfig;
+  /** Thinking level from effective config. When not 'off', enables provider-level thinking. */
+  thinkingLevel?: 'off' | 'low' | 'medium' | 'high' | 'auto';
   onActivity?: (activity: AgentActivity) => void;
   /** Suppress stdout writes (for TUI mode). */
   tui?: boolean;
+  /** Pre-loaded skill messages to inject into the agent system context. */
+  skillMessages?: string[];
+  /** Skill diagnostics for display/debug. */
+  skillDiagnostics?: SkillDiagnostic[];
 }): ChatSession {
-  const conversation = createAgentConversation();
+  const conversation = createAgentConversation({
+    skillMessages: options.skillMessages,
+  });
   let eventSink: ((event: import('../agent/events').AgentEvent) => void) | null = null;
+  const thinkingLevel = options.thinkingLevel;
+  // Track last provider identity for cross-provider message sanitization.
+  let lastProviderId = '';
+
+  /** Config wrapper: the TUI updates this reference when settings change. */
+  const configRef: { current: ProjectConfig } = { current: options.config };
+
+  const getConfig = (): ProjectConfig => configRef.current;
 
   return {
     conversation,
     setEventSink: (sink) => {
       eventSink = sink;
     },
+    refreshConfig: (config: ProjectConfig) => {
+      configRef.current = config;
+    },
     async handleUserMessage(message: string): Promise<ChatTurnReport> {
-      const providerConfig = normalizeProviderConfig(options.config.provider ?? {});
+      const config = getConfig();
+      const providerConfig = normalizeProviderConfig(config.provider ?? {}, { thinkingLevel });
+      // Sanitize conversation messages when switching providers/models.
+      const currentProviderId = `${providerConfig.baseUrl}|${providerConfig.model}`;
+      if (lastProviderId && lastProviderId !== currentProviderId) {
+        sanitizeConversationForProvider(conversation, providerConfig);
+      }
+      lastProviderId = currentProviderId;
       const client = createOpenAICompatibleClient(providerConfig);
       const beforeHead = await gitHead(options.repoRoot);
       const result = await runAgentTurn({
@@ -119,16 +175,16 @@ export function createChatSession(options: {
         task: message,
         client,
         conversation,
-        maxSteps: options.config.maxModelSteps,
-        maxToolCalls: options.config.maxToolCalls,
-        tools: { bashEnabled: options.config.tools?.bash?.enabled },
+        maxSteps: config.maxModelSteps,
+        maxToolCalls: config.maxToolCalls,
+        tools: { bashEnabled: config.tools?.bash?.enabled },
         contextBudget: {
-          contextBudgetTokens: options.config.contextBudgetTokens,
-          contextWindowTokens: options.config.contextWindowTokens,
-          reservedOutputTokens: options.config.reservedOutputTokens,
-          keepRecentTokens: options.config.keepRecentTokens,
-          maxSingleReadResultTokens: options.config.maxSingleReadResultTokens,
-          maxTotalReadResultTokensPerTurn: options.config.maxTotalReadResultTokensPerTurn,
+          contextBudgetTokens: config.contextBudgetTokens,
+          contextWindowTokens: config.contextWindowTokens,
+          reservedOutputTokens: config.reservedOutputTokens,
+          keepRecentTokens: config.keepRecentTokens,
+          maxSingleReadResultTokens: config.maxSingleReadResultTokens,
+          maxTotalReadResultTokensPerTurn: config.maxTotalReadResultTokensPerTurn,
         },
         onActivity(activity) {
           options.onActivity?.(activity);
@@ -186,14 +242,15 @@ export function createChatSession(options: {
     async handleSlashCommand(command: string): Promise<SlashCommandReport> {
       return handleSlashCommand(command, {
         repoRoot: options.repoRoot,
-        config: options.config,
+        config: getConfig(),
         conversation,
+        skillMessages: options.skillMessages,
       });
     },
     async handleShellCommand(command: string): Promise<ShellCommandReport> {
       return runLocalShellCommand(command, {
         repoRoot: options.repoRoot,
-        shell: options.config.tools?.shell ?? 'zsh',
+        shell: getConfig().tools?.shell ?? 'zsh',
       });
     },
   };
@@ -289,7 +346,26 @@ export function chatCommand(program: Command): void {
         return;
       }
 
-      const provider = normalizeProviderConfig(loaded.config.provider ?? {});
+      // Extract thinking level from the effective multi-provider config.
+      // Falls back to 'off' if the config can't be loaded.
+      let thinkingLevel: 'off' | 'low' | 'medium' | 'high' | 'auto' = 'off';
+      let skillMessages: string[] | undefined;
+      let skillDiagnostics: SkillDiagnostic[] | undefined;
+      try {
+        const effectiveConfig = loadSynaxConfig();
+        if (effectiveConfig.active.thinking && effectiveConfig.active.thinking !== 'off') {
+          thinkingLevel = effectiveConfig.active.thinking;
+        }
+        if (effectiveConfig.skills.enabled.length > 0) {
+          const result = loadSkills(effectiveConfig.skills, repoRoot);
+          skillMessages = result.systemMessages;
+          skillDiagnostics = result.diagnostics;
+        }
+      } catch {
+        // best-effort
+      }
+
+      const provider = normalizeProviderConfig(loaded.config.provider ?? {}, { thinkingLevel });
       const useTui = shouldUseInteractiveTui({
         plain: Boolean(options.plain),
         message: options.message,
@@ -307,6 +383,9 @@ export function chatCommand(program: Command): void {
       const session = createChatSession({
         repoRoot,
         config: loaded.config,
+        thinkingLevel,
+        skillMessages,
+        skillDiagnostics,
         onActivity: useTui
           ? (activity) => {
               if (activity.kind === 'model_response' && activity.modelOutput) {
@@ -335,12 +414,34 @@ export function chatCommand(program: Command): void {
           blockedMessage: !provider.model.trim() ? 'provider.model is required' : undefined,
           lastModelOutput: () => lastModelOutput,
           modelLabel,
+          thinkingEnabled: thinkingLevel !== 'off',
           endpointLabel: provider.baseUrl || undefined,
           providerName: providerNameFromPreset(loaded.config.provider?.preset),
           cwdLabel,
           gitBranch,
           contextWindowTokens: loaded.config.contextWindowTokens ?? loaded.config.contextBudgetTokens,
           coreVisualProfile: loaded.config.coreVisualProfile,
+          activeSkills: skillDiagnostics?.filter((d) => d.loaded).map((d) => d.id),
+          onSettingsConfigChanged: (settingsConfig) => {
+            loaded.config = applyEffectiveSynaxConfigToProjectConfig(loaded.config, settingsConfig);
+            // Keep the session's config reference in sync with the updated project config.
+            session.refreshConfig?.(loaded.config);
+            const nextThinkingLevel = settingsConfig.active.thinking ?? thinkingLevel;
+            const nextProvider = normalizeProviderConfig(loaded.config.provider ?? {}, {
+              thinkingLevel: nextThinkingLevel,
+            });
+            const activeProvider = settingsConfig.providers[settingsConfig.active.provider];
+            const activeModel = activeProvider?.models.find((model) => model.id === settingsConfig.active.model);
+            return {
+              modelLabel: nextProvider.model.trim() || undefined,
+              endpointLabel: nextProvider.baseUrl || undefined,
+              providerName: activeProvider?.name ?? providerNameFromPreset(loaded.config.provider?.preset),
+              contextWindowTokens:
+                activeModel?.contextWindow ?? loaded.config.contextWindowTokens ?? loaded.config.contextBudgetTokens,
+              coreVisualProfile: loaded.config.coreVisualProfile,
+              thinkingEnabled: nextThinkingLevel !== 'off',
+            };
+          },
         });
         return;
       }
@@ -443,12 +544,13 @@ export function classifyInlineSubmission(draft: InlinePasteDraft): InlineSubmiss
 }
 
 function renderInlinePastePreview(draft: InlinePasteDraft): string {
-  return draft.segments
+  const raw = draft.segments
     .map((segment) =>
       segment.kind === 'text' ? segment.text : `[pasted: ${segment.lines} lines, ${segment.chars} chars]`,
     )
-    .join('')
-    .trim();
+    .join('');
+  // Trim only leading whitespace; preserve trailing spaces for cursor positioning.
+  return raw.replace(/^\s+/, '');
 }
 
 function mergePasteAttachment(draft: InlinePasteDraft, attachment: InlinePasteAttachment): void {
@@ -732,7 +834,12 @@ function isUseAfterCloseError(error: unknown): boolean {
 
 async function handleSlashCommand(
   rawCommand: string,
-  context: { repoRoot: string; config: ProjectConfig; conversation: AgentConversation },
+  context: {
+    repoRoot: string;
+    config: ProjectConfig;
+    conversation: AgentConversation;
+    skillMessages?: string[];
+  },
 ): Promise<SlashCommandReport> {
   const trimmedCommand = rawCommand.trim();
   const command = trimmedCommand.toLowerCase();
@@ -746,11 +853,11 @@ async function handleSlashCommand(
     };
   }
   if (command === '/clear') {
-    resetAgentConversation(context.conversation);
+    resetAgentConversation(context.conversation, { skillMessages: context.skillMessages });
     return { handled: true, output: '[synax] conversation cleared' };
   }
   if (command === '/new') {
-    resetAgentConversation(context.conversation);
+    resetAgentConversation(context.conversation, { skillMessages: context.skillMessages });
     return { handled: true, output: '[synax] new session started', newSession: true };
   }
   if (command === '/settings') {

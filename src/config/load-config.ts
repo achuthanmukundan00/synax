@@ -35,7 +35,7 @@ const DEFAULT_MODELS: Record<string, ResolvedModelConfig[]> = {
     {
       id: 'Qwen3.6-35B-A3B-UD-IQ3_XXS.gguf',
       displayName: 'Qwen3.6 35B Local',
-      contextWindow: 88000,
+      contextWindow: 131072,
       supportsThinking: false,
       thinkingLevels: [],
     },

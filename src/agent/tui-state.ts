@@ -92,6 +92,8 @@ export interface RunStateSnapshot {
   };
   /** Scrollable transcript/debug history for model output, tool calls, and tool results. */
   debugHistory: TuiDebugHistoryItem[];
+  /** Names of active skills loaded into the agent context (e.g. ['coderabbit-review']). */
+  activeSkills: string[];
 }
 
 const MAX_TIMELINE_ITEMS = 10;
@@ -130,6 +132,7 @@ export function createInitialRunStateSnapshot(nowMs: number): RunStateSnapshot {
     terminal: 'running',
     lastModelOutput: '',
     debugHistory: [],
+    activeSkills: [],
   };
 }
 
@@ -180,6 +183,7 @@ export function applyEventToRunState(state: RunStateSnapshot, event: AgentEvent,
         terminal: 'running',
         lastModelOutput: '',
         patchPreview: undefined,
+        activeSkills: event.activeSkills ?? [],
       };
       next = withPhase(next, 'thinking', 'task started');
       next = withDebugHistory(next, {

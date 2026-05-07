@@ -13,6 +13,7 @@ import {
   generateDefaultConfig,
   writeConfigFile,
   normalizeProviderConfig,
+  applyEffectiveSynaxConfigToProjectConfig,
 } from '../config/project';
 
 import {
@@ -557,6 +558,68 @@ id = "deepseek-chat"
     expect(effective.active.thinking).toBe('off'); // not set, so default
   });
 
+  it('loads active multi-provider settings into the runtime provider config', () => {
+    const localPath = join(TMP, '.synax.toml');
+    writeFileSync(
+      localPath,
+      `
+[active]
+provider = "deepseek"
+model = "deepseek-reasoner"
+thinking = "high"
+
+[providers.deepseek]
+name = "DeepSeek"
+compatibility = "openai-compatible"
+base_url = "https://api.deepseek.com/v1"
+api_key_env = "DEEPSEEK_API_KEY"
+
+[[providers.deepseek.models]]
+id = "deepseek-reasoner"
+context_window = 65536
+supports_thinking = true
+thinking_levels = ["off", "low", "medium", "high"]
+`,
+      'utf-8',
+    );
+
+    const loaded = loadProjectConfig(TMP);
+    const provider = normalizeProviderConfig(loaded.config.provider ?? {});
+
+    expect(loaded.errors).toEqual([]);
+    expect(provider.baseUrl).toBe('https://api.deepseek.com/v1');
+    expect(provider.model).toBe('deepseek-reasoner');
+    expect(loaded.config.contextWindowTokens).toBe(65536);
+  });
+
+  it('keeps default runtime budgets when active multi-provider model has no context window', () => {
+    const localPath = join(TMP, '.synax.toml');
+    writeFileSync(
+      localPath,
+      `
+[active]
+provider = "deepseek"
+model = "deepseek-v4-pro"
+
+[providers.deepseek]
+name = "DeepSeek"
+compatibility = "openai-compatible"
+base_url = "https://api.deepseek.com/v1"
+
+[[providers.deepseek.models]]
+id = "deepseek-v4-pro"
+supports_thinking = false
+`,
+      'utf-8',
+    );
+
+    const loaded = loadProjectConfig(TMP);
+
+    expect(loaded.errors).toEqual([]);
+    expect(loaded.config.contextBudgetTokens).toBe(131072);
+    expect(loaded.config.contextWindowTokens).toBe(131072);
+  });
+
   it('preserves core visual profile through effective config loading', () => {
     const localPath = join(TMP, '.synax.toml');
     writeFileSync(
@@ -900,6 +963,21 @@ describe('buildConfigUpdate', () => {
     expect(updated.active.model).toBe('deepseek');
     // 'off' is in deepseek's thinkingLevels, so it is preserved.
     expect(updated.active.thinking).toBe('off');
+  });
+
+  it('projects effective settings updates into the chat runtime config', () => {
+    const updated = applyEffectiveSynaxConfigToProjectConfig(
+      { provider: { base_url: 'http://127.0.0.1:1234/v1', model: 'qwen' } },
+      {
+        ...baseConfig,
+        active: { provider: 'relay-local', model: 'deepseek', thinking: 'auto' },
+      },
+    );
+    const provider = normalizeProviderConfig(updated.provider ?? {});
+
+    expect(provider.baseUrl).toBe('http://127.0.0.1:1234/v1');
+    expect(provider.model).toBe('deepseek');
+    expect(updated.contextWindowTokens).toBe(131072);
   });
 });
 
