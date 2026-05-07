@@ -1,6 +1,6 @@
 import { existsSync } from 'fs';
 import { mkdir, readFile } from 'fs/promises';
-import { dirname } from 'path';
+import { dirname, isAbsolute, relative, resolve } from 'path';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 
@@ -52,6 +52,8 @@ export interface AgentMessage {
   tool_call_id?: string;
   name?: string;
   tool_calls?: unknown;
+  /** Provider-specific reasoning field required by DeepSeek thinking-mode continuation requests. */
+  reasoning_content?: string;
   // Internal markers for compaction integrity (not serialized to the model).
   _tool_call_ids?: string[];
   _tool_result_ids?: string[];
@@ -83,6 +85,8 @@ export interface AgentRunnerOptions {
   onBudget?: (snapshot: AgentBudgetSnapshot) => void;
   approvePatch?: (preview: PatchPreview) => PatchApprovalDecision | Promise<PatchApprovalDecision>;
   ensureCheckpoint?: () => Promise<unknown>;
+  /** Optional preloaded skill instructions injected as additional system messages. */
+  skillMessages?: string[];
   contextBudget?: Partial<ContextBudgetSettings> & { contextBudgetTokens?: number };
 }
 
@@ -120,7 +124,6 @@ export interface AgentTurnResult {
   error?: string;
 }
 
-const DEFAULT_MAX_STEPS = 64;
 const DEFAULT_MAX_TOOL_CALLS = 192;
 const MAX_CONSECUTIVE_RECOVERABLE_TOOL_ERRORS = 3;
 const MAX_IDENTICAL_READS_PER_TURN = 3;
@@ -132,14 +135,20 @@ interface AgentToolExecutionResult {
   success: boolean;
   toolResult: ToolResult;
   changedFile?: string;
-  completedAction?: string;
   error?: string;
   terminalState?: AgentTerminalState;
 }
 
-export function createAgentConversation(): AgentConversation {
+export function createAgentConversation(options: { skillMessages?: string[] } = {}): AgentConversation {
+  const messages: AgentMessage[] = [{ role: 'system', content: systemPrompt() }];
+  if (options.skillMessages && options.skillMessages.length > 0) {
+    for (const message of options.skillMessages) {
+      if (message.trim().length === 0) continue;
+      messages.push({ role: 'system', content: message });
+    }
+  }
   return {
-    messages: [{ role: 'system', content: systemPrompt() }],
+    messages,
     inspectionLedger: createInspectionLedger(),
     latestCompaction: null,
     tokenLedger: createTokenLedger(),
@@ -147,8 +156,18 @@ export function createAgentConversation(): AgentConversation {
   };
 }
 
-export function resetAgentConversation(conversation: AgentConversation): void {
-  conversation.messages.splice(0, conversation.messages.length, { role: 'system', content: systemPrompt() });
+export function resetAgentConversation(
+  conversation: AgentConversation,
+  options: { skillMessages?: string[] } = {},
+): void {
+  const messages: AgentMessage[] = [{ role: 'system', content: systemPrompt() }];
+  if (options.skillMessages && options.skillMessages.length > 0) {
+    for (const message of options.skillMessages) {
+      if (message.trim().length === 0) continue;
+      messages.push({ role: 'system', content: message });
+    }
+  }
+  conversation.messages.splice(0, conversation.messages.length, ...messages);
   conversation.inspectionLedger = createInspectionLedger();
   conversation.latestCompaction = null;
   conversation.assemblyStats = null;
@@ -156,7 +175,7 @@ export function resetAgentConversation(conversation: AgentConversation): void {
 }
 
 export async function runAgentTurn(options: AgentRunnerOptions & { task: string }): Promise<AgentTurnResult> {
-  const conversation = options.conversation ?? createAgentConversation();
+  const conversation = options.conversation ?? createAgentConversation({ skillMessages: options.skillMessages });
   const registry =
     options.registry ??
     createToolRegistry({
@@ -166,10 +185,8 @@ export async function runAgentTurn(options: AgentRunnerOptions & { task: string 
   const mode = options.mode ?? 'patch';
   const bashEnabled = options.tools?.bashEnabled ?? true;
   const tools = buildModelFacingTools({ ...options.tools, bashEnabled, mode });
-  const maxSteps = options.maxSteps ?? DEFAULT_MAX_STEPS;
   const maxToolCalls = options.maxToolCalls ?? DEFAULT_MAX_TOOL_CALLS;
   const changedFiles: string[] = [];
-  const completedActions: string[] = [];
   const toolCalls: AgentTurnResult['toolCalls'] = [];
   const readCache = new Map<string, ToolResult>();
   const identicalReadCounts = new Map<string, number>();
@@ -207,9 +224,8 @@ export async function runAgentTurn(options: AgentRunnerOptions & { task: string 
 
   conversation.messages.push({ role: 'user', content: options.task });
 
-  for (let step = 1; step <= maxSteps; step += 1) {
+  for (let step = 1; ; step += 1) {
     let response: ChatResponse;
-    const isFinalStep = step === maxSteps;
     try {
       options.onActivity?.({ kind: 'model', message: `model step ${step}` });
       options.onEvent?.({
@@ -270,36 +286,7 @@ export async function runAgentTurn(options: AgentRunnerOptions & { task: string 
         }
 
         // Build model request with assembly, orientation, and token ledger update
-        const assembled = buildModelRequest(
-          conversation,
-          contextBudget,
-          identicalReadCounts,
-          isFinalStep,
-          totalReadCalls,
-        );
-
-        // Final belt-and-suspenders check on assembled messages
-        if (isFinalStep) {
-          const finalTokens = estimateRequestTokens(assembled);
-          if (finalTokens > effectiveInputLimit) {
-            return {
-              terminalState: 'budget_exhausted',
-              finalAnswer: '',
-              steps: step,
-              toolCalls,
-              changedFiles,
-              conversation,
-              error: formatContextBudgetError({
-                estimatedInputTokens: finalTokens,
-                contextWindowTokens: contextBudget.contextWindowTokens,
-                reservedOutputTokens: contextBudget.reservedOutputTokens,
-                effectiveInputLimit,
-                largestContributors: summarizeLargestContributors(assembled),
-                compactionStage: 4,
-              }),
-            };
-          }
-        }
+        const assembled = buildModelRequest(conversation, contextBudget, identicalReadCounts, totalReadCalls);
 
         response = await options.client.chat({
           messages: assembled,
@@ -309,79 +296,13 @@ export async function runAgentTurn(options: AgentRunnerOptions & { task: string 
         });
       } else {
         // Within budget: build assembled model request proactively
-        const assembled = buildModelRequest(
-          conversation,
-          contextBudget,
-          identicalReadCounts,
-          isFinalStep,
-          totalReadCalls,
-        );
-
-        // Extra budget check for final step
-        if (isFinalStep) {
-          const finalTokens = estimateRequestTokens(assembled);
-          if (finalTokens > effectiveInputLimit) {
-            const guarded = guardModelRequestMultiStage(conversation.messages, contextBudget, conversation);
-            if (guarded.error) {
-              return {
-                terminalState: 'budget_exhausted',
-                finalAnswer: '',
-                steps: step,
-                toolCalls,
-                changedFiles,
-                conversation,
-                error: guarded.error,
-              };
-            }
-            // Rebuild from freshly compacted messages
-            const fallbackAssembled = buildModelRequest(
-              conversation,
-              contextBudget,
-              identicalReadCounts,
-              isFinalStep,
-              totalReadCalls,
-            );
-            const fallbackTokens = estimateRequestTokens(fallbackAssembled);
-            if (fallbackTokens > effectiveInputLimit) {
-              return {
-                terminalState: 'budget_exhausted',
-                finalAnswer: '',
-                steps: step,
-                toolCalls,
-                changedFiles,
-                conversation,
-                error: formatContextBudgetError({
-                  estimatedInputTokens: fallbackTokens,
-                  contextWindowTokens: contextBudget.contextWindowTokens,
-                  reservedOutputTokens: contextBudget.reservedOutputTokens,
-                  effectiveInputLimit,
-                  largestContributors: summarizeLargestContributors(fallbackAssembled),
-                  compactionStage: 4,
-                }),
-              };
-            }
-            response = await options.client.chat({
-              messages: fallbackAssembled,
-              tools,
-              temperature: 0,
-              maxTokens: 2048,
-            });
-          } else {
-            response = await options.client.chat({
-              messages: assembled,
-              tools,
-              temperature: 0,
-              maxTokens: 2048,
-            });
-          }
-        } else {
-          response = await options.client.chat({
-            messages: assembled,
-            tools,
-            temperature: 0,
-            maxTokens: 2048,
-          });
-        }
+        const assembled = buildModelRequest(conversation, contextBudget, identicalReadCounts, totalReadCalls);
+        response = await options.client.chat({
+          messages: assembled,
+          tools,
+          temperature: 0,
+          maxTokens: 2048,
+        });
       }
     } catch (error) {
       const message = errorMessage(error);
@@ -400,18 +321,6 @@ export async function runAgentTurn(options: AgentRunnerOptions & { task: string 
     options.onActivity?.(formatModelResponseActivity(response, step));
 
     conversation.messages.push(assistantMessage(response, contextBudget));
-
-    if (isFinalStep && response.toolCalls.length > 0) {
-      return {
-        terminalState: 'budget_exhausted',
-        finalAnswer: response.content.trim(),
-        steps: step,
-        toolCalls,
-        changedFiles,
-        conversation,
-        error: `max steps exceeded: ${maxSteps}`,
-      };
-    }
 
     if (response.toolCalls.length > 0 && response.content.trim().length > 0) {
       if (!isSafeToolPreamble(response.content)) {
@@ -441,7 +350,6 @@ export async function runAgentTurn(options: AgentRunnerOptions & { task: string 
       if (
         mode === 'patch' &&
         changedFiles.length === 0 &&
-        completedActions.length === 0 &&
         isPrematureCompletionClaim(response.content)
       ) {
         conversation.messages.push({
@@ -466,7 +374,6 @@ export async function runAgentTurn(options: AgentRunnerOptions & { task: string 
 
     const contentToolResults: Array<{ id: string; content: string }> = [];
     for (const call of response.toolCalls) {
-      const callIndex = toolCalls.length;
       if (toolCalls.length >= maxToolCalls) {
         return {
           terminalState: 'budget_exhausted',
@@ -537,38 +444,12 @@ export async function runAgentTurn(options: AgentRunnerOptions & { task: string 
         detail: formatToolResultDetail(result.toolResult),
       });
       if (result.changedFile) changedFiles.push(result.changedFile);
-      if (result.completedAction) {
-        completedActions.push(result.completedAction);
-        // Only auto-complete when this is the last tool call in the
-        // current model response. If the model queued multiple tool
-        // calls (e.g. commit → push → pr create), wait until all
-        // have been processed before deciding terminal state.
-        const isCurrentBatchLast = callIndex >= response.toolCalls.length - 1;
-        if (isCurrentBatchLast) {
-          flushContentToolResults(conversation, response, contentToolResults);
-          return {
-            terminalState: 'completed',
-            finalAnswer: formatCompletedActionFinalAnswer(result.completedAction, result.toolResult),
-            steps: step,
-            toolCalls,
-            changedFiles,
-            conversation,
-          };
-        }
-        // Otherwise: let remaining tool calls execute first.
-      }
 
       // Item 7: Budget check after EVERY tool result is appended.
       // Check the model-facing assembled request, not the unpruned
       // canonical transcript. Large shell/read results may be safely
       // compacted before the next model call.
-      const afterToolMessages = buildModelRequest(
-        conversation,
-        contextBudget,
-        identicalReadCounts,
-        false,
-        totalReadCalls,
-      );
+      const afterToolMessages = buildModelRequest(conversation, contextBudget, identicalReadCounts, totalReadCalls);
       const afterToolTokens = estimateRequestTokens(afterToolMessages);
       const effectiveLimit = contextBudget.contextWindowTokens - contextBudget.reservedOutputTokens;
       if (afterToolTokens > effectiveLimit) {
@@ -629,16 +510,6 @@ export async function runAgentTurn(options: AgentRunnerOptions & { task: string 
     }
     flushContentToolResults(conversation, response, contentToolResults);
   }
-
-  return {
-    terminalState: 'budget_exhausted',
-    finalAnswer: '',
-    steps: maxSteps,
-    toolCalls,
-    changedFiles,
-    conversation,
-    error: `max steps exceeded: ${maxSteps}`,
-  };
 }
 
 function assistantMessage(response: ChatResponse, settings?: ContextBudgetSettings): AgentMessage {
@@ -650,11 +521,14 @@ function assistantMessage(response: ChatResponse, settings?: ContextBudgetSettin
   if (content.length > maxOutputChars) {
     content = content.slice(0, maxOutputChars) + '\n[response truncated]';
   }
+  const reasoningContent = response.reasoningContent?.trim();
+  const reasoningFields = reasoningContent ? { reasoning_content: reasoningContent } : {};
 
   if (toolCallFormat(response) === 'content_xml') {
     return {
       role: 'assistant',
       content,
+      ...reasoningFields,
       // P2: Marker so compaction integrity can match XML tool-call pairs.
       // Not serialized by serializeMessage — model never sees it.
       _tool_call_ids: response.toolCalls.map((c) => c.id),
@@ -664,6 +538,7 @@ function assistantMessage(response: ChatResponse, settings?: ContextBudgetSettin
   return {
     role: 'assistant',
     content,
+    ...reasoningFields,
     tool_calls: response.toolCalls.map((call) => ({
       id: call.id,
       type: 'function',
@@ -825,7 +700,6 @@ async function executeReplaceInFile(
 
   const validation = await validateReplaceInFile(patch, {
     repoRoot: context.repoRoot,
-    ledger: context.ledger,
   });
   if (!validation.ok) {
     return toolFailure(toolName, validation.message);
@@ -851,7 +725,6 @@ async function executeReplaceInFile(
 
   const applied = await applyReplaceInFile(patch, {
     repoRoot: context.repoRoot,
-    ledger: context.ledger,
   });
   if (!applied.ok) {
     return toolFailure(toolName, applied.message);
@@ -1098,22 +971,24 @@ async function executeBashTool(input: Record<string, unknown>, repoRoot: string)
     return toolFailure('bash', `Blocked: ${blockReason}`);
   }
 
-  const safetyWarnings = detectDangerousCommandWarnings(command);
+  const plan = planBashCommand(command, repoRoot);
+  const safetyWarnings = detectDangerousCommandWarnings(plan.command);
 
   try {
-    const { stdout, stderr } = await execFileAsync('/bin/bash', ['-lc', command], {
+    const { stdout, stderr } = await execFileAsync('/bin/bash', ['-lc', plan.command], {
       cwd: repoRoot,
       maxBuffer: 256 * 1024,
       timeout: 30_000,
     });
     return {
       success: true,
-      completedAction: completedShellAction(command),
       toolResult: {
         success: true,
         toolName: 'bash',
         output: {
-          command,
+          command: plan.command,
+          ...(plan.originalCommand !== plan.command ? { originalCommand: plan.originalCommand } : {}),
+          ...(plan.cwdRecovery ? { cwdRecovery: plan.cwdRecovery } : {}),
           safetyWarnings,
           stdout: String(stdout ?? ''),
           stderr: String(stderr ?? ''),
@@ -1131,7 +1006,9 @@ async function executeBashTool(input: Record<string, unknown>, repoRoot: string)
         toolName: 'bash',
         error: errorMessage(error),
         output: {
-          command,
+          command: plan.command,
+          ...(plan.originalCommand !== plan.command ? { originalCommand: plan.originalCommand } : {}),
+          ...(plan.cwdRecovery ? { cwdRecovery: plan.cwdRecovery } : {}),
           safetyWarnings,
           stdout: typeof e.stdout === 'string' ? e.stdout : (e.stdout?.toString('utf-8') ?? ''),
           stderr: typeof e.stderr === 'string' ? e.stderr : (e.stderr?.toString('utf-8') ?? ''),
@@ -1140,6 +1017,60 @@ async function executeBashTool(input: Record<string, unknown>, repoRoot: string)
       },
     };
   }
+}
+
+interface BashCommandPlan {
+  command: string;
+  originalCommand: string;
+  cwdRecovery?: string;
+}
+
+function planBashCommand(command: string, repoRoot: string): BashCommandPlan {
+  const parsed = parseLeadingAbsoluteCd(command);
+  if (!parsed || !parsed.rest.trim()) return { command, originalCommand: command };
+
+  const root = resolve(repoRoot);
+  const target = resolve(parsed.target);
+  if (!isAbsolute(parsed.target)) return { command, originalCommand: command };
+
+  if (!existsSync(target)) {
+    return {
+      command: parsed.rest.trim(),
+      originalCommand: command,
+      cwdRecovery: `stale leading cd target did not exist: ${target}; running command body from ${root}`,
+    };
+  }
+
+  if (!isPathInside(root, target)) {
+    return {
+      command: parsed.rest.trim(),
+      originalCommand: command,
+      cwdRecovery: `stale leading cd target was outside the repository root: ${target}; running command body from ${root}`,
+    };
+  }
+
+  return { command, originalCommand: command };
+}
+
+function parseLeadingAbsoluteCd(command: string): { target: string; rest: string } | null {
+  const match = /^\s*cd\s+((?:"(?:[^"\\]|\\.)*"|'[^']*'|[^;&|]+?))\s*&&\s*([\s\S]+)$/u.exec(command);
+  if (!match) return null;
+  return { target: unquoteShellPath(match[1].trim()), rest: match[2] };
+}
+
+function unquoteShellPath(path: string): string {
+  if (path.length >= 2 && path.startsWith('"') && path.endsWith('"')) {
+    return path.slice(1, -1).replace(/\\(["\\$`])/g, '$1');
+  }
+  if (path.length >= 2 && path.startsWith("'") && path.endsWith("'")) {
+    return path.slice(1, -1);
+  }
+  return path;
+}
+
+function isPathInside(root: string, candidate: string): boolean {
+  const rel = relative(root, candidate);
+  return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
 }
 
 function detectRepeatedBashCommand(call: ParsedToolCall, counts: Map<string, number>): AgentToolExecutionResult | null {
@@ -1168,61 +1099,23 @@ function normalizeShellCommand(command: string): string {
   return command.replace(/\s+/g, ' ').trim();
 }
 
-function completedShellAction(command: string): string | undefined {
-  if (/(^|[;&|(){}\s])git\s+commit(?=\s|$)/.test(command)) return 'git commit';
-  if (/(^|[;&|(){}\s])git\s+push(?=\s|$)/.test(command)) return 'git push';
-  if (/(^|[;&|(){}\s])gh\s+pr\s+create(?=\s|$)/.test(command)) return 'gh pr create';
-  if (/(^|[;&|(){}\s])gh\s+pr\s+merge(?=\s|$)/.test(command)) return 'gh pr merge';
-  if (/(^|[;&|(){}\s])gh\s+issue\s+create(?=\s|$)/.test(command)) return 'gh issue create';
-  if (/(^|[;&|(){}\s])gh\s+release\s+create(?=\s|$)/.test(command)) return 'gh release create';
-  return undefined;
-}
-
-function formatCompletedActionFinalAnswer(action: string, toolResult: ToolResult): string {
-  const output = toolResult.output;
-  const command =
-    output && typeof output === 'object' && typeof (output as { command?: unknown }).command === 'string'
-      ? (output as { command: string }).command
-      : undefined;
-  const stdout =
-    output && typeof output === 'object' && typeof (output as { stdout?: unknown }).stdout === 'string'
-      ? (output as { stdout: string }).stdout.trim() || undefined
-      : undefined;
-  const stderr =
-    output && typeof output === 'object' && typeof (output as { stderr?: unknown }).stderr === 'string'
-      ? (output as { stderr: string }).stderr.trim() || undefined
-      : undefined;
-  const evidence = stdout ?? stderr;
-  const lines = [`Completed ${action}.`];
-  if (command) lines.push(`Command: \`${command}\``);
-  if (evidence) lines.push(evidence);
-  return lines.join('\n');
-}
-
 function detectBlockedCommand(command: string): string | null {
   const normalized = command.toLowerCase().replace(/\s+/g, ' ').trim();
 
   // Remote code execution via pipe-to-shell
-  if (/\bcurl\b.*\|\s*(bash|sh)\b/.test(normalized))
-    return 'remote script execution via curl|bash is blocked';
-  if (/\bwget\b.*\|\s*(bash|sh)\b/.test(normalized))
-    return 'remote script execution via wget|bash is blocked';
+  if (/\bcurl\b.*\|\s*(bash|sh)\b/.test(normalized)) return 'remote script execution via curl|bash is blocked';
+  if (/\bwget\b.*\|\s*(bash|sh)\b/.test(normalized)) return 'remote script execution via wget|bash is blocked';
 
   // Destructive root operations
-  if (/\brm\s+-rf\s+\/(?=[\s;|&)"']|$)/.test(normalized))
-    return 'destructive delete of root (rm -rf /) is blocked';
-  if (/\brm\s+-rf\s+~(?=[\s;|&)"']|$)/.test(normalized))
-    return 'destructive delete of home (rm -rf ~) is blocked';
+  if (/\brm\s+-rf\s+\/(?=[\s;|&)"']|$)/.test(normalized)) return 'destructive delete of root (rm -rf /) is blocked';
+  if (/\brm\s+-rf\s+~(?=[\s;|&)"']|$)/.test(normalized)) return 'destructive delete of home (rm -rf ~) is blocked';
 
   // Filesystem and block device destruction
-  if (/\bmkfs(\.| )/.test(normalized))
-    return 'filesystem formatting (mkfs) is blocked';
-  if (/\bdd\s+if=.*\s+of=\/dev\//.test(normalized))
-    return 'raw block device write (dd to /dev) is blocked';
+  if (/\bmkfs(\.| )/.test(normalized)) return 'filesystem formatting (mkfs) is blocked';
+  if (/\bdd\s+if=.*\s+of=\/dev\//.test(normalized)) return 'raw block device write (dd to /dev) is blocked';
 
   // System power state
-  if (/\bshutdown\b|\breboot\b|\bhalt\b/.test(normalized))
-    return 'system power-state command is blocked';
+  if (/\bshutdown\b|\breboot\b|\bhalt\b/.test(normalized)) return 'system power-state command is blocked';
 
   return null;
 }
@@ -1253,6 +1146,7 @@ function detectDangerousCommandWarnings(command: string): string[] {
 function isRecoverableToolError(call: ParsedToolCall, result: { success: boolean; error?: string }): boolean {
   if (result.success) return false;
   if (call.name === 'bash') return !isBashLoopError(result.error);
+  if (call.name === 'edit' || call.name === 'replace_in_file') return isEditRecoverableError(result.error);
   if (call.name !== 'read') return false;
   return isEnoentError(result.error) || isReadPolicyLimitError(result.error);
 }
@@ -1268,6 +1162,11 @@ function isReadPolicyLimitError(error: string | undefined): boolean {
 
 function isBashLoopError(error: string | undefined): boolean {
   return error !== undefined && error.includes('Bash loop detected');
+}
+
+function isEditRecoverableError(error: string | undefined): boolean {
+  if (error === undefined) return false;
+  return error.includes('oldStr no longer matches') || error.includes('oldStr must match exactly once');
 }
 
 function coercePatch(input: Record<string, unknown>): ReplaceInFilePatch | null {
@@ -1571,25 +1470,15 @@ function isSafeToolPreamble(text: string): boolean {
   return !forbiddenPhrases.some((phrase) => joined.includes(phrase));
 }
 
-function finalAnswerNowMessage(): AgentMessage {
-  return {
-    role: 'system',
-    content: [
-      'Final step: answer now using only the context already gathered.',
-      'Do not call tools, inspect more files, or request more information.',
-      'If the context is incomplete, give the best concise answer possible and state the uncertainty.',
-    ].join('\n'),
-  };
-}
-
 function systemPrompt(): string {
   return [
     'You are Synax, a disciplined local coding agent.',
     'Tools: read, write, edit, bash.',
     'Use bash for terminal commands, including git and verification.',
-    'Use read only for repository inspection: list files, search text, or read bounded line ranges.',
+    'Use read for local file inspection: list files, search text, or read bounded line ranges.',
     'Use write for new text files and edit for exact replacements in files you have already read.',
-    'Do the smallest useful action, then stop and summarize changed files plus verification.',
+    'Keep working until the task is done, then stop and summarize.',
+    'Be concise. Show file paths clearly when working with files.',
     'When calling a tool, emit only tool calls. Do not mix final-answer prose with tool calls.',
   ].join('\n');
 }
@@ -1654,19 +1543,46 @@ function buildModelRequest(
   conversation: AgentConversation,
   settings: ContextBudgetSettings,
   readCounts: Map<string, number>,
-  isFinalStep: boolean,
   totalReadCalls?: number,
 ): AgentMessage[] {
   // Start with conversation messages
-  const baseMessages = isFinalStep ? [...conversation.messages, finalAnswerNowMessage()] : conversation.messages;
+  const baseMessages = conversation.messages;
 
-  // Proactive compaction: compact old tool results
-  const { messages: assembled, stats } = assembleModelMessages(
-    baseMessages,
-    settings,
-    conversation.inspectionLedger,
-    readCounts,
-  );
+  // Budget-aware compaction: only compact old tool results when
+  // estimated tokens exceed the configured threshold fraction of the
+  // effective input limit. Default 0.8 means compaction only fires
+  // when using >80% of budget. For large-context models (DeepSeek 1M)
+  // this means compaction essentially never fires during normal tasks.
+  // Set threshold to 0 for always-compact (useful in tests).
+  const effectiveLimit = settings.contextWindowTokens - settings.reservedOutputTokens;
+  const estimatedTokens = estimateRequestTokens(baseMessages);
+  const threshold = settings.assemblyCompactionThreshold ?? 0.8;
+  const nearBudget = estimatedTokens > effectiveLimit * threshold;
+
+  let assembled: AgentMessage[];
+  let stats: AssemblyStats;
+  if (nearBudget) {
+    const result = assembleModelMessages(
+      baseMessages,
+      settings,
+      conversation.inspectionLedger,
+      readCounts,
+    );
+    assembled = result.messages;
+    stats = result.stats;
+  } else {
+    assembled = baseMessages;
+    stats = {
+      totalMessagesIn: baseMessages.length,
+      totalMessagesOut: baseMessages.length,
+      estimatedTokensIn: estimatedTokens,
+      estimatedTokensOut: estimatedTokens,
+      compactedToolResults: 0,
+      keptRecentTurns: 0,
+      droppedDuplicateReadResults: 0,
+      compactedFilePaths: [],
+    };
+  }
 
   // Store stats for debug visibility
   conversation.assemblyStats = stats;

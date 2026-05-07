@@ -13,7 +13,12 @@ function resetTmp(): void {
 }
 
 function fakeClient(
-  responses: Array<{ content?: string; toolCallFormat?: 'openai' | 'content_xml' | 'none'; toolCalls?: any[] }>,
+  responses: Array<{
+    content?: string;
+    reasoningContent?: string;
+    toolCallFormat?: 'openai' | 'content_xml' | 'none';
+    toolCalls?: any[];
+  }>,
 ): AgentClient & { requests: any[] } {
   const requests: any[] = [];
   return {
@@ -25,6 +30,7 @@ function fakeClient(
         content: next.content ?? '',
         model: 'fake',
         finishReason: 'stop',
+        reasoningContent: next.reasoningContent,
         toolCallFormat: next.toolCallFormat,
         toolCalls: next.toolCalls ?? [],
         usage: null,
@@ -189,6 +195,103 @@ describe('shared bounded agent runner', () => {
     expect(client.requests).toHaveLength(3);
   });
 
+  it('preserves provider reasoning metadata across tool-call turns', async () => {
+    const client = fakeClient([
+      {
+        reasoningContent: 'private reasoning payload',
+        toolCalls: [{ id: 'call_1', name: 'bash', arguments: { command: 'printf ok' } }],
+      },
+      { content: 'continued after tool result' },
+    ]);
+
+    const result = await runAgentTurn({
+      repoRoot: TMP,
+      task: 'run command',
+      client,
+      maxSteps: 4,
+    });
+
+    expect(result.terminalState).toBe('completed');
+    const secondRequestAssistant = client.requests[1].messages.find(
+      (message: { role: string; tool_calls?: unknown }) => message.role === 'assistant' && message.tool_calls,
+    );
+    expect(secondRequestAssistant).toMatchObject({
+      reasoning_content: 'private reasoning payload',
+    });
+  });
+
+  it('runs bash command bodies when the model prepends a stale missing cd', async () => {
+    const staleWorkspace = join(TMP, 'missing-workspace');
+    const client = fakeClient([
+      {
+        toolCalls: [
+          { id: 'call_1', name: 'bash', arguments: { command: `cd ${staleWorkspace} && pwd` } },
+          { id: 'call_2', name: 'bash', arguments: { command: `cd ${staleWorkspace} && printf two` } },
+          { id: 'call_3', name: 'bash', arguments: { command: `cd ${staleWorkspace} && printf three` } },
+        ],
+      },
+      { content: 'continued after stale cwd recovery' },
+    ]);
+
+    const result = await runAgentTurn({
+      repoRoot: TMP,
+      task: 'run commands despite stale cwd',
+      client,
+      maxSteps: 4,
+    });
+
+    expect(result).toMatchObject({
+      terminalState: 'completed',
+      finalAnswer: 'continued after stale cwd recovery',
+    });
+    expect(result.toolCalls).toEqual([
+      { name: 'bash', success: true, error: undefined },
+      { name: 'bash', success: true, error: undefined },
+      { name: 'bash', success: true, error: undefined },
+    ]);
+    const toolMessages = result.conversation.messages.filter((message) => message.role === 'tool');
+    expect(toolMessages[0].content).toContain('stale leading cd target did not exist');
+    expect(toolMessages[0].content).toContain(TMP);
+  });
+
+  it('runs bash command bodies from repo root when a leading absolute cd points outside the repo', async () => {
+    const outsideWorkspace = join('/private/tmp', 'synax-runner-outside-existing-workspace');
+    rmSync(outsideWorkspace, { recursive: true, force: true });
+    mkdirSync(outsideWorkspace, { recursive: true });
+    execSync('git init', { cwd: TMP, stdio: 'ignore' });
+    const client = fakeClient([
+      {
+        toolCalls: [
+          { id: 'call_1', name: 'bash', arguments: { command: `cd ${outsideWorkspace} && git status --short` } },
+          { id: 'call_2', name: 'bash', arguments: { command: `cd ${outsideWorkspace} && git diff --stat` } },
+          { id: 'call_3', name: 'bash', arguments: { command: `cd ${outsideWorkspace} && git diff --cached --stat` } },
+        ],
+      },
+      { content: 'continued after stale cwd recovery' },
+    ]);
+
+    const result = await runAgentTurn({
+      repoRoot: TMP,
+      task: 'inspect git state despite stale cwd',
+      client,
+      maxSteps: 4,
+    });
+
+    expect(result).toMatchObject({
+      terminalState: 'completed',
+      finalAnswer: 'continued after stale cwd recovery',
+    });
+    expect(result.toolCalls).toEqual([
+      { name: 'bash', success: true, error: undefined },
+      { name: 'bash', success: true, error: undefined },
+      { name: 'bash', success: true, error: undefined },
+    ]);
+    const toolMessages = result.conversation.messages.filter((message) => message.role === 'tool');
+    expect(toolMessages[0].content).toContain('stale leading cd target was outside the repository root');
+    expect(toolMessages[0].content).toContain(TMP);
+    rmSync(outsideWorkspace, { recursive: true, force: true });
+  });
+
   it('treats successful git commits as completed work even when no files are edited by Synax', async () => {
     execSync('git init', { cwd: TMP, stdio: 'ignore' });
     execSync('git config user.email "synax@example.test"', { cwd: TMP, stdio: 'ignore' });
@@ -218,7 +321,7 @@ describe('shared bounded agent runner', () => {
     expect(execSync('git rev-list --count HEAD', { cwd: TMP, encoding: 'utf-8' }).trim()).toBe('1');
   });
 
-  it('stops immediately after a successful git commit instead of spending more model steps', async () => {
+  it('completes after model finishes its planned tool sequence following git commit', async () => {
     execSync('git init', { cwd: TMP, stdio: 'ignore' });
     execSync('git config user.email "synax@example.test"', { cwd: TMP, stdio: 'ignore' });
     execSync('git config user.name "Synax Test"', { cwd: TMP, stdio: 'ignore' });
@@ -243,12 +346,11 @@ describe('shared bounded agent runner', () => {
       maxSteps: 32,
     });
 
-    expect(result).toMatchObject({
-      terminalState: 'completed',
-      steps: 1,
-      toolCalls: [{ name: 'bash', success: true, error: undefined }],
-    });
-    expect(client.requests).toHaveLength(1);
+    // Model completes after exhausting its planned tool sequence (3 turns:
+    // commit, status check, then content-only response from exhausted fakeClient).
+    expect(result.terminalState).toBe('completed');
+    expect(result.steps).toBe(3);
+    expect(result.toolCalls).toHaveLength(2);
     expect(execSync('git rev-list --count HEAD', { cwd: TMP, encoding: 'utf-8' }).trim()).toBe('1');
   });
 
@@ -520,22 +622,22 @@ describe('shared bounded agent runner', () => {
     expect(client.requests).toHaveLength(3);
   });
 
-  it('terminates immediately on unsafe read paths', async () => {
+  it('allows parent-relative read paths', async () => {
+    writeFileSync(join(TMP, '..', 'outside.ts'), 'export const outside = true;\n', 'utf-8');
     const client = fakeClient([
       { toolCalls: [{ id: 'call_1', name: 'read', arguments: { path: '../outside.ts' } }] },
-      { content: 'should not be reached' },
+      { content: 'Read the parent-relative file.' },
     ]);
 
     const result = await runAgentTurn({ repoRoot: TMP, task: 'read outside repo', client });
 
     expect(result).toMatchObject({
-      terminalState: 'tool_error',
-      error: 'paths must stay inside the repository',
+      terminalState: 'completed',
+      finalAnswer: 'Read the parent-relative file.',
     });
-    expect(result.toolCalls).toEqual([
-      { name: 'read', success: false, error: 'paths must stay inside the repository' },
-    ]);
-    expect(client.requests).toHaveLength(1);
+    expect(result.toolCalls).toEqual([{ name: 'read', success: true, error: undefined }]);
+    expect(client.requests).toHaveLength(2);
+    rmSync(join(TMP, '..', 'outside.ts'), { force: true });
   });
 
   it('stops when assistant returns no tool calls', async () => {
@@ -667,15 +769,19 @@ describe('shared bounded agent runner', () => {
     expect(result.toolCalls).toHaveLength(0);
   });
 
-  it('terminates deterministically at maxSteps', async () => {
+  it('continues past maxSteps until the model completes', async () => {
     const client = fakeClient([
       { toolCalls: [{ id: '1', name: 'read', arguments: {} }] },
-      { toolCalls: [{ id: '2', name: 'read', arguments: {} }] },
+      { content: 'done after inspection' },
     ]);
 
     const result = await runAgentTurn({ repoRoot: TMP, task: 'loop', client, maxSteps: 1 });
 
-    expect(result).toMatchObject({ terminalState: 'budget_exhausted', error: 'max steps exceeded: 1' });
+    expect(result).toMatchObject({
+      terminalState: 'completed',
+      finalAnswer: 'done after inspection',
+      steps: 2,
+    });
   });
 
   it('blocks provider calls when request is over context budget and compaction cannot save it', async () => {
@@ -807,6 +913,22 @@ describe('shared bounded agent runner', () => {
     expect(loopErrorMsg!.content).toContain('WORKING CONTEXT');
   });
 
+  it('allows absolute read paths', async () => {
+    const outside = join(TMP, '..', 'absolute-outside.txt');
+    writeFileSync(outside, 'absolute outside\n', 'utf-8');
+    const client = fakeClient([
+      { toolCalls: [{ id: '1', name: 'read', arguments: { path: outside } }] },
+      { content: 'Read the absolute file.' },
+    ]);
+
+    const result = await runAgentTurn({ repoRoot: TMP, task: 'read absolute', client, maxSteps: 4 });
+
+    expect(result.terminalState).toBe('completed');
+    expect(result.toolCalls).toEqual([{ name: 'read', success: true, error: undefined }]);
+    expect(client.requests).toHaveLength(2);
+    rmSync(outside, { force: true });
+  });
+
   it('warns the model after the third full-file read instead of silently re-reading', async () => {
     writeFileSync(join(TMP, 'a.txt'), 'hello\n', 'utf-8');
     const client = fakeClient([
@@ -932,11 +1054,12 @@ describe('shared bounded agent runner', () => {
     expect(secondToolMessage?.content).toContain('turn token budget exceeded');
   });
 
-  it('rejects exact replacement edits when prior read was truncated', async () => {
-    writeFileSync(join(TMP, 'a.txt'), `${'hello\n'.repeat(6000)}`, 'utf-8');
+  it('allows exact replacement edits even when prior read was truncated', async () => {
+    writeFileSync(join(TMP, 'a.txt'), `target\n${'hello\n'.repeat(6000)}`, 'utf-8');
     const client = fakeClient([
       { toolCalls: [{ id: '1', name: 'read', arguments: { path: 'a.txt' } }] },
-      { toolCalls: [{ id: '2', name: 'edit', arguments: { path: 'a.txt', oldStr: 'hello', newStr: 'hi' } }] },
+      { toolCalls: [{ id: '2', name: 'edit', arguments: { path: 'a.txt', oldStr: 'target', newStr: 'changed' } }] },
+      { content: 'edited' },
     ]);
 
     const result = await runAgentTurn({
@@ -946,8 +1069,8 @@ describe('shared bounded agent runner', () => {
       contextBudget: { maxSingleReadResultTokens: 300 },
     });
 
-    expect(result.terminalState).toBe('tool_error');
-    expect(result.error).toContain('oldStr must match a prior read of a.txt');
+    expect(result.terminalState).toBe('completed');
+    expect(readFileSync(join(TMP, 'a.txt'), 'utf-8').startsWith('changed\n')).toBe(true);
   });
 
   it('terminates deterministically at maxToolCalls', async () => {
@@ -978,6 +1101,27 @@ describe('shared bounded agent runner', () => {
       error: expect.stringContaining('Bash loop detected'),
     });
     expect(result.steps).toBeLessThan(32);
+  });
+
+  it('continues after stale edit mismatches and allows a corrected retry', async () => {
+    writeFileSync(join(TMP, 'a.txt'), 'hello\n', 'utf-8');
+    const client = fakeClient([
+      { toolCalls: [{ id: '1', name: 'edit', arguments: { path: 'a.txt', oldStr: 'helo', newStr: 'hi' } }] },
+      { toolCalls: [{ id: '2', name: 'edit', arguments: { path: 'a.txt', oldStr: 'hello', newStr: 'hi' } }] },
+      { content: 'done' },
+    ]);
+
+    const result = await runAgentTurn({ repoRoot: TMP, task: 'update greeting', client, maxSteps: 6 });
+
+    expect(result.terminalState).toBe('completed');
+    expect(readFileSync(join(TMP, 'a.txt'), 'utf-8')).toBe('hi\n');
+    expect(result.toolCalls).toHaveLength(2);
+    expect(result.toolCalls[0]).toMatchObject({
+      name: 'edit',
+      success: false,
+      error: expect.stringContaining('oldStr no longer matches'),
+    });
+    expect(result.toolCalls[1]).toMatchObject({ name: 'edit', success: true });
   });
 
   it('continues after large bash output when the model-facing context can compact it', async () => {
@@ -1020,7 +1164,7 @@ describe('shared bounded agent runner', () => {
     expect(bashResult?.content).not.toContain('x'.repeat(1000));
   });
 
-  it('asks for a final answer on the final allowed model step', async () => {
+  it('does not inject a forced final-answer prompt at maxSteps', async () => {
     writeFileSync(join(TMP, 'package.json'), '{}\n', 'utf-8');
     const client = fakeClient([
       { toolCalls: [{ id: '1', name: 'read', arguments: { path: 'package.json' } }] },
@@ -1035,26 +1179,28 @@ describe('shared bounded agent runner', () => {
       finalAnswer: 'final from inspected context',
       steps: 2,
     });
-    expect(finalRequest.messages.at(-1)).toMatchObject({
-      role: 'system',
-      content: expect.stringContaining('Do not call tools'),
-    });
+    expect(finalRequest.messages.at(-1)).toMatchObject({ role: 'tool' });
+    expect(
+      finalRequest.messages.some((message: { content: string }) => message.content.includes('Final step: answer now')),
+    ).toBe(false);
   });
 
-  it('does not execute tool calls requested on the final allowed model step', async () => {
+  it('executes tool calls requested after maxSteps', async () => {
     writeFileSync(join(TMP, 'a.txt'), 'hello\n', 'utf-8');
     const client = fakeClient([
       { toolCalls: [{ id: '1', name: 'read', arguments: { path: 'a.txt' } }] },
       { content: '', toolCalls: [{ id: '2', name: 'read', arguments: {} }] },
+      { content: 'done after retry' },
     ]);
 
     const result = await runAgentTurn({ repoRoot: TMP, task: 'loop', client, maxSteps: 2 });
 
     expect(result).toMatchObject({
-      terminalState: 'budget_exhausted',
-      error: 'max steps exceeded: 2',
+      terminalState: 'completed',
+      finalAnswer: 'done after retry',
+      steps: 3,
     });
-    expect(result.toolCalls.map((call) => call.name)).toEqual(['read']);
+    expect(result.toolCalls.map((call) => call.name)).toEqual(['read', 'read']);
   });
 
   it('finalizes before exceeding budget after a bounded inspection sequence', async () => {
@@ -1131,6 +1277,34 @@ describe('shared bounded agent runner', () => {
     });
   });
 
+  it('edits after inspecting a file through bash cat', async () => {
+    writeFileSync(join(TMP, '.synax.toml'), 'model = "qwen"\n', 'utf-8');
+    const client = fakeClient([
+      { toolCalls: [{ id: 'call_1', name: 'bash', arguments: { command: 'cat .synax.toml' } }] },
+      {
+        toolCalls: [
+          {
+            id: 'call_2',
+            name: 'edit',
+            arguments: { path: '.synax.toml', oldStr: 'model = "qwen"', newStr: 'model = "deepseek-v4-pro"' },
+          },
+        ],
+      },
+      { content: 'configured' },
+    ]);
+
+    const result = await runAgentTurn({
+      repoRoot: TMP,
+      task: 'configure .synax.toml',
+      client,
+      mode: 'patch',
+    });
+
+    expect(result.terminalState).toBe('completed');
+    expect(result.changedFiles).toEqual(['.synax.toml']);
+    expect(readFileSync(join(TMP, '.synax.toml'), 'utf-8')).toBe('model = "deepseek-v4-pro"\n');
+  });
+
   it('rejects a previewed edit when patch approval rejects it', async () => {
     writeFileSync(join(TMP, 'a.txt'), 'hello\n', 'utf-8');
     const events: AgentEvent[] = [];
@@ -1191,7 +1365,7 @@ describe('shared bounded agent runner', () => {
       repoRoot: TMP,
       task: 'read large file',
       client,
-      contextBudget: { maxSingleReadResultTokens: 8000 },
+      contextBudget: { maxSingleReadResultTokens: 8000, assemblyCompactionThreshold: 0 },
     });
 
     expect(result.terminalState).toBe('completed');

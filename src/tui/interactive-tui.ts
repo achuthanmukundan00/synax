@@ -4,14 +4,32 @@ import {
   createInitialRunStateSnapshot,
   type RunStateSnapshot,
 } from '../agent/tui-state';
-import type { ChatSession } from '../commands/chat';
+import {
+  classifyInlineSubmission,
+  createInlinePasteInputSession,
+  draftPlainText,
+  flattenInlinePasteDraft,
+  type ChatSession,
+} from '../commands/chat';
 import { stdin as defaultStdin } from 'node:process';
 import { DiffRenderer } from './diff-renderer';
 import { maxHistoryScrollOffset, renderLayout, type InteractiveViewState } from './layout';
-import { MAX_INPUT_CHARS, parseInputChunk } from './input';
+import { createInputParser, MAX_INPUT_CHARS } from './input';
 import { createTerminalSession, type InputStreamLike } from './terminal';
 import type { Writable } from 'node:stream';
 import type { CoreMode } from './ai-core';
+import { filterCommands, type SlashCommand, type SlashCommandResult } from '../settings/slash-command-registry';
+import { createSettingsState, settingsReducer, type SettingsState } from '../settings/settings-state';
+import { renderSettings } from '../settings/settings-renderer';
+import {
+  createResumePickerState,
+  resumePickerReducer,
+  renderResumePicker,
+  type ResumePickerState,
+} from '../sessions/resume-renderer';
+import { listSessionsSorted, type SessionMetadata } from '../sessions/session-store';
+import { loadSynaxConfig, persistConfig } from '../config/load-config';
+import type { EffectiveSynaxConfig } from '../config/schema';
 
 export async function runInteractiveTui(
   session: ChatSession,
@@ -23,6 +41,8 @@ export async function runInteractiveTui(
     lastModelOutput?: () => string;
     /** Active model ID for input panel label. */
     modelLabel?: string;
+    /** Whether provider-level thinking is enabled in the active model profile. */
+    thinkingEnabled?: boolean;
     /** Active endpoint for state display. */
     endpointLabel?: string;
     /** Provider label from config when available. */
@@ -33,12 +53,28 @@ export async function runInteractiveTui(
     gitBranch?: string;
     /** Configured total context window when known. */
     contextWindowTokens?: number;
+    /** Names of loaded skills currently active for the session. */
+    activeSkills?: string[];
+    /** Override core visual profile: 'model' (auto-detect), 'default', 'qwen', 'openai', 'claude', 'deepseek', 'gemini'. */
+    coreVisualProfile?: string;
+    /**
+     * Optional callback invoked after settings are persisted.
+     * Return updated runtime labels to apply immediately in the TUI.
+     */
+    onSettingsConfigChanged?: (settingsConfig: EffectiveSynaxConfig) => {
+      modelLabel?: string;
+      thinkingEnabled?: boolean;
+      endpointLabel?: string;
+      providerName?: string;
+      contextWindowTokens?: number;
+      coreVisualProfile?: string;
+    };
   },
 ): Promise<void> {
   const terminal = createTerminalSession({ stdin: options?.stdin, stdout: options?.stdout });
   if (!terminal.isTTY) return;
 
-  let inputBuffer = '';
+  let inputDraft = createInlinePasteInputSession();
   let state: RunStateSnapshot = options?.blockedMessage
     ? createBlockedRunStateSnapshot(
         Date.now(),
@@ -46,19 +82,40 @@ export async function runInteractiveTui(
         'configure .synax.toml or ~/.config/synax/config.toml',
       )
     : createInitialRunStateSnapshot(Date.now());
+  // Autocomplete state
+  let autocomplete: { active: boolean; selection: number; filtered: SlashCommand[]; visible: boolean } = {
+    active: false,
+    selection: 0,
+    filtered: [],
+    visible: false,
+  };
+  // Settings modal state
+  let settingsState: SettingsState | null = null;
+  // Resume picker state
+  let resumeState: ResumePickerState | null = null;
   let exiting = false;
   let busy = false;
   let historyScrollOffset = 0;
   const diff = new DiffRenderer();
+  let runtimeLabels = {
+    modelLabel: options?.modelLabel,
+    thinkingEnabled: options?.thinkingEnabled,
+    endpointLabel: options?.endpointLabel,
+    providerName: options?.providerName,
+    contextWindowTokens: options?.contextWindowTokens,
+    coreVisualProfile: options?.coreVisualProfile,
+  };
   const applyOptionsToState = (): void => {
-    if (options?.modelLabel) {
+    if (runtimeLabels.modelLabel) {
       state = {
         ...state,
-        modelId: options.modelLabel,
-        providerName: options.providerName ?? providerNameFromEndpoint(options.endpointLabel ?? ''),
-        contextWindowTokens: options.contextWindowTokens,
+        modelId: runtimeLabels.modelLabel,
+        providerName: runtimeLabels.providerName ?? providerNameFromEndpoint(runtimeLabels.endpointLabel ?? ''),
+        contextWindowTokens: runtimeLabels.contextWindowTokens,
+        thinkingEnabled: runtimeLabels.thinkingEnabled,
+        activeSkills: options?.activeSkills ?? [],
         coreLoaded: true,
-        sessionSpendLabel: isLocalEndpoint(options.endpointLabel ?? '') ? 'local' : undefined,
+        sessionSpendLabel: isLocalEndpoint(runtimeLabels.endpointLabel ?? '') ? 'local' : undefined,
       };
     }
   };
@@ -85,15 +142,16 @@ export async function runInteractiveTui(
 
   const viewState = (): InteractiveViewState => ({
     run: { ...state, nowMs: Date.now() },
-    objectiveInput: inputBuffer,
+    objectiveInput: inputDraft.getVisibleBody(),
     blockedMessage: options?.blockedMessage,
     coreMode: coreMode(),
     nowMs: Date.now(),
     lastModelOutput: options?.lastModelOutput?.(),
-    modelLabel: options?.modelLabel,
-    endpointLabel: options?.endpointLabel,
+    modelLabel: runtimeLabels.modelLabel,
+    endpointLabel: runtimeLabels.endpointLabel,
     cwdLabel: options?.cwdLabel ?? process.cwd(),
     gitBranch: options?.gitBranch,
+    coreVisualProfile: runtimeLabels.coreVisualProfile,
     historyScrollOffset,
   });
 
@@ -104,9 +162,53 @@ export async function runInteractiveTui(
     );
   };
 
+  const bold = (text: string): string => `\u001b[1;37m${text}\u001b[0m`;
+  const dim = (text: string): string => `\u001b[90m${text}\u001b[0m`;
+
+  const renderAutocompleteOverlay = (
+    lines: string[],
+    ac: { visible: boolean; selection: number; filtered: SlashCommand[] },
+    _width: number,
+  ): string[] => {
+    if (!ac.visible || ac.filtered.length === 0) return lines;
+    const overlayLines: string[] = [];
+    overlayLines.push(dim('  ── commands ──'));
+    for (let i = 0; i < Math.min(ac.filtered.length, 8); i += 1) {
+      const cmd = ac.filtered[i];
+      const desc = cmd.description ? ` — ${cmd.description}` : '';
+      const line = `${i === ac.selection ? bold(` → /${cmd.name}${desc}`) : dim(`   /${cmd.name}${desc}`)}`;
+      overlayLines.push(line);
+    }
+    const insertAt = Math.max(0, lines.length - 5 - overlayLines.length);
+    return [...lines.slice(0, insertAt), ...overlayLines, ...lines.slice(insertAt)];
+  };
+
   const paint = (force = false): void => {
     clampHistoryScroll();
-    const lines = renderLayout(viewState(), terminal.columns, terminal.rows);
+
+    // Settings modal takes over the entire screen
+    if (settingsState?.active) {
+      const settingsLines = renderSettings(settingsState, terminal.columns, terminal.rows);
+      const out = diff.render(settingsLines, terminal.columns, terminal.rows);
+      if (out || force) terminal.synchronizedWrite(out || '');
+      return;
+    }
+
+    // Resume picker takes over the entire screen
+    if (resumeState?.active) {
+      const resumeLines = renderResumePicker(resumeState, terminal.columns, terminal.rows);
+      const out = diff.render(resumeLines, terminal.columns, terminal.rows);
+      if (out || force) terminal.synchronizedWrite(out || '');
+      return;
+    }
+
+    let lines = renderLayout(viewState(), terminal.columns, terminal.rows);
+
+    // Render autocomplete overlay at the bottom of the input area
+    if (autocomplete.visible && autocomplete.filtered.length > 0) {
+      lines = renderAutocompleteOverlay(lines, autocomplete, terminal.columns);
+    }
+
     const out = diff.render(lines, terminal.columns, terminal.rows);
     if (!out && !force) return;
     terminal.synchronizedWrite(out || '');
@@ -117,13 +219,16 @@ export async function runInteractiveTui(
   };
 
   const submit = async (): Promise<void> => {
-    const text = inputBuffer.trim();
-    if (!text || busy) return;
-    inputBuffer = '';
+    const currentDraft = inputDraft.getDraft();
+    const plainText = draftPlainText(currentDraft).trim();
+    const kind = classifyInlineSubmission(currentDraft);
+    if (kind === 'empty' || busy) return;
+    const text = kind === 'slash' ? plainText : flattenInlinePasteDraft(currentDraft);
+    inputDraft = createInlinePasteInputSession();
     busy = true;
     paint(true);
 
-    if (text.startsWith('/')) {
+    if (kind === 'slash') {
       const slash = await session.handleSlashCommand(text);
       if (slash.newSession) {
         state = createInitialRunStateSnapshot(Date.now());
@@ -195,11 +300,11 @@ export async function runInteractiveTui(
         timestamp: new Date().toISOString(),
         mode: 'interactive',
         profile: 'default',
-        endpoint: options?.endpointLabel ?? 'local',
-        model: options?.modelLabel ?? 'local model',
-        providerName: options?.providerName,
+        endpoint: runtimeLabels.endpointLabel ?? 'local',
+        model: runtimeLabels.modelLabel ?? 'local model',
+        providerName: runtimeLabels.providerName,
         contextBudgetTokens: 0,
-        contextWindowTokens: options?.contextWindowTokens,
+        contextWindowTokens: runtimeLabels.contextWindowTokens,
         maxModelSteps: 0,
         maxToolCalls: 0,
         tools: [],
@@ -246,34 +351,343 @@ export async function runInteractiveTui(
     }
   };
 
+  // ─── Autocomplete ───────────────────────────────────────────
+
+  const updateAutocomplete = (): void => {
+    const plainText = draftPlainText(inputDraft.getDraft());
+    if (!inputDraft.hasPaste() && plainText.startsWith('/') && !plainText.includes(' ')) {
+      const query = plainText.slice(1);
+      const filtered = filterCommands(query);
+      autocomplete = {
+        active: true,
+        visible: filtered.length > 0,
+        selection: 0,
+        filtered: filtered.slice(0, 10),
+      };
+    } else {
+      autocomplete = { active: false, visible: false, selection: 0, filtered: [] };
+    }
+  };
+
+  const executeAutocompleteCommand = async (cmd: SlashCommand): Promise<void> => {
+    inputDraft = createInlinePasteInputSession();
+    autocomplete = { active: false, visible: false, selection: 0, filtered: [] };
+
+    const result: SlashCommandResult = await Promise.resolve(cmd.handler());
+
+    if (result.openSettings) {
+      openSettingsModal();
+      return;
+    }
+
+    if (result.openResume) {
+      openResumePicker();
+      return;
+    }
+
+    if (result.exit) {
+      finish();
+      return;
+    }
+
+    // For commands that return handled:false, pass through to the session
+    if (!result.handled && session.handleSlashCommand) {
+      const slashReport = await session.handleSlashCommand(`/${cmd.name}`);
+      if (slashReport.exit) {
+        finish();
+        return;
+      }
+      if (slashReport.newSession) {
+        state = createInitialRunStateSnapshot(Date.now());
+        applyOptionsToState();
+        historyScrollOffset = 0;
+      }
+      if (slashReport.output) {
+        state = applyEventToRunState(
+          state,
+          {
+            type: 'command_output',
+            timestamp: new Date().toISOString(),
+            command: `/${cmd.name}`,
+            content: slashReport.output,
+          },
+          Date.now(),
+        );
+      }
+      return;
+    }
+
+    if (result.newSession) {
+      state = createInitialRunStateSnapshot(Date.now());
+      applyOptionsToState();
+      historyScrollOffset = 0;
+    }
+
+    if (result.output) {
+      state = applyEventToRunState(
+        state,
+        {
+          type: 'command_output',
+          timestamp: new Date().toISOString(),
+          command: `/${cmd.name}`,
+          content: result.output,
+        },
+        Date.now(),
+      );
+    }
+  };
+
+  // ─── Settings modal ────────────────────────────────────────
+
+  const openSettingsModal = (): void => {
+    const config = loadSettingsConfig();
+    settingsState = settingsReducer(createSettingsState(config), { type: 'open' });
+    resumeState = null;
+  };
+
+  const closeSettingsModal = (): void => {
+    if (!settingsState) return;
+    settingsState = settingsReducer(settingsState, { type: 'close' });
+    if (settingsState?.dirty) {
+      persistSettingsConfig(settingsState.config);
+      const updates = options?.onSettingsConfigChanged?.(settingsState.config);
+      if (updates) {
+        runtimeLabels = {
+          ...runtimeLabels,
+          ...updates,
+        };
+        applyOptionsToState();
+      }
+    }
+    settingsState = null;
+  };
+
+  const handleSettingsInput = (event: { type: string; value?: string }): void => {
+    if (!settingsState) return;
+    if (event.type === 'escape') {
+      closeSettingsModal();
+      return;
+    }
+    if (event.type === 'arrow_up' || event.type === 'scroll_history_up') {
+      settingsState = settingsReducer(settingsState, { type: 'move_up' });
+      return;
+    }
+    if (event.type === 'arrow_down' || event.type === 'scroll_history_down') {
+      settingsState = settingsReducer(settingsState, { type: 'move_down' });
+      return;
+    }
+    if (event.type === 'tab') {
+      settingsState = settingsReducer(settingsState, { type: 'next_tab' });
+      return;
+    }
+    if (event.type === 'shift_tab') {
+      settingsState = settingsReducer(settingsState, { type: 'prev_tab' });
+      return;
+    }
+    if (event.type === 'submit') {
+      settingsState = settingsReducer(settingsState, { type: 'select_row' });
+      return;
+    }
+    if (event.type === 'text' && event.value === ' ') {
+      settingsState = settingsReducer(settingsState, { type: 'toggle' });
+      return;
+    }
+    if (event.type === 'text' && event.value === 'e') {
+      settingsState = settingsReducer(settingsState, { type: 'start_edit' });
+      return;
+    }
+    if (event.type === 'text' && event.value) {
+      if (settingsState.textInput) {
+        settingsState = settingsReducer(settingsState, { type: 'text_input', char: event.value });
+      } else if (event.value === '/') closeSettingsModal();
+      else if (event.value === 'q') closeSettingsModal();
+      return;
+    }
+    if (event.type === 'backspace' && settingsState.textInput) {
+      settingsState = settingsReducer(settingsState, { type: 'text_backspace' });
+    }
+  };
+
+  // ─── Resume picker ──────────────────────────────────────────
+
+  const openResumePicker = (): void => {
+    const sessions = listSessionsSorted('updated');
+    resumeState = resumePickerReducer(createResumePickerState(sessions), { type: 'open' });
+    settingsState = null;
+  };
+
+  const closeResumePicker = (): void => {
+    if (!resumeState) return;
+    resumeState = resumePickerReducer(resumeState, { type: 'close' });
+    resumeState = null;
+  };
+
+  const handleResumeInput = (event: { type: string; value?: string }): void => {
+    if (!resumeState) return;
+    if (event.type === 'escape') {
+      closeResumePicker();
+      return;
+    }
+    if (event.type === 'arrow_up' || event.type === 'scroll_history_up') {
+      resumeState = resumePickerReducer(resumeState, { type: 'move_up' });
+      return;
+    }
+    if (event.type === 'arrow_down' || event.type === 'scroll_history_down') {
+      resumeState = resumePickerReducer(resumeState, { type: 'move_down' });
+      return;
+    }
+    if (event.type === 'tab') {
+      resumeState = resumePickerReducer(resumeState, { type: 'toggle_sort' });
+      return;
+    }
+    if (event.type === 'submit') {
+      const selected = resumeState.filtered[resumeState.selectedRow];
+      if (selected) void resumeSelectedSession(selected);
+      return;
+    }
+    if (event.type === 'backspace' && resumeState.searchQuery.length > 0) {
+      resumeState = resumePickerReducer(resumeState, { type: 'search', query: resumeState.searchQuery.slice(0, -1) });
+      return;
+    }
+    if (event.type === 'text' && event.value) {
+      resumeState = resumePickerReducer(resumeState, { type: 'search', query: resumeState.searchQuery + event.value });
+    }
+  };
+
+  const resumeSelectedSession = async (meta: SessionMetadata): Promise<void> => {
+    closeResumePicker();
+    state = applyEventToRunState(
+      state,
+      {
+        type: 'command_output',
+        timestamp: new Date().toISOString(),
+        command: '/resume',
+        content: `Resumed session from ${meta.branch ?? 'unknown'} · updated ${meta.updatedAt}\nModel: ${meta.activeModel ?? 'unknown'}`,
+      },
+      Date.now(),
+    );
+  };
+
+  // ─── Config bridge ──────────────────────────────────────────
+
+  const loadSettingsConfig = (): EffectiveSynaxConfig => {
+    try {
+      return loadSynaxConfig();
+    } catch {
+      return {
+        active: { provider: 'relay-local', model: '', thinking: 'off' },
+        providers: {},
+        skills: { enabled: [], disabled: [] },
+        mcp: { servers: {} },
+        source: null,
+        errors: [],
+      };
+    }
+  };
+
+  const persistSettingsConfig = (config: EffectiveSynaxConfig): void => {
+    try {
+      persistConfig(config, process.cwd());
+    } catch {
+      /* best-effort */
+    }
+  };
+
   const stdin = options?.stdin ?? (defaultStdin as unknown as InputStreamLike);
+  const inputParser = createInputParser();
   const onData = (chunk: Buffer): void => {
-    const events = parseInputChunk(chunk.toString('utf8'));
+    const events = inputParser.parse(chunk.toString('utf8'));
     for (const event of events) {
+      // Exit always works
       if (event.type === 'exit') {
+        if (settingsState?.active) {
+          closeSettingsModal();
+          paint(true);
+          continue;
+        }
+        if (resumeState?.active) {
+          resumeState = resumePickerReducer(resumeState, { type: 'close' });
+          paint(true);
+          continue;
+        }
         finish();
         break;
       }
-      if (event.type === 'scroll_history_up') {
-        historyScrollOffset += 3;
-        clampHistoryScroll();
+
+      // Modal input routing
+      if (settingsState?.active) {
+        handleSettingsInput(event);
         continue;
       }
-      if (event.type === 'scroll_history_down') {
-        historyScrollOffset = Math.max(0, historyScrollOffset - 3);
-        clampHistoryScroll();
+
+      if (resumeState?.active) {
+        handleResumeInput(event);
+        continue;
+      }
+
+      // Normal input routing
+      if (event.type === 'arrow_up' || event.type === 'scroll_history_up') {
+        if (autocomplete.visible) {
+          autocomplete.selection = Math.max(0, autocomplete.selection - 1);
+        } else {
+          historyScrollOffset += 3;
+          clampHistoryScroll();
+        }
+        continue;
+      }
+      if (event.type === 'arrow_down' || event.type === 'scroll_history_down') {
+        if (autocomplete.visible) {
+          autocomplete.selection = Math.min(autocomplete.filtered.length - 1, autocomplete.selection + 1);
+        } else {
+          historyScrollOffset = Math.max(0, historyScrollOffset - 3);
+          clampHistoryScroll();
+        }
         continue;
       }
       if (event.type === 'backspace') {
-        inputBuffer = inputBuffer.slice(0, -1);
+        inputDraft.handleBackspace();
+        updateAutocomplete();
+        continue;
+      }
+      if (event.type === 'escape') {
+        if (autocomplete.visible) {
+          autocomplete.visible = false;
+          continue;
+        }
+        continue;
+      }
+      if (event.type === 'tab') {
+        if (autocomplete.visible && autocomplete.filtered.length > 0) {
+          // Auto-complete to first match
+          const cmd = autocomplete.filtered[autocomplete.selection] ?? autocomplete.filtered[0];
+          inputDraft = createInlinePasteInputSession();
+          inputDraft.handleText(`/${cmd.name} `);
+          autocomplete.visible = false;
+          continue;
+        }
         continue;
       }
       if (event.type === 'submit') {
+        if (autocomplete.visible && autocomplete.filtered.length > 0) {
+          const cmd = autocomplete.filtered[autocomplete.selection] ?? autocomplete.filtered[0];
+          void executeAutocompleteCommand(cmd);
+          continue;
+        }
         void submit();
         continue;
       }
+      if (event.type === 'paste' && event.value) {
+        if (inputDraft.getVisibleBody().length < MAX_INPUT_CHARS) {
+          inputDraft.handlePasteStart();
+          inputDraft.handlePasteChunk(event.value);
+          inputDraft.handlePasteEnd();
+        }
+        updateAutocomplete();
+        continue;
+      }
       if (event.type === 'text' && event.value) {
-        inputBuffer = `${inputBuffer}${event.value}`.slice(0, MAX_INPUT_CHARS);
+        if (inputDraft.getVisibleBody().length < MAX_INPUT_CHARS) inputDraft.handleText(event.value);
+        updateAutocomplete();
       }
     }
     paint();

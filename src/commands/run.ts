@@ -3,7 +3,9 @@ import { runAgentTask } from '../agent/run-task';
 import { normalizeRunMode, type RunMode } from '../agent/task-policy';
 import { TuiRenderer } from '../agent/renderers';
 import { loadProjectConfig, normalizeProviderConfig } from '../config/project';
+import { loadSynaxConfig } from '../config/load-config';
 import { createChatSession, compactHome, currentGitBranch, providerNameFromPreset } from './chat';
+import { loadSkills, type SkillDiagnostic } from '../agent/skills';
 import { runInteractiveTui } from '../tui/interactive-tui';
 
 const MAX_REPAIR_ATTEMPTS = 10;
@@ -91,11 +93,33 @@ export function runCommand(program: Command): void {
             process.exitCode = 1;
             return;
           }
-          const provider = normalizeProviderConfig(loaded.config.provider ?? {});
+
+          // Extract thinking level from the effective multi-provider config.
+          let thinkingLevel: 'off' | 'low' | 'medium' | 'high' | 'auto' = 'off';
+          let skillMessages: string[] | undefined;
+          let skillDiagnostics: SkillDiagnostic[] | undefined;
+          try {
+            const effectiveConfig = loadSynaxConfig();
+            if (effectiveConfig.active.thinking && effectiveConfig.active.thinking !== 'off') {
+              thinkingLevel = effectiveConfig.active.thinking;
+            }
+            if (effectiveConfig.skills.enabled.length > 0) {
+              const result = loadSkills(effectiveConfig.skills, repoRoot);
+              skillMessages = result.systemMessages;
+              skillDiagnostics = result.diagnostics;
+            }
+          } catch {
+            // best-effort
+          }
+
+          const provider = normalizeProviderConfig(loaded.config.provider ?? {}, { thinkingLevel });
           let lastModelOutput = '';
           const session = createChatSession({
             repoRoot,
             config: loaded.config,
+            thinkingLevel,
+            skillMessages,
+            skillDiagnostics,
             onActivity: (activity) => {
               if (activity.kind === 'model_response' && activity.modelOutput) {
                 lastModelOutput = activity.modelOutput;
@@ -110,11 +134,13 @@ export function runCommand(program: Command): void {
             blockedMessage: !provider.model.trim() ? 'provider.model is required' : undefined,
             lastModelOutput: () => lastModelOutput,
             modelLabel,
+            thinkingEnabled: thinkingLevel !== 'off',
             endpointLabel: provider.baseUrl || undefined,
             providerName: providerNameFromPreset(loaded.config.provider?.preset),
             cwdLabel,
             gitBranch,
             contextWindowTokens: loaded.config.contextWindowTokens ?? loaded.config.contextBudgetTokens,
+            coreVisualProfile: loaded.config.coreVisualProfile,
           });
         } else {
           console.log('[synax] Run command initialized. Use --task or --plan to specify work.');
@@ -150,7 +176,7 @@ function printReport(report: Awaited<ReturnType<typeof runAgentTask>>, activitie
   if (report.terminalState !== 'completed') {
     console.log(`Terminal state: ${report.terminalState}`);
   }
-  console.log(`Model steps: ${report.steps} / ${report.maxModelSteps}`);
+  console.log(`Model steps: ${report.steps}`);
   console.log(`Tool calls: ${report.toolCalls.length} / ${report.maxToolCalls}`);
   console.log(`Context budget: ${report.contextBudgetTokens}`);
   console.log(`Changed files: ${report.filesChanged.length > 0 ? report.filesChanged.join(', ') : 'none'}`);

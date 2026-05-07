@@ -292,7 +292,7 @@ export function checkContextBudget(config: ProjectConfig): DiagnosticResult {
 function formatBudgetMessage(config: ProjectConfig): string {
   return [
     `contextBudgetTokens set to ${config.contextBudgetTokens}`,
-    `maxModelSteps set to ${config.maxModelSteps ?? 'not configured'}`,
+    'modelSteps unlimited',
     `maxToolCalls set to ${config.maxToolCalls ?? 'not configured'}`,
   ].join('; ');
 }

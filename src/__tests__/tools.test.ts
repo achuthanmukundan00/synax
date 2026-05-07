@@ -134,7 +134,7 @@ describe('tool registry and inspection tools', () => {
     ]);
   });
 
-  it('excludes heavy and generated paths from directory listings', async () => {
+  it('lists repo-local paths without read denylist filtering', async () => {
     for (const directory of [
       '.git',
       'node_modules',
@@ -156,10 +156,21 @@ describe('tool registry and inspection tools', () => {
 
     expect(result.success).toBe(true);
     const entries = (result.output as DirectoryListingOutput).entries.map((entry) => entry.name);
-    expect(entries).toEqual(['README.md']);
+    expect(entries).toEqual([
+      '.cache',
+      '.git',
+      '.next',
+      '.vite',
+      'build',
+      'cache',
+      'coverage',
+      'dist',
+      'node_modules',
+      'README.md',
+    ]);
   });
 
-  it('rejects unsafe paths before reading', async () => {
+  it('allows reads of dotfiles, generated files, and dependency paths', async () => {
     mkdirSync(join(TMP, 'node_modules'), { recursive: true });
     writeFileSync(join(TMP, '.env'), 'TOKEN=secret\n', 'utf-8');
     writeFileSync(join(TMP, '.synax.toml'), 'api_key = "sk-never-print-this"\n', 'utf-8');
@@ -167,20 +178,20 @@ describe('tool registry and inspection tools', () => {
     const registry = createToolRegistry({ repoRoot: TMP });
 
     await expect(registry.execute('read_file_range', { path: '.env' })).resolves.toMatchObject({
-      success: false,
-      error: expect.stringContaining('unsafe path'),
+      success: true,
+      output: expect.objectContaining({ path: '.env' }),
     });
     await expect(registry.execute('read_file_range', { path: '.synax.toml' })).resolves.toMatchObject({
-      success: false,
-      error: expect.stringContaining('unsafe path'),
+      success: true,
+      output: expect.objectContaining({ path: '.synax.toml' }),
     });
     await expect(registry.execute('read_file_range', { path: 'node_modules/pkg.js' })).resolves.toMatchObject({
-      success: false,
-      error: expect.stringContaining('unsafe path'),
+      success: true,
+      output: expect.objectContaining({ path: 'node_modules/pkg.js' }),
     });
   });
 
-  it('applies the default secret-file denylist and keeps .synax.toml.example inspectable', async () => {
+  it('includes secret-shaped files in listings by default', async () => {
     for (const file of [
       '.env',
       '.env.local',
@@ -201,18 +212,29 @@ describe('tool registry and inspection tools', () => {
 
     expect(result.success).toBe(true);
     const files = (result.output as ListFilesOutput).files;
-    expect(files).toEqual(['.synax.toml.example']);
+    expect(files).toEqual([
+      '.env',
+      '.env.local',
+      '.synax.toml',
+      '.synax.toml.example',
+      'cert.pem',
+      'deploy.key',
+      'id_ed25519',
+      'id_rsa',
+      'identity.p12',
+      'server.crt',
+    ]);
   });
 
-  it('redacts inline secrets from allowed file reads', async () => {
+  it('does not redact file read output', async () => {
     writeFileSync(join(TMP, 'request.txt'), 'Authorization: Bearer bearer-never-print-this\n', 'utf-8');
     const registry = createToolRegistry({ repoRoot: TMP });
 
     const result = await registry.execute('read_file_range', { path: 'request.txt' });
 
     expect(result.success).toBe(true);
-    expect(JSON.stringify(result.output)).not.toContain('bearer-never-print-this');
-    expect(JSON.stringify(result.output)).toContain('[REDACTED]');
+    expect(JSON.stringify(result.output)).toContain('bearer-never-print-this');
+    expect(JSON.stringify(result.output)).not.toContain('[REDACTED]');
   });
 
   it('searches text with bounded repo-relative matches and ledger entries', async () => {
@@ -239,7 +261,7 @@ describe('tool registry and inspection tools', () => {
     expect(ledger.hasInspectedRange('src/a.ts', 2, 3)).toBe(true);
   });
 
-  it('lists safe files and hides generated/vendor/env files', async () => {
+  it('lists files without generated/vendor/env filtering', async () => {
     mkdirSync(join(TMP, 'src'), { recursive: true });
     mkdirSync(join(TMP, 'dist'), { recursive: true });
     writeFileSync(join(TMP, 'src', 'tool.ts'), 'export {}\n', 'utf-8');
@@ -251,7 +273,7 @@ describe('tool registry and inspection tools', () => {
 
     expect(result.success).toBe(true);
     expect(result.output).toMatchObject({ truncated: false });
-    expect((result.output as ListFilesOutput).files).toEqual(['src/tool.ts']);
+    expect((result.output as ListFilesOutput).files).toEqual(['.env.local', 'dist/tool.js', 'src/tool.ts']);
   });
 
   it('treats empty and whitespace list_files paths as the repository root', async () => {
@@ -272,17 +294,25 @@ describe('tool registry and inspection tools', () => {
     });
   });
 
-  it('continues to reject unsafe list_files paths', async () => {
+  it('allows absolute and parent-relative list_files paths', async () => {
+    const outside = join(TMP, '..', 'synax-tool-outside');
+    rmSync(outside, { recursive: true, force: true });
+    mkdirSync(outside, { recursive: true });
+    writeFileSync(join(outside, 'outside.txt'), 'outside\n', 'utf-8');
     const registry = createToolRegistry({ repoRoot: TMP });
 
-    await expect(registry.execute('list_files', { path: '/tmp' })).resolves.toMatchObject({
-      success: false,
-      error: 'absolute paths are not allowed',
+    await expect(registry.execute('list_files', { path: outside, maxFiles: 50 })).resolves.toMatchObject({
+      success: true,
+      output: { files: [`${outside}/outside.txt`], truncated: false },
     });
-    await expect(registry.execute('list_files', { path: '../outside' })).resolves.toMatchObject({
-      success: false,
-      error: 'paths must stay inside the repository',
+    await expect(
+      registry.execute('list_files', { path: '../synax-tool-outside', maxFiles: 50 }),
+    ).resolves.toMatchObject({
+      success: true,
+      output: { files: ['../synax-tool-outside/outside.txt'], truncated: false },
     });
+
+    rmSync(outside, { recursive: true, force: true });
   });
 
   it('returns bounded read-only git status and diff results visible to the ledger', async () => {

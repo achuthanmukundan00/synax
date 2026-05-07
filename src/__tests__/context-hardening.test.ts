@@ -1062,6 +1062,7 @@ describe('model message assembly', () => {
         maxSingleReadResultTokens: 50000,
         maxTotalReadResultTokensPerTurn: 500000,
         keepRecentToolTurns: 3,
+        assemblyCompactionThreshold: 0,
       },
     });
 
@@ -1105,6 +1106,7 @@ describe('model message assembly', () => {
         maxSingleReadResultTokens: 50000,
         maxTotalReadResultTokensPerTurn: 500000,
         keepRecentToolTurns: 2,
+        assemblyCompactionThreshold: 0,
       },
     });
 
@@ -1170,6 +1172,7 @@ describe('model message assembly', () => {
         maxSingleReadResultTokens: 50000,
         maxTotalReadResultTokensPerTurn: 500000,
         keepRecentToolTurns: 1,
+        assemblyCompactionThreshold: 0,
       },
     });
 
@@ -1232,6 +1235,7 @@ describe('model message assembly', () => {
         maxSingleReadResultTokens: 50000,
         maxTotalReadResultTokensPerTurn: 500000,
         keepRecentToolTurns: 1,
+        assemblyCompactionThreshold: 0,
       },
     });
 
@@ -1295,6 +1299,7 @@ describe('model message assembly', () => {
         maxSingleReadResultTokens: 50000,
         maxTotalReadResultTokensPerTurn: 500000,
         keepRecentToolTurns: 1,
+        assemblyCompactionThreshold: 0,
       },
     });
 
@@ -1328,6 +1333,7 @@ describe('model message assembly', () => {
         maxSingleReadResultTokens: 50000,
         maxTotalReadResultTokensPerTurn: 500000,
         keepRecentToolTurns: 2,
+        assemblyCompactionThreshold: 0,
       },
     });
 
@@ -1369,6 +1375,7 @@ describe('model message assembly', () => {
         maxSingleReadResultTokens: 50000,
         maxTotalReadResultTokensPerTurn: 500000,
         keepRecentToolTurns: 1,
+        assemblyCompactionThreshold: 0,
       },
     });
 

@@ -1,5 +1,4 @@
 import { extname, isAbsolute, normalize, relative, resolve, sep } from 'path';
-import { shouldSkipSecretFile } from './secrets';
 
 const BLOCKED_SEGMENTS = new Set(['.git', 'node_modules', 'dist', 'build', 'coverage', '.next', '.cache', '.vite']);
 const BLOCKED_BASENAMES = new Set(['package-lock.json', 'pnpm-lock.yaml', 'yarn.lock']);
@@ -42,11 +41,7 @@ export function normalizeRepoPath(repoRoot: string, inputPath: string): PathPoli
 
   const segments = normalized.split('/').filter(Boolean);
   const basename = segments[segments.length - 1] ?? '';
-  if (
-    segments.some((segment) => BLOCKED_SEGMENTS.has(segment)) ||
-    BLOCKED_BASENAMES.has(basename) ||
-    shouldSkipSecretFile(basename)
-  ) {
+  if (segments.some((segment) => BLOCKED_SEGMENTS.has(segment)) || BLOCKED_BASENAMES.has(basename)) {
     return { ok: false, reason: `unsafe path rejected: ${normalized}` };
   }
 

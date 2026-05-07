@@ -1,6 +1,8 @@
 import { readFileSync, existsSync, writeFileSync } from 'fs';
 import { basename, dirname, join } from 'path';
 import { parse as parseToml } from 'toml';
+import { loadSynaxConfig } from './load-config';
+import type { EffectiveSynaxConfig, ResolvedProviderConfig } from './schema';
 
 export type ProviderKind = 'openai-compatible';
 export type ProviderPreset =
@@ -101,7 +103,10 @@ function providerPresetDefaults(preset: ProviderPreset): ProviderConfig {
   }
 }
 
-export function normalizeProviderConfig(p: ProviderConfig): import('../llm/types').NormalizedProviderConfig {
+export function normalizeProviderConfig(
+  p: ProviderConfig,
+  opts?: { thinkingLevel?: 'off' | 'low' | 'medium' | 'high' | 'auto' },
+): import('../llm/types').NormalizedProviderConfig {
   const presetDefaults = providerPresetDefaults(p.preset ?? 'relay-local');
   const headersInput = p.custom_headers ?? p.customHeaders ?? presetDefaults.custom_headers;
   const customHeaders: Record<string, string> = {};
@@ -121,13 +126,14 @@ export function normalizeProviderConfig(p: ProviderConfig): import('../llm/types
   const model = p.model ?? presetDefaults.model ?? '';
   const timeoutMs = p.timeout_ms ?? p.timeoutMs ?? (p.timeout_seconds ?? p.timeoutSeconds ?? 120) * 1000;
   const toolCallParser = p.tool_call_parser ?? p.toolCallParser;
-  return { kind, baseUrl, model, toolCallParser, apiKey, customHeaders, timeoutMs };
+  return { kind, baseUrl, model, toolCallParser, apiKey, customHeaders, timeoutMs, thinkingLevel: opts?.thinkingLevel };
 }
 
 export interface ProjectConfig {
   activeProfile?: string;
   model?: string;
   baseUrl?: string;
+  coreVisualProfile?: string;
   context_budget_tokens?: number;
   contextBudgetTokens?: number;
   maxModelSteps?: number;
@@ -172,6 +178,27 @@ export interface LoadProjectConfigResult {
   source: ConfigSource;
 }
 
+export function applyEffectiveSynaxConfigToProjectConfig(
+  current: ProjectConfig,
+  effective: EffectiveSynaxConfig,
+): ProjectConfig {
+  const activeProvider = effective.providers[effective.active.provider];
+  if (!activeProvider) return current;
+  const activeModel = activeProvider.models.find((model) => model.id === effective.active.model);
+  const contextWindow =
+    activeModel?.contextWindow ??
+    current.contextWindowTokens ??
+    current.contextBudgetTokens ??
+    DEFAULTS.contextWindowTokens;
+  return {
+    ...current,
+    provider: projectProviderFromEffectiveProvider(activeProvider, effective.active.model),
+    contextWindowTokens: contextWindow,
+    contextBudgetTokens: contextWindow,
+    coreVisualProfile: effective.coreVisualProfile ?? current.coreVisualProfile,
+  };
+}
+
 const DEFAULTS: ProjectConfig = {
   activeProfile: 'default',
   model: undefined,
@@ -182,7 +209,6 @@ const DEFAULTS: ProjectConfig = {
   keepRecentTokens: 20000,
   maxSingleReadResultTokens: 12000,
   maxTotalReadResultTokensPerTurn: 40000,
-  maxModelSteps: 64,
   maxToolCalls: 192,
   subagents: { enabled: false, mode: 'sequential' },
   verification: { defaultCommand: undefined },
@@ -232,7 +258,6 @@ export function generateDefaultConfig(): string {
     '[agent]',
     '# 16000 is minimal/safe, 65536 is normal, 131072 is a high-context local profile.',
     'context_budget_tokens = 131072',
-    'max_model_steps = 64',
     'max_tool_calls = 192',
     '',
     '[subagents]',
@@ -249,6 +274,9 @@ export function generateDefaultConfig(): string {
     '',
     '[tools.bash]',
     'enabled = true',
+    '',
+    '# Core visual profile: "model" (auto-detect), "default", "qwen", "openai", "claude", "deepseek", "gemini"',
+    'coreVisualProfile = "model"',
     '',
     '[provider]',
     'kind = "openai-compatible"',
@@ -301,6 +329,7 @@ export function validateConfig(config: ProjectConfig): ValidationError[] {
     'verification',
     'provider',
     'tools',
+    'coreVisualProfile',
   ]);
   for (const key of Object.keys(config)) {
     if (!allowed.has(key)) {
@@ -312,6 +341,16 @@ export function validateConfig(config: ProjectConfig): ValidationError[] {
   }
   if (config.baseUrl !== undefined && typeof config.baseUrl !== 'string') {
     errors.push({ path: 'baseUrl', message: 'baseUrl must be a string' });
+  }
+  if (config.coreVisualProfile !== undefined) {
+    if (typeof config.coreVisualProfile !== 'string') {
+      errors.push({ path: 'coreVisualProfile', message: 'must be a string' });
+    } else {
+      const validProfiles: string[] = ['model', 'default', 'qwen', 'openai', 'claude', 'deepseek', 'gemini'];
+      if (!validProfiles.includes(config.coreVisualProfile)) {
+        errors.push({ path: 'coreVisualProfile', message: `must be one of: ${validProfiles.join(', ')}` });
+      }
+    }
   }
   validatePositiveInteger(errors, 'contextBudgetTokens', config.contextBudgetTokens);
   validatePositiveInteger(errors, 'context_budget_tokens', config.context_budget_tokens);
@@ -484,6 +523,8 @@ function validateSameNumericValue(errors: ValidationError[], entries: Array<[str
 
 function configFromParsedToml(parsed: Record<string, unknown>): ProjectConfig {
   const config: ProjectConfig = {};
+  const provider =
+    parsed.provider && typeof parsed.provider === 'object' ? (parsed.provider as Record<string, unknown>) : undefined;
   if (parsed.active_profile !== undefined) config.activeProfile = parsed.active_profile as string;
   if (parsed.activeProfile !== undefined) config.activeProfile = parsed.activeProfile as string;
   const agent = parsed.agent && typeof parsed.agent === 'object' ? (parsed.agent as AgentBudgetConfig) : undefined;
@@ -493,6 +534,12 @@ function configFromParsedToml(parsed: Record<string, unknown>): ProjectConfig {
   if (parsed.model !== undefined) config.model = parsed.model as string;
   if (parsed.baseUrl !== undefined) config.baseUrl = parsed.baseUrl as string;
   if (parsed.base_url !== undefined) config.baseUrl = parsed.base_url as string;
+  const coreVisualProfile =
+    stringValue(parsed.coreVisualProfile) ??
+    stringValue(parsed.core_visual_profile) ??
+    stringValue(provider?.coreVisualProfile) ??
+    stringValue(provider?.core_visual_profile);
+  if (coreVisualProfile !== undefined) config.coreVisualProfile = normalizeCoreVisualProfile(coreVisualProfile);
   if (agent !== undefined) config.agent = agent;
   if (parsed.contextBudgetTokens !== undefined) config.contextBudgetTokens = parsed.contextBudgetTokens as number;
   if (parsed.context_budget_tokens !== undefined) {
@@ -559,16 +606,39 @@ function configFromParsedToml(parsed: Record<string, unknown>): ProjectConfig {
   return config;
 }
 
+function normalizeCoreVisualProfile(value: string): string {
+  return value.trim().toLowerCase();
+}
+
+function stringValue(value: unknown): string | undefined {
+  return typeof value === 'string' ? value : undefined;
+}
+
+function projectProviderFromEffectiveProvider(provider: ResolvedProviderConfig, model: string): ProviderConfig {
+  const apiKey = provider.apiKey === '••••' ? undefined : provider.apiKey;
+  return {
+    preset: provider.id as ProviderPreset,
+    kind: 'openai-compatible',
+    base_url: provider.baseUrl,
+    baseUrl: provider.baseUrl,
+    model,
+    api_key_env: provider.apiKeyEnv,
+    apiKeyEnv: provider.apiKeyEnv,
+    api_key: apiKey,
+    apiKey,
+    custom_headers: provider.headers,
+    customHeaders: provider.headers,
+  };
+}
+
 function applyEnvOverrides(config: ProjectConfig, errors: ValidationError[]): ProjectConfig {
   const overrides: ProjectConfig = {};
   const contextBudgetTokens = readEnvPositiveInteger('SYNAX_CONTEXT_BUDGET_TOKENS', errors);
-  const maxModelSteps = readEnvPositiveInteger('SYNAX_MAX_MODEL_STEPS', errors);
   const maxToolCalls = readEnvPositiveInteger('SYNAX_MAX_TOOL_CALLS', errors);
   if (contextBudgetTokens !== undefined) {
     overrides.contextBudgetTokens = contextBudgetTokens;
     overrides.contextWindowTokens = contextBudgetTokens;
   }
-  if (maxModelSteps !== undefined) overrides.maxModelSteps = maxModelSteps;
   if (maxToolCalls !== undefined) overrides.maxToolCalls = maxToolCalls;
   return { ...config, ...overrides };
 }
@@ -590,9 +660,12 @@ export function loadProjectConfig(baseDir?: string): LoadProjectConfigResult {
   const errors: ValidationError[] = [];
   const userConfigPath = process.env.HOME ? join(process.env.HOME, '.config', 'synax', 'config.toml') : null;
   let userConfig: ProjectConfig = {};
+  let hasExtendedSettings = false;
   if (userConfigPath && existsSync(userConfigPath)) {
     try {
-      userConfig = configFromParsedToml(parseToml(readFileSync(userConfigPath, 'utf-8')) as Record<string, unknown>);
+      const parsed = parseToml(readFileSync(userConfigPath, 'utf-8')) as Record<string, unknown>;
+      hasExtendedSettings ||= hasExtendedSettingsKeys(parsed);
+      userConfig = configFromParsedToml(parsed);
     } catch {
       userConfig = {};
     }
@@ -603,10 +676,15 @@ export function loadProjectConfig(baseDir?: string): LoadProjectConfigResult {
     try {
       const raw = readFileSync(discoveredPath, 'utf-8');
       const parsed = parseToml(raw) as Record<string, unknown>;
+      hasExtendedSettings ||= hasExtendedSettingsKeys(parsed);
       config = configFromParsedToml(parsed);
     } catch (err) {
       errors.push({ path: discoveredPath, message: `Failed to parse TOML: ${(err as Error).message}` });
     }
+  }
+  if (hasExtendedSettings) {
+    const effectiveSettings = loadSynaxConfig(baseDir);
+    config = applyEffectiveSynaxConfigToProjectConfig(config, effectiveSettings);
   }
   const activeProviderPreset = (config.provider?.preset ??
     userConfig.provider?.preset ??
@@ -656,6 +734,13 @@ export function loadProjectConfig(baseDir?: string): LoadProjectConfigResult {
     source:
       path === null ? 'default' : basename(path) === '.synax.toml' && dirname(path) !== baseDir ? 'file' : 'explicit',
   };
+}
+
+function hasExtendedSettingsKeys(parsed: Record<string, unknown>): boolean {
+  return (
+    (parsed.active !== undefined && typeof parsed.active === 'object') ||
+    (parsed.providers !== undefined && typeof parsed.providers === 'object')
+  );
 }
 
 export default loadProjectConfig;
