@@ -79,6 +79,7 @@ function defaultEffectiveConfig(): EffectiveSynaxConfig {
     providers: { ...DEFAULT_PROVIDERS },
     skills: defaultSkillsConfig(),
     mcp: defaultMcpConfig(),
+    coreVisualProfile: undefined,
     source: null,
     errors: [],
   };
@@ -184,6 +185,15 @@ function isThinkingLevel(value: string): value is ThinkingLevel {
 
 export function configFromParsed(parsed: Record<string, unknown>): SynaxConfig {
   const config: SynaxConfig = {};
+  const provider =
+    parsed.provider && typeof parsed.provider === 'object' ? (parsed.provider as Record<string, unknown>) : undefined;
+
+  const coreVisualProfile =
+    stringValue(parsed.coreVisualProfile) ??
+    stringValue(parsed.core_visual_profile) ??
+    stringValue(provider?.coreVisualProfile) ??
+    stringValue(provider?.core_visual_profile);
+  if (coreVisualProfile !== undefined) config.coreVisualProfile = normalizeCoreVisualProfile(coreVisualProfile);
 
   // Active config
   if (parsed.active && typeof parsed.active === 'object') {
@@ -294,6 +304,10 @@ export function validateSynaxConfig(config: SynaxConfig): string[] {
         errors.push(`mcp.servers.${name}: command is required`);
       }
     }
+  }
+
+  if (config.coreVisualProfile !== undefined && !isCoreVisualProfile(config.coreVisualProfile)) {
+    errors.push('coreVisualProfile must be one of: model, default, qwen, openai, claude, deepseek, gemini');
   }
 
   return errors;
@@ -414,6 +428,10 @@ function mergeConfigs(
         };
       }
     }
+
+    if (layer.config.coreVisualProfile !== undefined) {
+      result.coreVisualProfile = layer.config.coreVisualProfile;
+    }
   }
 
   result.source = lastSource;
@@ -523,6 +541,11 @@ export function writeSynaxConfig(
 export function serializeEffectiveConfig(config: EffectiveSynaxConfig): string {
   const lines: string[] = [];
 
+  if (config.coreVisualProfile) {
+    lines.push(`coreVisualProfile = "${escapeTomlString(config.coreVisualProfile)}"`);
+    lines.push('');
+  }
+
   // Active
   lines.push('[active]');
   lines.push(`provider = "${escapeTomlString(config.active.provider)}"`);
@@ -620,6 +643,18 @@ function isTomlBareKey(key: string): boolean {
 /** Returns a safe TOML table key segment: bare if allowed, otherwise quoted. */
 function tomlTableKey(key: string): string {
   return isTomlBareKey(key) ? key : `"${escapeTomlString(key)}"`;
+}
+
+function isCoreVisualProfile(value: string): boolean {
+  return ['model', 'default', 'qwen', 'openai', 'claude', 'deepseek', 'gemini'].includes(value);
+}
+
+function normalizeCoreVisualProfile(value: string): string {
+  return value.trim().toLowerCase();
+}
+
+function stringValue(value: unknown): string | undefined {
+  return typeof value === 'string' ? value : undefined;
 }
 
 // ─── Selective mutation helpers ─────────────────────────────

@@ -92,6 +92,21 @@ command = "npx"
 args = ["-y", "@upstash/context7-mcp"]
 ```
 
+### AI Core Visual Profile
+
+```toml
+coreVisualProfile = "model"
+```
+
+Use `model` to choose the AI core morphology from the active model ID. You can also force one profile:
+
+```toml
+coreVisualProfile = "qwen"
+```
+
+Canonical values are lowercase: `model`, `default`, `qwen`, `openai`, `claude`, `deepseek`, and `gemini`.
+Synax also accepts `core_visual_profile` and legacy `[provider]`-scoped placement for compatibility.
+
 ## Legacy Format (backward compatible)
 
 The single-provider format from v0.1-v0.3 is still supported:

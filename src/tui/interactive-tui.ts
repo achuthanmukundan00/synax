@@ -45,6 +45,8 @@ export async function runInteractiveTui(
     gitBranch?: string;
     /** Configured total context window when known. */
     contextWindowTokens?: number;
+    /** Override core visual profile: 'model' (auto-detect), 'default', 'qwen', 'openai', 'claude', 'deepseek', 'gemini'. */
+    coreVisualProfile?: string;
   },
 ): Promise<void> {
   const terminal = createTerminalSession({ stdin: options?.stdin, stdout: options?.stdout });
@@ -118,6 +120,7 @@ export async function runInteractiveTui(
     endpointLabel: options?.endpointLabel,
     cwdLabel: options?.cwdLabel ?? process.cwd(),
     gitBranch: options?.gitBranch,
+    coreVisualProfile: options?.coreVisualProfile,
     historyScrollOffset,
   });
 

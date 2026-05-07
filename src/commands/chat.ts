@@ -340,6 +340,7 @@ export function chatCommand(program: Command): void {
           cwdLabel,
           gitBranch,
           contextWindowTokens: loaded.config.contextWindowTokens ?? loaded.config.contextBudgetTokens,
+          coreVisualProfile: loaded.config.coreVisualProfile,
         });
         return;
       }

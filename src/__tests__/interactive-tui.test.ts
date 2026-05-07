@@ -245,6 +245,55 @@ describe('ai core renderer', () => {
     expect(fallback).toMatch(/[●◎•]/);
   });
 
+  it('renders a stable inner containment chamber across model profiles', () => {
+    const base = { mode: 'idle' as const, frame: 4, width: 24, height: 9, unicode: true };
+    const openai = renderDottedCore({ ...base, profile: resolveCoreVisualProfile('gpt-5') })
+      .map(stripAnsi)
+      .join('\n');
+    const claude = renderDottedCore({ ...base, profile: resolveCoreVisualProfile('claude-sonnet-4.5') })
+      .map(stripAnsi)
+      .join('\n');
+
+    for (const rendered of [openai, claude]) {
+      expect(rendered).toMatch(/[╭╮╰╯]/);
+      expect(rendered).toMatch(/[─│]/);
+    }
+
+    expect(openai).not.toEqual(claude);
+    expect(openai).not.toMatch(/[╱╲]/);
+    expect(claude).toMatch(/[○◉]/);
+  });
+
+  it('renders prominent model-specific morphology signatures', () => {
+    const base = { mode: 'thinking' as const, frame: 8, width: 26, height: 9, unicode: true };
+    const profiles = {
+      qwen: renderDottedCore({ ...base, profile: resolveCoreVisualProfile('qwen3-local') })
+        .map(stripAnsi)
+        .join('\n'),
+      openai: renderDottedCore({ ...base, profile: resolveCoreVisualProfile('gpt-5') })
+        .map(stripAnsi)
+        .join('\n'),
+      claude: renderDottedCore({ ...base, profile: resolveCoreVisualProfile('claude-sonnet-4.5') })
+        .map(stripAnsi)
+        .join('\n'),
+      deepseek: renderDottedCore({ ...base, profile: resolveCoreVisualProfile('deepseek-v4') })
+        .map(stripAnsi)
+        .join('\n'),
+      gemini: renderDottedCore({ ...base, profile: resolveCoreVisualProfile('gemini-2.5-pro') })
+        .map(stripAnsi)
+        .join('\n'),
+    };
+
+    expect(new Set(Object.values(profiles)).size).toBe(Object.values(profiles).length);
+    expect(profiles.qwen).toMatch(/[╱╲]/);
+    expect(profiles.openai).toMatch(/[◎●]/);
+    expect(profiles.openai).not.toMatch(/[╱╲]/);
+    expect(profiles.claude).toMatch(/[○◉]/);
+    expect(profiles.deepseek).toMatch(/[═━◆◈]/);
+    expect(profiles.gemini).toMatch(/●[\s\S]*●/);
+    expect(profiles.gemini).toMatch(/│/);
+  });
+
   it('renders an unboxed containment field with consistent footprint', () => {
     const idle = renderAiCore('idle', 0);
     const thinking = renderAiCore('thinking', 0.25);
