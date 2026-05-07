@@ -13,6 +13,7 @@ import { join } from 'path';
 
 import {
   createSettingsState,
+  getTabRows,
   settingsReducer,
   SETTINGS_TABS,
   clearTextInput,
@@ -187,6 +188,26 @@ describe('settings state — thinking control', () => {
     // The reducer itself doesn't toggle thinking when it's n/a.
     const state = settingsReducer(createSettingsState(config), { type: 'open' });
     expect(state.tab).toBe('model');
+  });
+
+  it('allows selecting no active model so the core can unload', () => {
+    const config = makeTestConfig();
+    const rows = getTabRows('model', config);
+    const activeModel = rows.find((row) => row.id === 'active-model');
+    expect(activeModel?.options).toEqual(['', 'qwen', 'deepseek-reasoner']);
+
+    const noModelIndex = rows.findIndex((row) => row.id === 'no-active-model');
+    expect(noModelIndex).toBeGreaterThanOrEqual(0);
+
+    const state = {
+      ...settingsReducer(createSettingsState(config), { type: 'open' }),
+      focus: 'rows' as const,
+      selectedRow: noModelIndex,
+    };
+    const selected = settingsReducer(state, { type: 'select_row' });
+
+    expect(selected.config.active.model).toBe('');
+    expect(selected.config.active.thinking).toBe('off');
   });
 });
 

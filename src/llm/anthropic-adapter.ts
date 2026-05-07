@@ -242,9 +242,13 @@ export function createAnthropicAdapter(config: AnthropicAdapterConfig) {
     async chat(opts: ChatOptions): Promise<ChatResponse> {
       // Reject tool calls — not implemented for Anthropic yet
       if (opts.tools && opts.tools.length > 0) {
-        throw providerError('invalidRequest', 'Anthropic tool use is not yet supported in Synax. Remove tools from your request or use an OpenAI-compatible provider.', {
-          retryable: false,
-        });
+        throw providerError(
+          'invalidRequest',
+          'Anthropic tool use is not yet supported in Synax. Remove tools from your request or use an OpenAI-compatible provider.',
+          {
+            retryable: false,
+          },
+        );
       }
 
       const system = extractSystemPrompt(opts.messages);

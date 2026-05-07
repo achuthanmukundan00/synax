@@ -57,6 +57,8 @@ export async function runInteractiveTui(
     activeSkills?: string[];
     /** Override core visual profile: 'model' (auto-detect), 'default', 'qwen', 'openai', 'claude', 'deepseek', 'gemini'. */
     coreVisualProfile?: string;
+    /** Whether the active provider/model can be queried right now. */
+    coreLoaded?: boolean;
     /**
      * Optional callback invoked after settings are persisted.
      * Return updated runtime labels to apply immediately in the TUI.
@@ -68,6 +70,7 @@ export async function runInteractiveTui(
       providerName?: string;
       contextWindowTokens?: number;
       coreVisualProfile?: string;
+      coreLoaded?: boolean;
     };
   },
 ): Promise<void> {
@@ -104,20 +107,19 @@ export async function runInteractiveTui(
     providerName: options?.providerName,
     contextWindowTokens: options?.contextWindowTokens,
     coreVisualProfile: options?.coreVisualProfile,
+    coreLoaded: options?.coreLoaded,
   };
   const applyOptionsToState = (): void => {
-    if (runtimeLabels.modelLabel) {
-      state = {
-        ...state,
-        modelId: runtimeLabels.modelLabel,
-        providerName: runtimeLabels.providerName ?? providerNameFromEndpoint(runtimeLabels.endpointLabel ?? ''),
-        contextWindowTokens: runtimeLabels.contextWindowTokens,
-        thinkingEnabled: runtimeLabels.thinkingEnabled,
-        activeSkills: options?.activeSkills ?? [],
-        coreLoaded: true,
-        sessionSpendLabel: isLocalEndpoint(runtimeLabels.endpointLabel ?? '') ? 'local' : undefined,
-      };
-    }
+    state = {
+      ...state,
+      modelId: runtimeLabels.modelLabel ?? '',
+      providerName: runtimeLabels.providerName ?? providerNameFromEndpoint(runtimeLabels.endpointLabel ?? ''),
+      contextWindowTokens: runtimeLabels.contextWindowTokens,
+      thinkingEnabled: runtimeLabels.thinkingEnabled,
+      activeSkills: options?.activeSkills ?? [],
+      coreLoaded: runtimeLabels.coreLoaded ?? true,
+      sessionSpendLabel: isLocalEndpoint(runtimeLabels.endpointLabel ?? '') ? 'local' : undefined,
+    };
   };
   applyOptionsToState();
 
@@ -288,6 +290,22 @@ export async function runInteractiveTui(
           Date.now(),
         );
       }
+      busy = false;
+      paint(true);
+      return;
+    }
+
+    if (runtimeLabels.coreLoaded === false) {
+      state = applyEventToRunState(
+        state,
+        {
+          type: 'command_output',
+          timestamp: new Date().toISOString(),
+          command: 'submit',
+          content: options?.blockedMessage ?? '[synax] No queryable model is configured.',
+        },
+        Date.now(),
+      );
       busy = false;
       paint(true);
       return;

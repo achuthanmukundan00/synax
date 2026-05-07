@@ -4,8 +4,8 @@ import { normalizeRunMode, type RunMode } from '../agent/task-policy';
 import { TuiRenderer } from '../agent/renderers';
 import { loadProjectConfig, toProviderFactoryInput } from '../config/project';
 import { loadSynaxConfig } from '../config/load-config';
-import { createLLMClient } from '../llm/provider-factory';
-import { createChatSession, compactHome, currentGitBranch } from './chat';
+import { describeLLMProvider } from '../llm/provider-factory';
+import { createChatSession, compactHome, currentGitBranch, providerRuntimeBlockedMessage } from './chat';
 import { loadSkills, type SkillDiagnostic } from '../agent/skills';
 import { runInteractiveTui } from '../tui/interactive-tui';
 
@@ -95,8 +95,9 @@ export function runCommand(program: Command): void {
             return;
           }
 
-          const factoryResult = createLLMClient(toProviderFactoryInput(loaded.config));
-          const metadata = factoryResult.metadata;
+          const providerDescription = describeLLMProvider(toProviderFactoryInput(loaded.config));
+          const metadata = providerDescription.metadata;
+          const blockedMessage = providerRuntimeBlockedMessage(metadata, providerDescription.normalizedConfig);
 
           // Extract thinking level from the effective multi-provider config.
           let thinkingLevel: 'off' | 'low' | 'medium' | 'high' | 'auto' = 'off';
@@ -133,7 +134,7 @@ export function runCommand(program: Command): void {
           const cwdLabel = compactHome(repoRoot);
           const gitBranch = await currentGitBranch(repoRoot);
           await runInteractiveTui(session, {
-            blockedMessage: !metadata.modelId ? 'provider.model is required' : undefined,
+            blockedMessage,
             lastModelOutput: () => lastModelOutput,
             modelLabel,
             thinkingEnabled: thinkingLevel !== 'off',
@@ -143,6 +144,7 @@ export function runCommand(program: Command): void {
             gitBranch,
             contextWindowTokens: loaded.config.contextWindowTokens ?? loaded.config.contextBudgetTokens,
             coreVisualProfile: loaded.config.coreVisualProfile,
+            coreLoaded: blockedMessage === undefined,
           });
         } else {
           console.log('[synax] Run command initialized. Use --task or --plan to specify work.');
