@@ -488,7 +488,7 @@ function printTurnReport(report: ChatTurnReport): void {
   }
 }
 
-async function currentGitBranch(repoRoot: string): Promise<string | undefined> {
+export async function currentGitBranch(repoRoot: string): Promise<string | undefined> {
   try {
     const { stdout } = await execFileAsync('git', ['branch', '--show-current'], {
       cwd: repoRoot,
@@ -527,13 +527,13 @@ async function changedFilesBetween(repoRoot: string, before: string, after: stri
   }
 }
 
-function compactHome(path: string): string {
+export function compactHome(path: string): string {
   const home = process.env.HOME;
   if (!home) return path;
   return path === home ? '~' : path.startsWith(`${home}/`) ? `~/${path.slice(home.length + 1)}` : path;
 }
 
-function providerNameFromPreset(preset: string | undefined): string | undefined {
+export function providerNameFromPreset(preset: string | undefined): string | undefined {
   if (!preset) return undefined;
   if (preset === 'relay-local' || preset === 'relay-cloudflare') return 'Relay';
   if (preset === 'openai') return 'OpenAI';
