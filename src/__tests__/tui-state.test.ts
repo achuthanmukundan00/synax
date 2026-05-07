@@ -132,6 +132,32 @@ describe('tui-state', () => {
     expect(state.verification.state).toBe('skipped');
   });
 
+  it('does not classify provider errors containing "passed back" as passed verification', () => {
+    let state = createInitialRunStateSnapshot(0);
+
+    state = applyEventToRunState(
+      state,
+      {
+        type: 'task_finished',
+        timestamp: new Date(1).toISOString(),
+        status: 'model_error',
+        toolCalls: 0,
+        maxToolCalls: 192,
+        modelSteps: 1,
+        maxModelSteps: 64,
+        changedFiles: [],
+        workingTreeClean: true,
+        verification: 'Provider error: reasoning_content must be passed back to the model',
+        error: 'Provider error: reasoning_content must be passed back to the model',
+      },
+      1,
+    );
+
+    expect(state.terminal).toBe('failed');
+    expect(state.phase).toBe('error');
+    expect(state.verification.state).toBe('skipped');
+  });
+
   it('records model responses and tool calls in a debug history', () => {
     let state = createInitialRunStateSnapshot(0);
 

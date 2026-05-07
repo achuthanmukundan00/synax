@@ -502,7 +502,7 @@ function buildHelpRows(): SettingsRow[] {
 // ─── Toggle / Select handlers ───────────────────────────────
 
 function handleToggle(state: SettingsState, row: SettingsRow): SettingsState {
-  let next = { ...state, dirty: true };
+  const next = { ...state, dirty: true };
 
   // Skill toggle
   if (row.id.startsWith('skill-')) {
@@ -535,24 +535,46 @@ function handleToggle(state: SettingsState, row: SettingsRow): SettingsState {
 }
 
 function handleSelect(state: SettingsState, row: SettingsRow): SettingsState {
-  let next = { ...state, dirty: true };
+  const next = { ...state, dirty: true };
 
   if (row.id === 'active-provider') {
-    next.config = buildConfigUpdate(next.config, { activeProvider: row.value });
+    const providerIds = Object.values(next.config.providers)
+      .filter((provider) => provider.enabled)
+      .map((provider) => provider.id);
+    next.config = buildConfigUpdate(next.config, {
+      activeProvider: nextOption(next.config.active.provider, providerIds),
+    });
   }
 
-  if (row.id === 'active-model' || row.id.startsWith('model-')) {
-    const modelId = row.id.startsWith('model-') ? row.id.slice('model-'.length) : row.value;
+  if (row.id === 'active-model') {
+    const provider = next.config.providers[next.config.active.provider];
+    const modelIds = provider?.models.map((model) => model.id) ?? [];
+    next.config = buildConfigUpdate(next.config, {
+      activeModel: nextOption(next.config.active.model, modelIds),
+    });
+  }
+
+  if (row.id.startsWith('model-')) {
+    const modelId = row.id.slice('model-'.length);
     next.config = buildConfigUpdate(next.config, { activeModel: modelId });
   }
 
   if (row.id === 'active-thinking') {
+    const provider = next.config.providers[next.config.active.provider];
+    const model = provider?.models.find((candidate) => candidate.id === next.config.active.model);
     next.config = buildConfigUpdate(next.config, {
-      activeThinking: row.value as ThinkingLevel,
+      activeThinking: nextOption(next.config.active.thinking, model?.thinkingLevels ?? []) as ThinkingLevel,
     });
   }
 
   return next;
+}
+
+function nextOption(current: string, options: string[]): string {
+  if (options.length === 0) return current;
+  const currentIndex = options.indexOf(current);
+  if (currentIndex < 0) return options[0];
+  return options[(currentIndex + 1) % options.length];
 }
 
 function applyTextCommit(state: SettingsState, rowId: string, value: string): SettingsState {
@@ -586,7 +608,8 @@ function applyTextCommit(state: SettingsState, rowId: string, value: string): Se
 // ─── Helpers ────────────────────────────────────────────────
 
 export function clearTextInput(state: SettingsState): SettingsState {
-  const { textInput: _textInput, ...rest } = state;
+  const rest = { ...state };
+  delete rest.textInput;
   return { ...rest, focus: 'rows', dirty: true };
 }
 
