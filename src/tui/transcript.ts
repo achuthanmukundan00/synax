@@ -8,24 +8,9 @@ export interface TranscriptRenderState {
 export function renderTranscript(state: TranscriptRenderState, width: number): string[] {
   const blocks: string[][] = [];
   const history = state.run.debugHistory;
-  let lastKind = '';
 
   for (let i = 0; i < history.length; i += 1) {
     const item = history[i];
-    const blockKind =
-      item.kind === 'user'
-        ? 'user'
-        : item.kind === 'model'
-          ? 'model'
-          : item.kind === 'command' || item.kind === 'local_command'
-            ? 'command'
-            : 'tool';
-
-    // Insert a thin separator when switching between model and tool regions.
-    if (lastKind && lastKind !== blockKind) {
-      blocks.push([dim(separator(Math.min(width - 4, 40)))]);
-    }
-    lastKind = blockKind;
 
     if (item.kind === 'user') {
       blocks.push(renderUserPrompt(item.detail || item.summary, width));
@@ -69,7 +54,6 @@ export function renderTranscript(state: TranscriptRenderState, width: number): s
   if (!hasModelOutput) {
     const fallbackModel = cleanModelOutput(state.run.lastModelOutput || state.lastModelOutput || '');
     if (fallbackModel) {
-      if (lastKind) blocks.push([dim(separator(Math.min(width - 4, 40)))]);
       blocks.push(renderEventBlock('model', fallbackModel, width));
     }
   }
@@ -93,7 +77,7 @@ export function renderTranscript(state: TranscriptRenderState, width: number): s
     return [dim('No runtime events yet.')];
   }
 
-  return blocks.flat();
+  return blocks.flatMap((block, index) => (index === 0 ? block : ['', ...block]));
 }
 
 export function toolsUsed(run: RunStateSnapshot): string[] {
@@ -106,22 +90,14 @@ export function toolsUsed(run: RunStateSnapshot): string[] {
 }
 
 function renderEventBlock(label: string, body: string, width: number, maxLines = 3): string[] {
-  const available = Math.max(12, width - label.length - 4);
+  const available = Math.max(12, width - 13);
   const wrapped = wrapText(body || 'no detail', available).slice(0, maxLines);
-  return wrapped.map((line, index) =>
-    index === 0
-      ? `${eventLabel(label)}  ${clip(line, available)}`
-      : `${' '.repeat(label.length)}  ${clip(line, available)}`,
-  );
+  return [eventHeader(label, ''), ...wrapped.map((line) => detailRow('detail', line, width))];
 }
 
 function renderUserPrompt(body: string, width: number): string[] {
-  const inner = Math.max(12, width - 4);
-  const wrapped = wrapText(body || 'no prompt', inner).slice(0, 4);
-  return [
-    subtleBand(`user  ${clip(wrapped[0] ?? '', inner)}`, width),
-    ...wrapped.slice(1).map((line) => subtleBand(`      ${clip(line, inner - 6)}`, width)),
-  ];
+  const wrapped = wrapText(body || 'no prompt', Math.max(12, width - 13)).slice(0, 4);
+  return [eventHeader('user', ''), ...wrapped.map((line) => detailRow('prompt', line, width))];
 }
 
 function renderToolEvent(
@@ -130,20 +106,21 @@ function renderToolEvent(
   width: number,
 ): string[] {
   if (call.name === 'read') {
-    const path = call.path || 'unknown';
-    const range = call.startLine || call.endLine ? `:${call.startLine ?? '?'}-${call.endLine ?? '?'}` : '';
+    const path = call.path || '—';
     const preview = result ? summarizeOutput(result.detail).split('\n')[0] : '';
-    const block = [`${eventLabel('read')}  ${clip(`${path}${range}`, width - 8)}`];
-    if (preview) block.push(`      ${dim(clip(preview, width - 8))}`);
+    const block = [eventHeader('read', path, width)];
+    if (call.startLine || call.endLine)
+      block.push(detailRow('lines', `${call.startLine ?? '?'}–${call.endLine ?? '?'}`, width));
+    if (preview) block.push(detailRow('output', preview, width));
     return block;
   }
 
   if (call.name === 'write' || call.name === 'edit' || call.name === 'replace_in_file') {
     const label = call.name === 'write' ? 'write' : 'edit';
-    const path = call.path || 'unknown';
-    const block = [`${eventLabel(label)}  ${clip(path, width - 9)}`];
+    const path = call.path || '—';
+    const block = [eventHeader(label, path, width)];
     const summary = result ? summarizeOutput(result.detail || result.summary) : '';
-    if (summary) block.push(`       ${dim(clip(summary, width - 9))}`);
+    if (summary) block.push(detailRow('result', summary, width));
     return block;
   }
 
@@ -159,23 +136,24 @@ function renderCommandEvent(
   result: { summary: string; detail: string } | undefined,
   width: number,
 ): string[] {
-  const block = [`${eventLabel('$')} ${clip(command, width - 4)}`];
+  const parsed = result ? parseCommandResult(result.detail || result.summary) : undefined;
+  const state = parsed ? `exit ${parsed.exitCode ?? 1}` : 'requested';
+  const block = [eventHeader('bash', state, width)];
+  block.push(detailRow('command', command, width));
   if (!result) return block;
+  block.push(detailRow('exit', String(parsed?.exitCode ?? 1), width));
 
-  const parsed = parseCommandResult(result.detail || result.summary);
-  const exitLabel = dim(`exit ${parsed.exitCode ?? 1}`);
-  const tags = [exitLabel];
-  if (parsed.duration) tags.push(dim(parsed.duration));
-  if (isGitCommand(command)) tags.push(dim('git'));
-  block.push(`  ${tags.join(' · ')}`);
+  const meta = [parsed?.duration, isGitCommand(command) ? 'git' : ''].filter(Boolean).join(' · ');
+  if (meta) block.push(detailRow('meta', meta, width));
 
-  const output = colorizeCommandOutput(command, summarizeCommandDisplay(command, parsed.output)).trim();
-  const showOutput = output.length > 0 && (parsed.exitCode !== 0 || output.length < 420);
+  const output = colorizeCommandOutput(command, summarizeCommandDisplay(command, parsed?.output ?? '')).trim();
+  const showOutput = output.length > 0 && ((parsed?.exitCode ?? 1) !== 0 || output.length < 420);
   if (showOutput) {
-    const maxOutputLines = isGitDiffCommand(command) ? 6 : parsed.exitCode === 0 ? 2 : 4;
-    for (const line of wrapText(output, Math.max(20, width - 4)).slice(0, maxOutputLines)) {
-      const clipped = clip(line, width - 4);
-      block.push(`  ${hasAnsi(clipped) ? clipped : dim(clipped)}`);
+    const maxOutputLines = isGitDiffCommand(command) ? 6 : parsed?.exitCode === 0 ? 2 : 4;
+    const outputWidth = Math.max(20, width - 14);
+    for (const line of wrapText(output, outputWidth).slice(0, maxOutputLines)) {
+      const clipped = clip(line, outputWidth);
+      block.push(`  ${dim('output'.padEnd(10, ' '))} ${hasAnsi(clipped) ? clipped : dim(clipped)}`);
     }
   }
 
@@ -183,40 +161,26 @@ function renderCommandEvent(
 }
 
 function renderDiffPreview(path: string, diff: string, width: number): string[] {
-  const block = [
-    `${eventLabel('edit')}  ${clip(path, width - 8)}`,
-    `      ${dim(`Diff preview: ${clip(path, width - 22)}`)}`,
-  ];
+  const block = [eventHeader('edit', path, width), detailRow('preview', `Diff preview: ${path}`, width)];
   for (const line of diff.split('\n').slice(0, 8)) {
     const color =
       line.startsWith('+') && !line.startsWith('+++') ? '\u001b[32m' : line.startsWith('-') ? '\u001b[31m' : '';
-    block.push(`      ${color}${clip(line, width - 8)}${color ? '\u001b[0m' : ''}`);
+    block.push(`  ${' '.repeat(11)}${color}${clip(line, width - 14)}${color ? '\u001b[0m' : ''}`);
   }
   return block;
 }
 
 function renderVerification(run: RunStateSnapshot, width: number): string[] {
-  const stateIcon =
-    run.verification.state === 'passed'
-      ? '\u001b[32m✓\u001b[0m'
-      : run.verification.state === 'failed'
-        ? '\u001b[31m✗\u001b[0m'
-        : run.verification.state === 'running'
-          ? '\u001b[33m◌\u001b[0m'
-          : '·';
   const label = run.verification.state === 'failed' ? red('failed') : run.verification.state;
-  const block = [
-    `${stateIcon} ${eventLabel('verify')}  ${label}  ${clip(run.verification.currentCheckLabel || 'verification', width - 22)}`,
-  ];
-  if (run.verification.summary) block.push(`         ${dim(clip(run.verification.summary, width - 10))}`);
-  if (run.verification.state === 'failed')
-    block.push(`         ${dim(`next: ${clip(run.verification.summary, width - 16)}`)}`);
+  const block = [eventHeader('verify', label, width)];
+  block.push(detailRow('check', run.verification.currentCheckLabel || 'verification', width));
+  if (run.verification.summary) block.push(detailRow('summary', run.verification.summary, width));
+  if (run.verification.state === 'failed') block.push(detailRow('next', run.verification.summary, width));
   return block;
 }
 
 function renderFinalSummary(run: RunStateSnapshot, width: number): string[] {
   const commands = commandsRun(run).join(', ') || 'none';
-  const tools = toolsUsed(run).join(', ') || 'none';
   const fileCount =
     run.filesChangedThisRun.length > 0
       ? run.filesChangedThisRun.length
@@ -228,26 +192,31 @@ function renderFinalSummary(run: RunStateSnapshot, width: number): string[] {
   const result = completed ? 'completed' : run.terminal;
   const followUp = completed && run.verification.state !== 'failed' ? 'none' : 'resolve blocker and rerun verification';
   return [
-    ...(run.statusNote ? [completionActivity(run.statusNote)] : []),
-    bold('Final summary'),
-    `  objective: ${clip(run.objective.label, width - 15)}`,
-    `  result: ${clip(result, width - 10)}`,
-    `  Changed this run: ${plural(fileCount, 'file')}`,
-    `  Working tree: ${run.workingTreeClean === undefined ? 'unknown' : run.workingTreeClean ? 'clean' : 'dirty'}`,
-    `  tool invocations: ${toolInvocationCount}`,
-    `  tools used: ${clip(tools, width - 14)}`,
-    `  commands run: ${clip(commands, width - 16)}`,
-    `  verification: ${clip(run.verification.state, width - 18)}`,
-    `  blockers: ${clip(blockers, width - 13)}`,
-    `  follow-up: ${followUp}`,
+    ...(run.statusNote ? [completionActivity(run.statusNote, width)] : []),
+    eventHeader('final', result, width),
+    detailRow('objective', run.objective.label, width),
+    detailRow('changed', plural(fileCount, 'file'), width),
+    detailRow('tools', `${toolInvocationCount} calls`, width),
+    detailRow('commands', commands, width),
+    detailRow('verify', run.verification.state, width),
+    detailRow('blocker', blockers, width),
+    detailRow('follow-up', followUp, width),
   ];
 }
 
 function renderFrozenFinalSummary(detail: string, width: number): string[] {
-  return detail.split('\n').map((line) => {
-    if (line === 'Final summary') return bold(line);
-    return clip(line, width);
-  });
+  const fields = parseFrozenFinalSummary(detail);
+  return [
+    ...(fields.completed ? [completionActivity(fields.completed, width)] : []),
+    eventHeader('final', fields.result || 'blocked', width),
+    detailRow('objective', fields.objective || '—', width),
+    detailRow('changed', fields.changed || '0 files', width),
+    detailRow('tools', fields.tools || '0 calls', width),
+    detailRow('commands', fields.commands || 'none', width),
+    detailRow('verify', fields.verify || '—', width),
+    detailRow('blocker', fields.blocker || 'none', width),
+    detailRow('follow-up', fields.followUp || 'none', width),
+  ];
 }
 
 interface ParsedToolCall {
@@ -410,9 +379,43 @@ function isGitDiffCommand(command: string): boolean {
   return /^git\s+diff\b/.test(command.trim());
 }
 
-function completionActivity(statusNote: string): string {
+function completionActivity(statusNote: string, width: number): string {
   const trimmed = statusNote.replace(/^completed:\s*/i, '');
-  return `Completed · ${trimmed}`;
+  return `${dim('  status    ')}${clip(trimmed, Math.max(1, width - 13))}`;
+}
+
+interface FrozenFinalFields {
+  completed?: string;
+  objective?: string;
+  result?: string;
+  changed?: string;
+  tree?: string;
+  tools?: string;
+  used?: string;
+  commands?: string;
+  verify?: string;
+  blocker?: string;
+  followUp?: string;
+}
+
+function parseFrozenFinalSummary(detail: string): FrozenFinalFields {
+  const fields: FrozenFinalFields = {};
+  for (const rawLine of detail.split('\n')) {
+    const line = rawLine.trim();
+    if (line.startsWith('Completed · ')) fields.completed = line.replace(/^Completed ·\s*/, '');
+    else if (line.startsWith('objective:')) fields.objective = line.replace(/^objective:\s*/, '');
+    else if (line.startsWith('result:')) fields.result = line.replace(/^result:\s*/, '');
+    else if (line.startsWith('Changed this run:')) fields.changed = line.replace(/^Changed this run:\s*/, '');
+    else if (line.startsWith('Working tree:'))
+      fields.tree = line.replace(/^Working tree:\s*/, '').replace(/^unknown$/, '—');
+    else if (line.startsWith('tool invocations:')) fields.tools = `${line.replace(/^tool invocations:\s*/, '')} calls`;
+    else if (line.startsWith('tools used:')) fields.used = line.replace(/^tools used:\s*/, '');
+    else if (line.startsWith('commands run:')) fields.commands = line.replace(/^commands run:\s*/, '');
+    else if (line.startsWith('verification:')) fields.verify = line.replace(/^verification:\s*/, '');
+    else if (line.startsWith('blockers:')) fields.blocker = line.replace(/^blockers:\s*/, '');
+    else if (line.startsWith('follow-up:')) fields.followUp = line.replace(/^follow-up:\s*/, '');
+  }
+  return fields;
 }
 
 function cleanModelOutput(output: string): string {
@@ -505,8 +508,21 @@ function sliceAnsi(input: string, start: number, end: number): string {
   return out;
 }
 
-function eventLabel(label: string): string {
-  return dim(label);
+function eventHeader(label: string, state: string, width: number = 120): string {
+  const available = Math.max(1, width - 14);
+  const glyph = eventGlyph(label);
+  return `${glyph} ${bold(label.padEnd(10, ' '))} ${clip(state, available)}`;
+}
+
+function detailRow(label: string, value: string, width: number): string {
+  return `  ${dim(label.padEnd(10, ' '))} ${dim(clip(value || '—', Math.max(1, width - 14)))}`;
+}
+
+function eventGlyph(label: string): string {
+  if (label === 'final') return '\u001b[32m◆\u001b[0m';
+  if (label === 'verify') return '\u001b[36m◆\u001b[0m';
+  if (label === 'bash' || label === 'read' || label === 'write' || label === 'edit') return '\u001b[36m›\u001b[0m';
+  return dim('◇');
 }
 
 function bold(text: string): string {
@@ -527,14 +543,6 @@ function cyan(text: string): string {
 
 function dim(text: string): string {
   return `\u001b[90m${text}\u001b[0m`;
-}
-
-function subtleBand(text: string, width: number): string {
-  return `\u001b[48;5;236m\u001b[1;37m ${clip(text, Math.max(1, width - 2)).padEnd(Math.max(1, width - 2), ' ')} \u001b[0m`;
-}
-
-function separator(width: number): string {
-  return '─'.repeat(Math.max(1, width));
 }
 
 function plural(count: number, singular: string): string {
