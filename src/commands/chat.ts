@@ -8,13 +8,14 @@ import { promisify } from 'util';
 import {
   applyEffectiveSynaxConfigToProjectConfig,
   loadProjectConfig,
+  toProviderFactoryInput,
   normalizeProviderConfig,
   type ProjectConfig,
 } from '../config/project';
 import { loadSynaxConfig } from '../config/load-config';
 import { loadSkills, type SkillDiagnostic } from '../agent/skills';
 import pkg from '../../package.json';
-import { createOpenAICompatibleClient } from '../llm/client';
+import { createLLMClient } from '../llm/provider-factory';
 import {
   createAgentConversation,
   buildModelFacingTools,
@@ -104,27 +105,6 @@ export interface InlinePasteInputSession {
   hasPaste(): boolean;
 }
 
-/**
- * Strip provider-specific message fields when switching between incompatible providers.
- * Removes: reasoning_content (DeepSeek-specific), and OpenAI tool_calls format
- * when switching to a Qwen/Relay provider that prefers content_xml.
- */
-function sanitizeConversationForProvider(
-  conversation: AgentConversation,
-  providerConfig: import('../llm/types').NormalizedProviderConfig,
-): void {
-  const isDeepSeek = /deepseek/i.test(providerConfig.model);
-  for (const msg of conversation.messages) {
-    // Strip reasoning_content unless the new provider is DeepSeek.
-    if (!isDeepSeek && 'reasoning_content' in msg) {
-      delete msg.reasoning_content;
-    }
-    // Internal markers are never sent to the model but clean them for safety.
-    delete msg._tool_call_ids;
-    delete msg._tool_result_ids;
-  }
-}
-
 export function createChatSession(options: {
   repoRoot: string;
   config: ProjectConfig;
@@ -142,9 +122,6 @@ export function createChatSession(options: {
     skillMessages: options.skillMessages,
   });
   let eventSink: ((event: import('../agent/events').AgentEvent) => void) | null = null;
-  const thinkingLevel = options.thinkingLevel;
-  // Track last provider identity for cross-provider message sanitization.
-  let lastProviderId = '';
 
   /** Config wrapper: the TUI updates this reference when settings change. */
   const configRef: { current: ProjectConfig } = { current: options.config };
@@ -161,14 +138,8 @@ export function createChatSession(options: {
     },
     async handleUserMessage(message: string): Promise<ChatTurnReport> {
       const config = getConfig();
-      const providerConfig = normalizeProviderConfig(config.provider ?? {}, { thinkingLevel });
-      // Sanitize conversation messages when switching providers/models.
-      const currentProviderId = `${providerConfig.baseUrl}|${providerConfig.model}`;
-      if (lastProviderId && lastProviderId !== currentProviderId) {
-        sanitizeConversationForProvider(conversation, providerConfig);
-      }
-      lastProviderId = currentProviderId;
-      const client = createOpenAICompatibleClient(providerConfig);
+      const factoryResult = createLLMClient(toProviderFactoryInput(config));
+      const client = factoryResult.client;
       const beforeHead = await gitHead(options.repoRoot);
       const result = await runAgentTurn({
         repoRoot: options.repoRoot,
@@ -346,8 +317,11 @@ export function chatCommand(program: Command): void {
         return;
       }
 
+      const factoryResult = createLLMClient(toProviderFactoryInput(loaded.config));
+      const metadata = factoryResult.metadata;
+      const provider = factoryResult.normalizedConfig;
+
       // Extract thinking level from the effective multi-provider config.
-      // Falls back to 'off' if the config can't be loaded.
       let thinkingLevel: 'off' | 'low' | 'medium' | 'high' | 'auto' = 'off';
       let skillMessages: string[] | undefined;
       let skillDiagnostics: SkillDiagnostic[] | undefined;
@@ -364,8 +338,6 @@ export function chatCommand(program: Command): void {
       } catch {
         // best-effort
       }
-
-      const provider = normalizeProviderConfig(loaded.config.provider ?? {}, { thinkingLevel });
       const useTui = shouldUseInteractiveTui({
         plain: Boolean(options.plain),
         message: options.message,
@@ -376,7 +348,7 @@ export function chatCommand(program: Command): void {
       // Shared state so the TUI can observe model output in real time.
       let lastModelOutput = '';
 
-      const modelLabel = provider.model.trim() || undefined;
+      const modelLabel = metadata.modelId || undefined;
       const cwdLabel = compactHome(repoRoot);
       const gitBranch = await currentGitBranch(repoRoot);
 
@@ -396,7 +368,7 @@ export function chatCommand(program: Command): void {
         tui: useTui,
       });
       if (options.message) {
-        if (!provider.model.trim()) {
+        if (!metadata.modelId) {
           console.error('[synax] Config error: provider.model is required for chat.');
           process.exitCode = 1;
           return;
@@ -411,12 +383,12 @@ export function chatCommand(program: Command): void {
 
       if (useTui) {
         await runInteractiveTui(session, {
-          blockedMessage: !provider.model.trim() ? 'provider.model is required' : undefined,
+          blockedMessage: !metadata.modelId ? 'provider.model is required' : undefined,
           lastModelOutput: () => lastModelOutput,
           modelLabel,
           thinkingEnabled: thinkingLevel !== 'off',
-          endpointLabel: provider.baseUrl || undefined,
-          providerName: providerNameFromPreset(loaded.config.provider?.preset),
+          endpointLabel: metadata.baseUrl !== '(not set)' ? metadata.baseUrl : undefined,
+          providerName: metadata.displayName,
           cwdLabel,
           gitBranch,
           contextWindowTokens: loaded.config.contextWindowTokens ?? loaded.config.contextBudgetTokens,

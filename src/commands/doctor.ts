@@ -1,8 +1,8 @@
 import { spawnSync, execSync } from 'child_process';
 import { Command } from 'commander';
-import { loadProjectConfig, normalizeProviderConfig, type ProjectConfig } from '../config/project';
+import { loadProjectConfig, toProviderFactoryInput, type ProjectConfig } from '../config/project';
 import pkg from '../../package.json';
-import { createOpenAICompatibleClient } from '../llm/client';
+import { createLLMClient } from '../llm/provider-factory';
 import type { NormalizedProviderConfig } from '../llm/types';
 
 // ---------------------------------------------------------------------------
@@ -156,9 +156,8 @@ async function checkProviderReachability(
 // Model request check
 // ---------------------------------------------------------------------------
 
-async function checkModelRequest(normalized: NormalizedProviderConfig): Promise<DiagnosticResult> {
+async function checkModelRequest(client: import('../agent/runner').AgentClient): Promise<DiagnosticResult> {
   try {
-    const client = createOpenAICompatibleClient(normalized);
     const start = performance.now();
     const response = await client.chat({
       messages: [
@@ -301,16 +300,21 @@ function formatBudgetMessage(config: ProjectConfig): string {
 // Relay health check (OpenAPI-compatible endpoint probe)
 // ---------------------------------------------------------------------------
 
-async function checkRelayHealth(normalized: NormalizedProviderConfig, timeoutMs = 1000): Promise<DiagnosticResult> {
-  const baseUrl = normalized.baseUrl.replace(/\/+$/, '');
+async function checkRelayHealth(
+  baseUrl: string,
+  apiKey?: string,
+  customHeaders?: Record<string, string>,
+  timeoutMs = 1000,
+): Promise<DiagnosticResult> {
+  const cleanBaseUrl = baseUrl.replace(/\/+$/, '');
   const headers: Record<string, string> = {
     Accept: 'application/json',
     'User-Agent': `synax-doctor/${pkg.version}`,
   };
-  if (normalized.apiKey && normalized.apiKey.length > 0) {
-    headers.Authorization = `Bearer ${normalized.apiKey}`;
+  if (apiKey && apiKey.length > 0) {
+    headers.Authorization = `Bearer ${apiKey}`;
   }
-  for (const [key, value] of Object.entries(normalized.customHeaders ?? {})) {
+  for (const [key, value] of Object.entries(customHeaders ?? {})) {
     headers[key] = value;
   }
 
@@ -318,7 +322,7 @@ async function checkRelayHealth(normalized: NormalizedProviderConfig, timeoutMs 
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), timeoutMs);
     try {
-      const res = await fetch(`${baseUrl}/models`, {
+      const res = await fetch(`${cleanBaseUrl}/models`, {
         method: 'GET',
         headers,
         signal: controller.signal,
@@ -382,15 +386,17 @@ async function runFullDoctor(baseDir?: string): Promise<DoctorFullReport> {
   const report = await runQuickDoctor(baseDir);
   const result = loadProjectConfig(baseDir);
   const config = result.config;
-  const normalized = normalizeProviderConfig(config.provider ?? {});
+  const factoryResult = createLLMClient(toProviderFactoryInput(config));
+  const { client, metadata, normalizedConfig } = factoryResult;
 
-  if (result.errors.length > 0 || (config.provider?.kind ?? 'openai-compatible') !== 'openai-compatible') {
+  // Skip full checks for non-OpenAI-compatible providers
+  if (result.errors.length > 0 || metadata.protocol !== 'openai-compatible') {
     return report;
   }
 
-  const providerReachability = await checkProviderReachability(normalized);
-  const modelRequest = await checkModelRequest(normalized);
-  const relayHealth = await checkRelayHealth(normalized);
+  const providerReachability = await checkProviderReachability(normalizedConfig);
+  const modelRequest = await checkModelRequest(client);
+  const relayHealth = await checkRelayHealth(normalizedConfig.baseUrl, normalizedConfig.apiKey, normalizedConfig.customHeaders);
   return { ...report, providerReachability, modelRequest, relayHealth };
 }
 
