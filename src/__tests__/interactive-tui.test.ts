@@ -1,5 +1,6 @@
 import { createChatSession, shouldUseInteractiveTui, type ChatSession } from '../commands/chat';
 import { applyEventToRunState, createInitialRunStateSnapshot } from '../agent/tui-state';
+import { resolveCoreVisualProfile } from '../tui/core-visual-profile';
 import { CORE_HEIGHT, CORE_WIDTH, modeColor, renderAiCore, renderDottedCore } from '../tui/ai-core';
 import { DiffRenderer } from '../tui/diff-renderer';
 import { runInteractiveTui } from '../tui/interactive-tui';
@@ -7,6 +8,8 @@ import { maxHistoryScrollOffset, renderLayout } from '../tui/layout';
 import { parseInputChunk } from '../tui/input';
 import { createTerminalSession } from '../tui/terminal';
 import { PassThrough, Writable } from 'stream';
+
+const EXPECTED_MAX_INPUT_CHARS = 4096;
 
 class CapturingWritable extends Writable {
   public chunks: string[] = [];
@@ -74,6 +77,33 @@ describe('tui input parser', () => {
     const events = parseInputChunk('\x1b[<64;12;8M\x1b[<65;12;8M');
     expect(events).toEqual([{ type: 'scroll_history_up' }, { type: 'scroll_history_down' }]);
   });
+
+  it.each([
+    ['arrow up', '\x1b[A'],
+    ['arrow down', '\x1b[B'],
+    ['arrow right', '\x1b[C'],
+    ['arrow left', '\x1b[D'],
+    ['delete', '\x1b[3~'],
+    ['home', '\x1b[H'],
+    ['end', '\x1b[F'],
+    ['home tilde', '\x1b[1~'],
+    ['end tilde', '\x1b[4~'],
+    ['function key SS3', '\x1bOP'],
+    ['raw lone escape', '\x1b'],
+    ['null byte', '\u0000'],
+    ['unsupported control character', '\u0001'],
+    ['unsupported C1 control character', '\u009b'],
+  ])('discards unsupported terminal input for %s', (_name, input) => {
+    expect(parseInputChunk(input)).toEqual([]);
+  });
+
+  it('discards bracketed paste delimiters if the terminal sends them', () => {
+    const text = parseInputChunk('\x1b[200~paste\x1b[201~')
+      .map((event) => event.value ?? '')
+      .join('');
+
+    expect(text).toBe('paste');
+  });
 });
 
 describe('terminal session', () => {
@@ -97,6 +127,19 @@ describe('terminal session', () => {
     expect(output).toContain('\u001b[?1006h');
     expect(output).toContain('\u001b[?1006l');
     expect(output).toContain('\u001b[?1000l');
+  });
+
+  it('does not enable bracketed paste for the TUI input dock', () => {
+    const stdout = new CapturingWritable();
+    const stdin = createTtyInput();
+    const terminal = createTerminalSession({ stdin, stdout });
+
+    terminal.start();
+    terminal.stop();
+
+    const output = stdout.chunks.join('');
+    expect(output).not.toContain('\u001b[?2004h');
+    expect(output).toContain('\u001b[?2004l');
   });
 });
 
@@ -136,6 +179,36 @@ describe('diff renderer', () => {
 });
 
 describe('ai core renderer', () => {
+  it('resolves model-aware core visual profiles from model IDs only', () => {
+    expect(resolveCoreVisualProfile('Qwen3.6-35B-A3B-UD-IQ3_XXS.gguf').id).toBe('qwen');
+    expect(resolveCoreVisualProfile('gpt-5.5-thinking').id).toBe('openai');
+    expect(resolveCoreVisualProfile('OPENAI/local-compatible').id).toBe('openai');
+    expect(resolveCoreVisualProfile('claude-sonnet-4.5').id).toBe('claude');
+    expect(resolveCoreVisualProfile('deepseekv4-pro').id).toBe('deepseek');
+    expect(resolveCoreVisualProfile('gemini-2.5-pro').id).toBe('gemini');
+    expect(resolveCoreVisualProfile('local-unknown-model.gguf').id).toBe('default');
+  });
+
+  it('renders distinct inner morphology for qwen, claude, and default profiles in the same state', () => {
+    const base = { mode: 'thinking' as const, frame: 8, width: 24, height: 9, unicode: true };
+    const qwen = renderDottedCore({ ...base, profile: resolveCoreVisualProfile('qwen3-local') })
+      .map(stripAnsi)
+      .join('\n');
+    const claude = renderDottedCore({ ...base, profile: resolveCoreVisualProfile('claude-sonnet-4.5') })
+      .map(stripAnsi)
+      .join('\n');
+    const fallback = renderDottedCore({ ...base, profile: resolveCoreVisualProfile('unknown-local') })
+      .map(stripAnsi)
+      .join('\n');
+
+    expect(qwen).not.toEqual(claude);
+    expect(qwen).not.toEqual(fallback);
+    expect(claude).not.toEqual(fallback);
+    expect(qwen).toMatch(/[╱╲]/);
+    expect(claude).toMatch(/[○◉]/);
+    expect(fallback).toMatch(/[●◎•]/);
+  });
+
   it('renders an unboxed containment field with consistent footprint', () => {
     const idle = renderAiCore('idle', 0);
     const thinking = renderAiCore('thinking', 0.25);
@@ -1327,6 +1400,41 @@ describe('interactive layout visual agreements', () => {
 });
 
 describe('interactive tui runtime', () => {
+  it('caps submitted TUI input length', async () => {
+    const stdin = createTtyInput();
+    const stdout = new CapturingWritable();
+    let resolveSubmitted: (() => void) | undefined;
+    const submitted = new Promise<void>((resolve) => {
+      resolveSubmitted = resolve;
+    });
+    const session: ChatSession = {
+      conversation: createChatSession({
+        repoRoot: process.cwd(),
+        config: { provider: { kind: 'openai-compatible', base_url: 'http://localhost/v1', model: 'fake' } },
+      }).conversation,
+      handleUserMessage: jest.fn(async () => {
+        resolveSubmitted?.();
+        return {
+          terminalState: 'completed' as const,
+          finalAnswer: 'done',
+          changedFiles: [],
+          workingTreeClean: true,
+          steps: 1,
+          toolCalls: 0,
+        };
+      }),
+      handleSlashCommand: jest.fn(),
+    };
+
+    const runPromise = runInteractiveTui(session, { stdin, stdout });
+    stdin.write(Buffer.from(`${'x'.repeat(EXPECTED_MAX_INPUT_CHARS + 20)}\n`, 'utf8'));
+    await submitted;
+    stdin.write(Buffer.from('\u0003', 'utf8'));
+    await runPromise;
+
+    expect(session.handleUserMessage).toHaveBeenCalledWith('x'.repeat(EXPECTED_MAX_INPUT_CHARS));
+  });
+
   it('keeps slash commands local after a completed turn', async () => {
     const stdin = createTtyInput();
     const stdout = new CapturingWritable();
