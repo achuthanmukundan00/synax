@@ -18,130 +18,149 @@ export interface ParsedInput {
 export const MAX_INPUT_CHARS = 4096;
 
 export function parseInputChunk(chunk: string): ParsedInput[] {
-  const events: ParsedInput[] = [];
+  return createInputParser().parse(chunk);
+}
+
+export interface InputParser {
+  parse(chunk: string): ParsedInput[];
+}
+
+export function createInputParser(): InputParser {
   let pasteMode = false;
   let pasteText = '';
 
-  for (let index = 0; index < chunk.length; index += 1) {
-    // Paste bracket handling: absorb everything between bracket-paste start/end
-    // without treating newlines as submit or backspaces as backspace.
-    if (pasteMode) {
-      if (chunk.startsWith('\x1b[201~', index)) {
-        pasteMode = false;
-        events.push({ type: 'paste', value: pasteText });
-        pasteText = '';
-        index += 5;
-        continue;
+  return {
+    parse(chunk: string): ParsedInput[] {
+      const events: ParsedInput[] = [];
+
+      for (let index = 0; index < chunk.length; index += 1) {
+        // Paste bracket handling: absorb everything between bracket-paste start/end
+        // without treating newlines as submit or backspaces as backspace.
+        if (pasteMode) {
+          if (chunk.startsWith('\x1b[201~', index)) {
+            pasteMode = false;
+            events.push({ type: 'paste', value: pasteText });
+            pasteText = '';
+            index += 5;
+            continue;
+          }
+          if (chunk[index] === '\u0003') {
+            pasteMode = false;
+            events.push({ type: 'exit' });
+            pasteText = '';
+            continue;
+          }
+          pasteText += chunk[index];
+          continue;
+        }
+
+        if (chunk.startsWith('\x1b[200~', index)) {
+          pasteMode = true;
+          pasteText = '';
+          index += 5;
+          continue;
+        }
+
+        parseSingleInputEvent(chunk, index, events, (nextIndex) => {
+          index = nextIndex;
+        });
       }
-      if (chunk[index] === '\u0003') {
-        pasteMode = false;
-        events.push({ type: 'exit' });
-        pasteText = '';
-        continue;
-      }
-      pasteText += chunk[index];
-      continue;
-    }
 
-    if (chunk.startsWith('\x1b[200~', index)) {
-      pasteMode = true;
-      pasteText = '';
-      index += 5;
-      continue;
-    }
+      return events;
+    },
+  };
+}
 
-    const mouse = parseSgrMouse(chunk, index);
-    if (mouse) {
-      if (mouse.button === 64) events.push({ type: 'scroll_history_up' });
-      if (mouse.button === 65) events.push({ type: 'scroll_history_down' });
-      index += mouse.length - 1;
-      continue;
-    }
-    // Arrow keys
-    if (chunk.startsWith('\x1b[A', index)) {
-      events.push({ type: 'arrow_up' });
-      index += 2;
-      continue;
-    }
-    if (chunk.startsWith('\x1b[B', index)) {
-      events.push({ type: 'arrow_down' });
-      index += 2;
-      continue;
-    }
-    if (chunk.startsWith('\x1b[C', index)) {
-      // Right arrow is intentionally ignored; settings tabs use Tab.
-      index += 2;
-      continue;
-    }
-    if (chunk.startsWith('\x1b[D', index)) {
-      // Left arrow is intentionally ignored; settings tabs use Shift+Tab.
-      index += 2;
-      continue;
-    }
-    // Escape
-    if (chunk.startsWith('\x1b', index) && chunk.length === index + 1) {
-      events.push({ type: 'escape' });
-      continue;
-    }
-    if (chunk.startsWith('\x1b\x1b', index)) {
-      events.push({ type: 'escape' });
-      index += 1;
-      continue;
-    }
-    // Tab / Shift+Tab
-    if (chunk.startsWith('\x1b[Z', index)) {
-      events.push({ type: 'shift_tab' });
-      index += 3;
-      continue;
-    }
-    if (chunk.startsWith('\t', index)) {
-      events.push({ type: 'tab' });
-      continue;
-    }
-
-    if (chunk.startsWith('\x1b[5~', index)) {
-      events.push({ type: 'scroll_history_up' });
-      index += 3;
-      continue;
-    }
-    if (chunk.startsWith('\x1b[6~', index)) {
-      events.push({ type: 'scroll_history_down' });
-      index += 3;
-      continue;
-    }
-    const escapeLength = parseUnsupportedEscapeLength(chunk, index);
-    if (escapeLength > 0) {
-      index += escapeLength - 1;
-      continue;
-    }
-    const char = chunk[index];
-    if (char === '\u000c') {
-      continue;
-    }
-    if (char === '\u0003') {
-      events.push({ type: 'exit' });
-      continue;
-    }
-    if (char === '\u007f' || char === '\b') {
-      events.push({ type: 'backspace' });
-      continue;
-    }
-    if (char === '\r' || char === '\n') {
-      events.push({ type: 'submit' });
-      continue;
-    }
-    if (isUnsupportedControlCharacter(char)) {
-      continue;
-    }
-    events.push({ type: 'text', value: char });
+function parseSingleInputEvent(
+  chunk: string,
+  index: number,
+  events: ParsedInput[],
+  setIndex: (index: number) => void,
+): void {
+  const mouse = parseSgrMouse(chunk, index);
+  if (mouse) {
+    if (mouse.button === 64) events.push({ type: 'scroll_history_up' });
+    if (mouse.button === 65) events.push({ type: 'scroll_history_down' });
+    setIndex(index + mouse.length - 1);
+    return;
+  }
+  // Arrow keys
+  if (chunk.startsWith('\x1b[A', index)) {
+    events.push({ type: 'arrow_up' });
+    setIndex(index + 2);
+    return;
+  }
+  if (chunk.startsWith('\x1b[B', index)) {
+    events.push({ type: 'arrow_down' });
+    setIndex(index + 2);
+    return;
+  }
+  if (chunk.startsWith('\x1b[C', index)) {
+    // Right arrow is intentionally ignored; settings tabs use Tab.
+    setIndex(index + 2);
+    return;
+  }
+  if (chunk.startsWith('\x1b[D', index)) {
+    // Left arrow is intentionally ignored; settings tabs use Shift+Tab.
+    setIndex(index + 2);
+    return;
+  }
+  // Escape
+  if (chunk.startsWith('\x1b', index) && chunk.length === index + 1) {
+    events.push({ type: 'escape' });
+    return;
+  }
+  if (chunk.startsWith('\x1b\x1b', index)) {
+    events.push({ type: 'escape' });
+    setIndex(index + 1);
+    return;
+  }
+  // Tab / Shift+Tab
+  if (chunk.startsWith('\x1b[Z', index)) {
+    events.push({ type: 'shift_tab' });
+    setIndex(index + 3);
+    return;
+  }
+  if (chunk.startsWith('\t', index)) {
+    events.push({ type: 'tab' });
+    return;
   }
 
-  // If paste brackets were unmatched (e.g., terminal crash), flush remainder as text.
-  if (pasteMode && pasteText.length > 0) {
-    events.push({ type: 'paste', value: pasteText });
+  if (chunk.startsWith('\x1b[5~', index)) {
+    events.push({ type: 'scroll_history_up' });
+    setIndex(index + 3);
+    return;
   }
-
-  return events;
+  if (chunk.startsWith('\x1b[6~', index)) {
+    events.push({ type: 'scroll_history_down' });
+    setIndex(index + 3);
+    return;
+  }
+  const escapeLength = parseUnsupportedEscapeLength(chunk, index);
+  if (escapeLength > 0) {
+    setIndex(index + escapeLength - 1);
+    return;
+  }
+  const char = chunk[index];
+  if (char === '\u000c') {
+    return;
+  }
+  if (char === '\u0003') {
+    events.push({ type: 'exit' });
+    return;
+  }
+  if (char === '\u007f' || char === '\b') {
+    events.push({ type: 'backspace' });
+    return;
+  }
+  if (char === '\r' || char === '\n') {
+    events.push({ type: 'submit' });
+    return;
+  }
+  if (isUnsupportedControlCharacter(char)) {
+    return;
+  }
+  events.push({ type: 'text', value: char });
 }
 
 function parseSgrMouse(chunk: string, index: number): { button: number; length: number } | undefined {

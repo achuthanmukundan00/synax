@@ -126,7 +126,6 @@ When both formats exist, the multi-provider format takes precedence for provider
 | Variable | Purpose |
 |----------|---------|
 | `SYNAX_CONTEXT_BUDGET_TOKENS` | Override context budget |
-| `SYNAX_MAX_MODEL_STEPS` | Override max steps |
 | `SYNAX_MAX_TOOL_CALLS` | Override max tool calls |
 | `DEEPSEEK_API_KEY` | DeepSeek API key |
 | `OPENAI_API_KEY` | OpenAI API key |

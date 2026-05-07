@@ -248,7 +248,6 @@ export function applyEventToRunState(state: RunStateSnapshot, event: AgentEvent,
       next = {
         ...next,
         toolInvocationCount: next.toolInvocationCount + 1,
-        changes: trackChangeFromToolStart(next.changes, event.toolName, event.summary),
       };
       next = withDebugHistory(next, {
         atMs: nowMs,
@@ -267,8 +266,28 @@ export function applyEventToRunState(state: RunStateSnapshot, event: AgentEvent,
         summary: `${event.toolName} ${event.status === 'ok' ? 'ok' : 'error'}`,
         detail: event.detail ?? event.summary,
       });
-      if (event.status === 'error') {
-        next = withStatus(next, `${event.toolName} recovered with turbulence`, severity);
+      if (event.status === 'ok') {
+        // Only track file changes for successful mutating tools.
+        // Patch previews handle edit preview tracking separately;
+        // this catches writes and other successful mutations.
+        const op = classifyTool(event.toolName);
+        if (op !== 'read') {
+          // tool_finished summary is 'completed' on success; the path is in the
+          // tool result detail (e.g. {"success":true,"toolName":"write","output":{"path":"..."}}).
+          const path = extractPath(event.summary) ?? extractPath(event.detail ?? '');
+          if (path) {
+            next = {
+              ...next,
+              changes: compressChanges([...next.changes.items, { path, op }]),
+            };
+          }
+        }
+      } else {
+        // Surface the actual tool error rather than claiming recovery.
+        next = withStatus(next, `${event.toolName} error: ${event.summary}`, severity);
+      }
+      if (event.status === 'ok') {
+        next = withStatus(next, `${event.toolName} ok`, 'S0');
       }
       return withTimeline(
         next,
@@ -358,7 +377,7 @@ export function applyEventToRunState(state: RunStateSnapshot, event: AgentEvent,
         },
       };
       if (event.error) {
-        next = withRisk(next, `terminal issue: ${event.error}`, 'S3');
+        next = withRisk(next, `blocker: ${event.error}`, 'S3');
       }
       if (event.status === 'completed') {
         const filesChangedThisRun = unique(event.changedFiles);
@@ -662,7 +681,7 @@ function deriveVerificationFallback(verification: string): TuiVerificationState 
   if (v.includes('not run')) {
     return { ...base, state: 'skipped', checksSkipped: 1 };
   }
-  return { ...base, checksRunning: 1, checksPlanned: 1 };
+  return { ...base, state: 'skipped', checksSkipped: 1 };
 }
 
 function terminalStateToPhase(status: TerminalState, verificationState: TuiVerificationState['state']): TuiPhase {
@@ -672,18 +691,6 @@ function terminalStateToPhase(status: TerminalState, verificationState: TuiVerif
   if (status === 'failed_verification') return 'verifying';
   if (status === 'model_error' || status === 'tool_error') return 'error';
   return 'error';
-}
-
-function trackChangeFromToolStart(
-  changes: RunStateSnapshot['changes'],
-  toolName: string,
-  summary: string,
-): RunStateSnapshot['changes'] {
-  const path = extractPath(summary);
-  if (!path) return changes;
-  const op = classifyTool(toolName);
-  if (op === 'read') return changes;
-  return compressChanges([...changes.items, { path, op }]);
 }
 
 function classifyTool(toolName: string): ChangeOp {

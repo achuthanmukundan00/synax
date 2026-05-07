@@ -520,22 +520,22 @@ describe('shared bounded agent runner', () => {
     expect(client.requests).toHaveLength(3);
   });
 
-  it('terminates immediately on unsafe read paths', async () => {
+  it('allows parent-relative read paths', async () => {
+    writeFileSync(join(TMP, '..', 'outside.ts'), 'export const outside = true;\n', 'utf-8');
     const client = fakeClient([
       { toolCalls: [{ id: 'call_1', name: 'read', arguments: { path: '../outside.ts' } }] },
-      { content: 'should not be reached' },
+      { content: 'Read the parent-relative file.' },
     ]);
 
     const result = await runAgentTurn({ repoRoot: TMP, task: 'read outside repo', client });
 
     expect(result).toMatchObject({
-      terminalState: 'tool_error',
-      error: 'paths must stay inside the repository',
+      terminalState: 'completed',
+      finalAnswer: 'Read the parent-relative file.',
     });
-    expect(result.toolCalls).toEqual([
-      { name: 'read', success: false, error: 'paths must stay inside the repository' },
-    ]);
-    expect(client.requests).toHaveLength(1);
+    expect(result.toolCalls).toEqual([{ name: 'read', success: true, error: undefined }]);
+    expect(client.requests).toHaveLength(2);
+    rmSync(join(TMP, '..', 'outside.ts'), { force: true });
   });
 
   it('stops when assistant returns no tool calls', async () => {
@@ -667,15 +667,19 @@ describe('shared bounded agent runner', () => {
     expect(result.toolCalls).toHaveLength(0);
   });
 
-  it('terminates deterministically at maxSteps', async () => {
+  it('continues past maxSteps until the model completes', async () => {
     const client = fakeClient([
       { toolCalls: [{ id: '1', name: 'read', arguments: {} }] },
-      { toolCalls: [{ id: '2', name: 'read', arguments: {} }] },
+      { content: 'done after inspection' },
     ]);
 
     const result = await runAgentTurn({ repoRoot: TMP, task: 'loop', client, maxSteps: 1 });
 
-    expect(result).toMatchObject({ terminalState: 'budget_exhausted', error: 'max steps exceeded: 1' });
+    expect(result).toMatchObject({
+      terminalState: 'completed',
+      finalAnswer: 'done after inspection',
+      steps: 2,
+    });
   });
 
   it('blocks provider calls when request is over context budget and compaction cannot save it', async () => {
@@ -807,6 +811,22 @@ describe('shared bounded agent runner', () => {
     expect(loopErrorMsg!.content).toContain('WORKING CONTEXT');
   });
 
+  it('allows absolute read paths', async () => {
+    const outside = join(TMP, '..', 'absolute-outside.txt');
+    writeFileSync(outside, 'absolute outside\n', 'utf-8');
+    const client = fakeClient([
+      { toolCalls: [{ id: '1', name: 'read', arguments: { path: outside } }] },
+      { content: 'Read the absolute file.' },
+    ]);
+
+    const result = await runAgentTurn({ repoRoot: TMP, task: 'read absolute', client, maxSteps: 4 });
+
+    expect(result.terminalState).toBe('completed');
+    expect(result.toolCalls).toEqual([{ name: 'read', success: true, error: undefined }]);
+    expect(client.requests).toHaveLength(2);
+    rmSync(outside, { force: true });
+  });
+
   it('warns the model after the third full-file read instead of silently re-reading', async () => {
     writeFileSync(join(TMP, 'a.txt'), 'hello\n', 'utf-8');
     const client = fakeClient([
@@ -932,11 +952,12 @@ describe('shared bounded agent runner', () => {
     expect(secondToolMessage?.content).toContain('turn token budget exceeded');
   });
 
-  it('rejects exact replacement edits when prior read was truncated', async () => {
-    writeFileSync(join(TMP, 'a.txt'), `${'hello\n'.repeat(6000)}`, 'utf-8');
+  it('allows exact replacement edits even when prior read was truncated', async () => {
+    writeFileSync(join(TMP, 'a.txt'), `target\n${'hello\n'.repeat(6000)}`, 'utf-8');
     const client = fakeClient([
       { toolCalls: [{ id: '1', name: 'read', arguments: { path: 'a.txt' } }] },
-      { toolCalls: [{ id: '2', name: 'edit', arguments: { path: 'a.txt', oldStr: 'hello', newStr: 'hi' } }] },
+      { toolCalls: [{ id: '2', name: 'edit', arguments: { path: 'a.txt', oldStr: 'target', newStr: 'changed' } }] },
+      { content: 'edited' },
     ]);
 
     const result = await runAgentTurn({
@@ -946,8 +967,8 @@ describe('shared bounded agent runner', () => {
       contextBudget: { maxSingleReadResultTokens: 300 },
     });
 
-    expect(result.terminalState).toBe('tool_error');
-    expect(result.error).toContain('oldStr must match a prior read of a.txt');
+    expect(result.terminalState).toBe('completed');
+    expect(readFileSync(join(TMP, 'a.txt'), 'utf-8').startsWith('changed\n')).toBe(true);
   });
 
   it('terminates deterministically at maxToolCalls', async () => {
@@ -1020,7 +1041,7 @@ describe('shared bounded agent runner', () => {
     expect(bashResult?.content).not.toContain('x'.repeat(1000));
   });
 
-  it('asks for a final answer on the final allowed model step', async () => {
+  it('does not inject a forced final-answer prompt at maxSteps', async () => {
     writeFileSync(join(TMP, 'package.json'), '{}\n', 'utf-8');
     const client = fakeClient([
       { toolCalls: [{ id: '1', name: 'read', arguments: { path: 'package.json' } }] },
@@ -1035,26 +1056,28 @@ describe('shared bounded agent runner', () => {
       finalAnswer: 'final from inspected context',
       steps: 2,
     });
-    expect(finalRequest.messages.at(-1)).toMatchObject({
-      role: 'system',
-      content: expect.stringContaining('Do not call tools'),
-    });
+    expect(finalRequest.messages.at(-1)).toMatchObject({ role: 'tool' });
+    expect(
+      finalRequest.messages.some((message: { content: string }) => message.content.includes('Final step: answer now')),
+    ).toBe(false);
   });
 
-  it('does not execute tool calls requested on the final allowed model step', async () => {
+  it('executes tool calls requested after maxSteps', async () => {
     writeFileSync(join(TMP, 'a.txt'), 'hello\n', 'utf-8');
     const client = fakeClient([
       { toolCalls: [{ id: '1', name: 'read', arguments: { path: 'a.txt' } }] },
       { content: '', toolCalls: [{ id: '2', name: 'read', arguments: {} }] },
+      { content: 'done after retry' },
     ]);
 
     const result = await runAgentTurn({ repoRoot: TMP, task: 'loop', client, maxSteps: 2 });
 
     expect(result).toMatchObject({
-      terminalState: 'budget_exhausted',
-      error: 'max steps exceeded: 2',
+      terminalState: 'completed',
+      finalAnswer: 'done after retry',
+      steps: 3,
     });
-    expect(result.toolCalls.map((call) => call.name)).toEqual(['read']);
+    expect(result.toolCalls.map((call) => call.name)).toEqual(['read', 'read']);
   });
 
   it('finalizes before exceeding budget after a bounded inspection sequence', async () => {
@@ -1129,6 +1152,34 @@ describe('shared bounded agent runner', () => {
       path: 'a.txt',
       diff: '--- a.txt\n+++ a.txt\n-hello\n+hi',
     });
+  });
+
+  it('edits after inspecting a file through bash cat', async () => {
+    writeFileSync(join(TMP, '.synax.toml'), 'model = "qwen"\n', 'utf-8');
+    const client = fakeClient([
+      { toolCalls: [{ id: 'call_1', name: 'bash', arguments: { command: 'cat .synax.toml' } }] },
+      {
+        toolCalls: [
+          {
+            id: 'call_2',
+            name: 'edit',
+            arguments: { path: '.synax.toml', oldStr: 'model = "qwen"', newStr: 'model = "deepseek-v4-pro"' },
+          },
+        ],
+      },
+      { content: 'configured' },
+    ]);
+
+    const result = await runAgentTurn({
+      repoRoot: TMP,
+      task: 'configure .synax.toml',
+      client,
+      mode: 'patch',
+    });
+
+    expect(result.terminalState).toBe('completed');
+    expect(result.changedFiles).toEqual(['.synax.toml']);
+    expect(readFileSync(join(TMP, '.synax.toml'), 'utf-8')).toBe('model = "deepseek-v4-pro"\n');
   });
 
   it('rejects a previewed edit when patch approval rejects it', async () => {

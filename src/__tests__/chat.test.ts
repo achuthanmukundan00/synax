@@ -493,7 +493,7 @@ describe('chat session', () => {
     expect(badPath.output).toContain('Invalid settings path');
     expect(badPath.output).toContain('provider.endpoint');
     expect(badNumber.output).toContain('must be a positive integer');
-    expect(budget.output).toContain('Max model steps:  64');
+    expect(budget.output).toContain('Model steps:      unlimited');
   });
 
   it('/status includes context and checkpoint visibility', async () => {
@@ -515,7 +515,7 @@ describe('chat session', () => {
     const report = await session.handleSlashCommand('/status');
 
     expect(report.output).toContain('Context budget: (no model calls yet)');
-    expect(report.output).toContain('Max model steps: 24');
+    expect(report.output).toContain('Model steps: unlimited');
     expect(report.output).toContain('Max tool calls: 48');
     expect(report.output).toContain('Files read this session:');
     expect(report.output).toContain('Latest checkpoint: 2026-05-05T12-00-00-000Z');

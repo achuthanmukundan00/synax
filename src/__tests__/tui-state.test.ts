@@ -106,6 +106,32 @@ describe('tui-state', () => {
     ]);
   });
 
+  it('does not treat terminal tool errors as running verification', () => {
+    let state = createInitialRunStateSnapshot(0);
+
+    state = applyEventToRunState(
+      state,
+      {
+        type: 'task_finished',
+        timestamp: new Date(1).toISOString(),
+        status: 'tool_error',
+        toolCalls: 1,
+        maxToolCalls: 1,
+        modelSteps: 1,
+        maxModelSteps: 1,
+        changedFiles: [],
+        workingTreeClean: true,
+        verification: 'unsafe path rejected: .synax.toml',
+        error: 'unsafe path rejected: .synax.toml',
+      },
+      1,
+    );
+
+    expect(state.terminal).toBe('failed');
+    expect(state.phase).toBe('error');
+    expect(state.verification.state).toBe('skipped');
+  });
+
   it('records model responses and tool calls in a debug history', () => {
     let state = createInitialRunStateSnapshot(0);
 
@@ -203,6 +229,30 @@ describe('tui-state', () => {
         toolCallId: 'edit-1',
         toolName: 'edit',
         summary: '{"path":"src/tui/layout.ts"}',
+      },
+      2,
+    );
+    state = applyEventToRunState(
+      state,
+      {
+        type: 'patch_preview',
+        timestamp: new Date(2).toISOString(),
+        toolCallId: 'edit-1',
+        toolName: 'edit',
+        path: 'src/tui/layout.ts',
+        diff: '--- src/tui/layout.ts\n+++ src/tui/layout.ts\n-old\n+new',
+      },
+      2,
+    );
+    state = applyEventToRunState(
+      state,
+      {
+        type: 'tool_finished',
+        timestamp: new Date(2).toISOString(),
+        toolCallId: 'edit-1',
+        toolName: 'edit',
+        summary: 'completed',
+        status: 'ok',
       },
       2,
     );
@@ -543,5 +593,144 @@ describe('tui-state', () => {
     );
     expect(changes.items).toHaveLength(1);
     expect(changes.overflowCount).toBe(1);
+  });
+
+  it('does not count failed edit tools as file changes', () => {
+    let state = createInitialRunStateSnapshot(0);
+
+    state = applyEventToRunState(
+      state,
+      {
+        type: 'tool_started',
+        timestamp: new Date(1).toISOString(),
+        toolCallId: 'edit-fail',
+        toolName: 'edit',
+        summary: '{"path":".synax.toml"}',
+      },
+      1,
+    );
+    state = applyEventToRunState(
+      state,
+      {
+        type: 'tool_finished',
+        timestamp: new Date(2).toISOString(),
+        toolCallId: 'edit-fail',
+        toolName: 'edit',
+        summary: 'oldStr must match a prior read of .synax.toml',
+        status: 'error',
+      },
+      2,
+    );
+
+    // No changes should be tracked for a failed edit.
+    expect(state.changes.items).toEqual([]);
+    expect(state.toolInvocationCount).toBe(1);
+  });
+
+  it('does not label failed edits as recovered with turbulence', () => {
+    let state = createInitialRunStateSnapshot(0);
+
+    state = applyEventToRunState(
+      state,
+      {
+        type: 'tool_finished',
+        timestamp: new Date(1).toISOString(),
+        toolCallId: 'edit-fail',
+        toolName: 'edit',
+        summary: 'oldStr must match a prior read of .synax.toml',
+        status: 'error',
+      },
+      1,
+    );
+
+    // Must NOT claim recovery; must surface the actual error.
+    expect(state.statusNote).not.toContain('recovered');
+    expect(state.statusNote).toContain('error:');
+    expect(state.statusNote).toContain('oldStr must match a prior read');
+  });
+
+  it('labels successful retry after an edit failure as recovered', () => {
+    let state = createInitialRunStateSnapshot(0);
+
+    // Failed edit attempt
+    state = applyEventToRunState(
+      state,
+      {
+        type: 'tool_started',
+        timestamp: new Date(1).toISOString(),
+        toolCallId: 'edit-1',
+        toolName: 'edit',
+        summary: '{"path":"src/a.ts"}',
+      },
+      1,
+    );
+    state = applyEventToRunState(
+      state,
+      {
+        type: 'tool_finished',
+        timestamp: new Date(2).toISOString(),
+        toolCallId: 'edit-1',
+        toolName: 'edit',
+        summary: 'oldStr does not match',
+        status: 'error',
+      },
+      2,
+    );
+
+    // Successful retry with a new tool call
+    state = applyEventToRunState(
+      state,
+      {
+        type: 'tool_started',
+        timestamp: new Date(3).toISOString(),
+        toolCallId: 'edit-2',
+        toolName: 'edit',
+        summary: '{"path":"src/a.ts"}',
+      },
+      3,
+    );
+    state = applyEventToRunState(
+      state,
+      {
+        type: 'tool_finished',
+        timestamp: new Date(4).toISOString(),
+        toolCallId: 'edit-2',
+        toolName: 'edit',
+        summary: 'completed',
+        status: 'ok',
+        detail: '{"success":true,"toolName":"edit","output":{"path":"src/a.ts"}}',
+      },
+      4,
+    );
+
+    // The successful retry should be tracked as a change.
+    expect(state.changes.items).toEqual([{ path: 'src/a.ts', op: 'edit' }]);
+  });
+
+  it('surfaces the actual tool error as a blocker in the final failed run summary', () => {
+    let state = createInitialRunStateSnapshot(0);
+
+    state = applyEventToRunState(
+      state,
+      {
+        type: 'task_finished',
+        timestamp: new Date(1).toISOString(),
+        status: 'tool_error',
+        toolCalls: 1,
+        maxToolCalls: 192,
+        modelSteps: 1,
+        maxModelSteps: 64,
+        changedFiles: [],
+        verification: 'not run',
+        error: 'oldStr must match a prior read of .synax.toml',
+      },
+      1,
+    );
+
+    expect(state.terminal).toBe('failed');
+    expect(state.terminalIssue).toContain('oldStr must match a prior read');
+    expect(state.riskLine).toContain('blocker:');
+    expect(state.riskLine).toContain('oldStr must match a prior read');
+    expect(state.filesChangedThisRun).toEqual([]);
   });
 });
