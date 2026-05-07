@@ -347,7 +347,7 @@ function mergeConfigs(
   base: EffectiveSynaxConfig,
   layers: Array<{ config: SynaxConfig; source: string | null }>,
 ): EffectiveSynaxConfig {
-  let result = { ...base, providers: { ...base.providers } };
+  const result = { ...base, providers: { ...base.providers } };
   let lastSource: string | null = base.source;
 
   for (const layer of layers) {
@@ -532,7 +532,8 @@ export function serializeEffectiveConfig(config: EffectiveSynaxConfig): string {
 
   // Providers
   for (const [id, provider] of Object.entries(config.providers)) {
-    lines.push(`[providers.${id}]`);
+    const key = tomlTableKey(id);
+    lines.push(`[providers.${key}]`);
     lines.push(`enabled = ${provider.enabled}`);
     lines.push(`name = "${escapeTomlString(provider.name)}"`);
     lines.push(`compatibility = "${provider.compatibility}"`);
@@ -542,7 +543,7 @@ export function serializeEffectiveConfig(config: EffectiveSynaxConfig): string {
 
     if (Object.keys(provider.headers).length > 0) {
       lines.push('');
-      lines.push(`[providers.${id}.headers]`);
+      lines.push(`[providers.${key}.headers]`);
       for (const [k, v] of Object.entries(provider.headers)) {
         lines.push(`"${escapeTomlString(k)}" = "${escapeTomlString(v)}"`);
       }
@@ -550,7 +551,7 @@ export function serializeEffectiveConfig(config: EffectiveSynaxConfig): string {
 
     for (const model of provider.models) {
       lines.push('');
-      lines.push(`[[providers.${id}.models]]`);
+      lines.push(`[[providers.${key}.models]]`);
       lines.push(`id = "${escapeTomlString(model.id)}"`);
       if (model.displayName) lines.push(`display_name = "${escapeTomlString(model.displayName)}"`);
       if (model.contextWindow) lines.push(`context_window = ${model.contextWindow}`);
@@ -581,7 +582,8 @@ export function serializeEffectiveConfig(config: EffectiveSynaxConfig): string {
   // MCP
   if (Object.keys(config.mcp.servers).length > 0) {
     for (const [name, server] of Object.entries(config.mcp.servers)) {
-      lines.push(`[mcp.servers.${name}]`);
+      const key = tomlTableKey(name);
+      lines.push(`[mcp.servers.${key}]`);
       lines.push(`enabled = ${server.enabled}`);
       lines.push(`command = "${escapeTomlString(server.command)}"`);
       if (server.args.length > 0) {
@@ -589,7 +591,7 @@ export function serializeEffectiveConfig(config: EffectiveSynaxConfig): string {
       }
       if (Object.keys(server.env).length > 0) {
         lines.push('');
-        lines.push(`[mcp.servers.${name}.env]`);
+        lines.push(`[mcp.servers.${key}.env]`);
         for (const [k, v] of Object.entries(server.env)) {
           lines.push(`"${escapeTomlString(k)}" = "${escapeTomlString(v)}"`);
         }
@@ -602,7 +604,22 @@ export function serializeEffectiveConfig(config: EffectiveSynaxConfig): string {
 }
 
 function escapeTomlString(value: string): string {
-  return value.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n');
+  return value
+    .replace(/\\/g, '\\\\')
+    .replace(/"/g, '\\"')
+    .replace(/\n/g, '\\n')
+    .replace(/\r/g, '\\r')
+    .replace(/\t/g, '\\t');
+}
+
+/** Returns true if the key is safe to use as a TOML bare key (unquoted table key). */
+function isTomlBareKey(key: string): boolean {
+  return /^[A-Za-z0-9_-]+$/.test(key) && key.length > 0;
+}
+
+/** Returns a safe TOML table key segment: bare if allowed, otherwise quoted. */
+function tomlTableKey(key: string): string {
+  return isTomlBareKey(key) ? key : `"${escapeTomlString(key)}"`;
 }
 
 // ─── Selective mutation helpers ─────────────────────────────

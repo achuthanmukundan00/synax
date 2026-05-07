@@ -3,7 +3,7 @@
 exports[`interactive layout visual agreements matches the active docked-core render snapshot 1`] = `
 "  Synax v0.0.2-alpha  Tool  0:02
 
-  ◇ model                                                                        ┌ Core Module ─────────────────────┐
+  ◇ model                                                                        ┌ Synax Core ──────────────────────┐
     detail     Inspecting files before editing.                                  │               ˙˙ ˙·              │
                                                                                  │         · ··˙╲◆│││◆˙˙˙ ·         │
   › bash       exit 0                                                            │       ˙˙ ╲◆· ···˙╱ ˙˙╱◆··        │
@@ -38,7 +38,7 @@ exports[`interactive layout visual agreements matches the active docked-core ren
 exports[`interactive layout visual agreements matches the blocked budget-exhausted render snapshot 1`] = `
 "  Synax v0.0.2-alpha  Budget exhausted  0:00
 
-                                                                                 ┌ Core Module ─────────────────────┐
+                                                                                 ┌ Synax Core ──────────────────────┐
                                                                                  │               .  ×               │
     status    blocked: 32/32 model steps, 10 tool calls                          │           ·  ╲│││×╱ ·  .         │
   ◆ final      blocked                                                           │       ·  ╲×  ·.... ·.×╱×         │
@@ -64,8 +64,8 @@ exports[`interactive layout visual agreements matches the blocked budget-exhaust
 
 
 
+
 ┌─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
-│                                                                                                                     │
 │                                                                                                                     │
 └ Enter submit | Ctrl+C exit | /help | !cmd shell ────────────────────────────────────────────────────────────────────┘"
 `;
@@ -73,23 +73,23 @@ exports[`interactive layout visual agreements matches the blocked budget-exhaust
 exports[`interactive layout visual agreements matches the completed render snapshot 1`] = `
 "  Synax v0.0.2-alpha  Completed  0:00
 
-                                                                                 ┌ Core Module ─────────────────────┐
+                                                                                 ┌ Synax Core ──────────────────────┐
                                                                                  │               ·  .               │
-  ◆ verify     passed                                                            │           ..╲╲│  │╱╱.  ·         │
-    check      npm test -- src/__tests__/interactive-tui.test.ts                 │       ·  ╲.  · ..  .. ╱.         │
-    summary    focused tests passed                                              │       ◎ ─◎  ◎◎◎◎◎◎◎◎  ◎─ ◎       │
-                                                                                 │         ◎╱ ◎◎  ◎◎ ◎◎ ◎╲  ◎       │
-                                                                                 │         .  .╱╱│·  ╲╲ ·           │
-                                                                                 │                  .               │
-    status    3 model steps, 4 tool calls, 2 files changed                       │                                  │
-  ◆ final      completed                                                         │Runtime                           │
-    objective  Waiting for run start                                             │Core        Unloaded              │
-    changed    2 files                                                           │Model       —                     │
-    tools      4 calls                                                           │Provider    —                     │
-    commands   none                                                              │Context     —                     │
-    verify     passed                                                            │[────────────────────────────────]│
-    blocker    none                                                              │                                  │
-    follow-up  none                                                              │Session                           │
+    status    3 model steps, 4 tool calls, 2 files changed                       │           ..╲╲│  │╱╱.  ·         │
+  ◆ final      completed                                                         │       ·  ╲.  · ..  .. ╱.         │
+    objective  Waiting for run start                                             │       ◎ ─◎  ◎◎◎◎◎◎◎◎  ◎─ ◎       │
+    changed    2 files                                                           │         ◎╱ ◎◎  ◎◎ ◎◎ ◎╲  ◎       │
+    tools      4 calls                                                           │         .  .╱╱│·  ╲╲ ·           │
+    commands   none                                                              │                  .               │
+    verify     passed                                                            │                                  │
+    blocker    none                                                              │Runtime                           │
+    follow-up  none                                                              │Core        Unloaded              │
+                                                                                 │Model       —                     │
+                                                                                 │Provider    —                     │
+                                                                                 │Context     —                     │
+                                                                                 │[────────────────────────────────]│
+                                                                                 │                                  │
+                                                                                 │Session                           │
                                                                                  │Thinking    —                     │
                                                                                  │Spend       —                     │
                                                                                  │Tools       none                  │
@@ -99,8 +99,8 @@ exports[`interactive layout visual agreements matches the completed render snaps
 
 
 
+
 ┌─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
-│                                                                                                                     │
 │                                                                                                                     │
 └ Enter submit | Ctrl+C exit | /help | !cmd shell ────────────────────────────────────────────────────────────────────┘"
 `;
@@ -126,8 +126,8 @@ exports[`interactive layout visual agreements matches the idle large-core render
 
 
 
+
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                                                                             │
 │                                                                             │
 └ Enter submit | Ctrl+C exit | /help | !cmd shell ────────────────────────────┘"
 `;

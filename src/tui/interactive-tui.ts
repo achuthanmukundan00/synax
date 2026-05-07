@@ -22,6 +22,8 @@ import {
   type ResumePickerState,
 } from '../sessions/resume-renderer';
 import { listSessionsSorted, type SessionMetadata } from '../sessions/session-store';
+import { loadSynaxConfig, persistConfig } from '../config/load-config';
+import type { EffectiveSynaxConfig } from '../config/schema';
 
 export async function runInteractiveTui(
   session: ChatSession,
@@ -538,9 +540,8 @@ export async function runInteractiveTui(
 
   // ─── Config bridge ──────────────────────────────────────────
 
-  const loadSettingsConfig = (): import('../config/schema').EffectiveSynaxConfig => {
+  const loadSettingsConfig = (): EffectiveSynaxConfig => {
     try {
-      const { loadSynaxConfig } = require('../config/load-config');
       return loadSynaxConfig();
     } catch {
       return {
@@ -554,9 +555,8 @@ export async function runInteractiveTui(
     }
   };
 
-  const persistSettingsConfig = (config: import('../config/schema').EffectiveSynaxConfig): void => {
+  const persistSettingsConfig = (config: EffectiveSynaxConfig): void => {
     try {
-      const { persistConfig } = require('../config/load-config');
       persistConfig(config, process.cwd());
     } catch {
       /* best-effort */
