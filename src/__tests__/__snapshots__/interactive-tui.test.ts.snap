@@ -4,13 +4,13 @@ exports[`interactive layout visual agreements matches the active docked-core ren
 "  Synax v0.4.0  Tool  0:02
 
   ◇ model                                                                        ┌ Core Module ─────────────────────┐
-    detail     Inspecting files before editing.                                  │               .  ..              │
-                                                                                 │           ·..╲◆│││◆ ·. ·         │
-  › bash       exit 0                                                            │       ·· ╲◆  ..... ..╱◆··        │
-    command    npm test -- src/__tests__/interactive-tui.test.ts                 │       •  ─• ••••••••• ◆• •       │
-    exit       0                                                                 │         •╱◆••• •• •• ╲◆  •       │
-    output     PASS                                                              │         ·  ··╱◆│││◆. .           │
-                                                                                 │               .  ..              │
+    detail     Inspecting files before editing.                                  │               ˙˙ ˙·              │
+                                                                                 │         · ··˙╲◆│││◆˙˙˙ ·         │
+  › bash       exit 0                                                            │       ˙˙ ╲◆· ···˙╱ ˙˙╱◆··        │
+    command    npm test -- src/__tests__/interactive-tui.test.ts                 │       ● ●─● ●●●●●●●●● ◆● ●       │
+    exit       0                                                                 │       ● ●╱◆●●● ●● ●● ╲◆  ●       │
+    output     PASS                                                              │         ˙  ˙˙╱◆│││◆· ˙˙          │
+                                                                                 │               ·· ··              │
                                                                                  │                                  │
                                                                                  │Runtime                           │
                                                                                  │Core        Loaded                │

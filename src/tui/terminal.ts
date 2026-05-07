@@ -56,7 +56,7 @@ export function createTerminalSession(streams?: {
       if (!isTTY) return;
       stdin.setRawMode?.(true);
       stdin.resume();
-      stdout.write(`${ALT_SCREEN}${HIDE_CURSOR}${ENABLE_MOUSE}${CLEAR}${HOME}\u001b[?2004h`);
+      stdout.write(`${ALT_SCREEN}${HIDE_CURSOR}${ENABLE_MOUSE}${CLEAR}${HOME}`);
     },
     stop(): void {
       if (!isTTY) return;
