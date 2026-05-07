@@ -1,6 +1,7 @@
 import type { RunStateSnapshot } from '../agent/tui-state';
 import type { CoreMode } from './ai-core';
 import { CORE_HEIGHT, CORE_WIDTH, modeColor, renderAiCore, renderDottedCore } from './ai-core';
+import { resolveCoreVisualProfile } from './core-visual-profile';
 import { renderTranscript, toolsUsed } from './transcript';
 import pkg from '../../package.json';
 
@@ -71,7 +72,7 @@ export function maxHistoryScrollOffset(state: InteractiveViewState, _cols: numbe
 }
 
 function renderWelcome(lines: string[], width: number, bodyHeight: number, state: InteractiveViewState): void {
-  const core = renderAiCore(state.coreMode, state.nowMs / 1000);
+  const core = renderAiCore(state.coreMode, state.nowMs / 1000, resolveCoreVisualProfile(coreModelId(state)));
   const coreX = Math.max(0, Math.floor(width * 0.45 - CORE_WIDTH / 2));
   const coreY = Math.max(2, Math.floor((bodyHeight - CORE_HEIGHT) / 2) - 2);
   const telemetryWidth = Math.min(34, Math.max(24, width - (coreX + CORE_WIDTH + 4)));
@@ -274,6 +275,7 @@ function renderCoreModule(state: InteractiveViewState, width: number, maxHeight:
     width: coreWidth,
     height: 7,
     unicode: true,
+    profile: resolveCoreVisualProfile(coreModelId(state)),
   }).map((line) => centerVisible(line, inner));
   const body = [
     ...core,
@@ -371,6 +373,10 @@ function providerLabel(endpointLabel: string | undefined, run: RunStateSnapshot)
   if (/anthropic/i.test(endpoint)) return 'Anthropic';
   if (/openrouter/i.test(endpoint)) return 'OpenRouter';
   return endpoint ? 'OpenAI-compatible' : 'unknown';
+}
+
+function coreModelId(state: InteractiveViewState): string {
+  return state.modelLabel || state.run.modelId || modelFromProvider(state.run.providerLabel);
 }
 
 function contextLine(run: RunStateSnapshot): string {

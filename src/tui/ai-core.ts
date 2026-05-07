@@ -1,3 +1,5 @@
+import { resolveCoreVisualProfile, type CoreVisualProfile } from './core-visual-profile';
+
 export type CoreMode =
   | 'idle'
   | 'planning'
@@ -31,6 +33,7 @@ interface FieldState {
   mode: NormalizedCoreMode;
   frame: number;
   profile: CoreProfile;
+  visualProfile: CoreVisualProfile;
   palette: [MaterialColor, MaterialColor, MaterialColor];
   unicode: boolean;
 }
@@ -73,13 +76,18 @@ export function modeColor(mode: CoreMode): string {
   return '\u001b[90m';
 }
 
-export function renderAiCore(mode: CoreMode, t: number): string[] {
+export function renderAiCore(
+  mode: CoreMode,
+  t: number,
+  profile: CoreVisualProfile = resolveCoreVisualProfile(''),
+): string[] {
   return renderDottedCore({
     mode,
     frame: Math.floor(t * 8),
     width: CORE_WIDTH,
     height: CORE_HEIGHT,
     unicode: true,
+    profile,
   });
 }
 
@@ -89,16 +97,19 @@ export function renderDottedCore(opts: {
   width: number;
   height: number;
   unicode?: boolean;
+  profile?: CoreVisualProfile;
 }): string[] {
   const normalized = normalizeMode(opts.mode);
   if (normalized === 'unloaded') {
     return renderUnloadedCore(clamp(Math.floor(opts.width), 1, 80), clamp(Math.floor(opts.height), 1, 40));
   }
+  const visualProfile = opts.profile ?? resolveCoreVisualProfile('');
   const state: FieldState = {
     mode: normalized,
-    frame: opts.frame,
-    profile: profileForMode(normalized),
-    palette: paletteForMode(normalized, opts.frame),
+    frame: Math.floor(opts.frame * visualProfile.breathingRate),
+    profile: applyVisualProfile(profileForMode(normalized), visualProfile),
+    visualProfile,
+    palette: paletteForVisualProfile(paletteForMode(normalized, opts.frame), normalized, visualProfile),
     unicode: opts.unicode !== false,
   };
   const width = clamp(Math.floor(opts.width), 1, 80);
@@ -127,21 +138,31 @@ function renderFieldCell(state: FieldState, x: number, y: number, width: number,
   const containment = Math.abs(radius - (0.78 - p.compression * 0.13));
   const central = Math.max(0, 1 - radius);
   const flow =
-    Math.sin(angle * (2.1 + p.flow * 0.35) + frame * 0.16 * p.flow) +
-    Math.sin(nx * 4.6 - ny * 1.7 + frame * 0.11 * p.flow) * 0.45;
+    Math.sin(angle * (2.1 + p.flow * 0.35 + morphologyPhase(state.visualProfile)) + frame * 0.16 * p.flow) +
+    Math.sin(nx * 4.6 - ny * 1.7 + frame * 0.11 * p.flow + morphologyShear(state.visualProfile, nx, ny)) * 0.45;
   const harmonic = Math.sin((x + y * 1.8 + frame * p.sync) * 0.62);
   const lockedPulse = Math.abs(Math.sin(frame * 0.42 + y * 0.35));
   const stress = p.strain && positiveModulo(x * 7 + y * 11 + frame, 13) < 3;
   const grain = positiveModulo(x * 29 + y * 17 + frame * 5, 97) / 97;
-  const density = p.density + central * 0.3 + (containment < 0.09 ? 0.32 : 0) + Math.max(0, flow) * 0.12;
+  const density =
+    p.density +
+    central * centralDensity(state.visualProfile) +
+    (containment < 0.09 ? containmentDensity(state.visualProfile) : 0) +
+    Math.max(0, flow) * 0.12;
 
   if (grain > density && containment > 0.045 && central < 0.62) return ' ';
 
-  const glyphs = glyphSet(state.unicode);
+  const glyphs = glyphSet(state.unicode, state.visualProfile);
   let ch = glyphs.small;
   let color: MaterialColor = state.palette[0];
 
-  if (state.mode === 'tool_execution' && containment < 0.075 && positiveModulo(x + frame, 4) === 0) {
+  const profileGlyph = innerMorphologyGlyph(state, x, y, nx, ny, central, radius, angle);
+  if (profileGlyph) {
+    ch = profileGlyph;
+    color = central > 0.48 ? state.palette[2] : state.palette[1];
+  }
+
+  if (state.mode === 'tool_execution' && isToolScanCell(state, x, y, frame, containment, ny)) {
     ch = glyphs.compressed;
     color = state.palette[2];
   } else if (state.mode === 'verifying' && Math.abs(harmonic) > 0.88) {
@@ -164,7 +185,10 @@ function renderFieldCell(state: FieldState, x: number, y: number, width: number,
   return colorize(ch, color);
 }
 
-function glyphSet(unicode: boolean): {
+function glyphSet(
+  unicode: boolean,
+  visualProfile: CoreVisualProfile,
+): {
   small: string;
   mid: string;
   large: string;
@@ -186,6 +210,38 @@ function glyphSet(unicode: boolean): {
       line: (angle) => (Math.abs(Math.sin(angle)) > Math.abs(Math.cos(angle)) ? '|' : '-'),
     };
   }
+  if (visualProfile.id === 'claude') {
+    return {
+      small: '.',
+      mid: '·',
+      large: '○',
+      stable: '◉',
+      compressed: '◆',
+      sync: '━',
+      stress: '×',
+      line: (angle) => {
+        if (Math.abs(Math.sin(angle)) < 0.24) return '─';
+        if (Math.abs(Math.cos(angle)) < 0.24) return '│';
+        return '·';
+      },
+    };
+  }
+  if (visualProfile.id === 'qwen') {
+    return {
+      small: '˙',
+      mid: '·',
+      large: '●',
+      stable: '◎',
+      compressed: '◆',
+      sync: '━',
+      stress: '×',
+      line: (angle) => {
+        if (Math.abs(Math.sin(angle)) < 0.3) return '─';
+        if (Math.abs(Math.cos(angle)) < 0.3) return '│';
+        return Math.sin(angle) * Math.cos(angle) > 0 ? '╲' : '╱';
+      },
+    };
+  }
   return {
     small: '.',
     mid: '·',
@@ -200,6 +256,129 @@ function glyphSet(unicode: boolean): {
       return Math.sin(angle) * Math.cos(angle) > 0 ? '╲' : '╱';
     },
   };
+}
+
+function applyVisualProfile(profile: CoreProfile, visualProfile: CoreVisualProfile): CoreProfile {
+  return {
+    ...profile,
+    density: clamp(profile.density + visualProfile.densityBias, 0.04, 0.82),
+    flow: clamp(profile.flow + visualProfile.flowBias, 0, 2),
+    compression: clamp(profile.compression + visualProfile.compressionBias, 0, 0.7),
+    sync: clamp(profile.sync + visualProfile.syncBias, 0, 1.2),
+    stable: profile.stable || visualProfile.id === 'openai',
+  };
+}
+
+function paletteForVisualProfile(
+  palette: [MaterialColor, MaterialColor, MaterialColor],
+  mode: NormalizedCoreMode,
+  visualProfile: CoreVisualProfile,
+): [MaterialColor, MaterialColor, MaterialColor] {
+  if (mode === 'blocked' || mode === 'failure' || mode === 'completed' || mode === 'verifying') return palette;
+  return [
+    mix(palette[0], visualProfile.accent, 0.08),
+    mix(palette[1], visualProfile.accent, 0.16),
+    mix(palette[2], visualProfile.accent, 0.2),
+  ];
+}
+
+function morphologyPhase(visualProfile: CoreVisualProfile): number {
+  if (visualProfile.morphology === 'lattice') return 0.42;
+  if (visualProfile.morphology === 'aperture') return -0.22;
+  if (visualProfile.morphology === 'furnace') return -0.38;
+  if (visualProfile.morphology === 'twin') return 0.28;
+  return 0;
+}
+
+function morphologyShear(visualProfile: CoreVisualProfile, nx: number, ny: number): number {
+  if (visualProfile.morphology === 'lattice') return Math.sin((nx + ny) * 5.5) * 0.25;
+  if (visualProfile.morphology === 'aperture') return Math.sin(nx * ny * 3.2) * 0.18;
+  if (visualProfile.morphology === 'furnace') return -Math.abs(ny) * 0.35;
+  if (visualProfile.morphology === 'twin') return Math.sin(nx * 4.8) * 0.28;
+  return 0;
+}
+
+function centralDensity(visualProfile: CoreVisualProfile): number {
+  if (visualProfile.nucleusLayout === 'dense') return 0.46;
+  if (visualProfile.nucleusLayout === 'soft') return 0.24;
+  if (visualProfile.nucleusLayout === 'twin') return 0.2;
+  return 0.3;
+}
+
+function containmentDensity(visualProfile: CoreVisualProfile): number {
+  if (visualProfile.morphology === 'lattice') return 0.42;
+  if (visualProfile.morphology === 'aperture') return 0.24;
+  if (visualProfile.morphology === 'furnace') return 0.36;
+  return 0.32;
+}
+
+function innerMorphologyGlyph(
+  state: FieldState,
+  x: number,
+  y: number,
+  nx: number,
+  ny: number,
+  central: number,
+  radius: number,
+  angle: number,
+): string | undefined {
+  if (!state.unicode) return undefined;
+  const profile = state.visualProfile;
+  if (profile.nucleusLayout === 'twin') {
+    const phase = Math.sin(state.frame * 0.22) * 0.025;
+    const left = Math.hypot(nx + 0.2 + phase, ny);
+    const right = Math.hypot(nx - 0.2 - phase, ny);
+    if (left < 0.13 || right < 0.13) return state.frame % 2 === 0 ? '●' : '◉';
+    if (Math.abs(left - right) < 0.035 && radius < 0.55 && positiveModulo(x + y + state.frame, 4) === 0) return '·';
+  }
+  if (profile.nucleusLayout === 'soft' && central > 0.58) {
+    return central > 0.78 ? '◉' : '○';
+  }
+  if (profile.nucleusLayout === 'dense' && central > 0.46) {
+    return central > 0.7 ? '◆' : '◈';
+  }
+  if (profile.morphology === 'lattice' && radius > 0.24 && radius < 0.74) {
+    const diagonalA = Math.abs(Math.sin((nx + ny) * 7 + state.frame * 0.08));
+    const diagonalB = Math.abs(Math.sin((nx - ny) * 7 - state.frame * 0.08));
+    if (diagonalA < 0.12 || diagonalB < 0.12) return Math.sin(angle) * Math.cos(angle) > 0 ? '╲' : '╱';
+  }
+  if (profile.morphology === 'lens' && central > 0.68) return central > 0.82 ? '◎' : '●';
+  if (profile.morphology === 'contained' && central > 0.72 && positiveModulo(x + y, 2) === 0) return '●';
+  if (
+    profile.morphology === 'furnace' &&
+    Math.abs(ny) < 0.1 &&
+    radius < 0.68 &&
+    positiveModulo(x + state.frame, 3) === 0
+  ) {
+    return '─';
+  }
+  if (
+    profile.morphology === 'twin' &&
+    Math.abs(nx) < 0.05 &&
+    radius < 0.62 &&
+    positiveModulo(y + state.frame, 3) === 0
+  ) {
+    return '│';
+  }
+  return undefined;
+}
+
+function isToolScanCell(
+  state: FieldState,
+  x: number,
+  y: number,
+  frame: number,
+  containment: number,
+  ny: number,
+): boolean {
+  if (state.mode !== 'tool_execution') return false;
+  if (state.visualProfile.toolScan === 'horizontal') {
+    return Math.abs(ny) < 0.2 && positiveModulo(x + frame, 3) === 0;
+  }
+  if (state.visualProfile.toolScan === 'split') {
+    return containment < 0.08 && positiveModulo(x - y + frame, 5) === 0;
+  }
+  return containment < 0.075 && positiveModulo(x + frame, 4) === 0;
 }
 
 function profileForMode(mode: NormalizedCoreMode): CoreProfile {
