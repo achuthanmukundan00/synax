@@ -8,7 +8,7 @@ import type { ChatSession } from '../commands/chat';
 import { stdin as defaultStdin } from 'node:process';
 import { DiffRenderer } from './diff-renderer';
 import { maxHistoryScrollOffset, renderLayout, type InteractiveViewState } from './layout';
-import { parseInputChunk } from './input';
+import { MAX_INPUT_CHARS, parseInputChunk } from './input';
 import { createTerminalSession, type InputStreamLike } from './terminal';
 import type { Writable } from 'node:stream';
 import type { CoreMode } from './ai-core';
@@ -273,7 +273,7 @@ export async function runInteractiveTui(
         continue;
       }
       if (event.type === 'text' && event.value) {
-        inputBuffer += event.value;
+        inputBuffer = `${inputBuffer}${event.value}`.slice(0, MAX_INPUT_CHARS);
       }
     }
     paint();
