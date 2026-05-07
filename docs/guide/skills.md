@@ -1,8 +1,43 @@
 # Skills
 
-Synax skills extend the agent's capabilities. They are loaded from `~/.agents/skills/`.
+Synax skills extend the agent's capabilities by injecting skill instructions
+(SKILL.md manifests) into the agent's system context before each model step.
 
-## Skill Directory Structure
+## Skill Entry Format
+
+Skill entries in `.synax.toml` are filesystem paths. Synax resolves the path to
+a `SKILL.md` file and loads its content.
+
+Supported path forms:
+- **Home-relative**: `~/.agents/skills/coderabbit-review` — expands `~` to your home directory
+- **Absolute**: `/opt/skills/my-skill/SKILL.md` — used directly
+- **Project-relative**: `./project-skills/lint-checker` — resolved from the project root
+
+If the resolved path is a directory, Synax appends `/SKILL.md` automatically.
+If it's a file, it's used directly.
+
+Bare names (without `/` or `\`) are not supported — always use a path.
+
+## Configuration
+
+```toml
+[skills]
+enabled = ["~/.agents/skills/coderabbit-review"]
+disabled = ["~/.agents/skills/grill-me"]
+```
+
+- **enabled**: Skills loaded into the agent context
+- **disabled**: Skills explicitly turned off
+
+If a skill path is listed in neither array, it defaults to disabled.
+
+## Skill Directory Conventions
+
+Many tools install skills under `~/.agents/skills/<name>/SKILL.md`.
+The Synax settings TUI discovers skills from this directory for display,
+but injection requires explicit path-based configuration.
+
+Example directory layout:
 
 ```
 ~/.agents/skills/
@@ -12,52 +47,26 @@ Synax skills extend the agent's capabilities. They are loaded from `~/.agents/sk
     SKILL.md
 ```
 
-Each skill is a directory containing a `SKILL.md` manifest file.
-
-## Configuration
-
-```toml
-[skills]
-enabled = ["context7", "grill-me"]
-```
-
-- **enabled**: Skills that are active
-- **disabled**: Skills explicitly turned off
-
-If a skill is not listed in either array, it defaults to disabled.
-
-## Built-in Skills (Discovered)
-
-Synax discovers skills from your `~/.agents/skills/` directory:
-
-| Skill | Description |
-|-------|-------------|
-| `coderabbit-review` | AI code review of working tree changes |
-| `grill-me` | Harsh critique of ideas, plans, or code |
-| `context7` | Resolve library docs during coding tasks |
-
 ## Managing Skills in the TUI
 
-Press `/` and type `skills` to open the Skills tab in settings:
-
-- **✓ context7** — Enabled
-- **✓ grill-me** — Enabled
-- **○ release-notes** — Disabled
-- **! broken-skill** — Missing SKILL.md manifest
+Press `/` and type `skills` to open the Skills tab in settings.
+The TUI shows discovered skills from `~/.agents/skills/`.
 
 Press Space or Enter to toggle a skill on/off. Changes persist to the config file.
 
-## Broken Skills
+## Diagnostics
 
-Skills shown as broken (`!`) have a missing or invalid `SKILL.md` manifest.
-Fix the manifest file to re-enable the skill.
+At startup, Synax resolves each enabled skill path and reports:
+
+- Skill id/path
+- Resolved absolute path
+- Whether `SKILL.md` exists
+- Whether the skill was loaded and injected
+
+Missing or broken skills surface clear diagnostics instead of allowing
+the model to discover skills on its own.
 
 ## Skill Requirements
 
-Each skill directory must contain:
-- `SKILL.md` — a manifest file with skill name, description, and instructions
-
-Future versions may support:
-- `package.json` with metadata
-- Version constraints
-- Skill dependencies
+Each skill must provide a `SKILL.md` manifest file with the skill's instructions.
+The file content is injected as a system-level message into the agent context.
