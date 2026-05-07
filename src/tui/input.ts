@@ -24,6 +24,9 @@ export function parseInputChunk(chunk: string): ParsedInput[] {
       continue;
     }
     const char = chunk[index];
+    if (char === '\u000c') {
+      continue;
+    }
     if (char === '\u0003') {
       events.push({ type: 'exit' });
       continue;

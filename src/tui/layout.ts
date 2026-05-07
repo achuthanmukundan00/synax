@@ -65,8 +65,7 @@ export function renderLayout(state: InteractiveViewState, cols: number, rows: nu
 export function maxHistoryScrollOffset(state: InteractiveViewState, _cols: number, rows: number): number {
   const height = Math.max(14, rows);
   const bodyHeight = Math.max(1, height - INPUT_DOCK_HEIGHT);
-  // Account for header + separator + transcript label = 5 lines of chrome
-  const visibleRows = Math.max(1, bodyHeight - 5);
+  const visibleRows = Math.max(1, bodyHeight - 3);
   const estimatedLines = state.run.debugHistory.length * 4;
   return Math.max(0, estimatedLines - visibleRows);
 }
@@ -104,7 +103,7 @@ function renderOperationalSurface(
   const sideWidth = operationalSideWidth(width, bodyHeight);
   const transcriptWidth = operationalTranscriptWidth(width, bodyHeight);
   const transcriptLines = renderTranscript(state, Math.max(24, transcriptWidth));
-  const visibleRows = Math.max(1, bodyHeight - 5);
+  const visibleRows = Math.max(1, bodyHeight - 3);
   const maxScrollOffset = Math.max(0, transcriptLines.length - visibleRows);
   const scrollOffset = Math.min(maxScrollOffset, Math.max(0, state.historyScrollOffset ?? 0));
   const visibleTranscript = transcriptLines.slice(
@@ -112,11 +111,7 @@ function renderOperationalSurface(
     Math.max(0, transcriptLines.length - scrollOffset),
   );
 
-  // Transcript header with a thin rule beneath it.
-  put(lines, 2, 2, dim('Transcript'), width);
-  put(lines, 3, 2, dim(separatorBar(Math.min(transcriptWidth, 40))), width);
-
-  const lineOffset = 4;
+  const lineOffset = 2;
   for (let i = 0; i < visibleTranscript.length && lineOffset + i < bodyHeight; i += 1) {
     put(lines, lineOffset + i, 2, clip(visibleTranscript[i], transcriptWidth), width);
   }
@@ -277,23 +272,22 @@ function renderCoreModule(state: InteractiveViewState, width: number, maxHeight:
     unicode: true,
   }).map((line) => centerVisible(line, inner));
   const body = [
-    panelTitle('Core Module', inner),
     ...core,
-    dim(separatorBar(inner)),
+    '',
     dim('Runtime'),
     ...runtimeTelemetryRows(state, inner),
     contextUsageBar(state.run, inner),
-    dim(separatorBar(inner)),
+    '',
     dim('Session'),
     ...sessionTelemetryRows(state.run, inner),
   ];
 
-  if (width < 24 || body.length + 1 > maxHeight) return body.map((line) => clip(line, width));
+  if (width < 24 || body.length + 2 > maxHeight) return body.map((line) => clip(line, width));
 
   return [
-    `┌${panelTitle('Core Module', inner).slice(0, inner)}┐`,
-    ...body.slice(1).map((line) => `│${pad(clip(line, inner), inner)}│`),
-    `└${'─'.repeat(inner)}┘`,
+    panelTop('Core Module', inner),
+    ...body.map((line) => `${dim('│')}${pad(clip(line, inner), inner)}${dim('│')}`),
+    dim(`└${'─'.repeat(inner)}┘`),
   ];
 }
 
@@ -303,7 +297,7 @@ function renderTelemetry(state: InteractiveViewState, width: number): string[] {
     dim('Runtime'),
     ...runtimeTelemetryRows(state, inner),
     contextUsageBar(state.run, inner),
-    dim(separatorBar(inner)),
+    '',
     dim('Session'),
     ...sessionTelemetryRows(state.run, inner),
   ].map((line) => clip(line, width));
@@ -317,10 +311,10 @@ function runtimeTelemetryRows(state: InteractiveViewState, width: number): strin
   const valueWidth = Math.max(4, width - 12);
 
   return [
-    instrumentRow('Core', run.coreLoaded ? 'Loaded' : 'Unloaded', width, { color: modeColor(state.coreMode) }),
-    instrumentRow('Model', model ? truncateMiddle(model, valueWidth) : 'none', width, { dimValue: !model }),
-    instrumentRow('Provider', provider === 'unknown' ? 'none' : provider, width, { dimValue: provider === 'unknown' }),
-    instrumentRow('Context', context, width, { dimValue: context === 'unknown' }),
+    instrumentRow('Core', run.coreLoaded || model ? 'Loaded' : 'Unloaded', width, { color: modeColor(state.coreMode) }),
+    instrumentRow('Model', model ? truncateMiddle(model, valueWidth) : '—', width, { dimValue: !model }),
+    instrumentRow('Provider', provider === 'unknown' ? '—' : provider, width, { dimValue: provider === 'unknown' }),
+    instrumentRow('Context', context, width, { dimValue: context === '—' }),
   ];
 }
 
@@ -328,19 +322,14 @@ function sessionTelemetryRows(run: RunStateSnapshot, width: number): string[] {
   const tools = toolsUsed(run);
 
   return [
-    instrumentRow(
-      'Thinking',
-      run.thinkingEnabled === undefined ? 'unknown' : run.thinkingEnabled ? 'on' : 'off',
-      width,
-      {
-        dimValue: run.thinkingEnabled === undefined,
-      },
-    ),
-    instrumentRow('Spend', run.sessionSpendLabel ?? 'unknown', width, {
+    instrumentRow('Thinking', run.thinkingEnabled === undefined ? '—' : run.thinkingEnabled ? 'on' : 'off', width, {
+      dimValue: run.thinkingEnabled === undefined,
+    }),
+    instrumentRow('Spend', run.sessionSpendLabel ?? '—', width, {
       dimValue: run.sessionSpendLabel === undefined,
     }),
     instrumentRow('Tools', tools.length > 0 ? tools.join(', ') : 'none', width, { dimValue: tools.length === 0 }),
-    instrumentRow('Steps', modelSteps(run.statusNote), width, { dimValue: modelSteps(run.statusNote) === 'unknown' }),
+    instrumentRow('Steps', modelSteps(run.statusNote), width, { dimValue: modelSteps(run.statusNote) === '—' }),
   ];
 }
 
@@ -381,8 +370,11 @@ function providerLabel(endpointLabel: string | undefined, run: RunStateSnapshot)
 }
 
 function contextLine(run: RunStateSnapshot): string {
-  if (run.contextUsedTokens === undefined && run.contextWindowTokens === undefined) return 'unknown';
-  return `${formatTokens(run.contextUsedTokens ?? 0)} / ${formatTokens(run.contextWindowTokens ?? 0)}`;
+  if (run.contextUsedTokens === undefined && run.contextWindowTokens === undefined) return '—';
+  const used = run.contextUsedTokens ?? 0;
+  const total = run.contextWindowTokens ?? 0;
+  const ratio = total > 0 ? ` (${Math.round((used / total) * 100)}%)` : '';
+  return `${formatTokens(used)} / ${formatTokens(total)}${ratio}`;
 }
 
 function contextUsageBar(run: RunStateSnapshot, width: number): string {
@@ -411,14 +403,16 @@ function instrumentRow(
 }
 
 function modelSteps(statusNote: string): string {
+  const ratio = /(\d+)\s*\/\s*(\d+)\s+model steps?/i.exec(statusNote);
+  if (ratio) return `${ratio[1]}/${ratio[2]}`;
   const match = /(\d+)\s+model steps?/i.exec(statusNote);
-  return match ? match[1] : 'unknown';
+  return match ? match[1] : '—';
 }
 
-function panelTitle(title: string, width: number): string {
+function panelTop(title: string, width: number): string {
   const label = ` ${title} `;
   const fill = Math.max(0, width - label.length);
-  return `${label}${'─'.repeat(fill)}`;
+  return dim(`┌${label}${'─'.repeat(fill)}┐`);
 }
 
 function centerVisible(line: string, width: number): string {
@@ -452,8 +446,4 @@ function locationLabel(cwdLabel?: string, gitBranch?: string): string | undefine
 
 function dim(text: string): string {
   return `\u001b[90m${text}\u001b[0m`;
-}
-
-function separatorBar(width: number): string {
-  return '─'.repeat(Math.max(1, width));
 }

@@ -61,6 +61,10 @@ describe('tui input parser', () => {
     expect(events.map((e) => e.type)).toEqual(['text', 'backspace', 'submit', 'exit']);
   });
 
+  it('ignores Ctrl+L instead of inserting a form-feed glyph', () => {
+    expect(parseInputChunk('\u000c')).toEqual([]);
+  });
+
   it('parses history scroll keys', () => {
     const events = parseInputChunk('\x1b[5~\x1b[6~');
     expect(events).toEqual([{ type: 'scroll_history_up' }, { type: 'scroll_history_down' }]);
@@ -212,6 +216,139 @@ describe('ai core renderer', () => {
 });
 
 describe('interactive layout visual agreements', () => {
+  it('matches the idle large-core render snapshot', () => {
+    const lines = renderLayout(
+      {
+        run: createInitialRunStateSnapshot(0),
+        objectiveInput: '',
+        coreMode: 'idle',
+        nowMs: 2000,
+      },
+      80,
+      24,
+    );
+
+    expect(snapshotText(lines)).toMatchSnapshot();
+  });
+
+  it('matches the active docked-core render snapshot', () => {
+    const run = {
+      ...createInitialRunStateSnapshot(0),
+      phase: 'tool_execution' as const,
+      modelId: 'qwen-local',
+      providerName: 'Relay',
+      coreLoaded: true,
+      debugHistory: [
+        { atMs: 1, kind: 'model' as const, summary: 'model response', detail: 'Inspecting files before editing.' },
+        {
+          atMs: 2,
+          kind: 'tool_call' as const,
+          summary: 'bash call',
+          detail: 'bash\n{"command":"npm test -- src/__tests__/interactive-tui.test.ts"}',
+        },
+        { atMs: 3, kind: 'tool_result' as const, summary: 'bash ok', detail: 'exit code: 0\nPASS' },
+      ],
+    };
+
+    expect(
+      snapshotText(
+        renderLayout(
+          {
+            run,
+            objectiveInput: 'continue polishing the feed',
+            coreMode: 'bash',
+            nowMs: 2000,
+          },
+          120,
+          32,
+        ),
+      ),
+    ).toMatchSnapshot();
+  });
+
+  it('matches the completed render snapshot', () => {
+    const run = {
+      ...createInitialRunStateSnapshot(0),
+      phase: 'completed' as const,
+      terminal: 'completed' as const,
+      statusNote: 'completed: 3 model steps, 4 tool calls, 2 files changed',
+      filesChangedThisRun: ['src/tui/transcript.ts', 'src/tui/layout.ts'],
+      toolInvocationCount: 4,
+      workingTreeClean: false,
+      verification: {
+        ...createInitialRunStateSnapshot(0).verification,
+        state: 'passed' as const,
+        summary: 'focused tests passed',
+        currentCheckLabel: 'npm test -- src/__tests__/interactive-tui.test.ts',
+      },
+    };
+
+    expect(
+      snapshotText(
+        renderLayout(
+          {
+            run,
+            objectiveInput: '',
+            coreMode: 'completed',
+            nowMs: 2000,
+          },
+          120,
+          32,
+        ),
+      ),
+    ).toMatchSnapshot();
+  });
+
+  it('matches the blocked budget-exhausted render snapshot', () => {
+    const run = {
+      ...createInitialRunStateSnapshot(0),
+      phase: 'budget_exhausted' as const,
+      terminal: 'blocked' as const,
+      terminalIssue: 'max steps exceeded: 32',
+      statusNote: 'blocked: 32/32 model steps, 10 tool calls',
+    };
+
+    expect(
+      snapshotText(
+        renderLayout(
+          {
+            run,
+            objectiveInput: '',
+            coreMode: 'blocked',
+            nowMs: 2000,
+          },
+          120,
+          32,
+        ),
+      ),
+    ).toMatchSnapshot();
+  });
+
+  it('matches the narrow terminal fallback snapshot', () => {
+    const run = {
+      ...createInitialRunStateSnapshot(0),
+      phase: 'thinking' as const,
+      debugHistory: [
+        { atMs: 1, kind: 'model' as const, summary: 'model response', detail: 'Inspecting files before editing.' },
+      ],
+    };
+
+    expect(
+      snapshotText(
+        renderLayout(
+          {
+            run,
+            objectiveInput: 'short task',
+            coreMode: 'thinking',
+            nowMs: 2000,
+          },
+          56,
+          18,
+        ),
+      ),
+    ).toMatchSnapshot();
+  });
+
   it('keeps the core large only for the empty idle surface', () => {
     const run = createInitialRunStateSnapshot(0);
     const lines = renderLayout(
@@ -328,22 +465,22 @@ describe('interactive layout visual agreements', () => {
     expect(plain).toContain('Model       qwen');
     expect(plain).toContain('Provider    Relay');
     expect(plain).toContain('Context');
-    expect(plain).toContain('Inspecting TUI runtime state and renderer boundaries.');
     expect(plain).not.toContain('hidden chain');
-    expect(plain).toContain('read  src/tui/layout.ts:1-120');
-    expect(plain).toContain('$ npm test src/__tests__/interactive-tui.test.ts');
+    expect(plain).toContain('read       src/tui/layout.ts');
+    expect(plain).toContain('lines      1–120');
+    expect(plain).toContain('bash       exit 0');
+    expect(plain).toContain('command    npm test src/__tests__/interactive-tui.test.ts');
     expect(plain).toContain('exit 0');
     expect(plain).toContain('1.2s');
-    expect(plain).toContain('edit  src/tui/layout.ts');
+    expect(plain).toContain('edit       src/tui/layout.ts');
     expect(plain).toContain('-old dashboard');
     expect(plain).toContain('+new transcript');
-    expect(plain).toContain('verify  passed');
-    expect(plain).toContain('Final summary');
-    expect(plain).toContain('objective: Improve TUI observability');
-    expect(plain).toContain('Changed this run: 2 files');
-    expect(plain).toContain('Working tree: clean');
-    expect(plain).toContain('tool invocations: 3');
-    expect(plain).toContain('commands run: npm test src/__tests__/interactive-tui.test.ts');
+    expect(plain).toContain('verify     passed');
+    expect(plain).toContain('final      completed');
+    expect(plain).toContain('objective  Improve TUI observability');
+    expect(plain).toContain('changed    2 files');
+    expect(plain).toContain('tools      3 calls');
+    expect(plain).toContain('commands   npm test src/__tests__/interactive-tui.test.ts');
   });
 
   it('renders failed command output and blocker in the transcript summary', () => {
@@ -394,12 +531,12 @@ describe('interactive layout visual agreements', () => {
       .map((line) => stripAnsi(line))
       .join('\n');
 
-    expect(plain).toContain('$ npm test');
-    expect(plain).toContain('exit 1');
+    expect(plain).toContain('commands   npm test');
+    expect(plain).toContain('exit       1');
     expect(plain).toContain('FAIL src/__tests__/interactive-tui.test.ts');
-    expect(plain).toContain('verify  failed');
-    expect(plain).toContain('blockers: verification failed: Jest assertion failed');
-    expect(plain).toContain('next: Expected transcript to contain read block');
+    expect(plain).toContain('verify     failed');
+    expect(plain).toContain('blocker    verification failed: Jest assertion failed');
+    expect(plain).toContain('next       Expected transcript to contain read block');
   });
 
   it('preserves git diff ANSI colors in command output', () => {
@@ -689,8 +826,8 @@ describe('interactive layout visual agreements', () => {
       .join('\n');
 
     expect(plain).toContain('Core        Unloaded');
-    expect(plain).toContain('Model       none');
-    expect(plain).toContain('Provider    none');
+    expect(plain).toContain('Model       —');
+    expect(plain).toContain('Provider    —');
   });
 
   it('renders core telemetry as a structured module panel', () => {
@@ -737,10 +874,12 @@ describe('interactive layout visual agreements', () => {
     expect(plain).toContain('Model       Qwen3.6-35B-A3…XS.gguf');
     expect(plain).toContain('Provider    llama.cpp');
     expect(plain).toContain('Context     8.2k / 131.1k');
-    expect(plain).toContain('Thinking    unknown');
-    expect(plain).toContain('Spend       unknown');
+    expect(plain).toContain('Context     8.2k / 131.1k (6%)');
+    expect(plain).toContain('Thinking    —');
+    expect(plain).toContain('Spend       —');
     expect(plain).toContain('Tools       bash');
     expect(plain).toContain('Steps       13');
+    expect(plain).not.toContain('unknown');
     expect(plain).not.toContain('Core loaded');
     expect(plain).not.toContain('Session $');
     expect(plain).not.toContain('tools used bash');
@@ -802,7 +941,7 @@ describe('interactive layout visual agreements', () => {
     );
     const plain = lines.map((line) => stripAnsi(line)).join('\n');
 
-    expect(plain).toContain('Completed · 2 model steps, 1 tool call, 1 file changed');
+    expect(plain).toContain('status    2 model steps, 1 tool call, 1 file changed');
     expect(plain).toContain('Updated the TUI state and verified the focused tests.');
   });
 
@@ -865,10 +1004,11 @@ describe('interactive layout visual agreements', () => {
     );
     const plain = lines.map((line) => stripAnsi(line)).join('\n');
 
-    expect(plain).toContain('Transcript');
+    expect(plain).not.toContain('Transcript');
     expect(plain).toContain('model');
     expect(plain).toContain('I will check git status.');
-    expect(plain).toContain('$ git status --short');
+    expect(plain).toContain('bash       exit 1');
+    expect(plain).toContain('command    git status --short');
     expect(plain).toContain('M src/tui/layout.ts');
   });
 
@@ -950,13 +1090,13 @@ describe('interactive layout visual agreements', () => {
       .map((line) => stripAnsi(line))
       .join('\n');
 
-    const summaryIndex = plain.indexOf('Final summary');
-    const nextPromptIndex = plain.indexOf('user  second task should be visible');
+    const summaryIndex = plain.indexOf('final      completed');
+    const nextPromptIndex = plain.indexOf('prompt     second task should be visible');
 
     expect(run.terminal).toBe('running');
     expect(summaryIndex).toBeGreaterThanOrEqual(0);
     expect(nextPromptIndex).toBeGreaterThan(summaryIndex);
-    expect(plain.match(/Final summary/g)).toHaveLength(1);
+    expect(plain.match(/final      completed/g)).toHaveLength(1);
   });
 
   it('renders multi-line slash command output without 3-line cap', () => {
@@ -999,6 +1139,80 @@ describe('interactive layout visual agreements', () => {
     expect(plain).toContain('Probe provider models and chat endpoints');
   });
 
+  it('truncates long paths and commands without wrapping artifacts', () => {
+    const longPath =
+      'src/components/surfaces/very/deeply/nested/local-model-runtime-feed-event-renderer-with-extra-detail.tsx';
+    const longCommand =
+      'npm test -- src/__tests__/interactive-tui.test.ts --runInBand --verbose --detectOpenHandles --testNamePattern "renders a compact semantic operational feed"';
+    const run = {
+      ...createInitialRunStateSnapshot(0),
+      debugHistory: [
+        {
+          atMs: 1,
+          kind: 'tool_call' as const,
+          summary: 'read call',
+          detail: `read\n{"path":"${longPath}","startLine":1,"endLine":240}`,
+        },
+        { atMs: 2, kind: 'tool_result' as const, summary: 'read ok', detail: 'ok' },
+        {
+          atMs: 3,
+          kind: 'tool_call' as const,
+          summary: 'bash call',
+          detail: `bash\n{"command":"${longCommand.replace(/"/g, '\\"')}"}`,
+        },
+        { atMs: 4, kind: 'tool_result' as const, summary: 'bash ok', detail: 'exit code: 0\nPASS' },
+      ],
+    };
+    const lines = renderLayout(
+      {
+        run,
+        objectiveInput: '',
+        coreMode: 'thinking',
+        nowMs: 2000,
+      },
+      82,
+      30,
+    ).map(stripAnsi);
+    const plain = lines.join('\n');
+
+    expect(plain).toContain('read       src/components/surfaces');
+    expect(plain).toContain('…');
+    expect(plain).toContain('command    npm test');
+    expect(lines.every((line) => line.length === 82)).toBe(true);
+  });
+
+  it('renders blocked budget exhaustion with current step budget when available', () => {
+    const run = {
+      ...createInitialRunStateSnapshot(0),
+      phase: 'budget_exhausted' as const,
+      terminal: 'blocked' as const,
+      terminalIssue: 'max steps exceeded: 32',
+      objective: {
+        label: 'read project files',
+        currentPhase: 'budget_exhausted' as const,
+        nextCheckpoint: 'context budget exhausted',
+      },
+      statusNote: 'blocked: 32/32 model steps, 10 tool calls',
+    };
+    const plain = renderLayout(
+      {
+        run,
+        objectiveInput: '',
+        coreMode: 'blocked',
+        nowMs: 2000,
+      },
+      120,
+      30,
+    )
+      .map(stripAnsi)
+      .join('\n');
+
+    expect(plain).toContain('Budget exhausted');
+    expect(plain).toContain('Steps       32/32');
+    expect(plain).toContain('final      blocked');
+    expect(plain).toContain('blocker    max steps exceeded: 32');
+  });
+
   it('clamps transcript scroll offsets at the oldest and newest entries', () => {
     const run = {
       ...createInitialRunStateSnapshot(0),
@@ -1039,7 +1253,7 @@ describe('interactive layout visual agreements', () => {
       .join('\n');
 
     expect(oldestPlain).toContain('model event 0');
-    expect(oldestPlain).toContain('model event 8');
+    expect(oldestPlain).toContain('model event 4');
     expect(oldestPlain).not.toContain('model event 15');
     expect(newestPlain).toContain('model event 15');
     expect(newestPlain).not.toContain('model event 0');
@@ -1097,8 +1311,8 @@ describe('interactive tui runtime', () => {
     expect(session.handleUserMessage).toHaveBeenCalledTimes(1);
     expect(session.handleUserMessage).toHaveBeenCalledWith('finish this');
     expect(session.handleSlashCommand).toHaveBeenCalledWith('/help');
-    expect(plain).toContain('command  Chat Commands');
-    expect(plain).not.toContain('model  Chat Commands');
+    expect(plain).toContain('detail     Chat Commands');
+    expect(plain).not.toContain('model     Chat Commands');
   });
 
   it('runs bang-prefixed TUI input as a local shell command', async () => {
@@ -1136,7 +1350,7 @@ describe('interactive tui runtime', () => {
     const plain = stripAnsi(stdout.text());
     expect(session.handleShellCommand).toHaveBeenCalledWith('echo hello');
     expect(session.handleUserMessage).not.toHaveBeenCalled();
-    expect(plain).toContain('$ echo hello');
+    expect(plain).toContain('command    echo hello');
     expect(plain).toContain('hello');
   });
 
@@ -1203,6 +1417,10 @@ describe('interactive tui runtime', () => {
 function stripAnsi(input: string): string {
   // eslint-disable-next-line no-control-regex
   return input.replace(/\u001b\[[0-9;]*m/g, '');
+}
+
+function snapshotText(lines: string[]): string {
+  return lines.map((line) => stripAnsi(line).trimEnd()).join('\n');
 }
 
 function extractTrueColors(input: string): Array<{ r: number; g: number; b: number }> {
