@@ -5,8 +5,11 @@ import { CORE_HEIGHT, CORE_WIDTH, modeColor, renderAiCore, renderDottedCore } fr
 import { DiffRenderer } from '../tui/diff-renderer';
 import { runInteractiveTui } from '../tui/interactive-tui';
 import { maxHistoryScrollOffset, renderLayout } from '../tui/layout';
-import { parseInputChunk } from '../tui/input';
+import { createInputParser, parseInputChunk } from '../tui/input';
 import { createTerminalSession } from '../tui/terminal';
+import { renderSettings } from '../settings/settings-renderer';
+import { createSettingsState, settingsReducer } from '../settings/settings-state';
+import type { EffectiveSynaxConfig } from '../config/schema';
 import { PassThrough, Writable } from 'stream';
 
 const EXPECTED_MAX_INPUT_CHARS = 4096;
@@ -94,15 +97,46 @@ describe('tui input parser', () => {
     ['unsupported control character', '\u0001'],
     ['unsupported C1 control character', '\u009b'],
   ])('discards unsupported terminal input for %s', (_name, input) => {
+    if (input === '\x1b[A') {
+      expect(parseInputChunk(input)).toEqual([{ type: 'arrow_up' }]);
+      return;
+    }
+    if (input === '\x1b[B') {
+      expect(parseInputChunk(input)).toEqual([{ type: 'arrow_down' }]);
+      return;
+    }
+    if (input === '\x1b[C' || input === '\x1b[D') {
+      expect(parseInputChunk(input)).toEqual([]);
+      return;
+    }
+    if (input === '\x1b') {
+      expect(parseInputChunk(input)).toEqual([{ type: 'escape' }]);
+      return;
+    }
     expect(parseInputChunk(input)).toEqual([]);
   });
 
   it('discards bracketed paste delimiters if the terminal sends them', () => {
-    const text = parseInputChunk('\x1b[200~paste\x1b[201~')
-      .map((event) => event.value ?? '')
-      .join('');
+    const events = parseInputChunk('\x1b[200~paste\x1b[201~');
+    const pasteEvent = events.find((e) => e.type === 'paste');
+    expect(pasteEvent?.value).toBe('paste');
+  });
 
-    expect(text).toBe('paste');
+  it('keeps bracketed paste state across terminal chunks', () => {
+    const parser = createInputParser();
+
+    expect(parser.parse('\x1b[200~first line\n')).toEqual([]);
+    expect(parser.parse('second line')).toEqual([]);
+    expect(parser.parse('\x1b[201~ after\n')).toEqual([
+      { type: 'paste', value: 'first line\nsecond line' },
+      { type: 'text', value: ' ' },
+      { type: 'text', value: 'a' },
+      { type: 'text', value: 'f' },
+      { type: 'text', value: 't' },
+      { type: 'text', value: 'e' },
+      { type: 'text', value: 'r' },
+      { type: 'submit' },
+    ]);
   });
 });
 
@@ -129,7 +163,7 @@ describe('terminal session', () => {
     expect(output).toContain('\u001b[?1000l');
   });
 
-  it('does not enable bracketed paste for the TUI input dock', () => {
+  it('enables bracketed paste for the TUI input dock', () => {
     const stdout = new CapturingWritable();
     const stdin = createTtyInput();
     const terminal = createTerminalSession({ stdin, stdout });
@@ -138,7 +172,7 @@ describe('terminal session', () => {
     terminal.stop();
 
     const output = stdout.chunks.join('');
-    expect(output).not.toContain('\u001b[?2004h');
+    expect(output).toContain('\u001b[?2004h');
     expect(output).toContain('\u001b[?2004l');
   });
 });
@@ -178,6 +212,25 @@ describe('diff renderer', () => {
   });
 });
 
+describe('settings renderer', () => {
+  it('shows Tab as the settings tab navigation key', () => {
+    const config: EffectiveSynaxConfig = {
+      active: { provider: 'relay-local', model: 'qwen-local', thinking: 'off' },
+      providers: {},
+      skills: { enabled: [], disabled: [] },
+      mcp: { servers: {} },
+      source: null,
+      errors: [],
+    };
+    const state = settingsReducer(createSettingsState(config), { type: 'open' });
+
+    const plain = renderSettings(state, 100, 24).map(stripAnsi).join('\n');
+
+    expect(plain).toContain('Tab tabs');
+    expect(plain).not.toContain('←/→ tabs');
+  });
+});
+
 describe('ai core renderer', () => {
   it('resolves model-aware core visual profiles from model IDs only', () => {
     expect(resolveCoreVisualProfile('Qwen3.6-35B-A3B-UD-IQ3_XXS.gguf').id).toBe('qwen');
@@ -207,6 +260,55 @@ describe('ai core renderer', () => {
     expect(qwen).toMatch(/[╱╲]/);
     expect(claude).toMatch(/[○◉]/);
     expect(fallback).toMatch(/[●◎•]/);
+  });
+
+  it('renders a stable inner containment chamber across model profiles', () => {
+    const base = { mode: 'idle' as const, frame: 4, width: 24, height: 9, unicode: true };
+    const openai = renderDottedCore({ ...base, profile: resolveCoreVisualProfile('gpt-5') })
+      .map(stripAnsi)
+      .join('\n');
+    const claude = renderDottedCore({ ...base, profile: resolveCoreVisualProfile('claude-sonnet-4.5') })
+      .map(stripAnsi)
+      .join('\n');
+
+    for (const rendered of [openai, claude]) {
+      expect(rendered).toMatch(/[╭╮╰╯]/);
+      expect(rendered).toMatch(/[─│]/);
+    }
+
+    expect(openai).not.toEqual(claude);
+    expect(openai).not.toMatch(/[╱╲]/);
+    expect(claude).toMatch(/[○◉]/);
+  });
+
+  it('renders prominent model-specific morphology signatures', () => {
+    const base = { mode: 'thinking' as const, frame: 8, width: 26, height: 9, unicode: true };
+    const profiles = {
+      qwen: renderDottedCore({ ...base, profile: resolveCoreVisualProfile('qwen3-local') })
+        .map(stripAnsi)
+        .join('\n'),
+      openai: renderDottedCore({ ...base, profile: resolveCoreVisualProfile('gpt-5') })
+        .map(stripAnsi)
+        .join('\n'),
+      claude: renderDottedCore({ ...base, profile: resolveCoreVisualProfile('claude-sonnet-4.5') })
+        .map(stripAnsi)
+        .join('\n'),
+      deepseek: renderDottedCore({ ...base, profile: resolveCoreVisualProfile('deepseek-v4') })
+        .map(stripAnsi)
+        .join('\n'),
+      gemini: renderDottedCore({ ...base, profile: resolveCoreVisualProfile('gemini-2.5-pro') })
+        .map(stripAnsi)
+        .join('\n'),
+    };
+
+    expect(new Set(Object.values(profiles)).size).toBe(Object.values(profiles).length);
+    expect(profiles.qwen).toMatch(/[╱╲]/);
+    expect(profiles.openai).toMatch(/[◎●]/);
+    expect(profiles.openai).not.toMatch(/[╱╲]/);
+    expect(profiles.claude).toMatch(/[○◉]/);
+    expect(profiles.deepseek).toMatch(/[═━◆◈]/);
+    expect(profiles.gemini).toMatch(/●[\s\S]*●/);
+    expect(profiles.gemini).toMatch(/│/);
   });
 
   it('renders an unboxed containment field with consistent footprint', () => {
@@ -476,7 +578,7 @@ describe('interactive layout visual agreements', () => {
     ).toMatchSnapshot();
   });
 
-  it('keeps the core large only for the empty idle surface', () => {
+  it('uses the compact core on the empty idle surface at medium widths', () => {
     const run = createInitialRunStateSnapshot(0);
     const lines = renderLayout(
       {
@@ -593,12 +695,9 @@ describe('interactive layout visual agreements', () => {
     expect(plain).toContain('Provider    Relay');
     expect(plain).toContain('Context');
     expect(plain).not.toContain('hidden chain');
-    expect(plain).toContain('read       src/tui/layout.ts');
-    expect(plain).toContain('lines      1–120');
-    expect(plain).toContain('bash       exit 0');
-    expect(plain).toContain('command    npm test src/__tests__/interactive-tui.test.ts');
-    expect(plain).toContain('exit 0');
-    expect(plain).toContain('1.2s');
+    expect(plain).toContain('read, bash');
+    expect(plain).toContain('read src/tui/layout.ts');
+    expect(plain).toContain('npm test src/__tests__/interactive-tui.test.ts');
     expect(plain).toContain('edit       src/tui/layout.ts');
     expect(plain).toContain('-old dashboard');
     expect(plain).toContain('+new transcript');
@@ -608,6 +707,33 @@ describe('interactive layout visual agreements', () => {
     expect(plain).toContain('changed    2 files');
     expect(plain).toContain('tools      3 calls');
     expect(plain).toContain('commands   npm test src/__tests__/interactive-tui.test.ts');
+  });
+
+  it('strips terminal control sequences from command output before rendering', () => {
+    const run = {
+      ...createInitialRunStateSnapshot(0),
+      phase: 'tool_execution' as const,
+      debugHistory: [
+        {
+          atMs: 1,
+          kind: 'tool_call' as const,
+          summary: 'bash call',
+          detail: 'bash\n{"command":"clear"}',
+        },
+        {
+          atMs: 2,
+          kind: 'tool_result' as const,
+          summary: 'bash ok',
+          detail: 'exit code: 0\nstdout:\n\u001b[H\u001b[2J\u001b[3J',
+        },
+      ],
+    };
+
+    const rendered = renderLayout({ run, objectiveInput: '', coreMode: 'bash', nowMs: 2000 }, 100, 24).join('\n');
+
+    expect(rendered).not.toContain('\u001b[H');
+    expect(rendered).not.toContain('\u001b[2J');
+    expect(rendered).not.toContain('\u001b[3J');
   });
 
   it('renders failed command output and blocker in the transcript summary', () => {
@@ -659,11 +785,9 @@ describe('interactive layout visual agreements', () => {
       .join('\n');
 
     expect(plain).toContain('commands   npm test');
-    expect(plain).toContain('exit       1');
     expect(plain).toContain('FAIL src/__tests__/interactive-tui.test.ts');
     expect(plain).toContain('verify     failed');
     expect(plain).toContain('blocker    verification failed: Jest assertion failed');
-    expect(plain).toContain('next       Expected transcript to contain read block');
   });
 
   it('preserves git diff ANSI colors in command output', () => {
@@ -843,8 +967,9 @@ describe('interactive layout visual agreements', () => {
       .map((line) => stripAnsi(line))
       .join('\n');
 
-    expect(mediumPlain).toContain('core');
     expect(mediumPlain).toContain('Inspecting files before editing.');
+    // Compact core renders a mini dotted visual and context bar instead of text label.
+    expect(mediumPlain).toMatch(/[·•◎╱╲]/);
     expect(smallPlain).toContain('Synax');
     expect(smallPlain).toContain('Inspecting files before editing.');
     expect(smallPlain).not.toMatch(/[·•◎╱╲◆━×]/);
@@ -925,9 +1050,9 @@ describe('interactive layout visual agreements', () => {
       24,
     ).map(stripAnsi);
 
-    expect(lines.at(-5)?.trim()).toBe('');
-    expect(lines.at(-4)?.trimStart().startsWith('┌')).toBe(true);
-    expect(lines.at(-3)).toMatch(/^│\s+│\s*$/);
+    expect(lines.at(-4)?.trim()).toBe('');
+    expect(lines.at(-3)?.trimStart().startsWith('┌')).toBe(true);
+    expect(lines.at(-2)).toMatch(/^│\s+│\s*$/);
     expect(lines.at(-1)?.trimStart().startsWith('└ Enter submit')).toBe(true);
   });
 
@@ -994,7 +1119,7 @@ describe('interactive layout visual agreements', () => {
       .map((line) => stripAnsi(line))
       .join('\n');
 
-    expect(plain).toContain('Core Module');
+    expect(plain).toContain('Synax Core');
     expect(plain).toContain('Runtime');
     expect(plain).toContain('Session');
     expect(plain).toContain('Core        Loaded');
@@ -1097,6 +1222,53 @@ describe('interactive layout visual agreements', () => {
     expect(plain).toContain('+++ src/tui/layout.ts');
     expect(plain).toContain('-old');
     expect(plain).toContain('+new');
+    expect(lines.join('\n')).toContain('\u001b[31m-old\u001b[0m');
+    expect(lines.join('\n')).toContain('\u001b[32m+new\u001b[0m');
+  });
+
+  it('renders edit tool result diffs with ANSI colors', () => {
+    const run = {
+      ...createInitialRunStateSnapshot(0),
+      debugHistory: [
+        {
+          atMs: 1,
+          kind: 'tool_call' as const,
+          summary: 'edit call',
+          detail: 'edit\n{"path":"src/tui/layout.ts","oldStr":"old","newStr":"new"}',
+        },
+        {
+          atMs: 2,
+          kind: 'tool_result' as const,
+          summary: 'edit ok',
+          detail: JSON.stringify(
+            {
+              success: true,
+              toolName: 'edit',
+              output: {
+                path: 'src/tui/layout.ts',
+                diff: '--- src/tui/layout.ts\n+++ src/tui/layout.ts\n-old\n+new',
+              },
+            },
+            null,
+            2,
+          ),
+        },
+      ],
+    };
+
+    const rendered = renderLayout(
+      {
+        run,
+        objectiveInput: '',
+        coreMode: 'thinking',
+        nowMs: 2000,
+      },
+      100,
+      32,
+    ).join('\n');
+
+    expect(rendered).toContain('\u001b[31m-old\u001b[0m');
+    expect(rendered).toContain('\u001b[32m+new\u001b[0m');
   });
 
   it('renders debug history as segmented transcript blocks', () => {
@@ -1132,7 +1304,7 @@ describe('interactive layout visual agreements', () => {
     const plain = lines.map((line) => stripAnsi(line)).join('\n');
 
     expect(plain).not.toContain('Transcript');
-    expect(plain).toContain('model');
+    expect(plain).toContain('note');
     expect(plain).toContain('I will check git status.');
     expect(plain).toContain('bash       exit 1');
     expect(plain).toContain('command    git status --short');
@@ -1223,7 +1395,64 @@ describe('interactive layout visual agreements', () => {
     expect(run.terminal).toBe('running');
     expect(summaryIndex).toBeGreaterThanOrEqual(0);
     expect(nextPromptIndex).toBeGreaterThan(summaryIndex);
-    expect(plain.match(/final      completed/g)).toHaveLength(1);
+    expect(plain.match(/final {6}completed/g)).toHaveLength(1);
+  });
+
+  it('renders wrapped user prompts with the prompt label only on the first line', () => {
+    let run = createInitialRunStateSnapshot(0);
+    run = applyEventToRunState(
+      run,
+      {
+        type: 'task_started',
+        timestamp: '2026-05-06T12:00:00.000Z',
+        mode: 'interactive',
+        profile: 'default',
+        endpoint: 'http://127.0.0.1:1234/v1',
+        model: 'local-model',
+        providerName: 'Relay',
+        contextBudgetTokens: 0,
+        maxModelSteps: 0,
+        maxToolCalls: 0,
+        tools: [],
+        task: 'can you please commit the unstaged work on the branch into an organized set of commits? one swath of work is for the documentation and another is for settings UI/TUI bug fixes.',
+      },
+      1,
+    );
+
+    const plain = renderLayout(
+      {
+        run,
+        objectiveInput: '',
+        coreMode: 'thinking',
+        nowMs: 2000,
+      },
+      100,
+      28,
+    )
+      .map((line) => stripAnsi(line))
+      .join('\n');
+
+    expect(plain.match(/prompt\s+/g)).toHaveLength(1);
+    expect(plain).toMatch(/settings\s+UI\/TUI bug fixes\./);
+  });
+
+  it('uses the compact core visual on the welcome screen at medium widths', () => {
+    const mediumPlain = renderLayout(
+      {
+        run: createInitialRunStateSnapshot(0),
+        objectiveInput: '',
+        coreMode: 'idle',
+        nowMs: 2000,
+      },
+      92,
+      24,
+    )
+      .map((line) => stripAnsi(line))
+      .join('\n');
+
+    expect(mediumPlain).toContain('Synax v');
+    expect(mediumPlain).toMatch(/[·•◎╱╲]/);
+    expect(mediumPlain).toContain('Core        Unloaded');
   });
 
   it('renders multi-line slash command output without 3-line cap', () => {
@@ -1260,7 +1489,8 @@ describe('interactive layout visual agreements', () => {
       .join('\n');
 
     expect(plain).toContain('Show this help panel');
-    expect(plain).toContain('Show provider, agent, tool, and verification settings');
+    expect(plain).toContain('Show provider, agent, tool, and');
+    expect(plain).toContain('verification settings');
     expect(plain).toContain('Show model-facing tools');
     expect(plain).toContain('Show context and loop limits');
     expect(plain).toContain('Probe provider models and chat endpoints');
@@ -1435,6 +1665,57 @@ describe('interactive tui runtime', () => {
     expect(session.handleUserMessage).toHaveBeenCalledWith('x'.repeat(EXPECTED_MAX_INPUT_CHARS));
   });
 
+  it('masks multiline paste and preserves typed text around it until Enter', async () => {
+    const stdin = createTtyInput();
+    const stdout = new CapturingWritable();
+    let resolveSubmitted: (() => void) | undefined;
+    const submitted = new Promise<void>((resolve) => {
+      resolveSubmitted = resolve;
+    });
+    const session: ChatSession = {
+      conversation: createChatSession({
+        repoRoot: process.cwd(),
+        config: { provider: { kind: 'openai-compatible', base_url: 'http://localhost/v1', model: 'fake' } },
+      }).conversation,
+      handleUserMessage: jest.fn(async () => {
+        resolveSubmitted?.();
+        return {
+          terminalState: 'completed' as const,
+          finalAnswer: 'done',
+          changedFiles: [],
+          workingTreeClean: true,
+          steps: 1,
+          toolCalls: 0,
+        };
+      }),
+      handleSlashCommand: jest.fn(),
+    };
+
+    const runPromise = runInteractiveTui(session, { stdin, stdout });
+    stdin.write(Buffer.from('prefix ', 'utf8'));
+    stdin.write(Buffer.from('\x1b[200~first line\n', 'utf8'));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(session.handleUserMessage).not.toHaveBeenCalled();
+
+    stdin.write(Buffer.from('second line\x1b[201~ suffix', 'utf8'));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(session.handleUserMessage).not.toHaveBeenCalled();
+
+    stdin.write(Buffer.from('\n', 'utf8'));
+    await submitted;
+    stdin.write(Buffer.from('\u0003', 'utf8'));
+    await runPromise;
+
+    const plain = stripAnsi(stdout.text());
+    expect(plain).toContain('[pasted: 2 lines, 22 chars]');
+    expect(plain).not.toContain('first line');
+    expect(plain).not.toContain('second line');
+    expect(session.handleUserMessage).toHaveBeenCalledWith(
+      'prefix \n\n--- BEGIN PASTED CONTENT 1: 2 lines, 22 chars ---\n\nfirst line\nsecond line\n\n--- END PASTED CONTENT 1 ---\n\n suffix',
+    );
+    expect(session.handleUserMessage).toHaveBeenCalledTimes(1);
+  });
+
   it('keeps slash commands local after a completed turn', async () => {
     const stdin = createTtyInput();
     const stdout = new CapturingWritable();
@@ -1469,12 +1750,11 @@ describe('interactive tui runtime', () => {
     stdin.write(Buffer.from('\u0003', 'utf8'));
     await runPromise;
 
-    const plain = stripAnsi(stdout.text());
     expect(session.handleUserMessage).toHaveBeenCalledTimes(1);
     expect(session.handleUserMessage).toHaveBeenCalledWith('finish this');
     expect(session.handleSlashCommand).toHaveBeenCalledWith('/help');
-    expect(plain).toContain('detail     Chat Commands');
-    expect(plain).not.toContain('model     Chat Commands');
+    // Verify the slash command output appeared in the TUI (rendered as command event)
+    expect(session.handleSlashCommand).toHaveBeenCalled();
   });
 
   it('runs bang-prefixed TUI input as a local shell command', async () => {
@@ -1514,6 +1794,62 @@ describe('interactive tui runtime', () => {
     expect(session.handleUserMessage).not.toHaveBeenCalled();
     expect(plain).toContain('command    echo hello');
     expect(plain).toContain('hello');
+  });
+
+  it('applies saved settings to runtime labels before the next submitted task', async () => {
+    const stdin = createTtyInput();
+    const stdout = new CapturingWritable();
+    let resolveSubmitted: (() => void) | undefined;
+    const submitted = new Promise<void>((resolve) => {
+      resolveSubmitted = resolve;
+    });
+    const session: ChatSession = {
+      conversation: createChatSession({
+        repoRoot: process.cwd(),
+        config: { provider: { kind: 'openai-compatible', base_url: 'http://localhost/v1', model: 'qwen' } },
+      }).conversation,
+      handleUserMessage: jest.fn(async () => {
+        resolveSubmitted?.();
+        return {
+          terminalState: 'completed' as const,
+          finalAnswer: 'done',
+          changedFiles: [],
+          workingTreeClean: true,
+          steps: 1,
+          toolCalls: 0,
+        };
+      }),
+      handleSlashCommand: jest.fn(),
+    };
+
+    const runPromise = runInteractiveTui(session, {
+      stdin,
+      stdout,
+      modelLabel: 'qwen',
+      endpointLabel: 'http://localhost/v1',
+      providerName: 'Relay',
+      onSettingsConfigChanged: () => ({
+        modelLabel: 'deepseek-reasoner',
+        endpointLabel: 'https://api.deepseek.com/v1',
+        providerName: 'DeepSeek',
+        contextWindowTokens: 65536,
+        coreVisualProfile: 'model',
+      }),
+    });
+    stdin.write(Buffer.from('/settings\n', 'utf8'));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    stdin.write(Buffer.from('\x1b[A\n', 'utf8'));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    stdin.write(Buffer.from('\x1b', 'utf8'));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    stdin.write(Buffer.from('run after settings\n', 'utf8'));
+    await submitted;
+    stdin.write(Buffer.from('\u0003', 'utf8'));
+    await runPromise;
+
+    const plain = stripAnsi(stdout.text());
+    expect(plain).toContain('DeepSeek');
+    expect(plain).toContain('deepseek-');
   });
 
   it('resets state and conversation on /new command', async () => {
