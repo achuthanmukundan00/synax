@@ -1,6 +1,7 @@
 import { spawnSync, execSync } from 'child_process';
 import { Command } from 'commander';
 import { loadProjectConfig, normalizeProviderConfig, type ProjectConfig } from '../config/project';
+import pkg from '../../package.json';
 import { createOpenAICompatibleClient } from '../llm/client';
 import type { NormalizedProviderConfig } from '../llm/types';
 
@@ -114,7 +115,7 @@ async function checkProviderReachability(
   const baseUrl = normalized.baseUrl.replace(/\/+$/, '');
   const headers: Record<string, string> = {
     Accept: 'application/json',
-    'User-Agent': 'synax-doctor/0.1.0',
+    'User-Agent': `synax-doctor/${pkg.version}`,
   };
   if (normalized.apiKey && normalized.apiKey.length > 0) {
     headers.Authorization = `Bearer ${normalized.apiKey}`;
@@ -304,7 +305,7 @@ async function checkRelayHealth(normalized: NormalizedProviderConfig, timeoutMs 
   const baseUrl = normalized.baseUrl.replace(/\/+$/, '');
   const headers: Record<string, string> = {
     Accept: 'application/json',
-    'User-Agent': 'synax-doctor/0.1.0',
+    'User-Agent': `synax-doctor/${pkg.version}`,
   };
   if (normalized.apiKey && normalized.apiKey.length > 0) {
     headers.Authorization = `Bearer ${normalized.apiKey}`;

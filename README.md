@@ -102,8 +102,11 @@ npm run synax -- inspect --doc specs/PRD.md
 # Ask one bounded question
 npm run synax -- ask --question "Where is provider config normalized?"
 
-# Start an interactive coding session
+# Start an interactive coding session (full-screen TUI on TTY)
 npm run synax -- chat
+
+# Plain fallback
+npm run synax -- chat --plain
 
 # Run one bounded edit-capable task; --yes accepts previewed replacement edits
 npm run synax -- run --task "Fix the failing test" --yes
@@ -179,12 +182,12 @@ api_key = "sk-no-key-required"
 timeout_seconds = 120
 
 [tools]
-exposed = ["read", "write", "edit", "git"]
+exposed = ["read", "write", "edit", "bash"]
 shell = "zsh"
 unsafe = false
 
 [tools.bash]
-enabled = false
+enabled = true
 ```
 
 Environment overrides:
@@ -220,8 +223,7 @@ Synax sends a compact OpenAI-compatible tool surface to the model:
 | `read`  | List files, read bounded ranges, or search text |
 | `edit`  | Exact `replace_in_file` edits                   |
 | `write` | Create new repo-local text files                |
-| `git`   | Show bounded git status or diff                 |
-| `bash`  | Hidden unless explicitly enabled                |
+| `bash`  | Run terminal commands, including git            |
 
 The model loop stops when the model returns a final answer, hits the configured model-step limit, hits the configured tool-call limit, or encounters a tool/provider error.
 

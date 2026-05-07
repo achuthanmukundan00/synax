@@ -1,7 +1,9 @@
 import type { AgentEvent } from './events';
+export { TuiRenderer } from './tui-renderer';
 
 export interface AgentRenderer {
   onEvent(event: AgentEvent): void;
+  setModelOutput?(text: string): void;
   finish?(): void;
 }
 
@@ -40,6 +42,31 @@ export class NormalRenderer implements AgentRenderer {
     if (event.type === 'patch_preview') {
       process.stdout.write(`      preview: ${event.path}\n`);
       process.stdout.write(`${event.diff}\n\n`);
+      return;
+    }
+    if (event.type === 'verification_planned') {
+      process.stdout.write(`${kv('Verif plan:', `${event.checkLabel} (${event.summary ?? 'planned'})`)}\n`);
+      return;
+    }
+    if (event.type === 'verification_started') {
+      process.stdout.write(
+        `${kv('Verif start:', `${event.checkLabel}${event.command ? ` → ${event.command}` : ''}`)}\n`,
+      );
+      return;
+    }
+    if (event.type === 'verification_passed') {
+      const dur = event.durationMs !== undefined ? ` (${formatDurationNormal(event.durationMs)})` : '';
+      process.stdout.write(`${kv('Verif ✓:', `${event.checkLabel}${dur}`)}\n`);
+      return;
+    }
+    if (event.type === 'verification_failed') {
+      const dur = event.durationMs !== undefined ? ` (${formatDurationNormal(event.durationMs)})` : '';
+      process.stdout.write(`${kv('Verif ✗:', `${event.checkLabel}${dur}`)}\n`);
+      if (event.summary) process.stdout.write(`${kv('', event.summary)}\n`);
+      return;
+    }
+    if (event.type === 'verification_skipped') {
+      process.stdout.write(`${kv('Verif skip:', event.checkLabel)}\n`);
       return;
     }
     if (event.type === 'task_finished') {
@@ -135,6 +162,12 @@ export class DebugRenderer implements AgentRenderer {
 function preview(value: string): string {
   const redacted = redact(value).replace(/\s+/g, ' ').trim();
   return redacted.length > 240 ? `${redacted.slice(0, 237)}...` : redacted;
+}
+
+function formatDurationNormal(ms: number): string {
+  if (ms < 1000) return `${ms}ms`;
+  const s = (ms / 1000).toFixed(1);
+  return `${s}s`;
 }
 
 function redact(value: string): string {

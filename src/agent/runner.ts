@@ -1,6 +1,8 @@
 import { existsSync } from 'fs';
 import { mkdir, readFile } from 'fs/promises';
 import { dirname } from 'path';
+import { execFile } from 'child_process';
+import { promisify } from 'util';
 
 import { type ChatOptions, type ChatResponse } from '../llm/types';
 import { type ParsedToolCall } from '../llm/tool-calls';
@@ -33,7 +35,14 @@ import {
 } from './context-budget';
 import { atomicWriteFile, writeLastEditRecord } from './safety';
 import { eventNow, type AgentEvent, type TerminalState } from './events';
-import { canMutatePath, describeToolCall, guardBroadTask, getAllowedModelTools, type RunMode } from './task-policy';
+import {
+  canMutatePath,
+  describeToolCall,
+  guardBroadTask,
+  guardUnsupportedTask,
+  getAllowedModelTools,
+  type RunMode,
+} from './task-policy';
 
 export type AgentTerminalState = TerminalState;
 
@@ -111,16 +120,19 @@ export interface AgentTurnResult {
   error?: string;
 }
 
-const DEFAULT_MAX_STEPS = 32;
-const DEFAULT_MAX_TOOL_CALLS = 96;
+const DEFAULT_MAX_STEPS = 64;
+const DEFAULT_MAX_TOOL_CALLS = 192;
 const MAX_CONSECUTIVE_RECOVERABLE_TOOL_ERRORS = 3;
 const MAX_IDENTICAL_READS_PER_TURN = 3;
 const MAX_TOTAL_READS_PER_TURN = 24;
+const MAX_IDENTICAL_BASH_COMMANDS_PER_TURN = 3;
+const execFileAsync = promisify(execFile);
 
 interface AgentToolExecutionResult {
   success: boolean;
   toolResult: ToolResult;
   changedFile?: string;
+  completedAction?: string;
   error?: string;
   terminalState?: AgentTerminalState;
 }
@@ -152,13 +164,16 @@ export async function runAgentTurn(options: AgentRunnerOptions & { task: string 
       ledger: conversation.inspectionLedger,
     });
   const mode = options.mode ?? 'patch';
-  const tools = buildModelFacingTools({ ...options.tools, mode });
+  const bashEnabled = options.tools?.bashEnabled ?? true;
+  const tools = buildModelFacingTools({ ...options.tools, bashEnabled, mode });
   const maxSteps = options.maxSteps ?? DEFAULT_MAX_STEPS;
   const maxToolCalls = options.maxToolCalls ?? DEFAULT_MAX_TOOL_CALLS;
   const changedFiles: string[] = [];
+  const completedActions: string[] = [];
   const toolCalls: AgentTurnResult['toolCalls'] = [];
   const readCache = new Map<string, ToolResult>();
   const identicalReadCounts = new Map<string, number>();
+  const identicalBashCounts = new Map<string, number>();
   let totalReadCalls = 0;
   let totalReadResultTokens = 0;
   const contextBudget = resolveContextBudgetSettings(options.contextBudget ?? {});
@@ -177,6 +192,19 @@ export async function runAgentTurn(options: AgentRunnerOptions & { task: string 
     };
   }
 
+  const unsupportedTask = guardUnsupportedTask(options.task, bashEnabled);
+  if (unsupportedTask) {
+    return {
+      terminalState: 'blocked',
+      finalAnswer: `${unsupportedTask.message}\nSuggested first step: ${unsupportedTask.suggestedFirstStep}`,
+      steps: 0,
+      toolCalls,
+      changedFiles,
+      conversation,
+      error: unsupportedTask.message,
+    };
+  }
+
   conversation.messages.push({ role: 'user', content: options.task });
 
   for (let step = 1; step <= maxSteps; step += 1) {
@@ -184,6 +212,11 @@ export async function runAgentTurn(options: AgentRunnerOptions & { task: string 
     const isFinalStep = step === maxSteps;
     try {
       options.onActivity?.({ kind: 'model', message: `model step ${step}` });
+      options.onEvent?.({
+        type: 'model_step_started',
+        timestamp: eventNow(),
+        stepIndex: step,
+      });
 
       // Preflight budget guard (item 7): runs before EVERY model call.
       const effectiveInputLimit = contextBudget.contextWindowTokens - contextBudget.reservedOutputTokens;
@@ -237,7 +270,13 @@ export async function runAgentTurn(options: AgentRunnerOptions & { task: string 
         }
 
         // Build model request with assembly, orientation, and token ledger update
-        const assembled = buildModelRequest(conversation, contextBudget, identicalReadCounts, isFinalStep, totalReadCalls);
+        const assembled = buildModelRequest(
+          conversation,
+          contextBudget,
+          identicalReadCounts,
+          isFinalStep,
+          totalReadCalls,
+        );
 
         // Final belt-and-suspenders check on assembled messages
         if (isFinalStep) {
@@ -270,7 +309,13 @@ export async function runAgentTurn(options: AgentRunnerOptions & { task: string 
         });
       } else {
         // Within budget: build assembled model request proactively
-        const assembled = buildModelRequest(conversation, contextBudget, identicalReadCounts, isFinalStep, totalReadCalls);
+        const assembled = buildModelRequest(
+          conversation,
+          contextBudget,
+          identicalReadCounts,
+          isFinalStep,
+          totalReadCalls,
+        );
 
         // Extra budget check for final step
         if (isFinalStep) {
@@ -289,7 +334,13 @@ export async function runAgentTurn(options: AgentRunnerOptions & { task: string 
               };
             }
             // Rebuild from freshly compacted messages
-            const fallbackAssembled = buildModelRequest(conversation, contextBudget, identicalReadCounts, isFinalStep, totalReadCalls);
+            const fallbackAssembled = buildModelRequest(
+              conversation,
+              contextBudget,
+              identicalReadCounts,
+              isFinalStep,
+              totalReadCalls,
+            );
             const fallbackTokens = estimateRequestTokens(fallbackAssembled);
             if (fallbackTokens > effectiveInputLimit) {
               return {
@@ -384,6 +435,25 @@ export async function runAgentTurn(options: AgentRunnerOptions & { task: string 
     }
 
     if (response.toolCalls.length === 0) {
+      // Gate: prevent premature completion when the model claims success
+      // without making any changes in patch mode. Read-only and verify
+      // modes are exempt since they legitimately don't make changes.
+      if (
+        mode === 'patch' &&
+        changedFiles.length === 0 &&
+        completedActions.length === 0 &&
+        isPrematureCompletionClaim(response.content)
+      ) {
+        conversation.messages.push({
+          role: 'user',
+          content:
+            'You claimed completion without taking action. ' +
+            'Use available tools (bash for git/commands, edit for file changes, write for new files) to complete the task. ' +
+            'If no action is needed, explain specifically why. Do not just say "verified" or "passed" — show evidence.',
+        });
+        continue;
+      }
+
       return {
         terminalState: 'completed',
         finalAnswer: response.content.trim(),
@@ -396,6 +466,7 @@ export async function runAgentTurn(options: AgentRunnerOptions & { task: string 
 
     const contentToolResults: Array<{ id: string; content: string }> = [];
     for (const call of response.toolCalls) {
+      const callIndex = toolCalls.length;
       if (toolCalls.length >= maxToolCalls) {
         return {
           terminalState: 'budget_exhausted',
@@ -418,30 +489,33 @@ export async function runAgentTurn(options: AgentRunnerOptions & { task: string 
         toolCallId: call.id,
         toolName: call.name,
         summary: JSON.stringify(call.arguments).slice(0, 180),
+        detail: JSON.stringify(call.arguments, null, 2),
       });
-      const result = await executeAgentTool(call, {
-        repoRoot: options.repoRoot,
-        registry,
-        ledger: conversation.inspectionLedger,
-        mode,
-        readCache,
-        identicalReadCounts,
-        totalReadCalls,
-        totalReadResultTokens,
-        readResultBudget: contextBudget,
-        ensureCheckpoint: options.ensureCheckpoint,
-        approvePatch: options.approvePatch,
-        onPatchPreview: (preview) => {
-          options.onEvent?.({
-            type: 'patch_preview',
-            timestamp: eventNow(),
-            stepIndex: step,
-            toolCallId: call.id,
-            toolName: call.name,
-            ...preview,
-          });
-        },
-      });
+      const result =
+        detectRepeatedBashCommand(call, identicalBashCounts) ??
+        (await executeAgentTool(call, {
+          repoRoot: options.repoRoot,
+          registry,
+          ledger: conversation.inspectionLedger,
+          mode,
+          readCache,
+          identicalReadCounts,
+          totalReadCalls,
+          totalReadResultTokens,
+          readResultBudget: contextBudget,
+          ensureCheckpoint: options.ensureCheckpoint,
+          approvePatch: options.approvePatch,
+          onPatchPreview: (preview) => {
+            options.onEvent?.({
+              type: 'patch_preview',
+              timestamp: eventNow(),
+              stepIndex: step,
+              toolCallId: call.id,
+              toolName: call.name,
+              ...preview,
+            });
+          },
+        }));
       if (call.name === 'read') {
         totalReadCalls += 1;
         totalReadResultTokens += estimateReadResultTokens(result.toolResult);
@@ -460,12 +534,42 @@ export async function runAgentTurn(options: AgentRunnerOptions & { task: string 
         toolName: call.name,
         status: result.success ? 'ok' : 'error',
         summary: result.success ? 'completed' : (result.error ?? 'failed'),
+        detail: formatToolResultDetail(result.toolResult),
       });
       if (result.changedFile) changedFiles.push(result.changedFile);
+      if (result.completedAction) {
+        completedActions.push(result.completedAction);
+        // Only auto-complete when this is the last tool call in the
+        // current model response. If the model queued multiple tool
+        // calls (e.g. commit → push → pr create), wait until all
+        // have been processed before deciding terminal state.
+        const isCurrentBatchLast = callIndex >= response.toolCalls.length - 1;
+        if (isCurrentBatchLast) {
+          flushContentToolResults(conversation, response, contentToolResults);
+          return {
+            terminalState: 'completed',
+            finalAnswer: formatCompletedActionFinalAnswer(result.completedAction, result.toolResult),
+            steps: step,
+            toolCalls,
+            changedFiles,
+            conversation,
+          };
+        }
+        // Otherwise: let remaining tool calls execute first.
+      }
 
       // Item 7: Budget check after EVERY tool result is appended.
-      // Prevent silent overflow buildup within a single step.
-      const afterToolTokens = estimateRequestTokens(conversation.messages);
+      // Check the model-facing assembled request, not the unpruned
+      // canonical transcript. Large shell/read results may be safely
+      // compacted before the next model call.
+      const afterToolMessages = buildModelRequest(
+        conversation,
+        contextBudget,
+        identicalReadCounts,
+        false,
+        totalReadCalls,
+      );
+      const afterToolTokens = estimateRequestTokens(afterToolMessages);
       const effectiveLimit = contextBudget.contextWindowTokens - contextBudget.reservedOutputTokens;
       if (afterToolTokens > effectiveLimit) {
         flushContentToolResults(conversation, response, contentToolResults);
@@ -481,7 +585,7 @@ export async function runAgentTurn(options: AgentRunnerOptions & { task: string 
             contextWindowTokens: contextBudget.contextWindowTokens,
             reservedOutputTokens: contextBudget.reservedOutputTokens,
             effectiveInputLimit: effectiveLimit,
-            largestContributors: summarizeLargestContributors(conversation.messages),
+            largestContributors: summarizeLargestContributors(afterToolMessages),
             compactionStage: 0, // overflow within a step, not compaction
           }),
         };
@@ -598,10 +702,6 @@ async function executeAgentTool(
     );
   }
 
-  if (call.name === 'git') {
-    return executeGitTool(call.arguments, context.registry);
-  }
-
   if (call.name === 'edit' || call.name === 'replace_in_file') {
     return executeReplaceInFile(call.arguments, context, call.name);
   }
@@ -611,7 +711,7 @@ async function executeAgentTool(
   }
 
   if (call.name === 'bash') {
-    return toolFailure('bash', 'bash tool is not enabled in this scaffold');
+    return executeBashTool(call.arguments, context.repoRoot);
   }
 
   const toolResult = await context.registry.execute(call.name, call.arguments);
@@ -693,17 +793,6 @@ async function executeReadTool(
   const normalized = normalizeReadToolResult(result, readResultBudget, totalReadResultTokens, ledger);
   readCache.set(signature, normalized);
   return publicToolResult('read', normalized);
-}
-
-async function executeGitTool(
-  input: Record<string, unknown>,
-  registry: ToolRegistry,
-): Promise<AgentToolExecutionResult> {
-  const action =
-    typeof input.action === 'string' ? input.action : typeof input.operation === 'string' ? input.operation : 'status';
-  const result =
-    action === 'diff' ? await registry.execute('show_git_diff', input) : await registry.execute('show_git_status', {});
-  return publicToolResult('git', result);
 }
 
 async function executeReplaceInFile(
@@ -840,7 +929,7 @@ async function executeCreateFile(
 }
 
 export function buildModelFacingTools(options: ModelToolSurfaceOptions = {}): ToolDefinition[] {
-  const bashEnabled = options.bashEnabled ?? false;
+  const bashEnabled = options.bashEnabled ?? true;
   const allowedNames = getAllowedModelTools(options.mode ?? 'patch', bashEnabled);
   const tools: ToolDefinition[] = [
     {
@@ -954,45 +1043,12 @@ export function buildModelFacingTools(options: ModelToolSurfaceOptions = {}): To
         };
       },
     },
-    {
-      name: 'git',
-      description: 'Inspect bounded git status or diff. Pass action "diff" for diff; defaults to status.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          action: {
-            type: 'string',
-            enum: ['status', 'diff'],
-            description: 'Git inspection action.',
-          },
-          maxLines: {
-            type: 'number',
-            description: 'Maximum diff lines for action=diff.',
-          },
-        },
-        additionalProperties: false,
-      },
-      safetyPolicy: {
-        readOnly: true,
-        rejectsUnsafePaths: true,
-        boundedOutput: true,
-      },
-      ledgerBehavior: 'records-git-status',
-      async execute() {
-        return {
-          success: false,
-          toolName: 'git',
-          error: 'handled by the agent runner',
-        };
-      },
-    },
   ];
 
   if (bashEnabled) {
-    tools.splice(3, 0, {
+    tools.push({
       name: 'bash',
-      description:
-        'Reserved shell execution surface. This v0.3 scaffold exposes the name only when shell execution policy enables it.',
+      description: 'Execute a shell command in the repository root. Use for git workflows and verification commands.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -1030,8 +1086,174 @@ function publicToolResult(toolName: string, result: ToolResult): AgentToolExecut
   };
 }
 
+async function executeBashTool(input: Record<string, unknown>, repoRoot: string): Promise<AgentToolExecutionResult> {
+  const command = resolveShellCommand(input);
+  if (!command) {
+    return toolFailure('bash', 'command is required');
+  }
+
+  // Block obviously catastrophic commands outright rather than just warning.
+  const blockReason = detectBlockedCommand(command);
+  if (blockReason) {
+    return toolFailure('bash', `Blocked: ${blockReason}`);
+  }
+
+  const safetyWarnings = detectDangerousCommandWarnings(command);
+
+  try {
+    const { stdout, stderr } = await execFileAsync('/bin/bash', ['-lc', command], {
+      cwd: repoRoot,
+      maxBuffer: 256 * 1024,
+      timeout: 30_000,
+    });
+    return {
+      success: true,
+      completedAction: completedShellAction(command),
+      toolResult: {
+        success: true,
+        toolName: 'bash',
+        output: {
+          command,
+          safetyWarnings,
+          stdout: String(stdout ?? ''),
+          stderr: String(stderr ?? ''),
+          exitCode: 0,
+        },
+      },
+    };
+  } catch (error) {
+    const e = error as { stdout?: string | Buffer; stderr?: string | Buffer; code?: number };
+    return {
+      success: false,
+      error: errorMessage(error),
+      toolResult: {
+        success: false,
+        toolName: 'bash',
+        error: errorMessage(error),
+        output: {
+          command,
+          safetyWarnings,
+          stdout: typeof e.stdout === 'string' ? e.stdout : (e.stdout?.toString('utf-8') ?? ''),
+          stderr: typeof e.stderr === 'string' ? e.stderr : (e.stderr?.toString('utf-8') ?? ''),
+          exitCode: typeof e.code === 'number' ? e.code : 1,
+        },
+      },
+    };
+  }
+}
+
+function detectRepeatedBashCommand(call: ParsedToolCall, counts: Map<string, number>): AgentToolExecutionResult | null {
+  if (call.name !== 'bash') return null;
+  const command = resolveShellCommand(call.arguments);
+  if (!command) return null;
+  const key = normalizeShellCommand(command);
+  const seen = counts.get(key) ?? 0;
+  counts.set(key, seen + 1);
+  if (seen < MAX_IDENTICAL_BASH_COMMANDS_PER_TURN) return null;
+
+  return toolFailure(
+    'bash',
+    `Bash loop detected: command repeated ${seen + 1} times without completing the task: ${command}`,
+  );
+}
+
+function resolveShellCommand(input: Record<string, unknown>): string | null {
+  if (typeof input.command === 'string' && input.command.trim().length > 0) {
+    return input.command.trim();
+  }
+  return null;
+}
+
+function normalizeShellCommand(command: string): string {
+  return command.replace(/\s+/g, ' ').trim();
+}
+
+function completedShellAction(command: string): string | undefined {
+  if (/(^|[;&|(){}\s])git\s+commit(?=\s|$)/.test(command)) return 'git commit';
+  if (/(^|[;&|(){}\s])git\s+push(?=\s|$)/.test(command)) return 'git push';
+  if (/(^|[;&|(){}\s])gh\s+pr\s+create(?=\s|$)/.test(command)) return 'gh pr create';
+  if (/(^|[;&|(){}\s])gh\s+pr\s+merge(?=\s|$)/.test(command)) return 'gh pr merge';
+  if (/(^|[;&|(){}\s])gh\s+issue\s+create(?=\s|$)/.test(command)) return 'gh issue create';
+  if (/(^|[;&|(){}\s])gh\s+release\s+create(?=\s|$)/.test(command)) return 'gh release create';
+  return undefined;
+}
+
+function formatCompletedActionFinalAnswer(action: string, toolResult: ToolResult): string {
+  const output = toolResult.output;
+  const command =
+    output && typeof output === 'object' && typeof (output as { command?: unknown }).command === 'string'
+      ? (output as { command: string }).command
+      : undefined;
+  const stdout =
+    output && typeof output === 'object' && typeof (output as { stdout?: unknown }).stdout === 'string'
+      ? (output as { stdout: string }).stdout.trim() || undefined
+      : undefined;
+  const stderr =
+    output && typeof output === 'object' && typeof (output as { stderr?: unknown }).stderr === 'string'
+      ? (output as { stderr: string }).stderr.trim() || undefined
+      : undefined;
+  const evidence = stdout ?? stderr;
+  const lines = [`Completed ${action}.`];
+  if (command) lines.push(`Command: \`${command}\``);
+  if (evidence) lines.push(evidence);
+  return lines.join('\n');
+}
+
+function detectBlockedCommand(command: string): string | null {
+  const normalized = command.toLowerCase().replace(/\s+/g, ' ').trim();
+
+  // Remote code execution via pipe-to-shell
+  if (/\bcurl\b.*\|\s*(bash|sh)\b/.test(normalized))
+    return 'remote script execution via curl|bash is blocked';
+  if (/\bwget\b.*\|\s*(bash|sh)\b/.test(normalized))
+    return 'remote script execution via wget|bash is blocked';
+
+  // Destructive root operations
+  if (/\brm\s+-rf\s+\/(?=[\s;|&)"']|$)/.test(normalized))
+    return 'destructive delete of root (rm -rf /) is blocked';
+  if (/\brm\s+-rf\s+~(?=[\s;|&)"']|$)/.test(normalized))
+    return 'destructive delete of home (rm -rf ~) is blocked';
+
+  // Filesystem and block device destruction
+  if (/\bmkfs(\.| )/.test(normalized))
+    return 'filesystem formatting (mkfs) is blocked';
+  if (/\bdd\s+if=.*\s+of=\/dev\//.test(normalized))
+    return 'raw block device write (dd to /dev) is blocked';
+
+  // System power state
+  if (/\bshutdown\b|\breboot\b|\bhalt\b/.test(normalized))
+    return 'system power-state command is blocked';
+
+  return null;
+}
+
+function detectDangerousCommandWarnings(command: string): string[] {
+  const normalized = command.toLowerCase().replace(/\s+/g, ' ').trim();
+  const warnings: string[] = [];
+  // Patterns that warrant a warning but not outright blocking.
+  // Catastrophic patterns (curl|bash, rm -rf /, mkfs, dd to /dev, shutdown)
+  // are blocked upstream by detectBlockedCommand.
+  const patterns: Array<{ pattern: RegExp; warning: string }> = [
+    {
+      pattern: /\brm\s+-rf\s+\.(?=[\s;|&)"']|$)/,
+      warning: 'destructive delete of current directory (`rm -rf .`) detected',
+    },
+    { pattern: /\brm\s+-rf\s+\/etc(?=[\s;|&/)"']|$)/, warning: 'system directory deletion (`rm -rf /etc`) detected' },
+    { pattern: /\bchmod\s+-r\s+0{0,2}\s+\//, warning: 'broad permission reset on root detected' },
+    { pattern: /\bchown\s+-r\s+.+\s+\//, warning: 'recursive ownership change on root detected' },
+    { pattern: /\brm\s+-rf\s+\/usr\b/, warning: 'system directory deletion (`rm -rf /usr`) detected' },
+    { pattern: /\brm\s+-rf\s+\/var\b/, warning: 'system directory deletion (`rm -rf /var`) detected' },
+  ];
+  for (const entry of patterns) {
+    if (entry.pattern.test(normalized)) warnings.push(entry.warning);
+  }
+  return warnings;
+}
+
 function isRecoverableToolError(call: ParsedToolCall, result: { success: boolean; error?: string }): boolean {
-  if (call.name !== 'read' || result.success) return false;
+  if (result.success) return false;
+  if (call.name === 'bash') return !isBashLoopError(result.error);
+  if (call.name !== 'read') return false;
   return isEnoentError(result.error) || isReadPolicyLimitError(result.error);
 }
 
@@ -1042,6 +1264,10 @@ function isEnoentError(error: string | undefined): boolean {
 function isReadPolicyLimitError(error: string | undefined): boolean {
   if (error === undefined) return false;
   return error.includes('total read limit reached') || error.includes('Read loop detected');
+}
+
+function isBashLoopError(error: string | undefined): boolean {
+  return error !== undefined && error.includes('Bash loop detected');
 }
 
 function coercePatch(input: Record<string, unknown>): ReplaceInFilePatch | null {
@@ -1146,6 +1372,28 @@ function toolFailure(toolName: string, error: string): { success: false; toolRes
     error,
     toolResult: { success: false, toolName, error },
   };
+}
+
+function formatToolResultDetail(toolResult: ToolResult): string {
+  const output = toolResult.output;
+  if (!output || typeof output !== 'object') {
+    return toolResult.error ?? JSON.stringify(toolResult);
+  }
+  const record = output as Record<string, unknown>;
+  const lines: string[] = [];
+  if (typeof record.command === 'string') lines.push(`command: ${record.command}`);
+  if (Array.isArray(record.safetyWarnings) && record.safetyWarnings.length > 0) {
+    lines.push(`warnings: ${record.safetyWarnings.join(', ')}`);
+  }
+  if (typeof record.stdout === 'string' && record.stdout.length > 0) {
+    lines.push(`stdout:\n${record.stdout.trimEnd()}`);
+  }
+  if (typeof record.stderr === 'string' && record.stderr.length > 0) {
+    lines.push(`stderr:\n${record.stderr.trimEnd()}`);
+  }
+  if (typeof record.exitCode === 'number') lines.push(`exitCode: ${record.exitCode}`);
+  if (lines.length > 0) return lines.join('\n');
+  return toolResult.error ?? JSON.stringify(toolResult, null, 2);
 }
 
 /**
@@ -1262,6 +1510,41 @@ function readPathFromOutput(output: unknown): string | undefined {
   return typeof path === 'string' ? path : undefined;
 }
 
+/**
+ * Detect when a model claims completion/success without actually doing work.
+ * For short responses (< 60 chars), checks the full text. For longer responses,
+ * only checks the trailing 40% to avoid false positives from mid-response
+ * mentions like "no issues found in the diff, proceeding with edit".
+ */
+function isPrematureCompletionClaim(text: string): boolean {
+  const normalized = text
+    .replace(/<think>[\s\S]*?<\/think>/gi, '')
+    .replace(/<thinking>[\s\S]*?<\/thinking>/gi, '')
+    .trim()
+    .toLowerCase();
+
+  if (normalized.length < 10) return false;
+
+  const prematurePhrases = [
+    'verified passed',
+    'verification passed',
+    'all tests pass',
+    'completed successfully',
+    'task complete',
+    'work is complete',
+  ];
+
+  // For short responses, check the full text.
+  if (normalized.length < 60) {
+    return prematurePhrases.some((phrase) => normalized.includes(phrase));
+  }
+
+  // For longer responses, only check the trailing portion.
+  const tailStart = Math.floor(normalized.length * 0.6);
+  const tail = normalized.slice(tailStart);
+  return prematurePhrases.some((phrase) => tail.includes(phrase));
+}
+
 function isSafeToolPreamble(text: string): boolean {
   const normalized = text
     .replace(/<think>[\s\S]*?<\/think>/gi, '')
@@ -1302,16 +1585,12 @@ function finalAnswerNowMessage(): AgentMessage {
 function systemPrompt(): string {
   return [
     'You are Synax, a disciplined local coding agent.',
-    'Inspect only what you need. Stop when you have enough context.',
-    'READ EFFICIENTLY: use startLine/endLine to read 50-200 line ranges, not entire files.',
-    'Use query search first to locate relevant sections, then read only those ranges.',
-    'A full-file read wastes context; you rarely need more than 200 lines at once.',
-    'Do not reread files already in the working context block.',
-    'Exact edits require exact text currently visible in context.',
-    'If a file is marked "compacted from model view" or "truncated", reread the target range before editing.',
-    'Make minimal, targeted changes. Write only small repo-local text files.',
-    'When done, summarize changed files and verification results.',
-    'Emit tool calls only — no final-answer preambles around them.',
+    'Tools: read, write, edit, bash.',
+    'Use bash for terminal commands, including git and verification.',
+    'Use read only for repository inspection: list files, search text, or read bounded line ranges.',
+    'Use write for new text files and edit for exact replacements in files you have already read.',
+    'Do the smallest useful action, then stop and summarize changed files plus verification.',
+    'When calling a tool, emit only tool calls. Do not mix final-answer prose with tool calls.',
   ].join('\n');
 }
 
@@ -1323,17 +1602,15 @@ function errorMessage(error: unknown): string {
  * Format a human-readable summary of the model's response for CLI display.
  * Shows text content (model "thoughts") and tool call intentions.
  */
-function formatModelResponseActivity(
-  response: ChatResponse,
-  _step: number,
-): AgentActivity {
+function formatModelResponseActivity(response: ChatResponse, _step: number): AgentActivity {
   const lines: string[] = [];
   const trimmedContent = response.content.trim();
 
   if (trimmedContent.length > 0) {
-    const preview = trimmedContent.length > 300
-      ? trimmedContent.slice(0, 300) + '…'
-      : trimmedContent;
+    // Show substantially more model output so users can see what the model is thinking.
+    // 1200 chars is enough to surface reasoning, thinking tags, and tool-call intent
+    // without flooding the terminal.
+    const preview = trimmedContent.length > 1200 ? trimmedContent.slice(0, 1200) + '…' : trimmedContent;
     lines.push(preview);
   }
 
@@ -1404,26 +1681,23 @@ function buildModelRequest(
   // Read budget warning: fire when approaching the total read limit OR
   // when the model is re-reading files excessively.
   // Placed LAST in the message list for maximum influence on local models.
-  const READ_BUDGET_WARNING_THRESHOLD = Math.floor(MAX_TOTAL_READS_PER_TURN * 0.50);
+  const READ_BUDGET_WARNING_THRESHOLD = Math.floor(MAX_TOTAL_READS_PER_TURN * 0.5);
   const hasReadBudgetPressure =
     totalReadCalls !== undefined &&
     totalReadCalls >= READ_BUDGET_WARNING_THRESHOLD &&
     totalReadCalls < MAX_TOTAL_READS_PER_TURN;
 
-  const hasRepetitionPressure =
-    readCounts !== undefined &&
-    [...readCounts.values()].some((count) => count >= 3);
+  const hasRepetitionPressure = readCounts !== undefined && [...readCounts.values()].some((count) => count >= 3);
 
   if (hasReadBudgetPressure || hasRepetitionPressure) {
-    const remaining = totalReadCalls !== undefined
-      ? MAX_TOTAL_READS_PER_TURN - totalReadCalls
-      : MAX_TOTAL_READS_PER_TURN;
+    const remaining =
+      totalReadCalls !== undefined ? MAX_TOTAL_READS_PER_TURN - totalReadCalls : MAX_TOTAL_READS_PER_TURN;
     const warning: AgentMessage = {
       role: 'user',
       content: [
         `⛔ STOP READING. ${remaining} read(s) remain before hard stop.`,
-        'You have enough context. Deliver your answer NOW.',
-        'Do not call any more read or inspect tools. Answer with what you have.',
+        'You have enough context. Use non-read tools (bash, edit, write) to act now.',
+        'Do not call any more read or inspect tools. Take action with what you have.',
       ].join('\n'),
     };
     const finalMessages = [...withOrientation, warning];

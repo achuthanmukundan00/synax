@@ -21,7 +21,23 @@ export interface ToolEvent extends AgentEventBase {
   toolCallId: string;
   toolName: string;
   summary: string;
+  detail?: string;
   status?: 'ok' | 'error';
+}
+
+export interface VerificationLifecycleEvent extends AgentEventBase {
+  type:
+    | 'verification_planned'
+    | 'verification_started'
+    | 'verification_passed'
+    | 'verification_failed'
+    | 'verification_skipped';
+  checkId: string;
+  checkLabel: string;
+  command?: string;
+  summary?: string;
+  severity?: 'S0' | 'S1' | 'S2' | 'S3';
+  durationMs?: number;
 }
 
 export type AgentEvent =
@@ -31,20 +47,40 @@ export type AgentEvent =
       profile: string;
       endpoint: string;
       model: string;
+      providerName?: string;
       contextBudgetTokens: number;
+      contextWindowTokens?: number;
       maxModelSteps: number;
       maxToolCalls: number;
       tools: string[];
       task: string;
     })
   | (AgentEventBase & { type: 'model_step_started' })
+  | (AgentEventBase & {
+      type: 'context_budget_updated';
+      estimatedInputTokens: number;
+      inputLimit: number;
+      contextWindowTokens: number;
+      reservedOutputTokens: number;
+      step: number;
+    })
   | ToolEvent
+  | VerificationLifecycleEvent
   | (AgentEventBase &
       PatchPreview & {
         type: 'patch_preview';
         toolCallId: string;
         toolName: string;
       })
+  | (AgentEventBase & { type: 'command_output'; command: string; content: string })
+  | (AgentEventBase & {
+      type: 'local_shell_command';
+      command: string;
+      exitCode: number;
+      durationMs: number;
+      stdout: string;
+      stderr: string;
+    })
   | (AgentEventBase & { type: 'assistant_message'; content: string })
   | (AgentEventBase & {
       type: 'task_finished';
@@ -54,6 +90,7 @@ export type AgentEvent =
       modelSteps: number;
       maxModelSteps: number;
       changedFiles: string[];
+      workingTreeClean?: boolean;
       verification: string;
       error?: string;
     })

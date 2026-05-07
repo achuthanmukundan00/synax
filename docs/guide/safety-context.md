@@ -103,15 +103,15 @@ Inside chat:
 
 The main budget controls are:
 
-| Setting                       | Default  | Use                                                  |
-| ----------------------------- | -------- | ---------------------------------------------------- |
-| `agent.context_budget_tokens` | `131072` | Overall context target for local high-context models |
-| `agent.reserved_output_tokens` | `8192` | Output tokens reserved before each model call |
-| `agent.keep_recent_tokens` | `20000` | Verbatim tail preserved when compacting old history |
-| `agent.max_single_read_result_tokens` | `12000` | Per-read result cap before tool output enters history |
-| `agent.max_total_read_result_tokens_per_turn` | `40000` | Per-turn aggregate cap for read result payloads |
-| `agent.max_model_steps`       | `32`     | Maximum model turns per task                         |
-| `agent.max_tool_calls`        | `96`     | Maximum tool calls per task                          |
+| Setting                                       | Default  | Use                                                   |
+| --------------------------------------------- | -------- | ----------------------------------------------------- |
+| `agent.context_budget_tokens`                 | `131072` | Overall context target for local high-context models  |
+| `agent.reserved_output_tokens`                | `8192`   | Output tokens reserved before each model call         |
+| `agent.keep_recent_tokens`                    | `20000`  | Verbatim tail preserved when compacting old history   |
+| `agent.max_single_read_result_tokens`         | `12000`  | Per-read result cap before tool output enters history |
+| `agent.max_total_read_result_tokens_per_turn` | `40000`  | Per-turn aggregate cap for read result payloads       |
+| `agent.max_model_steps`                       | `32`     | Maximum model turns per task                          |
+| `agent.max_tool_calls`                        | `96`     | Maximum tool calls per task                           |
 
 Useful profiles:
 
@@ -140,21 +140,21 @@ Replacement edits require a prior read of the same file in the current session a
 If a read result was truncated for context safety, Synax will not accept that truncated session as proof for exact replacement edits.
 The `run` command constrains tool access with `--mode`:
 
-- `read-only`: read and git only.
-- `patch`: read, write, edit, and git.
-- `verify`: read and git only, with verification-focused output.
+- `read-only`: read and bash only.
+- `patch`: read, write, edit, and bash.
+- `verify`: read and bash only, with verification-focused output.
 - `docs`: docs-oriented mutation only, still using read-before-edit.
 
 ## Bash Policy
 
-Bash is disabled by default:
+Bash is the only model-facing terminal tool:
 
 ```toml
 [tools.bash]
-enabled = false
+enabled = true
 ```
 
-The model does not see the bash tool unless it is enabled. Prefer configured verification commands over unrestricted shell access.
+Disable bash to remove model-facing terminal access entirely. Prefer configured verification commands for routine checks.
 
 ## Verification
 

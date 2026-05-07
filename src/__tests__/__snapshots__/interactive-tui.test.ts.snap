@@ -1,0 +1,154 @@
+// Jest Snapshot v1, https://goo.gl/fbAQLP
+
+exports[`interactive layout visual agreements matches the active docked-core render snapshot 1`] = `
+"  Synax v0.0.2-alpha  Tool  0:02
+
+  ◇ model                                                                        ┌ Core Module ─────────────────────┐
+    detail     Inspecting files before editing.                                  │               ˙˙ ˙·              │
+                                                                                 │         · ··˙╲◆│││◆˙˙˙ ·         │
+  › bash       exit 0                                                            │       ˙˙ ╲◆· ···˙╱ ˙˙╱◆··        │
+    command    npm test -- src/__tests__/interactive-tui.test.ts                 │       ● ●─● ●●●●●●●●● ◆● ●       │
+    exit       0                                                                 │       ● ●╱◆●●● ●● ●● ╲◆  ●       │
+    output     PASS                                                              │         ˙  ˙˙╱◆│││◆· ˙˙          │
+                                                                                 │               ·· ··              │
+                                                                                 │                                  │
+                                                                                 │Runtime                           │
+                                                                                 │Core        Loaded                │
+                                                                                 │Model       qwen-local            │
+                                                                                 │Provider    Relay                 │
+                                                                                 │Context     —                     │
+                                                                                 │[────────────────────────────────]│
+                                                                                 │                                  │
+                                                                                 │Session                           │
+                                                                                 │Thinking    —                     │
+                                                                                 │Spend       —                     │
+                                                                                 │Tools       bash                  │
+                                                                                 │Steps       —                     │
+                                                                                 └──────────────────────────────────┘
+
+
+
+
+┌─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│ continue polishing the feed                                                                                         │
+│                                                                                                                     │
+└ Enter submit | Ctrl+C exit | /help | !cmd shell ────────────────────────────────────────────────────────────────────┘"
+`;
+
+exports[`interactive layout visual agreements matches the blocked budget-exhausted render snapshot 1`] = `
+"  Synax v0.0.2-alpha  Budget exhausted  0:00
+
+                                                                                 ┌ Core Module ─────────────────────┐
+                                                                                 │               .  ×               │
+    status    blocked: 32/32 model steps, 10 tool calls                          │           ·  ╲│││×╱ ·  .         │
+  ◆ final      blocked                                                           │       ·  ╲×  ·.... ·.×╱×         │
+    objective  Waiting for run start                                             │       •  •  ×•×•×•••• •─ ×       │
+    changed    0 files                                                           │         •╱•••  •× ×• •╲  •       │
+    tools      0 calls                                                           │         ·  ×╱╱││││╲╲ .           │
+    commands   none                                                              │               .  .               │
+    verify     planned                                                           │                                  │
+    blocker    max steps exceeded: 32                                            │Runtime                           │
+    follow-up  resolve blocker and rerun verification                            │Core        Unloaded              │
+                                                                                 │Model       —                     │
+                                                                                 │Provider    —                     │
+                                                                                 │Context     —                     │
+                                                                                 │[────────────────────────────────]│
+                                                                                 │                                  │
+                                                                                 │Session                           │
+                                                                                 │Thinking    —                     │
+                                                                                 │Spend       —                     │
+                                                                                 │Tools       none                  │
+                                                                                 │Steps       32/32                 │
+                                                                                 └──────────────────────────────────┘
+
+
+
+
+┌─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│                                                                                                                     │
+│                                                                                                                     │
+└ Enter submit | Ctrl+C exit | /help | !cmd shell ────────────────────────────────────────────────────────────────────┘"
+`;
+
+exports[`interactive layout visual agreements matches the completed render snapshot 1`] = `
+"  Synax v0.0.2-alpha  Completed  0:00
+
+                                                                                 ┌ Core Module ─────────────────────┐
+                                                                                 │               ·  .               │
+  ◆ verify     passed                                                            │           ..╲╲│  │╱╱.  ·         │
+    check      npm test -- src/__tests__/interactive-tui.test.ts                 │       ·  ╲.  · ..  .. ╱.         │
+    summary    focused tests passed                                              │       ◎ ─◎  ◎◎◎◎◎◎◎◎  ◎─ ◎       │
+                                                                                 │         ◎╱ ◎◎  ◎◎ ◎◎ ◎╲  ◎       │
+                                                                                 │         .  .╱╱│·  ╲╲ ·           │
+                                                                                 │                  .               │
+    status    3 model steps, 4 tool calls, 2 files changed                       │                                  │
+  ◆ final      completed                                                         │Runtime                           │
+    objective  Waiting for run start                                             │Core        Unloaded              │
+    changed    2 files                                                           │Model       —                     │
+    tools      4 calls                                                           │Provider    —                     │
+    commands   none                                                              │Context     —                     │
+    verify     passed                                                            │[────────────────────────────────]│
+    blocker    none                                                              │                                  │
+    follow-up  none                                                              │Session                           │
+                                                                                 │Thinking    —                     │
+                                                                                 │Spend       —                     │
+                                                                                 │Tools       none                  │
+                                                                                 │Steps       3                     │
+                                                                                 └──────────────────────────────────┘
+
+
+
+
+┌─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│                                                                                                                     │
+│                                                                                                                     │
+└ Enter submit | Ctrl+C exit | /help | !cmd shell ────────────────────────────────────────────────────────────────────┘"
+`;
+
+exports[`interactive layout visual agreements matches the idle large-core render snapshot 1`] = `
+"  Synax v0.0.2-alpha  Idle  0:02
+
+                                .  .
+                            ·      .  ·             Runtime
+                        .   .╲╲╲. .   ╱╱╱.  .       Core        Unloaded
+                        ••╲╲  ••  •  •  •  ╱•  •    Model       —
+                       •──••  ••••••••• •  •─ •     Provider    —
+                      ··─ .  .·••••••••··  ··─.     Context     —
+                      ·  ─·  · .••••••··  · ──      [────────────────────────]
+                     ··  ·╱ ·  ..  .  ·  .╲╲ .  ·
+                        ·  ..╱╱╱. .  .╲╲╲.  .       Session
+                           .  .      .  .           Thinking    —
+                                 ·  .               Spend       —
+                                                    Tools       none
+                                                    Steps       —
+
+
+
+
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                                                                             │
+│                                                                             │
+└ Enter submit | Ctrl+C exit | /help | !cmd shell ────────────────────────────┘"
+`;
+
+exports[`interactive layout visual agreements matches the narrow terminal fallback snapshot 1`] = `
+"  Synax v0.0.2-alpha  Thinking  0:02
+
+  ◇ model
+    detail     Inspecting files before editing.
+
+
+
+
+
+
+
+
+
+
+┌─────────────────────────────────────────────────────┐
+│ short task                                          │
+│                                                     │
+└ Enter submit | Ctrl+C exit | /help | !cmd shell ────┘"
+`;
