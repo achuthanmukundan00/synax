@@ -128,6 +128,7 @@ export interface ProjectConfig {
   activeProfile?: string;
   model?: string;
   baseUrl?: string;
+  coreVisualProfile?: string;
   context_budget_tokens?: number;
   contextBudgetTokens?: number;
   maxModelSteps?: number;
@@ -250,6 +251,9 @@ export function generateDefaultConfig(): string {
     '[tools.bash]',
     'enabled = true',
     '',
+    '# Core visual profile: "model" (auto-detect), "default", "qwen", "openai", "claude", "deepseek", "gemini"',
+    'coreVisualProfile = "model"',
+    '',
     '[provider]',
     'kind = "openai-compatible"',
     'base_url = "http://127.0.0.1:1234/v1"',
@@ -301,6 +305,7 @@ export function validateConfig(config: ProjectConfig): ValidationError[] {
     'verification',
     'provider',
     'tools',
+    'coreVisualProfile',
   ]);
   for (const key of Object.keys(config)) {
     if (!allowed.has(key)) {
@@ -312,6 +317,16 @@ export function validateConfig(config: ProjectConfig): ValidationError[] {
   }
   if (config.baseUrl !== undefined && typeof config.baseUrl !== 'string') {
     errors.push({ path: 'baseUrl', message: 'baseUrl must be a string' });
+  }
+  if (config.coreVisualProfile !== undefined) {
+    if (typeof config.coreVisualProfile !== 'string') {
+      errors.push({ path: 'coreVisualProfile', message: 'must be a string' });
+    } else {
+      const validProfiles: string[] = ['model', 'default', 'qwen', 'openai', 'claude', 'deepseek', 'gemini'];
+      if (!validProfiles.includes(config.coreVisualProfile)) {
+        errors.push({ path: 'coreVisualProfile', message: `must be one of: ${validProfiles.join(', ')}` });
+      }
+    }
   }
   validatePositiveInteger(errors, 'contextBudgetTokens', config.contextBudgetTokens);
   validatePositiveInteger(errors, 'context_budget_tokens', config.context_budget_tokens);
@@ -484,6 +499,8 @@ function validateSameNumericValue(errors: ValidationError[], entries: Array<[str
 
 function configFromParsedToml(parsed: Record<string, unknown>): ProjectConfig {
   const config: ProjectConfig = {};
+  const provider =
+    parsed.provider && typeof parsed.provider === 'object' ? (parsed.provider as Record<string, unknown>) : undefined;
   if (parsed.active_profile !== undefined) config.activeProfile = parsed.active_profile as string;
   if (parsed.activeProfile !== undefined) config.activeProfile = parsed.activeProfile as string;
   const agent = parsed.agent && typeof parsed.agent === 'object' ? (parsed.agent as AgentBudgetConfig) : undefined;
@@ -493,6 +510,12 @@ function configFromParsedToml(parsed: Record<string, unknown>): ProjectConfig {
   if (parsed.model !== undefined) config.model = parsed.model as string;
   if (parsed.baseUrl !== undefined) config.baseUrl = parsed.baseUrl as string;
   if (parsed.base_url !== undefined) config.baseUrl = parsed.base_url as string;
+  const coreVisualProfile =
+    stringValue(parsed.coreVisualProfile) ??
+    stringValue(parsed.core_visual_profile) ??
+    stringValue(provider?.coreVisualProfile) ??
+    stringValue(provider?.core_visual_profile);
+  if (coreVisualProfile !== undefined) config.coreVisualProfile = normalizeCoreVisualProfile(coreVisualProfile);
   if (agent !== undefined) config.agent = agent;
   if (parsed.contextBudgetTokens !== undefined) config.contextBudgetTokens = parsed.contextBudgetTokens as number;
   if (parsed.context_budget_tokens !== undefined) {
@@ -557,6 +580,14 @@ function configFromParsedToml(parsed: Record<string, unknown>): ProjectConfig {
   }
   if (parsed.tools !== undefined && typeof parsed.tools === 'object') config.tools = parsed.tools as ToolSurfaceConfig;
   return config;
+}
+
+function normalizeCoreVisualProfile(value: string): string {
+  return value.trim().toLowerCase();
+}
+
+function stringValue(value: unknown): string | undefined {
+  return typeof value === 'string' ? value : undefined;
 }
 
 function applyEnvOverrides(config: ProjectConfig, errors: ValidationError[]): ProjectConfig {

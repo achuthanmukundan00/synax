@@ -149,8 +149,9 @@ function renderFieldCell(state: FieldState, x: number, y: number, width: number,
     central * centralDensity(state.visualProfile) +
     (containment < 0.09 ? containmentDensity(state.visualProfile) : 0) +
     Math.max(0, flow) * 0.12;
+  const chamber = innerChamberGlyph(state, x, y, width, height);
 
-  if (grain > density && containment > 0.045 && central < 0.62) return ' ';
+  if (!chamber && grain > density && containment > 0.045 && central < 0.62) return ' ';
 
   const glyphs = glyphSet(state.unicode, state.visualProfile);
   let ch = glyphs.small;
@@ -162,7 +163,10 @@ function renderFieldCell(state: FieldState, x: number, y: number, width: number,
     color = central > 0.48 ? state.palette[2] : state.palette[1];
   }
 
-  if (state.mode === 'tool_execution' && isToolScanCell(state, x, y, frame, containment, ny)) {
+  if (chamber) {
+    ch = chamber;
+    color = state.palette[1];
+  } else if (state.mode === 'tool_execution' && isToolScanCell(state, x, y, frame, containment, ny)) {
     ch = glyphs.compressed;
     color = state.palette[2];
   } else if (state.mode === 'verifying' && Math.abs(harmonic) > 0.88) {
@@ -183,6 +187,37 @@ function renderFieldCell(state: FieldState, x: number, y: number, width: number,
   }
 
   return colorize(ch, color);
+}
+
+function innerChamberGlyph(state: FieldState, x: number, y: number, width: number, height: number): string | undefined {
+  if (!state.unicode) return undefined;
+  const centerX = Math.floor(width / 2);
+  const centerY = Math.floor(height / 2);
+  const halfWidth = chamberHalfWidth(state.visualProfile, width);
+  const halfHeight = chamberHalfHeight(state.visualProfile, height);
+  const left = centerX - halfWidth;
+  const right = centerX + halfWidth;
+  const top = centerY - halfHeight;
+  const bottom = centerY + halfHeight;
+
+  if (x < left || x > right || y < top || y > bottom) return undefined;
+  if (x === left && y === top) return '╭';
+  if (x === right && y === top) return '╮';
+  if (x === left && y === bottom) return '╰';
+  if (x === right && y === bottom) return '╯';
+  if (y === top || y === bottom) return '─';
+  if (x === left || x === right) return '│';
+  return undefined;
+}
+
+function chamberHalfWidth(visualProfile: CoreVisualProfile, width: number): number {
+  const base = visualProfile.morphology === 'aperture' ? 0.2 : visualProfile.morphology === 'furnace' ? 0.14 : 0.16;
+  return clamp(Math.round(width * base), 3, Math.max(3, Math.floor(width / 2) - 2));
+}
+
+function chamberHalfHeight(visualProfile: CoreVisualProfile, height: number): number {
+  const base = visualProfile.morphology === 'aperture' ? 0.24 : 0.2;
+  return clamp(Math.round(height * base), 1, Math.max(1, Math.floor(height / 2) - 1));
 }
 
 function glyphSet(
@@ -239,6 +274,50 @@ function glyphSet(
         if (Math.abs(Math.sin(angle)) < 0.3) return '─';
         if (Math.abs(Math.cos(angle)) < 0.3) return '│';
         return Math.sin(angle) * Math.cos(angle) > 0 ? '╲' : '╱';
+      },
+    };
+  }
+  if (visualProfile.id === 'openai') {
+    return {
+      small: '.',
+      mid: ':',
+      large: '●',
+      stable: '◎',
+      compressed: '═',
+      sync: '━',
+      stress: '×',
+      line: (angle) => {
+        if (Math.abs(Math.sin(angle)) < 0.36) return '─';
+        if (Math.abs(Math.cos(angle)) < 0.36) return '│';
+        return '·';
+      },
+    };
+  }
+  if (visualProfile.id === 'deepseek') {
+    return {
+      small: '˙',
+      mid: ':',
+      large: '◆',
+      stable: '◆',
+      compressed: '═',
+      sync: '━',
+      stress: '×',
+      line: (angle) => (Math.abs(Math.sin(angle)) < 0.44 ? '━' : '│'),
+    };
+  }
+  if (visualProfile.id === 'gemini') {
+    return {
+      small: '.',
+      mid: '·',
+      large: '●',
+      stable: '◉',
+      compressed: '◆',
+      sync: '━',
+      stress: '×',
+      line: (angle) => {
+        if (Math.abs(Math.sin(angle)) < 0.3) return '─';
+        if (Math.abs(Math.cos(angle)) < 0.3) return '│';
+        return '·';
       },
     };
   }
@@ -346,11 +425,11 @@ function innerMorphologyGlyph(
   if (profile.morphology === 'contained' && central > 0.72 && positiveModulo(x + y, 2) === 0) return '●';
   if (
     profile.morphology === 'furnace' &&
-    Math.abs(ny) < 0.1 &&
+    Math.abs(ny) < 0.18 &&
     radius < 0.68 &&
-    positiveModulo(x + state.frame, 3) === 0
+    positiveModulo(x + state.frame, 2) === 0
   ) {
-    return '─';
+    return Math.abs(ny) < 0.08 ? '═' : '━';
   }
   if (
     profile.morphology === 'twin' &&
