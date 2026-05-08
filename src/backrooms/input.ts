@@ -51,7 +51,7 @@ export function createBackroomsInput(): BackroomsInput {
   };
 }
 
-function parseBackroomsInput(chunk: string): BackroomsAction[] {
+export function parseBackroomsInput(chunk: string): BackroomsAction[] {
   const actions: BackroomsAction[] = [];
 
   for (let i = 0; i < chunk.length; i += 1) {

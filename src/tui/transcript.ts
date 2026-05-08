@@ -2,6 +2,7 @@ import type { RunStateSnapshot } from '../agent/tui-state';
 
 export interface TranscriptRenderState {
   run: RunStateSnapshot;
+  nowMs?: number;
   lastModelOutput?: string;
   /** Whether activity/reasoning detail is expanded (Ctrl+O toggle). */
   activityExpanded?: boolean;
@@ -9,6 +10,8 @@ export interface TranscriptRenderState {
 
 /** Breathing glyph sequence for the working indicator. */
 const BREATHING_GLYPHS = ['◌', '◓', '◑', '◒'];
+const TYPEWRITER_CHARS_PER_SECOND = 70;
+const TYPEWRITER_INITIAL_CHARS = 24;
 
 // ─── Tool-summary detection ───────────────────────────────
 
@@ -29,6 +32,8 @@ export function renderTranscript(state: TranscriptRenderState, width: number): s
   const history = state.run.debugHistory;
   const completed = state.run.terminal === 'completed' || state.run.phase === 'completed';
   const isWorking = state.run.phase === 'thinking' && state.run.terminal === 'running';
+  const animateModelText = state.run.terminal === 'running';
+  const nowMs = state.nowMs ?? state.run.nowMs;
   let lastRenderedProse = '';
 
   for (let i = 0; i < history.length; i += 1) {
@@ -50,10 +55,15 @@ export function renderTranscript(state: TranscriptRenderState, width: number): s
         continue;
       }
       if (completed && isLastModel) {
-        blocks.push(renderReviewOutput(prose || item.detail || item.summary, width));
+        blocks.push(
+          renderReviewOutput(
+            typewriterText(prose || item.detail || item.summary, item.atMs, nowMs, animateModelText),
+            width,
+          ),
+        );
         lastRenderedProse = prose;
       } else if (prose) {
-        blocks.push(renderModelProse(prose, width));
+        blocks.push(renderModelProse(typewriterText(prose, item.atMs, nowMs, animateModelText), width));
         lastRenderedProse = prose;
       }
       // Model items with only tool-call content (no natural-language prose) are
@@ -127,7 +137,7 @@ export function renderTranscript(state: TranscriptRenderState, width: number): s
   if (isWorking) {
     const frameIdx = Math.floor((state.run.nowMs / 1000) * 3) % BREATHING_GLYPHS.length;
     const glyph = `\u001b[1;34m${BREATHING_GLYPHS[frameIdx]}\u001b[0m`;
-    const label = '\u001b[1;34mworking\u001b[0m';
+    const label = renderWorkingShimmer(state.run.nowMs);
     blocks.push(['', `${glyph} ${label}`]);
 
     if (state.activityExpanded) {
@@ -759,6 +769,26 @@ function renderModelProse(prose: string, width: number): string[] {
     `${pink(glyph)} ${dim(label)} ${dimI(wrapped[0])}`,
     ...wrapped.slice(1).map((line) => `${continuationIndent}${dimI(line)}`),
   ];
+}
+
+function typewriterText(text: string, startedAtMs: number, nowMs: number, enabled: boolean): string {
+  if (!text || !enabled) return text;
+  const elapsedMs = Math.max(0, nowMs - startedAtMs);
+  const visibleChars = TYPEWRITER_INITIAL_CHARS + Math.floor((elapsedMs / 1000) * TYPEWRITER_CHARS_PER_SECOND);
+  if (visibleChars >= text.length) return text;
+  return text.slice(0, Math.max(1, visibleChars));
+}
+
+function renderWorkingShimmer(nowMs: number): string {
+  const text = 'working';
+  const highlight = Math.floor((nowMs / 120) % (text.length + 3)) - 1;
+  let rendered = '';
+  for (let i = 0; i < text.length; i += 1) {
+    const style =
+      i === highlight ? '\u001b[1;97m' : i === highlight - 1 || i === highlight + 1 ? '\u001b[1;36m' : '\u001b[1;34m';
+    rendered += `${style}${text[i]}\u001b[0m`;
+  }
+  return rendered;
 }
 
 function renderTerminalIssue(issue: string, width: number): string[] {
