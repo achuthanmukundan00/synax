@@ -5,6 +5,12 @@ export class DiffRenderer {
   private width = 0;
   private height = 0;
 
+  reset(): void {
+    this.previous = [];
+    this.width = 0;
+    this.height = 0;
+  }
+
   render(lines: string[], width: number, height: number): string {
     const writeWidth = terminalWriteWidth(width);
     const next = Array.from({ length: height }, (_, index) => clip(lines[index] ?? '', writeWidth));
@@ -14,7 +20,7 @@ export class DiffRenderer {
 
     if (sizeChanged || this.previous.length === 0) {
       this.previous = next;
-      return `${ESC}H\u001b[2J${next.map((line, i) => `${ESC}${i + 1};1H${line}\u001b[K`).join('')}`;
+      return `${ESC}H\u001b[2J${next.map((line, i) => renderLine(i, line)).join('')}`;
     }
 
     let firstChanged = -1;
@@ -29,11 +35,15 @@ export class DiffRenderer {
     const chunks: string[] = [];
     for (let i = firstChanged; i < next.length; i += 1) {
       if (next[i] === (this.previous[i] ?? '')) continue;
-      chunks.push(`${ESC}${i + 1};1H${next[i]}\u001b[K`);
+      chunks.push(renderLine(i, next[i]));
     }
     this.previous = next;
     return chunks.join('');
   }
+}
+
+function renderLine(index: number, line: string): string {
+  return `${ESC}${index + 1};1H\u001b[0m\u001b[2K${line}\u001b[0m`;
 }
 
 function clip(line: string, width: number): string {
