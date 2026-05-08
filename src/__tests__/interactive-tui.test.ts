@@ -495,7 +495,7 @@ describe('interactive layout visual agreements', () => {
       .map(stripAnsi)
       .join('\n');
 
-    expect(plain).toContain('Synax v0.0.2-alpha  Completed  0:25');
+    expect(plain).toContain('Synax v0.0.21-alpha  Completed  0:25');
   });
 
   it('renders final summaries with full-width status color bars', () => {
