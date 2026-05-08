@@ -740,15 +740,25 @@ function isProcessChatter(text: string): boolean {
 }
 
 /** Render model prose as a secondary note with pink star glyph, dim label, and dim wrapping text. */
+/** Render model prose as a secondary note with pink star glyph, dim label, and dim wrapping text. */
+/** Render model prose as a secondary note with pink star glyph, dim label, and dim wrapping text. */
+/** Render model prose as a secondary note with pink star glyph, dim label, and dim wrapping text. */
 function renderModelProse(prose: string, width: number): string[] {
-  const lines: string[] = [];
-  const proseWidth = Math.max(20, width - 6);
-  const wrapped = wrapText(prose, proseWidth);
-  lines.push(`${pink('✽')} ${dim('note').padEnd(9, ' ')} ${dimI(wrapped[0])}`);
-  for (let i = 1; i < wrapped.length; i += 1) {
-    lines.push(`  ${' '.repeat(10)} ${dimI(wrapped[i])}`);
-  }
-  return lines;
+  const glyph = '✽';
+  const label = 'note';
+
+  const plainPrefix = `${glyph} ${label} `;
+  const prefixVisibleWidth = visibleLength(plainPrefix);
+  const bodyWidth = Math.max(20, width - prefixVisibleWidth);
+  const continuationIndent = ' '.repeat(prefixVisibleWidth);
+
+  const wrapped = wrapText(prose, bodyWidth);
+  if (wrapped.length === 0) return [];
+
+  return [
+    `${pink(glyph)} ${dim(label)} ${dimI(wrapped[0])}`,
+    ...wrapped.slice(1).map((line) => `${continuationIndent}${dimI(line)}`),
+  ];
 }
 
 function renderTerminalIssue(issue: string, width: number): string[] {
