@@ -94,7 +94,7 @@ export interface GameState {
 
 /** Fixed game constants. */
 export const GRID_CELL_SIZE = 1.0;
-export const MOVE_SPEED = 2.5; // grid cells per second
+export const MOVE_SPEED = 2.9; // grid cells per second
 export const ROTATE_SPEED = 2.5; // radians per second
 export const PLAYER_RADIUS = 0.2;
 export const MAX_LOG_LINES = 30;

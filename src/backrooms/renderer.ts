@@ -260,7 +260,7 @@ function buildHud(
 
   if (state.showHelp) {
     const helpLines = [
-      '  WASD/Arrows: move  |  Q/Esc: exit  |  L: overlay  |  H: help',
+      '  WASD: move  |  Arrows: turn/view  |  Q/Esc: exit  |  L: overlay  |  H: help',
       '  violet walls: keep walking into them to enter another room',
       '  terminal render inspiration: Lallapallooza/c_ascii_render',
     ];

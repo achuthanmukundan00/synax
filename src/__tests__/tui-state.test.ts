@@ -225,6 +225,55 @@ describe('tui-state', () => {
     expect(state.debugHistory[0].detail).toBe('checking files\nI will read package.json.');
   });
 
+  it('deduplicates repeated assistant notes across intervening tool events', () => {
+    let state = createInitialRunStateSnapshot(0);
+
+    state = applyEventToRunState(
+      state,
+      {
+        type: 'assistant_message',
+        timestamp: new Date(1).toISOString(),
+        content: 'I found the duplicated note path.',
+      },
+      1,
+    );
+    state = applyEventToRunState(
+      state,
+      {
+        type: 'tool_started',
+        timestamp: new Date(2).toISOString(),
+        toolCallId: 'call_1',
+        toolName: 'read',
+        summary: '{"path":"src/tui/transcript.ts"}',
+      },
+      2,
+    );
+    state = applyEventToRunState(
+      state,
+      {
+        type: 'tool_finished',
+        timestamp: new Date(3).toISOString(),
+        toolCallId: 'call_1',
+        toolName: 'read',
+        summary: 'completed',
+        status: 'ok',
+        detail: 'ok',
+      },
+      3,
+    );
+    state = applyEventToRunState(
+      state,
+      {
+        type: 'assistant_message',
+        timestamp: new Date(4).toISOString(),
+        content: 'I found the duplicated note path.',
+      },
+      4,
+    );
+
+    expect(state.debugHistory.filter((item) => item.kind === 'model')).toHaveLength(1);
+  });
+
   it('records a terminal completion summary', () => {
     let state = createInitialRunStateSnapshot(0);
     state = applyEventToRunState(
