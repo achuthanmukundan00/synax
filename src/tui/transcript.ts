@@ -26,17 +26,14 @@ export function renderTranscript(state: TranscriptRenderState, width: number): s
 
     if (item.kind === 'model') {
       const prose = extractModelProse(item.detail || item.summary);
-      const toolSummary = extractToolCallSummary(item.detail || item.summary);
       const isLastModel = i === history.length - 1 || !history.slice(i + 1).some((h) => h.kind === 'model');
       if (completed && isLastModel) {
         blocks.push(renderReviewOutput(item.detail || item.summary, width));
       } else if (prose) {
-        blocks.push(renderModelProse(prose, toolSummary, width));
-      } else if (toolSummary) {
-        blocks.push(renderCompactModelTools(toolSummary, width));
-      } else {
-        blocks.push(renderEventBlock('model', cleanModelOutput(item.detail || item.summary), width));
+        blocks.push(renderModelProse(prose, width));
       }
+      // Model items with only tool-call content (no natural-language prose) are
+      // not useful to render; the actual tool calls are rendered as separate entries.
       continue;
     }
 
@@ -51,7 +48,9 @@ export function renderTranscript(state: TranscriptRenderState, width: number): s
     }
 
     if (item.kind === 'final_summary') {
-      blocks.push(renderFrozenFinalSummary(item.detail || item.summary, width));
+      // Final summary is intentionally not rendered in the transcript.
+      // Completion state is communicated via the header, status bar, and
+      // runtime panel. Internal summary data is preserved for logs and telemetry.
       continue;
     }
 
@@ -79,17 +78,7 @@ export function renderTranscript(state: TranscriptRenderState, width: number): s
   const fallbackModel = !hasModelOutput
     ? cleanModelOutput(state.run.lastModelOutput || state.lastModelOutput || '')
     : '';
-  // Find the last substantial model response for the result block.
-  let lastModelDetail = '';
-  for (let i = history.length - 1; i >= 0; i -= 1) {
-    if (history[i].kind === 'model') {
-      lastModelDetail = history[i].detail;
-      break;
-    }
-  }
-  const willShowFinalSummary = shouldShowFinalSummary(state.run) && !hasFrozenFinalSummary(state.run);
-
-  if (fallbackModel && !willShowFinalSummary) {
+  if (fallbackModel) {
     blocks.push(renderEventBlock('model', fallbackModel, width));
   }
 
@@ -102,11 +91,6 @@ export function renderTranscript(state: TranscriptRenderState, width: number): s
   if (hasVerificationEvents) {
     blocks.push(['']);
     blocks.push(renderVerification(state.run, width));
-  }
-
-  if (willShowFinalSummary) {
-    blocks.push(['']);
-    blocks.push(renderFinalSummary(state.run, width, fallbackModel, lastModelDetail));
   }
 
   // Working indicator and activity preview — placed at the bottom so it remains
@@ -267,81 +251,6 @@ function renderVerification(run: RunStateSnapshot, width: number): string[] {
   if (run.verification.summary) block.push(detailRow('summary', run.verification.summary, width));
   if (run.verification.state === 'failed') block.push(detailRow('next', run.verification.summary, width));
   return block;
-}
-
-function renderFinalSummary(
-  run: RunStateSnapshot,
-  width: number,
-  modelMessage?: string,
-  lastModelDetail?: string,
-): string[] {
-  const commands = commandsRun(run).join(', ') || 'none';
-  const fileCount =
-    run.filesChangedThisRun.length > 0
-      ? run.filesChangedThisRun.length
-      : run.changes.items.filter((item) => item.op !== 'read').length + run.changes.overflowCount;
-  const toolInvocationCount =
-    run.toolInvocationCount || run.debugHistory.filter((item) => item.kind === 'tool_call').length;
-  const blockers = run.terminalIssue || (run.verification.state === 'failed' ? run.verification.summary : 'none');
-  const completed = run.terminal === 'completed' || run.phase === 'completed';
-  const result = completed ? 'completed' : run.terminal;
-  const followUp = completed && run.verification.state !== 'failed' ? 'none' : 'resolve blocker and rerun verification';
-  const hasVerificationEvents = run.verification.seenCheckIds.size > 0;
-  const rows: string[] = [
-    ...(run.statusNote ? [completionActivity(run.statusNote, width)] : []),
-    finalBanner(result, width, finalTone(result, run.verification.state)),
-  ];
-  if (modelMessage) {
-    rows.push(detailRow('message', modelMessage, width));
-  }
-  rows.push(
-    detailRow('objective', run.objective.label, width),
-    detailRow('changed', plural(fileCount, 'file'), width),
-    detailRow('tools', `${toolInvocationCount} calls`, width),
-    detailRow('commands', commands, width),
-  );
-  // Only include verify in final summary when no dedicated verification block exists.
-  if (!hasVerificationEvents) {
-    rows.push(detailRow('verify', run.verification.state, width));
-  }
-  rows.push(detailRow('blocker', blockers, width), detailRow('follow-up', followUp, width));
-
-  // Render full model output as a readable result block.
-  const modelDetail = lastModelDetail || run.lastModelOutput || '';
-  if (modelDetail && !modelMessage) {
-    const resultLines = resultBlock(modelDetail, width);
-    if (resultLines.length > 0) {
-      rows.push('');
-      rows.push(...resultLines);
-    }
-  }
-
-  return rows;
-}
-
-function renderFrozenFinalSummary(detail: string, width: number): string[] {
-  const fields = parseFrozenFinalSummary(detail);
-  const rows: string[] = [
-    ...(fields.completed ? [completionActivity(fields.completed, width)] : []),
-    finalBanner(fields.result || 'blocked', width, finalTone(fields.result || 'blocked', fields.verify)),
-  ];
-  if (fields.message) {
-    rows.push(detailRow('message', fields.message, width));
-  }
-  rows.push(
-    detailRow('objective', fields.objective || '—', width),
-    detailRow('changed', fields.changed || '0 files', width),
-    detailRow('tools', fields.tools || '0 calls', width),
-    detailRow('commands', fields.commands || 'none', width),
-  );
-  if (fields.verify && fields.verify !== '—') {
-    rows.push(detailRow('verify', fields.verify, width));
-  }
-  rows.push(
-    detailRow('blocker', fields.blocker || 'none', width),
-    detailRow('follow-up', fields.followUp || 'none', width),
-  );
-  return rows;
 }
 
 interface ParsedToolCall {
@@ -515,68 +424,6 @@ function extractChangedSummary(output: string): string {
   return '';
 }
 
-function commandsRun(run: RunStateSnapshot): string[] {
-  const commands: string[] = [];
-  for (const item of run.debugHistory) {
-    if (item.kind !== 'tool_call') continue;
-    const call = parseToolCall(item.detail);
-    if (call.command) commands.push(call.command);
-  }
-  return commands;
-}
-
-function shouldShowFinalSummary(run: RunStateSnapshot): boolean {
-  return run.terminal !== 'running' || run.phase === 'completed' || run.verification.state === 'failed';
-}
-
-function hasFrozenFinalSummary(run: RunStateSnapshot): boolean {
-  return run.debugHistory.some((item) => item.kind === 'final_summary');
-}
-
-function isGitDiffCommand(command: string): boolean {
-  return /^git\s+diff\b/.test(command.trim());
-}
-
-function completionActivity(statusNote: string, width: number): string {
-  const trimmed = statusNote.replace(/^completed:\s*/i, '');
-  return `${dim('  status    ')}${clip(trimmed, Math.max(1, width - 13))}`;
-}
-
-interface FrozenFinalFields {
-  completed?: string;
-  message?: string;
-  objective?: string;
-  result?: string;
-  changed?: string;
-  tree?: string;
-  tools?: string;
-  used?: string;
-  commands?: string;
-  verify?: string;
-  blocker?: string;
-  followUp?: string;
-}
-
-function parseFrozenFinalSummary(detail: string): FrozenFinalFields {
-  const fields: FrozenFinalFields = {};
-  for (const rawLine of detail.split('\n')) {
-    const line = rawLine.trim();
-    if (line.startsWith('Completed · ')) fields.completed = line.replace(/^Completed ·\s*/, '');
-    else if (line.startsWith('objective:')) fields.objective = line.replace(/^objective:\s*/, '');
-    else if (line.startsWith('result:')) fields.result = line.replace(/^result:\s*/, '');
-    else if (line.startsWith('Changed this run:')) fields.changed = line.replace(/^Changed this run:\s*/, '');
-    else if (line.startsWith('Working tree:'))
-      fields.tree = line.replace(/^Working tree:\s*/, '').replace(/^unknown$/, '—');
-    else if (line.startsWith('tool invocations:')) fields.tools = `${line.replace(/^tool invocations:\s*/, '')} calls`;
-    else if (line.startsWith('tools used:')) fields.used = line.replace(/^tools used:\s*/, '');
-    else if (line.startsWith('commands run:')) fields.commands = line.replace(/^commands run:\s*/, '');
-    else if (line.startsWith('verification:')) fields.verify = line.replace(/^verification:\s*/, '');
-    else if (line.startsWith('blockers:')) fields.blocker = line.replace(/^blockers:\s*/, '');
-    else if (line.startsWith('follow-up:')) fields.followUp = line.replace(/^follow-up:\s*/, '');
-  }
-  return fields;
-}
-
 function cleanModelOutput(output: string): string {
   return stripTerminalControl(output)
     .replace(/<think>[\s\S]*?<\/think>/gi, '')
@@ -584,6 +431,10 @@ function cleanModelOutput(output: string): string {
     .replace(/<tool_call>[\s\S]*?<\/tool_call>/gi, '')
     .replace(/\s+/g, ' ')
     .trim();
+}
+
+function isGitDiffCommand(command: string): boolean {
+  return /^git\s+diff\b/.test(command.trim());
 }
 
 function wrapText(text: string, maxWidth: number): string[] {
@@ -611,12 +462,6 @@ function wrapText(text: string, maxWidth: number): string[] {
 function clip(text: string, width: number): string {
   if (visibleLength(text) <= width) return text;
   return closeAnsi(`${sliceAnsi(text, 0, Math.max(0, width - 1))}…`);
-}
-
-function pad(text: string, width: number): string {
-  const visible = visibleLength(text);
-  if (visible >= width) return text;
-  return `${text}${' '.repeat(width - visible)}`;
 }
 
 function stripAnsi(input: string): string {
@@ -695,24 +540,6 @@ function eventHeader(label: string, state: string, width: number = 120): string 
   return `${glyph} ${bold(label.padEnd(10, ' '))} ${clip(state, available)}`;
 }
 
-type FinalTone = 'success' | 'caution' | 'failure';
-
-function finalTone(result: string, verification?: string): FinalTone {
-  const normalized = result.toLowerCase();
-  if (verification === 'failed' || normalized === 'failed' || normalized === 'error') return 'failure';
-  if (normalized === 'blocked' || normalized === 'budget_exhausted' || normalized === 'user_input_required') {
-    return 'caution';
-  }
-  return 'success';
-}
-
-function finalBanner(result: string, width: number, tone: FinalTone): string {
-  const bg = tone === 'success' ? '\u001b[48;5;22m' : tone === 'caution' ? '\u001b[48;5;58m' : '\u001b[48;5;52m';
-  const text = `■ ${'final'.padEnd(10, ' ')} ${result}`;
-  const clipped = clip(text, Math.max(1, width));
-  return `${bg}\u001b[1;37m${pad(clipped, width)}\u001b[0m`;
-}
-
 function detailRow(label: string, value: string, width: number): string {
   return `  ${dim(label.padEnd(10, ' '))} ${dim(clip(value || '—', Math.max(1, width - 14)))}`;
 }
@@ -735,29 +562,6 @@ function alignedField(label: string, lines: string[], width: number, valueDimmed
   ];
 }
 
-/** Render a readable result block for the final model output. */
-function resultBlock(content: string, width: number): string[] {
-  const clean = content
-    .replace(/<think>[\s\S]*?<\/think>/gi, '')
-    .replace(/<thinking>[\s\S]*?<\/thinking>/gi, '')
-    .replace(/<tool_call>[\s\S]*?<\/tool_call>/gi, '')
-    .trim();
-  if (!clean) return [];
-
-  const hasMd = /^#{1,3}\s|^[*\-+]\s|^```|^\d+\.\s|^>\s|^---+$/m.test(clean);
-  if (hasMd) {
-    const resultWidth = Math.max(20, width - 8);
-    const mdLines = renderMarkdownBlock(clean, resultWidth);
-    return [`  ${cyan('result')}`, ...mdLines.slice(0, 40).map((line) => `    ${clip(line, width - 6)}`)];
-  }
-
-  const resultWidth = Math.max(20, width - 8);
-  const lines = wrapText(clean, resultWidth);
-  if (lines.length === 0) return [];
-
-  return [`  ${cyan('result')}`, ...lines.map((line) => `    ${clip(line, width - 6)}`)];
-}
-
 /** Drop leading output lines that are verbatim echoes of the command. */
 function dropCommandEcho(command: string, output: string): string {
   const trimmedCommand = command.trim();
@@ -774,7 +578,6 @@ function eventGlyph(label: string): string {
   if (label === 'model') return '\u001b[35m※\u001b[0m';
   if (label === 'review') return '\u001b[35m※\u001b[0m';
   if (label === 'bash' || label === 'read' || label === 'write' || label === 'edit') return '\u001b[33m$\u001b[0m';
-  if (label === 'final') return '\u001b[32m■\u001b[0m';
   if (label === 'verify') return '\u001b[32m√\u001b[0m';
   return dim('?');
 }
@@ -861,45 +664,19 @@ function extractModelProse(detail: string): string {
     .replace(/<tool_call>[\s\S]*?<\/tool_call>/gi, '')
     .replace(/\s+/g, ' ')
     .trim();
-  if (!clean) return '';
-  return clipText(clean, 300);
+  return clean;
 }
 
-/** Extract a compact tool-call summary from model detail. */
-function extractToolCallSummary(detail: string): string | null {
-  const tcMatch = detail.match(/<tool_call>[\s\S]*?<\/tool_call>/gi);
-  if (!tcMatch || tcMatch.length === 0) return null;
-  const names: string[] = [];
-  for (const tc of tcMatch) {
-    const nameMatch = tc.match(/"name"\s*:\s*"(\w+)"/);
-    if (nameMatch) names.push(nameMatch[1]);
-  }
-  if (names.length === 0) return null;
-  const counts = new Map<string, number>();
-  for (const n of names) counts.set(n, (counts.get(n) ?? 0) + 1);
-  return [...counts.entries()].map(([name, count]) => (count > 1 ? `${name} ×${count}` : name)).join(', ');
-}
-
-/** Render model prose prominently, with tool calls as a secondary compact line. */
-function renderModelProse(prose: string, toolSummary: string | null, width: number): string[] {
+/** Render model prose prominently, with full text wrapping and no truncation. */
+function renderModelProse(prose: string, width: number): string[] {
   const lines: string[] = [];
   const proseWidth = Math.max(20, width - 4);
-  const wrapped = wrapText(prose, proseWidth).slice(0, 4);
+  const wrapped = wrapText(prose, proseWidth);
   lines.push(`\u001b[35m※\u001b[0m ${bold('note'.padEnd(10, ' '))} ${wrapped[0]}`);
   for (let i = 1; i < wrapped.length; i += 1) {
     lines.push(`  ${' '.repeat(10)} ${wrapped[i]}`);
   }
-  if (toolSummary) {
-    lines.push(`  ${dim('tools'.padEnd(10, ' '))} ${dim(toolSummary)}`);
-  }
   return lines;
-}
-
-/** Render a model step that only contains tool calls (no natural language prose). */
-function renderCompactModelTools(toolSummary: string, width: number): string[] {
-  return [
-    `\u001b[35m◇\u001b[0m ${bold('inspecting'.padEnd(10, ' '))} ${dim(clip(toolSummary, Math.max(1, width - 14)))}`,
-  ];
 }
 
 // ─── Tool group rendering ───────────────────────────────────
