@@ -33,7 +33,7 @@ describe('Provider presets registry', () => {
       expect(preset!.apiKeyRequired).toBe(true);
       expect(preset!.cloud).toBe(true);
       expect(preset!.defaultModel).toBe('deepseek-chat');
-      expect(preset!.contextWindow).toBe(64000);
+      expect(preset!.contextWindow).toBe(1_000_000);
     });
 
     it('returns openrouter preset with default headers', () => {

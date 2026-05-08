@@ -44,7 +44,7 @@ const providerPresets: Record<ProviderId, ProviderPreset> = {
     apiKeyRequired: true,
     cloud: true,
     defaultModel: 'deepseek-chat',
-    contextWindow: 64000,
+    contextWindow: 1_000_000,
     supportsStreaming: true,
     supportsToolCalling: true,
     inputPricePer1MTokens: 0.27,

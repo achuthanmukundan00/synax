@@ -97,6 +97,23 @@ describe('LLM client — basic chat', () => {
     expect(resp.usage).toEqual({ promptTokens: 10, completionTokens: 5, totalTokens: 15 });
   });
 
+  test('omits empty assistant tool_calls from provider requests', async () => {
+    const client = createOpenAICompatibleClient(makeConfig({ baseUrl: getServerUrl(srv) }));
+
+    await client.chat({
+      messages: [
+        { role: 'user', content: 'first' },
+        { role: 'assistant', content: 'final answer', tool_calls: [] },
+        { role: 'user', content: 'next' },
+      ],
+    });
+
+    const body = JSON.parse(captured!.body) as {
+      messages: Array<{ role: string; content: string; tool_calls?: unknown }>;
+    };
+    expect(body.messages[1]).toEqual({ role: 'assistant', content: 'final answer' });
+  });
+
   test('preserves reasoning/thinking tags in content for Qwen context echo', async () => {
     srv.close();
     srv = await createMockServer((_req, res) => {
