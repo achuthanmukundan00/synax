@@ -498,7 +498,7 @@ describe('interactive layout visual agreements', () => {
     expect(plain).toContain('Synax v0.0.21-alpha  Completed  0:25');
   });
 
-  it('renders final summaries with full-width status color bars', () => {
+  it('renders terminal-state status bars in the header without redundant final summary blocks', () => {
     const success = {
       ...createInitialRunStateSnapshot(0),
       phase: 'completed' as const,
@@ -517,15 +517,36 @@ describe('interactive layout visual agreements', () => {
       terminalIssue: 'runtime error',
     };
 
-    expect(
-      renderLayout({ run: success, objectiveInput: '', coreMode: 'completed', nowMs: 0 }, 100, 24).join('\n'),
-    ).toContain('\u001b[48;5;22m');
-    expect(
-      renderLayout({ run: blocked, objectiveInput: '', coreMode: 'blocked', nowMs: 0 }, 100, 24).join('\n'),
-    ).toContain('\u001b[48;5;58m');
-    expect(
-      renderLayout({ run: failed, objectiveInput: '', coreMode: 'failure', nowMs: 0 }, 100, 24).join('\n'),
-    ).toContain('\u001b[48;5;52m');
+    // Header phase label renders terminal state (no synthetic final summary block).
+    const successPlain = renderLayout(
+      { run: success, objectiveInput: '', coreMode: 'completed', nowMs: 0 },
+      100,
+      24,
+    )
+      .map((line) => stripAnsi(line))
+      .join('\n');
+    const blockedPlain = renderLayout(
+      { run: blocked, objectiveInput: '', coreMode: 'blocked', nowMs: 0 },
+      100,
+      24,
+    )
+      .map((line) => stripAnsi(line))
+      .join('\n');
+    const failedPlain = renderLayout(
+      { run: failed, objectiveInput: '', coreMode: 'failure', nowMs: 0 },
+      100,
+      24,
+    )
+      .map((line) => stripAnsi(line))
+      .join('\n');
+
+    expect(successPlain).toContain('Completed');
+    expect(blockedPlain).toContain('Blocked');
+    expect(failedPlain).toContain('Error');
+    // No synthetic final summary block rendered.
+    expect(successPlain).not.toContain('final      completed');
+    expect(blockedPlain).not.toContain('final      blocked');
+    expect(failedPlain).not.toContain('final      failed');
   });
 
   it('matches the blocked budget-exhausted render snapshot', () => {
@@ -701,12 +722,12 @@ describe('interactive layout visual agreements', () => {
     expect(plain).toContain('edit       src/tui/layout.ts');
     expect(plain).toContain('-old dashboard');
     expect(plain).toContain('+new transcript');
-    expect(plain).toContain('verify     passed');
-    expect(plain).toContain('final      completed');
-    expect(plain).toContain('objective  Improve TUI observability');
-    expect(plain).toContain('changed    2 files');
-    expect(plain).toContain('tools      3 calls');
-    expect(plain).toContain('commands   npm test src/__tests__/interactive-tui.test.ts');
+    // Final summary block is not rendered; completion is in the header and runtime panel.
+    expect(plain).not.toContain('final      completed');
+    expect(plain).not.toContain('objective  Improve TUI observability');
+    expect(plain).not.toContain('changed    2 files');
+    expect(plain).not.toContain('tools      3 calls');
+    expect(plain).not.toContain('commands   npm test src/__tests__/interactive-tui.test.ts');
   });
 
   it('strips terminal control sequences from command output before rendering', () => {
@@ -784,10 +805,10 @@ describe('interactive layout visual agreements', () => {
       .map((line) => stripAnsi(line))
       .join('\n');
 
-    expect(plain).toContain('commands   npm test');
     expect(plain).toContain('FAIL src/__tests__/interactive-tui.test.ts');
-    expect(plain).toContain('verify     failed');
-    expect(plain).toContain('blocker    verification failed: Jest assertion failed');
+    // Verification state and blocker are in the runtime panel, not a synthetic final-summary block.
+    expect(plain).not.toContain('verify     failed');
+    expect(plain).not.toContain('blocker    verification failed: Jest assertion failed');
   });
 
   it('preserves git diff ANSI colors in command output', () => {
@@ -1193,7 +1214,6 @@ describe('interactive layout visual agreements', () => {
     );
     const plain = lines.map((line) => stripAnsi(line)).join('\n');
 
-    expect(plain).toContain('status    2 model steps, 1 tool call, 1 file changed');
     expect(plain).toContain('Updated the TUI state and verified the focused tests.');
   });
 
@@ -1389,13 +1409,15 @@ describe('interactive layout visual agreements', () => {
       .map((line) => stripAnsi(line))
       .join('\n');
 
-    const summaryIndex = plain.indexOf('final      completed');
+    // No synthetic final summary block; the model review output appears for the
+    // completed run and the next user prompt follows.
+    const reviewIndex = plain.indexOf('Finished the first task.');
     const nextPromptIndex = plain.indexOf('prompt     second task should be visible');
 
     expect(run.terminal).toBe('running');
-    expect(summaryIndex).toBeGreaterThanOrEqual(0);
-    expect(nextPromptIndex).toBeGreaterThan(summaryIndex);
-    expect(plain.match(/final {6}completed/g)).toHaveLength(1);
+    expect(reviewIndex).toBeGreaterThanOrEqual(0);
+    expect(nextPromptIndex).toBeGreaterThan(reviewIndex);
+    expect(plain.match(/final {6}completed/g) || []).toHaveLength(0);
   });
 
   it('renders wrapped user prompts with the prompt label only on the first line', () => {
@@ -1566,8 +1588,9 @@ describe('interactive layout visual agreements', () => {
 
     expect(plain).toContain('Budget exhausted');
     expect(plain).toContain('Steps       32/32');
-    expect(plain).toContain('final      blocked');
-    expect(plain).toContain('blocker    max steps exceeded: 32');
+    // Final summary block is not rendered; budget-exhausted state is in header.
+    expect(plain).not.toContain('final      blocked');
+    expect(plain).not.toContain('blocker    max steps exceeded: 32');
   });
 
   it('clamps transcript scroll offsets at the oldest and newest entries', () => {

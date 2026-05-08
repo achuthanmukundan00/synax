@@ -544,7 +544,7 @@ function stripAll(input: string): string {
 }
 
 describe('transcript rendering', () => {
-  it('final assistant message does not leak as orphaned markdown after verify', () => {
+  it('model output renders as review or fallback block without synthetic final summary', () => {
     const run: RunStateSnapshot = {
       ...createInitialRunStateSnapshot(0),
       terminal: 'completed',
@@ -576,10 +576,10 @@ describe('transcript rendering', () => {
     const lines = renderTranscript({ run, lastModelOutput: '' }, 80).map(stripAll);
     const text = lines.join('\n');
 
-    // The final summary should render (non-frozen path, no final_summary in history)
-    expect(text).toContain('final      completed');
-    // Model output should be embedded in the final block as 'message', not as orphaned bullet
-    expect(text).toContain('message    - Add src/config/schema.ts');
+    // No synthetic final summary block.
+    expect(text).not.toContain('final      completed');
+    // Model output still appears in the transcript as a fallback model entry.
+    expect(text).toContain('- Add src/config/schema.ts');
   });
 
   it('verify is not duplicated when verification events exist', () => {
