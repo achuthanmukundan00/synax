@@ -13,7 +13,7 @@ import {
 } from '../commands/chat';
 import { stdin as defaultStdin } from 'node:process';
 import { DiffRenderer } from './diff-renderer';
-import { inputCursorPosition, maxHistoryScrollOffset, renderLayout, type InteractiveViewState } from './layout';
+import { maxHistoryScrollOffset, renderLayout, type InteractiveViewState } from './layout';
 import { createInputParser, MAX_INPUT_CHARS } from './input';
 import { createTerminalSession, type InputStreamLike } from './terminal';
 import type { Writable } from 'node:stream';
@@ -57,8 +57,6 @@ export async function runInteractiveTui(
     activeSkills?: string[];
     /** Override core visual profile: 'model' (auto-detect), 'default', 'qwen', 'openai', 'claude', 'deepseek', 'gemini'. */
     coreVisualProfile?: string;
-    /** Whether the active provider/model can be queried right now. */
-    coreLoaded?: boolean;
     /**
      * Optional callback invoked after settings are persisted.
      * Return updated runtime labels to apply immediately in the TUI.
@@ -70,7 +68,6 @@ export async function runInteractiveTui(
       providerName?: string;
       contextWindowTokens?: number;
       coreVisualProfile?: string;
-      coreLoaded?: boolean;
     };
   },
 ): Promise<void> {
@@ -107,19 +104,20 @@ export async function runInteractiveTui(
     providerName: options?.providerName,
     contextWindowTokens: options?.contextWindowTokens,
     coreVisualProfile: options?.coreVisualProfile,
-    coreLoaded: options?.coreLoaded,
   };
   const applyOptionsToState = (): void => {
-    state = {
-      ...state,
-      modelId: runtimeLabels.modelLabel ?? '',
-      providerName: runtimeLabels.providerName ?? providerNameFromEndpoint(runtimeLabels.endpointLabel ?? ''),
-      contextWindowTokens: runtimeLabels.contextWindowTokens,
-      thinkingEnabled: runtimeLabels.thinkingEnabled,
-      activeSkills: options?.activeSkills ?? [],
-      coreLoaded: runtimeLabels.coreLoaded ?? true,
-      sessionSpendLabel: isLocalEndpoint(runtimeLabels.endpointLabel ?? '') ? 'local' : undefined,
-    };
+    if (runtimeLabels.modelLabel) {
+      state = {
+        ...state,
+        modelId: runtimeLabels.modelLabel,
+        providerName: runtimeLabels.providerName ?? providerNameFromEndpoint(runtimeLabels.endpointLabel ?? ''),
+        contextWindowTokens: runtimeLabels.contextWindowTokens,
+        thinkingEnabled: runtimeLabels.thinkingEnabled,
+        activeSkills: options?.activeSkills ?? [],
+        coreLoaded: true,
+        sessionSpendLabel: isLocalEndpoint(runtimeLabels.endpointLabel ?? '') ? 'local' : undefined,
+      };
+    }
   };
   applyOptionsToState();
 
@@ -193,7 +191,6 @@ export async function runInteractiveTui(
       const settingsLines = renderSettings(settingsState, terminal.columns, terminal.rows);
       const out = diff.render(settingsLines, terminal.columns, terminal.rows);
       if (out || force) terminal.synchronizedWrite(out || '');
-      terminal.write('\u001b[?25l');
       return;
     }
 
@@ -202,7 +199,6 @@ export async function runInteractiveTui(
       const resumeLines = renderResumePicker(resumeState, terminal.columns, terminal.rows);
       const out = diff.render(resumeLines, terminal.columns, terminal.rows);
       if (out || force) terminal.synchronizedWrite(out || '');
-      terminal.write('\u001b[?25l');
       return;
     }
 
@@ -216,11 +212,6 @@ export async function runInteractiveTui(
     const out = diff.render(lines, terminal.columns, terminal.rows);
     if (!out && !force) return;
     terminal.synchronizedWrite(out || '');
-
-    // Position and show cursor beam in the input box.
-    const cursor = inputCursorPosition(viewState().objectiveInput, terminal.columns, terminal.rows);
-    // Terminal cursor positions are 1-indexed.
-    terminal.write(`\u001b[${cursor.row + 1};${cursor.col + 1}H\u001b[?25h`);
   };
 
   const finish = (): void => {
@@ -297,22 +288,6 @@ export async function runInteractiveTui(
           Date.now(),
         );
       }
-      busy = false;
-      paint(true);
-      return;
-    }
-
-    if (runtimeLabels.coreLoaded === false) {
-      state = applyEventToRunState(
-        state,
-        {
-          type: 'command_output',
-          timestamp: new Date().toISOString(),
-          command: 'submit',
-          content: options?.blockedMessage ?? '[synax] No queryable model is configured.',
-        },
-        Date.now(),
-      );
       busy = false;
       paint(true);
       return;

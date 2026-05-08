@@ -243,7 +243,6 @@ function buildModelRows(config: EffectiveSynaxConfig): SettingsRow[] {
   const active = config.active;
   const provider = config.providers[active.provider];
   const activeModel = provider?.models.find((m) => m.id === active.model);
-  const modelValue = active.model === '' ? 'No model' : (activeModel?.displayName ?? active.model);
   const rows: SettingsRow[] = [];
 
   rows.push({
@@ -259,9 +258,9 @@ function buildModelRows(config: EffectiveSynaxConfig): SettingsRow[] {
   rows.push({
     id: 'active-model',
     label: 'Active Model',
-    value: modelValue,
+    value: activeModel?.displayName ?? active.model,
     kind: 'select',
-    options: ['', ...(provider?.models.map((m) => m.id) ?? [])],
+    options: provider?.models.map((m) => m.id) ?? [],
   });
 
   const thinkingLabel = 'Thinking';
@@ -285,13 +284,6 @@ function buildModelRows(config: EffectiveSynaxConfig): SettingsRow[] {
 
   // Model list
   rows.push({ id: 'models-header', label: 'Models', value: '', kind: 'info', dimmed: true });
-  rows.push({
-    id: 'no-active-model',
-    label: active.model === '' ? '→ No model' : '  No model',
-    value: 'Core unloaded',
-    kind: 'select',
-    options: [],
-  });
   for (const model of provider?.models ?? []) {
     const isActive = model.id === active.model;
     const ctxStr = model.contextWindow ? `ctx ${formatContext(model.contextWindow)}` : '';
@@ -556,14 +548,10 @@ function handleSelect(state: SettingsState, row: SettingsRow): SettingsState {
 
   if (row.id === 'active-model') {
     const provider = next.config.providers[next.config.active.provider];
-    const modelIds = ['', ...(provider?.models.map((model) => model.id) ?? [])];
+    const modelIds = provider?.models.map((model) => model.id) ?? [];
     next.config = buildConfigUpdate(next.config, {
       activeModel: nextOption(next.config.active.model, modelIds),
     });
-  }
-
-  if (row.id === 'no-active-model') {
-    next.config = buildConfigUpdate(next.config, { activeModel: '' });
   }
 
   if (row.id.startsWith('model-')) {

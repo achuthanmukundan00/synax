@@ -64,16 +64,6 @@ export interface RunStateSnapshot {
   contextWindowTokens?: number;
   thinkingEnabled?: boolean;
   sessionSpendLabel?: string;
-  /** Cumulative session cost in USD. */
-  sessionCostUsd?: number;
-  /** Price per 1M input tokens in USD. */
-  inputPricePer1MTokens?: number;
-  /** Price per 1M output tokens in USD. */
-  outputPricePer1MTokens?: number;
-  /** Cumulative input tokens for session cost tracking. */
-  sessionInputTokens?: number;
-  /** Cumulative output tokens for session cost tracking. */
-  sessionOutputTokens?: number;
   coreLoaded: boolean;
   phase: TuiPhase;
   objective: {
@@ -122,11 +112,6 @@ export function createInitialRunStateSnapshot(nowMs: number): RunStateSnapshot {
     contextWindowTokens: undefined,
     thinkingEnabled: undefined,
     sessionSpendLabel: undefined,
-    sessionCostUsd: undefined,
-    inputPricePer1MTokens: undefined,
-    outputPricePer1MTokens: undefined,
-    sessionInputTokens: undefined,
-    sessionOutputTokens: undefined,
     coreLoaded: false,
     phase: 'idle',
     objective: {
@@ -180,12 +165,7 @@ export function applyEventToRunState(state: RunStateSnapshot, event: AgentEvent,
         providerName: event.providerName ?? providerNameFromEndpoint(event.endpoint),
         contextWindowTokens: event.contextWindowTokens ?? event.contextBudgetTokens,
         coreLoaded: event.model.trim().length > 0,
-        sessionSpendLabel: isLocalEndpoint(event.endpoint) ? 'local' : formatCost(0),
-        sessionCostUsd: 0,
-        inputPricePer1MTokens: event.inputPricePer1MTokens,
-        outputPricePer1MTokens: event.outputPricePer1MTokens,
-        sessionInputTokens: 0,
-        sessionOutputTokens: 0,
+        sessionSpendLabel: isLocalEndpoint(event.endpoint) ? 'local' : undefined,
         objective: {
           label: event.task.trim() || 'No objective',
           currentPhase: 'thinking',
@@ -219,17 +199,11 @@ export function applyEventToRunState(state: RunStateSnapshot, event: AgentEvent,
       return withTimeline(next, 'thinking', `Thinking · step ${event.stepIndex ?? next.timeline.length + 1}`, 'S0');
     }
     case 'context_budget_updated': {
-      const prevInputTokens = next.sessionInputTokens ?? 0;
-      const newInputTokens = prevInputTokens + (event.estimatedInputTokens - (next.contextUsedTokens ?? 0));
-      next = {
+      return {
         ...next,
         contextUsedTokens: event.estimatedInputTokens,
         contextWindowTokens: event.contextWindowTokens,
-        sessionInputTokens: Math.max(0, newInputTokens),
       };
-      // Update cost estimate from accumulated tokens
-      next = updateSessionCost(next);
-      return next;
     }
     case 'assistant_message': {
       const note = summarizeModelOutput(event.content);
@@ -689,34 +663,6 @@ function formatDuration(ms: number): string {
   if (ms < 1000) return `${ms}ms`;
   const s = (ms / 1000).toFixed(1);
   return `${s}s`;
-}
-
-/** Update session spend label from accumulated token counts and pricing. */
-function updateSessionCost(state: RunStateSnapshot): RunStateSnapshot {
-  const inputPrice = state.inputPricePer1MTokens;
-  const outputPrice = state.outputPricePer1MTokens;
-  if (inputPrice === undefined && outputPrice === undefined) return state;
-
-  const inputTokens = state.sessionInputTokens ?? 0;
-  const outputTokens = state.sessionOutputTokens ?? 0;
-
-  const inputCost = inputPrice !== undefined ? (inputTokens / 1_000_000) * inputPrice : 0;
-  const outputCost = outputPrice !== undefined ? (outputTokens / 1_000_000) * outputPrice : 0;
-  const totalCost = inputCost + outputCost;
-
-  return {
-    ...state,
-    sessionCostUsd: totalCost,
-    sessionSpendLabel: formatCost(totalCost),
-  };
-}
-
-/** Format cost as a compact dollar string. */
-function formatCost(usd: number): string {
-  if (usd >= 0.01) return `$${usd.toFixed(2)}`;
-  if (usd >= 0.0001) return `$${usd.toFixed(3)}`;
-  if (usd > 0) return '<$0.001';
-  return '$0.00';
 }
 
 /**

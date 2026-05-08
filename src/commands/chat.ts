@@ -7,16 +7,14 @@ import { promisify } from 'util';
 
 import {
   applyEffectiveSynaxConfigToProjectConfig,
-  discoverConfigPath,
   loadProjectConfig,
   normalizeProviderConfig,
-  toProviderFactoryInput,
   type ProjectConfig,
 } from '../config/project';
 import { loadSynaxConfig } from '../config/load-config';
 import { loadSkills, type SkillDiagnostic } from '../agent/skills';
 import pkg from '../../package.json';
-import { createLLMClient, describeLLMProvider } from '../llm/provider-factory';
+import { createOpenAICompatibleClient } from '../llm/client';
 import {
   createAgentConversation,
   buildModelFacingTools,
@@ -32,7 +30,8 @@ import { buildProjectProfile, formatTextProfile } from '../config/profile';
 import { buildInspectConfigProfile } from './inspect';
 import { join } from 'path';
 import { writeFileSync, mkdirSync } from 'fs';
-import type { NormalizedProviderConfig, ProviderMetadata } from '../llm/types';
+import { discoverConfigPath, normalizeProviderConfig as normalizeProvider } from '../config/project';
+import type { NormalizedProviderConfig } from '../llm/types';
 import { detectDirtyTree, readLatestCheckpoint, undoLastEdit } from '../agent/safety';
 import { runInteractiveTui } from '../tui/interactive-tui';
 
@@ -105,6 +104,27 @@ export interface InlinePasteInputSession {
   hasPaste(): boolean;
 }
 
+/**
+ * Strip provider-specific message fields when switching between incompatible providers.
+ * Removes: reasoning_content (DeepSeek-specific), and OpenAI tool_calls format
+ * when switching to a Qwen/Relay provider that prefers content_xml.
+ */
+function sanitizeConversationForProvider(
+  conversation: AgentConversation,
+  providerConfig: import('../llm/types').NormalizedProviderConfig,
+): void {
+  const isDeepSeek = /deepseek/i.test(providerConfig.model);
+  for (const msg of conversation.messages) {
+    // Strip reasoning_content unless the new provider is DeepSeek.
+    if (!isDeepSeek && 'reasoning_content' in msg) {
+      delete msg.reasoning_content;
+    }
+    // Internal markers are never sent to the model but clean them for safety.
+    delete msg._tool_call_ids;
+    delete msg._tool_result_ids;
+  }
+}
+
 export function createChatSession(options: {
   repoRoot: string;
   config: ProjectConfig;
@@ -122,6 +142,9 @@ export function createChatSession(options: {
     skillMessages: options.skillMessages,
   });
   let eventSink: ((event: import('../agent/events').AgentEvent) => void) | null = null;
+  const thinkingLevel = options.thinkingLevel;
+  // Track last provider identity for cross-provider message sanitization.
+  let lastProviderId = '';
 
   /** Config wrapper: the TUI updates this reference when settings change. */
   const configRef: { current: ProjectConfig } = { current: options.config };
@@ -138,8 +161,14 @@ export function createChatSession(options: {
     },
     async handleUserMessage(message: string): Promise<ChatTurnReport> {
       const config = getConfig();
-      const factoryResult = createLLMClient(toProviderFactoryInput(config));
-      const client = factoryResult.client;
+      const providerConfig = normalizeProviderConfig(config.provider ?? {}, { thinkingLevel });
+      // Sanitize conversation messages when switching providers/models.
+      const currentProviderId = `${providerConfig.baseUrl}|${providerConfig.model}`;
+      if (lastProviderId && lastProviderId !== currentProviderId) {
+        sanitizeConversationForProvider(conversation, providerConfig);
+      }
+      lastProviderId = currentProviderId;
+      const client = createOpenAICompatibleClient(providerConfig);
       const beforeHead = await gitHead(options.repoRoot);
       const result = await runAgentTurn({
         repoRoot: options.repoRoot,
@@ -317,12 +346,8 @@ export function chatCommand(program: Command): void {
         return;
       }
 
-      const providerDescription = describeLLMProvider(toProviderFactoryInput(loaded.config));
-      const metadata = providerDescription.metadata;
-      const provider = providerDescription.normalizedConfig;
-      const blockedMessage = providerRuntimeBlockedMessage(metadata, provider);
-
       // Extract thinking level from the effective multi-provider config.
+      // Falls back to 'off' if the config can't be loaded.
       let thinkingLevel: 'off' | 'low' | 'medium' | 'high' | 'auto' = 'off';
       let skillMessages: string[] | undefined;
       let skillDiagnostics: SkillDiagnostic[] | undefined;
@@ -339,6 +364,8 @@ export function chatCommand(program: Command): void {
       } catch {
         // best-effort
       }
+
+      const provider = normalizeProviderConfig(loaded.config.provider ?? {}, { thinkingLevel });
       const useTui = shouldUseInteractiveTui({
         plain: Boolean(options.plain),
         message: options.message,
@@ -349,7 +376,7 @@ export function chatCommand(program: Command): void {
       // Shared state so the TUI can observe model output in real time.
       let lastModelOutput = '';
 
-      const modelLabel = metadata.modelId || undefined;
+      const modelLabel = provider.model.trim() || undefined;
       const cwdLabel = compactHome(repoRoot);
       const gitBranch = await currentGitBranch(repoRoot);
 
@@ -369,8 +396,8 @@ export function chatCommand(program: Command): void {
         tui: useTui,
       });
       if (options.message) {
-        if (blockedMessage) {
-          console.error(`[synax] Config error: ${blockedMessage}`);
+        if (!provider.model.trim()) {
+          console.error('[synax] Config error: provider.model is required for chat.');
           process.exitCode = 1;
           return;
         }
@@ -384,17 +411,16 @@ export function chatCommand(program: Command): void {
 
       if (useTui) {
         await runInteractiveTui(session, {
-          blockedMessage,
+          blockedMessage: !provider.model.trim() ? 'provider.model is required' : undefined,
           lastModelOutput: () => lastModelOutput,
           modelLabel,
           thinkingEnabled: thinkingLevel !== 'off',
-          endpointLabel: metadata.baseUrl !== '(not set)' ? metadata.baseUrl : undefined,
-          providerName: metadata.displayName,
+          endpointLabel: provider.baseUrl || undefined,
+          providerName: providerNameFromPreset(loaded.config.provider?.preset),
           cwdLabel,
           gitBranch,
           contextWindowTokens: loaded.config.contextWindowTokens ?? loaded.config.contextBudgetTokens,
           coreVisualProfile: loaded.config.coreVisualProfile,
-          coreLoaded: blockedMessage === undefined,
           activeSkills: skillDiagnostics?.filter((d) => d.loaded).map((d) => d.id),
           onSettingsConfigChanged: (settingsConfig) => {
             loaded.config = applyEffectiveSynaxConfigToProjectConfig(loaded.config, settingsConfig);
@@ -404,22 +430,16 @@ export function chatCommand(program: Command): void {
             const nextProvider = normalizeProviderConfig(loaded.config.provider ?? {}, {
               thinkingLevel: nextThinkingLevel,
             });
-            const nextDescription = describeLLMProvider(toProviderFactoryInput(loaded.config));
-            const nextBlockedMessage = providerRuntimeBlockedMessage(nextDescription.metadata, nextProvider);
             const activeProvider = settingsConfig.providers[settingsConfig.active.provider];
             const activeModel = activeProvider?.models.find((model) => model.id === settingsConfig.active.model);
             return {
               modelLabel: nextProvider.model.trim() || undefined,
               endpointLabel: nextProvider.baseUrl || undefined,
-              providerName:
-                activeProvider?.name ??
-                nextDescription.metadata.displayName ??
-                providerNameFromPreset(loaded.config.provider?.preset),
+              providerName: activeProvider?.name ?? providerNameFromPreset(loaded.config.provider?.preset),
               contextWindowTokens:
                 activeModel?.contextWindow ?? loaded.config.contextWindowTokens ?? loaded.config.contextBudgetTokens,
               coreVisualProfile: loaded.config.coreVisualProfile,
               thinkingEnabled: nextThinkingLevel !== 'off',
-              coreLoaded: nextBlockedMessage === undefined,
             };
           },
         });
@@ -623,18 +643,6 @@ export function providerNameFromPreset(preset: string | undefined): string | und
   if (preset === 'openai') return 'OpenAI';
   if (preset === 'anthropic') return 'Anthropic';
   if (preset === 'openrouter') return 'OpenRouter';
-  return undefined;
-}
-
-export function providerRuntimeBlockedMessage(
-  metadata: ProviderMetadata,
-  provider: NormalizedProviderConfig,
-): string | undefined {
-  if (!provider.model.trim()) return 'provider.model is required';
-  if (!provider.baseUrl.trim()) return 'provider.base_url is required';
-  if (metadata.apiKeyRequired && !metadata.apiKeyConfigured) {
-    return `${metadata.displayName} API key is required`;
-  }
   return undefined;
 }
 
@@ -1109,7 +1117,7 @@ interface ProviderProbe {
 }
 
 async function renderProviderTest(config: ProjectConfig): Promise<string> {
-  const provider = normalizeProviderConfig(config.provider ?? {});
+  const provider = normalizeProvider(config.provider ?? {});
   if (!provider.baseUrl.trim() || !provider.model.trim()) {
     return formatProviderTest(config, provider, 'blocked', [
       provider.baseUrl.trim() ? '[ok] endpoint configured' : '[blocked] endpoint missing',
@@ -1282,7 +1290,7 @@ function renderHelpPanel(): string {
 }
 
 function renderSettingsPanel(repoRoot: string, config: ProjectConfig): string {
-  const provider = normalizeProviderConfig(config.provider ?? {});
+  const provider = normalizeProvider(config.provider ?? {});
   const headers = Object.keys(config.provider?.custom_headers ?? config.provider?.customHeaders ?? {});
   const configPath = discoverConfigPath(repoRoot) ?? '(defaults)';
   const exposed = buildModelFacingTools({ bashEnabled: config.tools?.bash?.enabled }).map((tool) => tool.name);

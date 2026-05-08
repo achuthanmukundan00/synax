@@ -57,24 +57,6 @@ describe('shared bounded agent runner', () => {
     ]);
   });
 
-  it('does not store empty tool_calls on final assistant messages', async () => {
-    const conversation = createAgentConversation();
-    const firstClient = fakeClient([{ content: 'first answer' }]);
-
-    await runAgentTurn({ repoRoot: TMP, task: 'first task', client: firstClient, conversation });
-
-    const finalAssistant = conversation.messages.at(-1) as { role: string; tool_calls?: unknown };
-    expect(finalAssistant).toMatchObject({ role: 'assistant' });
-    expect(finalAssistant.tool_calls).toBeUndefined();
-
-    const secondClient = fakeClient([{ content: 'second answer' }]);
-    await runAgentTurn({ repoRoot: TMP, task: 'second task', client: secondClient, conversation });
-
-    const secondRequest = secondClient.requests[0].messages as Array<{ role: string; tool_calls?: unknown }>;
-    const priorFinal = secondRequest.find((message) => message.role === 'assistant');
-    expect(priorFinal?.tool_calls).toBeUndefined();
-  });
-
   it('keeps the system prompt focused on the four model-facing tools', async () => {
     const client = fakeClient([{ content: 'done' }]);
 

@@ -4,7 +4,6 @@
 
 import { mkdirSync, writeFileSync, rmSync, existsSync, readFileSync } from 'fs';
 import { join } from 'path';
-import { tmpdir } from 'os';
 
 import {
   discoverConfigPath,
@@ -40,7 +39,7 @@ import type { EffectiveSynaxConfig } from '../config/schema';
 
 // ─── helpers ────────────────────────────────────────────────
 
-const TMP = join(tmpdir(), 'synax-config-tests');
+const TMP = join(__dirname, '..', '..', '..', 'tmp', 'synax-config-tests');
 
 function ensureTmp() {
   if (existsSync(TMP)) {
@@ -547,7 +546,6 @@ model = "deepseek-chat"
 [providers.deepseek]
 compatibility = "openai-compatible"
 base_url = "https://api.deepseek.com/v1"
-api_key = "sk-test"
 
 [[providers.deepseek.models]]
 id = "deepseek-chat"
@@ -558,41 +556,6 @@ id = "deepseek-chat"
     expect(effective.active.provider).toBe('deepseek');
     expect(effective.active.model).toBe('deepseek-chat');
     expect(effective.active.thinking).toBe('off'); // not set, so default
-  });
-
-  it('falls back when the active provider requires a missing API key', () => {
-    const originalKey = process.env.ANTHROPIC_API_KEY;
-    delete process.env.ANTHROPIC_API_KEY;
-    const localPath = join(TMP, '.synax.toml');
-    writeFileSync(
-      localPath,
-      `
-[active]
-provider = "anthropic"
-model = "claude-3-5-haiku-20241022"
-
-[providers.anthropic]
-compatibility = "anthropic-compatible"
-base_url = "https://api.anthropic.com/v1"
-api_key_env = "ANTHROPIC_API_KEY"
-
-[[providers.anthropic.models]]
-id = "claude-3-5-haiku-20241022"
-`,
-      'utf-8',
-    );
-
-    try {
-      const effective = loadSynaxConfig(TMP);
-      expect(effective.active.provider).toBe('relay-local');
-      expect(effective.active.model).toBe('Qwen3.6-35B-A3B-UD-IQ3_XXS.gguf');
-    } finally {
-      if (originalKey === undefined) {
-        delete process.env.ANTHROPIC_API_KEY;
-      } else {
-        process.env.ANTHROPIC_API_KEY = originalKey;
-      }
-    }
   });
 
   it('loads active multi-provider settings into the runtime provider config', () => {
@@ -610,7 +573,6 @@ name = "DeepSeek"
 compatibility = "openai-compatible"
 base_url = "https://api.deepseek.com/v1"
 api_key_env = "DEEPSEEK_API_KEY"
-api_key = "sk-test"
 
 [[providers.deepseek.models]]
 id = "deepseek-reasoner"
@@ -671,7 +633,6 @@ model = "deepseek-v4-pro"
 name = "DeepSeek"
 compatibility = "openai-compatible"
 base_url = "https://api.deepseek.com/v1"
-api_key = "sk-test"
 
 [[providers.deepseek.models]]
 id = "deepseek-v4-pro"
@@ -686,48 +647,6 @@ supports_thinking = false
     expect(loaded.errors).toEqual([]);
     expect(loaded.config.contextWindowTokens).toBe(1_000_000);
     expect(loaded.config.contextBudgetTokens).toBe(1_000_000);
-  });
-
-  it('uses provider preset context windows for legacy provider config when context is not explicit', () => {
-    const localPath = join(TMP, '.synax.toml');
-    writeFileSync(
-      localPath,
-      `
-[provider]
-preset = "deepseek"
-model = "deepseek-chat"
-api_key = "sk-test"
-`,
-      'utf-8',
-    );
-
-    const loaded = loadProjectConfig(TMP);
-
-    expect(loaded.errors).toEqual([]);
-    expect(loaded.config.contextWindowTokens).toBe(1_000_000);
-    expect(loaded.config.contextBudgetTokens).toBe(1_000_000);
-  });
-
-  it('preserves explicit context windows over provider preset defaults', () => {
-    const localPath = join(TMP, '.synax.toml');
-    writeFileSync(
-      localPath,
-      `
-context_window_tokens = 65536
-
-[provider]
-preset = "deepseek"
-model = "deepseek-chat"
-api_key = "sk-test"
-`,
-      'utf-8',
-    );
-
-    const loaded = loadProjectConfig(TMP);
-
-    expect(loaded.errors).toEqual([]);
-    expect(loaded.config.contextWindowTokens).toBe(65_536);
-    expect(loaded.config.contextBudgetTokens).toBe(65_536);
   });
 
   it('preserves core visual profile through effective config loading', () => {
@@ -803,7 +722,6 @@ thinking = "high"
 [providers.openai]
 compatibility = "openai-compatible"
 base_url = "https://api.openai.com/v1"
-api_key = "sk-test"
 
 [[providers.openai.models]]
 id = "gpt-4"
@@ -1073,15 +991,6 @@ describe('buildConfigUpdate', () => {
     const updated = buildConfigUpdate(baseConfig, { activeModel: 'deepseek' });
     expect(updated.active.model).toBe('deepseek');
     // 'off' is in deepseek's thinkingLevels, so it is preserved.
-    expect(updated.active.thinking).toBe('off');
-  });
-
-  it('preserves an intentionally empty active model', () => {
-    const updated = buildConfigUpdate(
-      { ...baseConfig, active: { provider: 'relay-local', model: 'deepseek', thinking: 'auto' } },
-      { activeModel: '' },
-    );
-    expect(updated.active.model).toBe('');
     expect(updated.active.thinking).toBe('off');
   });
 

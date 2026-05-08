@@ -5,7 +5,6 @@
 import { mkdirSync, writeFileSync, rmSync, existsSync } from 'fs';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'http';
 import { join } from 'path';
-import { tmpdir } from 'os';
 
 import {
   runDoctor,
@@ -19,7 +18,7 @@ import {
   type DoctorFullReport,
 } from '../commands/doctor';
 
-const TMP = join(tmpdir(), 'synax-doctor-tests');
+const TMP = join(__dirname, '..', '..', '..', 'tmp', 'synax-doctor-tests');
 
 function ensureTmp() {
   if (existsSync(TMP)) {

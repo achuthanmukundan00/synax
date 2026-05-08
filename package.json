@@ -20,7 +20,6 @@
     "docs:build": "vitepress build docs",
     "docs:preview": "vitepress preview docs",
     "synax": "node dist/cli.js",
-    "smoke:provider": "node scripts/smoke-provider.mjs",
     "deploy": "npm run docs:build && wrangler deploy",
     "preview": "npm run docs:build && wrangler dev"
   },

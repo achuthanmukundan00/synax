@@ -55,8 +55,6 @@ export type AgentEvent =
       tools: string[];
       task: string;
       activeSkills?: string[];
-      inputPricePer1MTokens?: number;
-      outputPricePer1MTokens?: number;
     })
   | (AgentEventBase & { type: 'model_step_started' })
   | (AgentEventBase & {

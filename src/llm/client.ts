@@ -355,9 +355,6 @@ function normalizeMessagesForProvider(
   );
   return messages.map((message) => {
     const normalized = { ...message };
-    if (Array.isArray(normalized.tool_calls) && normalized.tool_calls.length === 0) {
-      delete normalized.tool_calls;
-    }
     if (!options.preserveReasoningContent) {
       delete normalized.reasoning_content;
       return normalized;

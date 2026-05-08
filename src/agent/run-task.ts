@@ -1,7 +1,7 @@
-import { loadProjectConfig, toProviderFactoryInput } from '../config/project';
+import { loadProjectConfig, normalizeProviderConfig } from '../config/project';
 import { loadSynaxConfig } from '../config/load-config';
 import { loadSkills } from './skills';
-import { createLLMClient } from '../llm/provider-factory';
+import { createOpenAICompatibleClient } from '../llm/client';
 import { buildModelFacingTools, runAgentTurn, type AgentActivity, type AgentTerminalState } from './runner';
 import { runVerification, type VerificationResult } from './verification';
 import { eventNow, type AgentEvent } from './events';
@@ -64,11 +64,8 @@ export async function runAgentTask(options: RunTaskOptions): Promise<RunTaskRepo
     };
   }
 
-  const providerInput = toProviderFactoryInput(projectConfig.config);
-  let factoryResult;
-  try {
-    factoryResult = createLLMClient(providerInput);
-  } catch (err) {
+  const providerConfig = normalizeProviderConfig(projectConfig.config.provider ?? {});
+  if (!providerConfig.model.trim()) {
     return {
       task: options.task,
       mode,
@@ -79,15 +76,15 @@ export async function runAgentTask(options: RunTaskOptions): Promise<RunTaskRepo
       verification: { state: 'skipped', stdout: '', stderr: '' },
       steps: 0,
       toolCalls: [],
-      messages: [(err as Error).message],
+      messages: ['provider.model is required for run.'],
       contextBudgetTokens: projectConfig.config.contextBudgetTokens ?? 131072,
       maxModelSteps: projectConfig.config.maxModelSteps ?? 64,
       maxToolCalls: projectConfig.config.maxToolCalls ?? 192,
-      error: (err as Error).message,
+      error: 'provider.model is required',
     };
   }
 
-  const { client, metadata } = factoryResult;
+  const client = createOpenAICompatibleClient(providerConfig);
   const dirtyTree = await detectDirtyTree(options.repoRoot);
   const beforeHead = await gitHead(options.repoRoot);
   let checkpoint: { id: string; statusPath: string; diffPath: string } | null = null;
@@ -99,17 +96,15 @@ export async function runAgentTask(options: RunTaskOptions): Promise<RunTaskRepo
     timestamp: eventNow(),
     mode,
     profile: projectConfig.config.activeProfile ?? 'default',
-    endpoint: metadata.baseUrl,
-    model: metadata.modelId,
-    providerName: metadata.displayName,
+    endpoint: providerConfig.baseUrl,
+    model: providerConfig.model,
+    providerName: providerNameFromPreset(projectConfig.config.provider?.preset),
     contextBudgetTokens: projectConfig.config.contextBudgetTokens ?? 131072,
     contextWindowTokens: projectConfig.config.contextWindowTokens ?? projectConfig.config.contextBudgetTokens ?? 131072,
     maxModelSteps: projectConfig.config.maxModelSteps ?? 64,
     maxToolCalls: projectConfig.config.maxToolCalls ?? 192,
     tools,
     task: options.task,
-    inputPricePer1MTokens: metadata.inputPricePer1MTokens,
-    outputPricePer1MTokens: metadata.outputPricePer1MTokens,
   });
   // Load configured skills for injection into agent context.
   let skillMessages: string[] | undefined;
@@ -381,6 +376,15 @@ export async function runAgentTask(options: RunTaskOptions): Promise<RunTaskRepo
 
 function unique(values: string[]): string[] {
   return [...new Set(values)];
+}
+
+function providerNameFromPreset(preset: string | undefined): string | undefined {
+  if (!preset) return undefined;
+  if (preset === 'relay-local' || preset === 'relay-cloudflare') return 'Relay';
+  if (preset === 'openai') return 'OpenAI';
+  if (preset === 'anthropic') return 'Anthropic';
+  if (preset === 'openrouter') return 'OpenRouter';
+  return undefined;
 }
 
 async function gitHead(repoRoot: string): Promise<string | null> {

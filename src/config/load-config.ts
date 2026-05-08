@@ -624,19 +624,14 @@ function resolveActive(effective: EffectiveSynaxConfig): void {
   const providerId = effective.active.provider;
   const provider = providerId ? effective.providers[providerId] : undefined;
 
-  if (!isQueryableProvider(provider)) {
-    // Fall back to the first provider that has enough local config to answer.
-    const first = Object.values(effective.providers).find(isQueryableProvider);
+  if (!provider || !provider.enabled) {
+    // Fall back to first enabled provider
+    const first = Object.values(effective.providers).find((p) => p.enabled);
     if (first) {
       effective.active.provider = first.id;
       const firstModel = first.models[0];
       if (firstModel) effective.active.model = firstModel.id;
     }
-    return;
-  }
-
-  if (effective.active.model === '') {
-    effective.active.thinking = 'off';
     return;
   }
 
@@ -661,16 +656,6 @@ function resolveActive(effective: EffectiveSynaxConfig): void {
       effective.active.thinking = activeModel.defaultThinkingLevel ?? activeModel.thinkingLevels[0];
     }
   }
-}
-
-function isQueryableProvider(provider: ResolvedProviderConfig | undefined): provider is ResolvedProviderConfig {
-  if (!provider?.enabled) return false;
-  if (!provider.baseUrl.trim()) return false;
-  if (provider.models.length === 0) return false;
-  if (!provider.apiKeyEnv) return true;
-  if (provider.apiKey && provider.apiKey.trim().length > 0 && provider.apiKey !== '••••') return true;
-  const envValue = process.env[provider.apiKeyEnv];
-  return envValue !== undefined && envValue.trim().length > 0;
 }
 
 // ─── Writing ────────────────────────────────────────────────

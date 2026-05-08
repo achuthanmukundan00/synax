@@ -11,17 +11,10 @@ export type ProviderPreset =
   | 'openai'
   | 'anthropic'
   | 'openrouter'
-  | 'custom-openai-compatible'
-  // New provider IDs
-  | 'relay'
-  | 'custom'
-  | 'deepseek'
-  | 'groq'
-  | 'mistral'
-  | 'together';
+  | 'custom-openai-compatible';
 
 export interface ProviderConfig {
-  preset?: string;
+  preset?: ProviderPreset;
   kind?: ProviderKind;
   baseUrl?: string;
   base_url?: string;
@@ -38,10 +31,6 @@ export interface ProviderConfig {
   toolCallParser?: string;
   api_key_env?: string;
   apiKeyEnv?: string;
-  input_price_per_1m_tokens?: number;
-  inputPricePer1MTokens?: number;
-  output_price_per_1m_tokens?: number;
-  outputPricePer1MTokens?: number;
 }
 
 export interface AgentBudgetConfig {
@@ -63,7 +52,7 @@ export interface AgentBudgetConfig {
   max_total_read_result_tokens_per_turn?: number;
 }
 
-function providerPresetDefaults(preset: string): ProviderConfig {
+function providerPresetDefaults(preset: ProviderPreset): ProviderConfig {
   switch (preset) {
     case 'relay-cloudflare':
       return {
@@ -99,54 +88,8 @@ function providerPresetDefaults(preset: string): ProviderConfig {
         base_url: 'https://openrouter.ai/api/v1',
         model: '',
         api_key_env: 'OPENROUTER_API_KEY',
-        custom_headers: {
-          'HTTP-Referer': 'https://github.com/achuthanmukundan00/synax',
-          'X-Title': 'Synax',
-        },
-      };
-    case 'deepseek':
-      return {
-        preset,
-        kind: 'openai-compatible',
-        base_url: 'https://api.deepseek.com/v1',
-        model: 'deepseek-chat',
-        api_key_env: 'DEEPSEEK_API_KEY',
-      };
-    case 'groq':
-      return {
-        preset,
-        kind: 'openai-compatible',
-        base_url: 'https://api.groq.com/openai/v1',
-        model: 'llama-3.3-70b-versatile',
-        api_key_env: 'GROQ_API_KEY',
-      };
-    case 'mistral':
-      return {
-        preset,
-        kind: 'openai-compatible',
-        base_url: 'https://api.mistral.ai/v1',
-        model: 'mistral-large-latest',
-        api_key_env: 'MISTRAL_API_KEY',
-      };
-    case 'together':
-      return {
-        preset,
-        kind: 'openai-compatible',
-        base_url: 'https://api.together.xyz/v1',
-        model: 'meta-llama/Llama-3.3-70B-Instruct-Turbo',
-        api_key_env: 'TOGETHER_API_KEY',
       };
     case 'custom-openai-compatible':
-      return { preset, kind: 'openai-compatible', base_url: '', model: '', api_key_env: '' };
-    case 'relay':
-      return {
-        preset,
-        kind: 'openai-compatible',
-        base_url: 'http://127.0.0.1:1234/v1',
-        model: 'Qwen3.6-35B-A3B-UD-IQ3_XXS.gguf',
-        api_key_env: '',
-      };
-    case 'custom':
       return { preset, kind: 'openai-compatible', base_url: '', model: '', api_key_env: '' };
     case 'relay-local':
     default:
@@ -158,121 +101,6 @@ function providerPresetDefaults(preset: string): ProviderConfig {
         api_key_env: '',
       };
   }
-}
-
-function providerPresetContextWindowDefault(preset: string): number | undefined {
-  switch (preset) {
-    case 'deepseek':
-      return 1_000_000;
-    case 'groq':
-    case 'mistral':
-    case 'together':
-      return 128_000;
-    case 'anthropic':
-      return 200_000;
-    case 'openrouter':
-      return 64_000;
-    case 'openai':
-      return 128_000;
-    case 'relay':
-      return 88_000;
-    default:
-      return undefined;
-  }
-}
-
-function hasExplicitContextWindow(config: ProjectConfig): boolean {
-  return (
-    config.contextBudgetTokens !== undefined ||
-    config.context_budget_tokens !== undefined ||
-    config.contextWindowTokens !== undefined ||
-    config.context_window_tokens !== undefined ||
-    config.agent?.contextBudgetTokens !== undefined ||
-    config.agent?.context_budget_tokens !== undefined ||
-    config.agent?.contextWindowTokens !== undefined ||
-    config.agent?.context_window_tokens !== undefined
-  );
-}
-
-/**
- * Convert legacy ProjectConfig provider section to ProviderFactoryInput
- * for the new provider factory. Preserves backward compatibility.
- */
-export interface ProviderFactoryInput {
-  provider?: string;
-  model?: string;
-  baseUrl?: string;
-  apiKey?: string;
-  apiKeyEnv?: string;
-  customHeaders?: Record<string, string>;
-  timeoutMs?: number;
-  contextWindow?: number;
-  preset?: string;
-  kind?: string;
-  inputPricePer1MTokens?: number;
-  outputPricePer1MTokens?: number;
-}
-
-export function toProviderFactoryInput(config: ProjectConfig): ProviderFactoryInput {
-  const p = config.provider ?? {};
-  const preset = p.preset;
-  const kind = p.kind;
-  const baseUrl = p.base_url ?? p.baseUrl;
-  const model = p.model ?? config.model;
-  const apiKeyEnv = p.api_key_env ?? p.apiKeyEnv;
-  const apiKey = p.api_key ?? p.apiKey;
-
-  // Resolve custom headers
-  const headersInput = p.custom_headers ?? p.customHeaders;
-  const customHeaders: Record<string, string> = {};
-  if (headersInput) {
-    for (const [name, value] of Object.entries(headersInput)) {
-      if (value.startsWith('$')) {
-        const envName = value.slice(1);
-        const resolved = process.env[envName];
-        if (resolved) customHeaders[name] = resolved;
-        continue;
-      }
-      customHeaders[name] = value;
-    }
-  }
-
-  // Map legacy preset names to new provider IDs
-  const providerMap: Record<string, string> = {
-    'relay-local': 'relay',
-    'relay-cloudflare': 'relay',
-    'custom-openai-compatible': 'custom',
-    openai: 'custom', // OpenAI uses custom base URL
-    openrouter: 'openrouter',
-    anthropic: 'anthropic',
-    deepseek: 'deepseek',
-    groq: 'groq',
-    mistral: 'mistral',
-    together: 'together',
-    relay: 'relay',
-    custom: 'custom',
-  };
-
-  const providerId = preset ? (providerMap[preset] ?? preset) : undefined;
-
-  const timeoutSeconds = p.timeout_seconds ?? p.timeoutSeconds;
-  const timeoutMsRaw = p.timeout_ms ?? p.timeoutMs;
-  const timeoutMs = timeoutMsRaw ?? (timeoutSeconds !== undefined ? timeoutSeconds * 1000 : undefined);
-
-  return {
-    provider: providerId,
-    model: model || undefined,
-    baseUrl: baseUrl || undefined,
-    apiKey: apiKey || undefined,
-    apiKeyEnv: apiKeyEnv || undefined,
-    customHeaders: Object.keys(customHeaders).length > 0 ? customHeaders : undefined,
-    timeoutMs,
-    contextWindow: config.contextWindowTokens ?? config.contextBudgetTokens,
-    preset: preset ?? undefined,
-    kind: kind ?? undefined,
-    inputPricePer1MTokens: p.inputPricePer1MTokens ?? p.input_price_per_1m_tokens,
-    outputPricePer1MTokens: p.outputPricePer1MTokens ?? p.output_price_per_1m_tokens,
-  };
 }
 
 export function normalizeProviderConfig(
@@ -606,10 +434,10 @@ export function validateConfig(config: ProjectConfig): ValidationError[] {
     } else {
       const p = config.provider;
       const kind = p.kind;
-      if (kind !== undefined && kind !== 'openai-compatible' && kind !== 'anthropic-messages') {
+      if (kind !== undefined && kind !== 'openai-compatible') {
         errors.push({
           path: 'provider.kind',
-          message: `unsupported-provider: kind="${kind}" is not supported. Use "openai-compatible" or "anthropic-messages".`,
+          message: `unsupported-provider: kind="${kind}" is not supported in v0.1. Use "openai-compatible". Native Anthropic provider support is not available.`,
         });
       }
       const resolvedBaseUrl = p.base_url ?? p.baseUrl;
@@ -789,7 +617,7 @@ function stringValue(value: unknown): string | undefined {
 function projectProviderFromEffectiveProvider(provider: ResolvedProviderConfig, model: string): ProviderConfig {
   const apiKey = provider.apiKey === '••••' ? undefined : provider.apiKey;
   return {
-    preset: provider.id,
+    preset: provider.id as ProviderPreset,
     kind: 'openai-compatible',
     base_url: provider.baseUrl,
     baseUrl: provider.baseUrl,
@@ -854,16 +682,14 @@ export function loadProjectConfig(baseDir?: string): LoadProjectConfigResult {
       errors.push({ path: discoveredPath, message: `Failed to parse TOML: ${(err as Error).message}` });
     }
   }
-  const hasExplicitContextConfig =
-    hasExplicitContextWindow(userConfig) ||
-    hasExplicitContextWindow(config) ||
-    process.env.SYNAX_CONTEXT_BUDGET_TOKENS !== undefined;
   if (hasExtendedSettings) {
     const effectiveSettings = loadSynaxConfig(baseDir);
     config = applyEffectiveSynaxConfigToProjectConfig(config, effectiveSettings);
   }
-  const activeProviderPreset =
-    config.provider?.preset ?? userConfig.provider?.preset ?? DEFAULTS.provider?.preset ?? 'relay-local';
+  const activeProviderPreset = (config.provider?.preset ??
+    userConfig.provider?.preset ??
+    DEFAULTS.provider?.preset ??
+    'relay-local') as ProviderPreset;
   const provider = {
     ...DEFAULTS.provider,
     ...providerPresetDefaults(activeProviderPreset),
@@ -899,13 +725,6 @@ export function loadProjectConfig(baseDir?: string): LoadProjectConfigResult {
     },
     errors,
   );
-  if (!hasExtendedSettings && !hasExplicitContextConfig) {
-    const providerContextWindow = providerPresetContextWindowDefault(activeProviderPreset);
-    if (providerContextWindow !== undefined) {
-      mergedConfig.contextWindowTokens = providerContextWindow;
-      mergedConfig.contextBudgetTokens = providerContextWindow;
-    }
-  }
   const validationErrors = validateConfig(mergedConfig);
   errors.push(...validationErrors);
   return {
