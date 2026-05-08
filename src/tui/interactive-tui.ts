@@ -31,6 +31,31 @@ import { listSessionsSorted, type SessionMetadata } from '../sessions/session-st
 import { loadSynaxConfig, persistConfig } from '../config/load-config';
 import type { EffectiveSynaxConfig } from '../config/schema';
 
+export function renderAutocompleteOverlay(
+  lines: string[],
+  ac: { visible: boolean; selection: number; filtered: SlashCommand[] },
+  width: number,
+): string[] {
+  if (!ac.visible || ac.filtered.length === 0) return lines;
+
+  const renderWidth = terminalWriteWidth(width);
+  const overlayLines: string[] = [];
+  overlayLines.push(dim('  -- commands --'));
+  for (let i = 0; i < Math.min(ac.filtered.length, 8); i += 1) {
+    const cmd = ac.filtered[i];
+    const desc = cmd.description ? ` - ${cmd.description}` : '';
+    const text = `${i === ac.selection ? bold(` -> /${cmd.name}${desc}`) : dim(`    /${cmd.name}${desc}`)}`;
+    overlayLines.push(text);
+  }
+
+  const insertAt = Math.max(0, lines.length - 5 - overlayLines.length);
+  const rendered = lines.slice();
+  for (let i = 0; i < overlayLines.length && insertAt + i < rendered.length; i += 1) {
+    rendered[insertAt + i] = padAnsi(clipAnsi(overlayLines[i], renderWidth), renderWidth);
+  }
+  return rendered;
+}
+
 export async function runInteractiveTui(
   session: ChatSession,
   options?: {
@@ -172,27 +197,6 @@ export async function runInteractiveTui(
       maxHistoryScrollOffset(viewState(), terminal.columns, terminal.rows),
       Math.max(0, historyScrollOffset),
     );
-  };
-
-  const bold = (text: string): string => `\u001b[1;37m${text}\u001b[0m`;
-  const dim = (text: string): string => `\u001b[90m${text}\u001b[0m`;
-
-  const renderAutocompleteOverlay = (
-    lines: string[],
-    ac: { visible: boolean; selection: number; filtered: SlashCommand[] },
-    _width: number,
-  ): string[] => {
-    if (!ac.visible || ac.filtered.length === 0) return lines;
-    const overlayLines: string[] = [];
-    overlayLines.push(dim('  ── commands ──'));
-    for (let i = 0; i < Math.min(ac.filtered.length, 8); i += 1) {
-      const cmd = ac.filtered[i];
-      const desc = cmd.description ? ` — ${cmd.description}` : '';
-      const line = `${i === ac.selection ? bold(` → /${cmd.name}${desc}`) : dim(`   /${cmd.name}${desc}`)}`;
-      overlayLines.push(line);
-    }
-    const insertAt = Math.max(0, lines.length - 5 - overlayLines.length);
-    return [...lines.slice(0, insertAt), ...overlayLines, ...lines.slice(insertAt)];
   };
 
   const paint = (force = false): void => {
@@ -612,7 +616,7 @@ export async function runInteractiveTui(
       return loadSynaxConfig();
     } catch {
       return {
-        active: { provider: 'relay-local', model: '', thinking: 'off' },
+        active: { provider: 'relay', model: '', thinking: 'off' },
         providers: {},
         skills: { enabled: [], disabled: [] },
         mcp: { servers: {} },
@@ -763,6 +767,54 @@ function inferThinkingMode(state: RunStateSnapshot): CoreMode {
     return 'planning';
   }
   return 'reasoning';
+}
+
+function bold(text: string): string {
+  return `\u001b[1;37m${text}\u001b[0m`;
+}
+
+function dim(text: string): string {
+  return `\u001b[90m${text}\u001b[0m`;
+}
+
+function stripAnsi(text: string): string {
+  // eslint-disable-next-line no-control-regex
+  return text.replace(/\u001b\[[0-9;]*m/g, '');
+}
+
+function padAnsi(text: string, width: number): string {
+  const visible = stripAnsi(text).length;
+  if (visible >= width) return text;
+  return `${text}${' '.repeat(width - visible)}`;
+}
+
+function clipAnsi(text: string, width: number): string {
+  const visible = stripAnsi(text);
+  if (visible.length <= width) return text;
+
+  const target = Math.max(0, width - 1);
+  let visibleCount = 0;
+  let out = '';
+  for (let i = 0; i < text.length; i += 1) {
+    if (text[i] === '\u001b') {
+      // eslint-disable-next-line no-control-regex
+      const match = /\u001b\[[0-9;]*m/.exec(text.slice(i));
+      if (match) {
+        out += match[0];
+        i += match[0].length - 1;
+        continue;
+      }
+    }
+
+    if (visibleCount >= target) break;
+    out += text[i];
+    visibleCount += 1;
+  }
+  return `${out}…`;
+}
+
+function terminalWriteWidth(width: number): number {
+  return width > 1 ? width - 1 : width;
 }
 
 function inferToolExecutionMode(state: RunStateSnapshot): CoreMode {

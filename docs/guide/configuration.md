@@ -34,7 +34,7 @@ vim .synax.toml
 
 ```toml
 [active]
-provider = "relay-local"
+provider = "relay"
 model = "Qwen3.6-35B-A3B-UD-IQ3_XXS.gguf"
 thinking = "off"
 ```
@@ -42,16 +42,16 @@ thinking = "off"
 ### Provider Definitions
 
 ```toml
-[providers.relay-local]
+[providers.relay]
 enabled = true
-name = "Relay Local"
+name = "Relay"
 compatibility = "openai-compatible"
 base_url = "http://127.0.0.1:1234/v1"
 
-[[providers.relay-local.models]]
+[[providers.relay.models]]
 id = "Qwen3.6-35B-A3B-UD-IQ3_XXS.gguf"
 display_name = "Qwen3.6 35B Local"
-context_window = 88000
+context_window = 131072
 supports_thinking = false
 
 [providers.deepseek]
@@ -71,7 +71,7 @@ supports_thinking = false
 ### Custom Headers
 
 ```toml
-[providers.relay-local.headers]
+[providers.relay.headers]
 "X-Custom-Header" = "${MY_ENV_VAR}"
 ```
 

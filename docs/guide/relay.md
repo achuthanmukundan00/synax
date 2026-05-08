@@ -28,7 +28,7 @@ mode = "sequential"
 defaultCommand = "npm run typecheck"
 
 [provider]
-preset = "relay-local"
+preset = "relay"
 kind = "openai-compatible"
 base_url = "http://127.0.0.1:1234/v1"
 model = "Qwen3.6-35B-A3B-UD-IQ3_XXS.gguf"
@@ -52,7 +52,7 @@ Synax currently normalizes these provider presets:
 
 | Preset                     | Use                                              |
 | -------------------------- | ------------------------------------------------ |
-| `relay-local`              | Default local Relay endpoint at `127.0.0.1:1234` |
+| `relay`              | Default local Relay endpoint at `127.0.0.1:1234` |
 | `openai`                   | OpenAI-compatible cloud endpoint                 |
 | `anthropic`                | Experimental OpenAI-compatible config shape only |
 | `openrouter`               | OpenRouter-compatible endpoint                   |

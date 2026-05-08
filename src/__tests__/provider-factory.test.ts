@@ -94,7 +94,7 @@ describe('Provider factory — relay (local)', () => {
 
   it('exposes correct metadata for relay', () => {
     const { metadata } = createLLMClient(makeInput({ baseUrl: getServerUrl(srv) }));
-    expect(metadata.displayName).toBe('Relay (local)');
+    expect(metadata.displayName).toBe('Relay');
     expect(metadata.streamingSupported).toBe(true);
     expect(metadata.toolCallingSupported).toBe(true);
     expect(metadata.apiKeyConfigured).toBe(false);
