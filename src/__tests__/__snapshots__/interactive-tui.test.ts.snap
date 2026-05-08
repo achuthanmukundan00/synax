@@ -3,14 +3,14 @@
 exports[`interactive layout visual agreements matches the active docked-core render snapshot 1`] = `
 "  Synax v0.0.21-alpha  Tool  0:02
 
-  ※ note       Inspecting files before editing.                                  ┌ Synax Core ──────────────────────┐
-                                                                                 │               ˙˙ ˙·              │
-  $ bash       exit 0                                                            │         · ··˙╲◆│││◆˙˙˙ ·         │
-    command    npm test -- src/__tests__/interactive-tui.test.ts                 │       ˙˙ ╲◆· ╭─────╮˙╱◆··        │
-    output     PASS                                                              │       ● ●─● ●│●●●●●│● ◆● ●       │
-                                                                                 │       ● ●╱◆●●╰─────╯ ╲◆  ●       │
-                                                                                 │         ˙  ˙˙╱◆│││◆· ˙˙          │
-                                                                                 │               ·· ··              │
+  • Inspecting files before editing.                                             ┌ Synax Core ──────────────────────┐
+                                                                                 │               ˙  ˙               │
+  $ npm test -- src/__tests__/interactive-tui.test.ts  exit 0                    │           ···╲◆│││◆· ˙           │
+    output     PASS                                                              │       ·  ╲◆  ╭─────╮ ╱◆ ··       │
+                                                                                 │       ●  ─  ●│●●●●●│ ●◆  ●       │
+                                                                                 │       ●  ╱◆  ╰─────╯ ╲◆  ●       │
+                                                                                 │           · ˙╱◆│││◆˙ ·           │
+                                                                                 │               ˙  ˙               │
                                                                                  │                                  │
                                                                                  │Runtime                           │
                                                                                  │Core        Loaded                │
@@ -29,22 +29,22 @@ exports[`interactive layout visual agreements matches the active docked-core ren
 
 
 
-╔═════════════════════════════════════════════════════════════════════════════════════════════════════════════════════╗
-║ continue polishing the feed                                                                                         ║
-║                                                                                                                     ║
-╚ Enter submit | Ctrl+C exit | /help | !cmd shell ════════════════════════════════════════════════════════════════════╝"
+┌─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│ continue polishing the feed                                                                                         │
+│                                                                                                                     │
+└ Enter submit  Ctrl+C exit  /help  !cmd shell ───────────────────────────────────────────────────────────────────────┘"
 `;
 
 exports[`interactive layout visual agreements matches the blocked budget-exhausted render snapshot 1`] = `
 "  Synax v0.0.21-alpha  Budget exhausted  0:00
 
   No runtime events yet.                                                         ┌ Synax Core ──────────────────────┐
-                                                                                 │               .  ×               │
-                                                                                 │           ·  ╲│││×╱ ·  .         │
-                                                                                 │       ·  ╲×  ╭─────╮.×╱×         │
-                                                                                 │       •  •  ×│×•×••│• •─ ×       │
-                                                                                 │         •╱•••╰─────╯ •╲  •       │
-                                                                                 │         ·  ×╱╱││││╲╲ .           │
+                                                                                 │               ·  ×               │
+                                                                                 │           .  ╲│││×╱  ×           │
+                                                                                 │       ·  ╲×  ╭─────╮ ×╱  ×       │
+                                                                                 │       •  •  ×│×•×••│  •          │
+                                                                                 │       •  ╱•  ╰─────╯ •╲  •       │
+                                                                                 │           .  ╱││││╲  ·           │
                                                                                  │               .  .               │
                                                                                  │                                  │
                                                                                  │Runtime                           │
@@ -65,22 +65,22 @@ exports[`interactive layout visual agreements matches the blocked budget-exhaust
 
 
 
-╔═════════════════════════════════════════════════════════════════════════════════════════════════════════════════════╗
-║                                                                                                                     ║
-╚ Enter submit | Ctrl+C exit | /help | !cmd shell ════════════════════════════════════════════════════════════════════╝"
+┌─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│                                                                                                                     │
+└ Enter submit  Ctrl+C exit  /help  !cmd shell ───────────────────────────────────────────────────────────────────────┘"
 `;
 
 exports[`interactive layout visual agreements matches the completed render snapshot 1`] = `
 "  Synax v0.0.21-alpha  Completed  0:00
 
   No runtime events yet.                                                         ┌ Synax Core ──────────────────────┐
-                                                                                 │               ·  ·               │
-                                                                                 │           ··╲╲│· │╱╱.  .         │
-                                                                                 │       ·  ╲   ╭─────╮  ╱·         │
-                                                                                 │         ─◎  ◎│◎◎◎◎◎│  ◎─ ◎       │
-                                                                                 │         ◎╱ ◎◎╰─────╯ ◎╲  ◎       │
-                                                                                 │            .╱╱│.  ╲╲ ·           │
-                                                                                 │                  ·               │
+                                                                                 │              ·    ·              │
+                                                                                 │          ·  ╲╲│  │╱╱  .          │
+                                                                                 │          ╲  ·╭─────╮  ╱          │
+                                                                                 │         ─◎ ◎◎│◎◎◎◎◎│◎ ◎─         │
+                                                                                 │          ╱  ◎╰─────╯  ╲          │
+                                                                                 │          ·  ╱╱   │╲╲· ·          │
+                                                                                 │              .    .              │
                                                                                  │                                  │
                                                                                  │Runtime                           │
                                                                                  │Core        Unloaded              │
@@ -100,25 +100,25 @@ exports[`interactive layout visual agreements matches the completed render snaps
 
 
 
-╔═════════════════════════════════════════════════════════════════════════════════════════════════════════════════════╗
-║                                                                                                                     ║
-╚ Enter submit | Ctrl+C exit | /help | !cmd shell ════════════════════════════════════════════════════════════════════╝"
+┌─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│                                                                                                                     │
+└ Enter submit  Ctrl+C exit  /help  !cmd shell ───────────────────────────────────────────────────────────────────────┘"
 `;
 
 exports[`interactive layout visual agreements matches the idle large-core render snapshot 1`] = `
 "  Synax v0.0.21-alpha  Idle  0:02
 
-                                ·  .
-                            ·   ·  .  .             Runtime
-                        ·   ╲╲╲╲· ·   ╱╱╱╱  .       Core        Unloaded
-                        ◎◎╲╲  ◎╭───────╮◎  ╱◎  ◎    Model       —
-                       ◎──◎   ◎│◎◎◎◎◎◎◎│◎  ◎─ ◎     Provider    —
-                      ··─ .  ..│◎◎◎◎◎◎◎│.  ·.─.     Context     —
-                      .  ─   . │◎◎◎◎◎◎·│  · ──      [────────────────────────]
-                     .   .╱ .  ╰───────╯ ·╲╲ ·  .
-                        .  ·╱╱╱╱. .  ·╲╲╲╲  ·       Session
-                              .      .  ·           Thinking    —
-                                 .  .               Spend       —
+
+                               ·  ·.                Runtime
+                           ·╲╲╲╲  ·.  ╱╱╱╱.         Core        Unloaded
+                       ◎  ╲╲  ◎╭───────╮  ╱╱  ◎     Model       —
+                      ◎  ─◎  ◎ │◎◎◎◎◎◎◎│◎  ◎─  ◎    Provider    —
+                      · ─.   ..│◎◎◎◎◎◎◎│.   ·─      Context     —
+                      ·  ─.  . │◎◎◎◎◎◎·│·  ·─  .    [────────────────────────]
+                       .  ╱╱  ·╰───────╯  ╲╲  ·
+                           .╱╱╱╱      ╲╲╲╲·  ·      Session
+                                  ..  .             Thinking    —
+                                                    Spend       —
                                                     Tools       none
                                                     Steps       —
 
@@ -127,15 +127,15 @@ exports[`interactive layout visual agreements matches the idle large-core render
 
 
 
-╔═════════════════════════════════════════════════════════════════════════════╗
-║                                                                             ║
-╚ Enter submit | Ctrl+C exit | /help | !cmd shell ════════════════════════════╝"
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                                                                             │
+└ Enter submit  Ctrl+C exit  /help  !cmd shell ───────────────────────────────┘"
 `;
 
 exports[`interactive layout visual agreements matches the narrow terminal fallback snapshot 1`] = `
 "  Synax v0.0.21-alpha  Thinking  0:02
 
-  ※ note       Inspecting files before editing.
+  • Inspecting files before editing.
 
   ◌ working  waiting for model response…
 
@@ -147,8 +147,8 @@ exports[`interactive layout visual agreements matches the narrow terminal fallba
 
 
 
-╔═════════════════════════════════════════════════════╗
-║ short task                                          ║
-║                                                     ║
-╚ Enter submit | Ctrl+C exit | /help | !cmd shell ════╝"
+┌─────────────────────────────────────────────────────┐
+│ short task                                          │
+│                                                     │
+└ Enter submit  Ctrl+C exit  /help  !cmd shell ───────┘"
 `;

@@ -60,7 +60,7 @@ export function modeColor(mode: CoreMode): string {
   if (mode === 'blocked') return '\u001b[33m';
   if (mode === 'failure' || mode === 'error') return '\u001b[31m';
   if (mode === 'completed') return '\u001b[32m';
-  if (mode === 'verifying') return '\u001b[32m';
+  if (mode === 'verifying') return '\u001b[34m';
   if (
     mode === 'idle' ||
     mode === 'planning' ||
@@ -143,7 +143,10 @@ function renderFieldCell(state: FieldState, x: number, y: number, width: number,
   const harmonic = Math.sin((x + y * 1.8 + frame * p.sync) * 0.62);
   const lockedPulse = Math.abs(Math.sin(frame * 0.42 + y * 0.35));
   const stress = p.strain && positiveModulo(x * 7 + y * 11 + frame, 13) < 3;
-  const grain = positiveModulo(x * 29 + y * 17 + frame * 5, 97) / 97;
+  const sx = Math.min(x, width - 1 - x);
+  const sy = Math.min(y, height - 1 - y);
+  const grainFrame = p.stable ? 0 : frame;
+  const grain = positiveModulo(sx * 29 + sy * 17 + grainFrame * 5, 97) / 97;
   const density =
     p.density +
     central * centralDensity(state.visualProfile) +
@@ -463,28 +466,28 @@ function isToolScanCell(
 
 function profileForMode(mode: NormalizedCoreMode): CoreProfile {
   if (mode === 'idle') {
-    return { density: 0.18, flow: 0.04, pressure: 0.18, compression: 0.06, sync: 0.12, strain: false, stable: true };
+    return { density: 0.12, flow: 0.02, pressure: 0.18, compression: 0.06, sync: 0.08, strain: false, stable: true };
   }
   if (mode === 'unloaded') {
     return { density: 0.14, flow: 0, pressure: 0, compression: 0, sync: 0, strain: false, stable: true };
   }
   if (mode === 'thinking') {
-    return { density: 0.43, flow: 1.45, pressure: 0.82, compression: 0.12, sync: 0.56, strain: false, stable: false };
+    return { density: 0.3, flow: 1.0, pressure: 0.82, compression: 0.12, sync: 0.42, strain: false, stable: false };
   }
   if (mode === 'tool_execution') {
-    return { density: 0.47, flow: 1.0, pressure: 1.0, compression: 0.44, sync: 0.45, strain: false, stable: false };
+    return { density: 0.32, flow: 0.82, pressure: 1.0, compression: 0.38, sync: 0.34, strain: false, stable: false };
   }
   if (mode === 'verifying') {
-    return { density: 0.35, flow: 0.72, pressure: 0.62, compression: 0.18, sync: 0.9, strain: false, stable: true };
+    return { density: 0.24, flow: 0.5, pressure: 0.62, compression: 0.18, sync: 0.72, strain: false, stable: true };
   }
   if (mode === 'completed') {
-    return { density: 0.22, flow: 0.04, pressure: 0.28, compression: 0.08, sync: 0.12, strain: false, stable: true };
+    return { density: 0.16, flow: 0.02, pressure: 0.28, compression: 0.08, sync: 0.08, strain: false, stable: true };
   }
   if (mode === 'blocked') {
-    return { density: 0.34, flow: 0.52, pressure: 0.78, compression: 0.32, sync: 0.42, strain: true, stable: false };
+    return { density: 0.28, flow: 0.38, pressure: 0.78, compression: 0.32, sync: 0.34, strain: true, stable: false };
   }
   if (mode === 'failure') {
-    return { density: 0.43, flow: 0.64, pressure: 1.0, compression: 0.4, sync: 0.62, strain: true, stable: true };
+    return { density: 0.3, flow: 0.42, pressure: 1.0, compression: 0.4, sync: 0.5, strain: true, stable: true };
   }
   return { density: 0.43, flow: 0.64, pressure: 1.0, compression: 0.4, sync: 0.62, strain: true, stable: false };
 }

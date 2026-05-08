@@ -15,12 +15,12 @@ describe('layout input dock', () => {
       24,
     ).map(stripAnsi);
 
-    const dockTop = findLastIndex(lines, (line) => line.trimStart().startsWith('╔'));
+    const dockTop = findLastIndex(lines, (line) => line.trimStart().startsWith('┌'));
     const dock = dockTop >= 0 ? lines.slice(dockTop) : [];
 
     expect(dock.length).toBeGreaterThan(4);
-    expect(dock[0]?.trimStart().startsWith('╔')).toBe(true);
-    expect(dock.at(-1)?.trimStart().startsWith('╚ Enter submit')).toBe(true);
+    expect(dock[0]?.trimStart().startsWith('┌')).toBe(true);
+    expect(dock.at(-1)?.trimStart().startsWith('└ Enter submit')).toBe(true);
     expect(lines.join('\n')).toContain('TAIL_MARKER');
   });
 
