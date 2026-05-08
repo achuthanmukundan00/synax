@@ -37,14 +37,14 @@ export const llama3JsonParser: ToolCallParser = {
     const sanitized = sanitizeReasoningTags(content);
 
     // Strip Llama header/footer tags if present (model output format)
-    let text = sanitized
+    const text = sanitized
       .replace(/<\|start_header_id\|>assistant<\|end_header_id\|>/gi, '')
       .replace(/<\|eot_id\|>/gi, '')
       .trim();
 
     const calls: ParsedToolCall[] = [];
     let remaining = text;
-    let nonToolParts: string[] = [];
+    const nonToolParts: string[] = [];
 
     while (remaining.length > 0) {
       const tagIdx = remaining.indexOf(PYTHON_TAG);
