@@ -2,6 +2,8 @@ import { h, type App } from 'vue'
 import { useData } from 'vitepress'
 import DefaultTheme from 'vitepress/theme'
 import SynaxLanding from './components/SynaxLanding.vue'
+import CoreTranscriptHero from './components/CoreTranscriptHero.vue'
+import MeasuredTerminalBlock from './components/MeasuredTerminalBlock.vue'
 import './style.css'
 
 export default {
@@ -15,5 +17,7 @@ export default {
   },
   enhanceApp({ app }: { app: App }) {
     app.component('SynaxLanding', SynaxLanding)
+    app.component('CoreTranscriptHero', CoreTranscriptHero)
+    app.component('MeasuredTerminalBlock', MeasuredTerminalBlock)
   },
 }

@@ -178,3 +178,29 @@ Full provider checks:
 ```sh
 npm run synax -- doctor --full
 ```
+
+## Typical Workflow
+
+<MeasuredTerminalBlock
+  title="synax session"
+  :lines="[
+    'synax chat',
+    '/status',
+    '  core: qwen-coder',
+    '  provider: relay (local)',
+    '  ctx: 0 / 32768',
+    '',
+    '> fix the type error in src/config.ts',
+    '',
+    '  reasoning: type mismatch...',
+    '  read src/config.ts',
+    '  edit src/config.ts',
+    '  test npm test',
+    '  result: verification passed',
+    '',
+    '/status',
+    '  state: succeeded',
+  ]"
+  :dimLines="[4, 5, 6, 7]"
+  ariaLabel="Example Synax session showing status, a coding request, tool calls, and completion"
+/>
