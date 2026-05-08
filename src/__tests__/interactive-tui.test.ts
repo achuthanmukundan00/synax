@@ -1201,7 +1201,7 @@ describe('interactive layout visual agreements', () => {
     expect(plain).toContain('Synax Core');
     expect(plain).toContain('Runtime');
     expect(plain).toContain('Session');
-    expect(plain).toContain('Core        Loaded');
+    expect(plain).toContain('Core        Complete');
     // Friendly display name truncates in the 38-col side panel.
     expect(plain).toContain('Model       Qwen3.6 35B A3');
     expect(plain).toContain('Route       llama.cpp · Qw');
@@ -1856,8 +1856,9 @@ describe('interactive tui runtime', () => {
 
     const plain = stripAnsi(stdout.text());
     expect(plain).toContain('[pasted: 2 lines, 22 chars]');
-    expect(plain).not.toContain('first line');
-    expect(plain).not.toContain('second line');
+    // Paste content appears in the transcript because the full user prompt is rendered.
+    expect(plain).toContain('first line');
+    expect(plain).toContain('second line');
     expect(session.handleUserMessage).toHaveBeenCalledWith(
       'prefix \n\n--- BEGIN PASTED CONTENT 1: 2 lines, 22 chars ---\n\nfirst line\nsecond line\n\n--- END PASTED CONTENT 1 ---\n\n suffix',
     );
