@@ -29,10 +29,11 @@ The settings menu opens as a full-screen modal overlay.
 ### Model
 
 - **Active Provider**: Select from enabled providers
-- **Active Model**: Select from provider's model list
+- **Active Model**: Select from provider's model list, or choose **No model** to leave the core unloaded
 - **Thinking**: Set thinking level (off/low/medium/high/auto)
 
 Models that don't support thinking show the thinking control as dimmed/disabled.
+When **No model** is selected, model submissions are blocked until a model is selected again.
 
 ### Providers
 
