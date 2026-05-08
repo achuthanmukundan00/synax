@@ -667,10 +667,11 @@ function isQueryableProvider(provider: ResolvedProviderConfig | undefined): prov
   if (!provider?.enabled) return false;
   if (!provider.baseUrl.trim()) return false;
   if (provider.models.length === 0) return false;
-  if (!provider.apiKeyEnv) return true;
-  if (provider.apiKey && provider.apiKey.trim().length > 0 && provider.apiKey !== '••••') return true;
-  const envValue = process.env[provider.apiKeyEnv];
-  return envValue !== undefined && envValue.trim().length > 0;
+  // API key presence is NOT gated here — the LLM factory (createLLMClient)
+  // surfaces missing keys as clear, actionable errors at call time.
+  // Gating on the key here would silently revert the user's provider
+  // selection in the settings UI, which is worse than a clear error.
+  return true;
 }
 
 // ─── Writing ────────────────────────────────────────────────

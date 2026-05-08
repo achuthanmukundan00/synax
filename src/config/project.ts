@@ -241,6 +241,7 @@ export function toProviderFactoryInput(config: ProjectConfig): ProviderFactoryIn
   const providerMap: Record<string, string> = {
     'relay-local': 'relay',
     'relay-cloudflare': 'relay',
+    'relay-cf': 'relay',
     'custom-openai-compatible': 'custom',
     openai: 'custom', // OpenAI uses custom base URL
     openrouter: 'openrouter',

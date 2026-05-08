@@ -560,7 +560,7 @@ id = "deepseek-chat"
     expect(effective.active.thinking).toBe('off'); // not set, so default
   });
 
-  it('falls back when the active provider requires a missing API key', () => {
+  it('keeps active provider even when API key is missing (key check belongs in LLM factory)', () => {
     const originalKey = process.env.ANTHROPIC_API_KEY;
     delete process.env.ANTHROPIC_API_KEY;
     const localPath = join(TMP, '.synax.toml');
@@ -584,8 +584,9 @@ id = "claude-3-5-haiku-20241022"
 
     try {
       const effective = loadSynaxConfig(TMP);
-      expect(effective.active.provider).toBe('relay-local');
-      expect(effective.active.model).toBe('Qwen3.6-35B-A3B-UD-IQ3_XXS.gguf');
+      // Provider selection should stick — the API key error is surfaced later by createLLMClient
+      expect(effective.active.provider).toBe('anthropic');
+      expect(effective.active.model).toBe('claude-3-5-haiku-20241022');
     } finally {
       if (originalKey === undefined) {
         delete process.env.ANTHROPIC_API_KEY;
