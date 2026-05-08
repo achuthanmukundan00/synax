@@ -2,7 +2,7 @@ import { readFileSync, existsSync, writeFileSync } from 'fs';
 import { basename, dirname, join } from 'path';
 import { parse as parseToml } from 'toml';
 import { loadSynaxConfig } from './load-config';
-import type { EffectiveSynaxConfig, ResolvedProviderConfig } from './schema';
+import type { EffectiveSynaxConfig, ResolvedProviderConfig, ThinkingLevel } from './schema';
 
 export type ProviderKind = 'openai-compatible' | 'anthropic-messages';
 export type ProviderPreset =
@@ -191,7 +191,7 @@ export interface ProviderFactoryInput {
   kind?: string;
   inputPricePer1MTokens?: number;
   outputPricePer1MTokens?: number;
-  thinkingLevel?: 'off' | 'low' | 'medium' | 'high' | 'auto';
+  thinkingLevel?: ThinkingLevel;
 }
 
 export function toProviderFactoryInput(config: ProjectConfig): ProviderFactoryInput {
@@ -257,7 +257,7 @@ export function toProviderFactoryInput(config: ProjectConfig): ProviderFactoryIn
 
 export function normalizeProviderConfig(
   p: ProviderConfig,
-  opts?: { thinkingLevel?: 'off' | 'low' | 'medium' | 'high' | 'auto' },
+  opts?: { thinkingLevel?: ThinkingLevel },
 ): import('../llm/types').NormalizedProviderConfig {
   const presetDefaults = providerPresetDefaults(p.preset ?? 'relay');
   const headersInput = p.custom_headers ?? p.customHeaders ?? presetDefaults.custom_headers;

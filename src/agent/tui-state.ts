@@ -558,6 +558,18 @@ function upsertModelHistory(state: RunStateSnapshot, item: TuiDebugHistoryItem):
     debugHistory.push(item.detail.length >= last.detail.length ? item : last);
     return { ...state, debugHistory };
   }
+  // Also dedupe when the normalized summaries are identical (catches
+  // cases where delta-accumulated detail differs in whitespace/formatting
+  // from the final assistant_message but the prose is the same).
+  if (last?.kind === 'model' && item.kind === 'model') {
+    const lastSummary = summarizeModelOutput(last.detail);
+    const itemSummary = summarizeModelOutput(item.detail);
+    if (lastSummary && itemSummary && lastSummary === itemSummary) {
+      const debugHistory = state.debugHistory.slice(0, -1);
+      debugHistory.push(item.detail.length >= last.detail.length ? item : last);
+      return { ...state, debugHistory };
+    }
+  }
   return withDebugHistory(state, item);
 }
 

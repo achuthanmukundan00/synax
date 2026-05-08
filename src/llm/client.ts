@@ -249,10 +249,16 @@ async function readOpenAIStream(
   let finishReason: string | null = null;
   let usage: unknown;
   const toolCalls = new Map<number, { id?: string; name?: string; arguments: string }>();
+  // Track non-SSE raw bytes in case the server responds with plain JSON
+  // instead of the expected text/event-stream format.
+  let rawBody = '';
+  let hasSsePayloads = false;
 
   for (;;) {
     const { value, done } = await reader.read();
-    buffer += decoder.decode(value, { stream: !done });
+    const chunk = decoder.decode(value, { stream: !done });
+    buffer += chunk;
+    rawBody += chunk;
     const parts = buffer.split(/\r?\n\r?\n/);
     buffer = parts.pop() ?? '';
     for (const part of parts) {
@@ -262,6 +268,7 @@ async function readOpenAIStream(
         .map((line) => line.slice(5).trim());
       for (const payload of payloads) {
         if (!payload || payload === '[DONE]') continue;
+        hasSsePayloads = true;
         const parsed = JSON.parse(payload) as StreamChunk;
         if (parsed.model) model = parsed.model;
         if (parsed.usage) usage = parsed.usage;
@@ -283,6 +290,34 @@ async function readOpenAIStream(
       }
     }
     if (done) break;
+  }
+
+  // Fallback: when the server returns plain JSON instead of SSE (e.g.
+  // because it ignores the stream flag), parse the raw body directly.
+  if (!hasSsePayloads && rawBody.trim()) {
+    try {
+      const parsed = JSON.parse(rawBody.trim()) as {
+        model?: string;
+        choices?: Array<{
+          message?: {
+            role?: string;
+            content?: string;
+            reasoning_content?: string;
+            tool_calls?: unknown;
+          };
+          finish_reason?: string | null;
+        }>;
+      };
+      if (parsed.model) model = parsed.model;
+      const choice = parsed.choices?.[0];
+      if (choice?.message) {
+        content = choice.message.content ?? '';
+        reasoningContent = choice.message.reasoning_content ?? '';
+      }
+      if (choice?.finish_reason) finishReason = choice.finish_reason;
+    } catch {
+      // Raw body isn't valid JSON — keep empty content from SSE parse.
+    }
   }
 
   return {

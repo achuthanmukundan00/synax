@@ -15,6 +15,7 @@ const ESC = '\u001b[';
 const RESET = '\u001b[0m';
 const HIDE_CURSOR = '\u001b[?25l';
 const SHOW_CURSOR = '\u001b[?25h';
+const RESET_CURSOR_STYLE = '\u001b[0 q';
 const ALT_SCREEN = '\u001b[?1049h';
 const MAIN_SCREEN = '\u001b[?1049l';
 const CLEAR = '\u001b[2J';
@@ -69,7 +70,7 @@ export class TuiRenderer implements AgentRenderer {
     }
     process.stdout.off('resize', this.onResize);
     if (process.stdout.isTTY) {
-      process.stdout.write(`${SHOW_CURSOR}${RESET}${MAIN_SCREEN}`);
+      process.stdout.write(`${SHOW_CURSOR}${RESET_CURSOR_STYLE}${RESET}${MAIN_SCREEN}`);
     }
   }
 
