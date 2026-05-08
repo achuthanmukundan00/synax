@@ -122,21 +122,13 @@ export function renderTranscript(state: TranscriptRenderState, width: number): s
     blocks.push(renderTerminalIssue(state.run.terminalIssue, width));
   }
 
-  // Working indicator and activity preview — placed at the bottom so it remains
+  // Working indicator — placed at the bottom so it remains
   // visible when the transcript autoscrolls during long workloads.
   if (isWorking) {
     const frameIdx = Math.floor((state.run.nowMs / 1000) * 3) % BREATHING_GLYPHS.length;
-    const glyph = `\u001b[34m${BREATHING_GLYPHS[frameIdx]}\u001b[0m`;
-    const label = '\u001b[34mworking\u001b[0m';
-    const preview = activityPreviewText(state.run);
-    const previewWidth = Math.max(1, width - 22);
-    const wrappedPreview = wrapText(preview, previewWidth);
-    const previewLines: string[] = [];
-    previewLines.push(`${glyph} ${label}  ${dimI(wrappedPreview[0] || '')}`);
-    for (let p = 1; p < wrappedPreview.length; p += 1) {
-      previewLines.push(`  ${' '.repeat(10)} ${dimI(wrappedPreview[p])}`);
-    }
-    blocks.push(previewLines);
+    const glyph = `\u001b[1;34m${BREATHING_GLYPHS[frameIdx]}\u001b[0m`;
+    const label = '\u001b[1;34mworking\u001b[0m';
+    blocks.push(['', `${glyph} ${label}`]);
 
     if (state.activityExpanded) {
       blocks.push(renderExpandedActivity(state.run, width));
@@ -276,7 +268,18 @@ function renderCommandEvent(
 
 function renderDiffPreview(path: string, diff: string, width: number): string[] {
   const block = [eventHeader('edit', path, width), detailRow('preview', `Diff preview: ${path}`, width)];
-  block.push(...renderDiffRows(diff, width, 8));
+
+  // Detect and separate truncation marker appended by clipPatchPreview so it is
+  // always visible even under display-line caps.
+  const TRUNCATION_MARKER = '\n\n[Edit preview truncated:';
+  const truncIdx = diff.indexOf(TRUNCATION_MARKER);
+  const displayDiff = truncIdx >= 0 ? diff.slice(0, truncIdx) : diff;
+  const truncNote = truncIdx >= 0 ? diff.slice(truncIdx + 2).trim() : null;
+
+  block.push(...renderDiffRows(displayDiff, width, truncNote ? 6 : 8));
+  if (truncNote) {
+    block.push(`  ${' '.repeat(11)}${dimI(truncNote)}`);
+  }
   return block;
 }
 
@@ -676,49 +679,6 @@ function plural(count: number, singular: string): string {
   return `${count} ${count === 1 ? singular : `${singular}s`}`;
 }
 
-/** Get the latest useful process/thought text for the live working preview.
- *  Uses model-visible thinking/output text from the transcript.
- *  Filters out tool-summary-only noise. */
-function getLatestUsefulProcessText(run: RunStateSnapshot): string | null {
-  // Search debug history in reverse for model items with useful prose.
-  for (let i = run.debugHistory.length - 1; i >= 0; i -= 1) {
-    const item = run.debugHistory[i];
-    if (item.kind !== 'model') continue;
-    const prose = extractModelProse(item.detail || item.summary);
-    if (!prose || isToolSummaryNote(prose)) continue;
-    // Avoid repeated identical text (e.g. model re-emitting same plan).
-    return prose;
-  }
-  return null;
-}
-
-/** Extract a safe activity/reasoning preview from the run state. */
-function activityPreviewText(run: RunStateSnapshot): string {
-  // First try: latest useful model prose from debug history.
-  const processText = getLatestUsefulProcessText(run);
-  if (processText) return clipText(processText, 120);
-
-  // Fallback: lifecycle-based activity labels derived from real runtime state.
-  const latest = run.timeline[run.timeline.length - 1];
-  if (latest) {
-    const summary = latest.summary.toLowerCase();
-    if (summary.includes('objective registered') || summary.includes('task started')) return 'inspecting context…';
-    if (summary.includes('model step') || summary.includes('working')) return 'planning next action…';
-    if (summary.includes('tool') && summary.includes('read')) return 'reading file…';
-    if (summary.includes('tool') && (summary.includes('write') || summary.includes('edit'))) return 'editing file…';
-    if (summary.includes('tool') && summary.includes('bash')) return 'running bash…';
-    if (summary.includes('tool') && summary.includes('ok')) return 'checking tool result…';
-    if (summary.includes('tool') && summary.includes('error')) return 'recovering from tool error…';
-    if (summary.includes('passed')) return 'verification passed…';
-    if (summary.includes('failed')) return 'verification failed…';
-    if (summary.includes('verifying')) return 'checking verification result…';
-    if (summary.includes('planned')) return 'planning verification…';
-    return `synax: ${clipText(run.statusNote || latest.summary, 80)}`;
-  }
-  if (run.statusNote) return clipText(run.statusNote, 80);
-  return 'waiting for model response…';
-}
-
 /** Render expanded activity detail: recent timeline items. */
 function renderExpandedActivity(run: RunStateSnapshot, width: number): string[] {
   const items = run.timeline.slice(-12);
@@ -736,11 +696,6 @@ function dimI(text: string): string {
 function truncate(text: string, max: number): string {
   if (text.length <= max) return text;
   return `${text.slice(0, Math.max(0, max - 1))}…`;
-}
-
-function clipText(value: string, max: number): string {
-  if (value.length <= max) return value;
-  return `${value.slice(0, Math.max(0, max - 3))}...`;
 }
 
 // ─── Model prose rendering ─────────────────────────────────
@@ -789,9 +744,9 @@ function renderModelProse(prose: string, width: number): string[] {
   const lines: string[] = [];
   const proseWidth = Math.max(20, width - 6);
   const wrapped = wrapText(prose, proseWidth);
-  lines.push(`${pink('✽')} ${dim('note').padEnd(9, ' ')} ${dim(wrapped[0])}`);
+  lines.push(`${pink('✽')} ${dim('note').padEnd(9, ' ')} ${dimI(wrapped[0])}`);
   for (let i = 1; i < wrapped.length; i += 1) {
-    lines.push(`  ${' '.repeat(10)} ${dim(wrapped[i])}`);
+    lines.push(`  ${' '.repeat(10)} ${dimI(wrapped[i])}`);
   }
   return lines;
 }
