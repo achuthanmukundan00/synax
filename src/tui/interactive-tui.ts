@@ -15,7 +15,7 @@ import { stdin as defaultStdin } from 'node:process';
 import { DiffRenderer } from './diff-renderer';
 import { inputCursorPosition, maxHistoryScrollOffset, renderLayout, type InteractiveViewState } from './layout';
 import { createInputParser, MAX_INPUT_CHARS } from './input';
-import { createTerminalSession, type InputStreamLike } from './terminal';
+import { createTerminalSession, type InputStreamLike, type TerminalSession } from './terminal';
 import type { Writable } from 'node:stream';
 import type { CoreMode } from './ai-core';
 import { filterCommands, type SlashCommand, type SlashCommandResult } from '../settings/slash-command-registry';
@@ -103,9 +103,16 @@ export async function runInteractiveTui(
       inputPricePer1MTokens?: number;
       outputPricePer1MTokens?: number;
     };
+    /** Enable SGR mouse tracking for app-managed wheel scrolling. Default false. */
+    enableMouse?: boolean;
+    /** Use alternate screen buffer. Default true. */
+    alternateScreen?: boolean;
   },
 ): Promise<void> {
-  const terminal = createTerminalSession({ stdin: options?.stdin, stdout: options?.stdout });
+  const terminal = createTerminalSession(
+    { stdin: options?.stdin, stdout: options?.stdout },
+    { enableMouse: options?.enableMouse ?? false, alternateScreen: options?.alternateScreen ?? true },
+  );
   if (!terminal.isTTY) return;
 
   let inputDraft = createInlinePasteInputSession();
@@ -253,6 +260,25 @@ export async function runInteractiveTui(
     paint(true);
 
     if (kind === 'slash') {
+      // /mouse is handled locally to toggle terminal mouse tracking.
+      if (plainText === '/mouse') {
+        const toggled = toggleMouseMode(terminal);
+        state = applyEventToRunState(
+          state,
+          {
+            type: 'command_output',
+            timestamp: new Date().toISOString(),
+            command: '/mouse',
+            content: toggled
+              ? '[synax] Mouse mode enabled — SGR wheel scrolling active. Native text selection is disabled.'
+              : '[synax] Mouse mode disabled — native text selection and copy work normally. Use keyboard or PageUp/PageDown to scroll.',
+          },
+          Date.now(),
+        );
+        busy = false;
+        paint(true);
+        return;
+      }
       const slash = await session.handleSlashCommand(text);
       if (slash.newSession) {
         state = createInitialRunStateSnapshot(Date.now());
@@ -416,6 +442,24 @@ export async function runInteractiveTui(
     autocomplete = { active: false, visible: false, selection: 0, filtered: [] };
 
     const result: SlashCommandResult = await Promise.resolve(cmd.handler());
+
+    // /mouse is handled locally to toggle terminal mouse tracking.
+    if (cmd.name === 'mouse') {
+      const toggled = toggleMouseMode(terminal);
+      state = applyEventToRunState(
+        state,
+        {
+          type: 'command_output',
+          timestamp: new Date().toISOString(),
+          command: '/mouse',
+          content: toggled
+            ? '[synax] Mouse mode enabled — SGR wheel scrolling active. Native text selection is disabled.'
+            : '[synax] Mouse mode disabled — native text selection and copy work normally. Use keyboard or PageUp/PageDown to scroll.',
+        },
+        Date.now(),
+      );
+      return;
+    }
 
     if (result.openSettings) {
       openSettingsModal();
@@ -750,6 +794,15 @@ export async function runInteractiveTui(
     stdin?.off('data', onData);
     terminal.stop();
   }
+}
+
+function toggleMouseMode(terminal: TerminalSession): boolean {
+  if (terminal.mouseEnabled) {
+    terminal.disableMouse();
+    return false;
+  }
+  terminal.enableMouse();
+  return true;
 }
 
 function isLocalEndpoint(endpoint: string): boolean {

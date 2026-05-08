@@ -26,6 +26,8 @@ import type {
   SkillsConfig,
   McpConfig,
   McpServerConfig,
+  TuiConfig,
+  ResolvedTuiConfig,
 } from './schema';
 
 // ─── Defaults ──────────────────────────────────────────────
@@ -183,12 +185,17 @@ function defaultMcpConfig(): ResolvedMcpConfig {
   return { servers: {} };
 }
 
+function defaultTuiConfig(): ResolvedTuiConfig {
+  return { mouse: false, alternateScreen: true };
+}
+
 function defaultEffectiveConfig(): EffectiveSynaxConfig {
   return {
     active: defaultActiveConfig(),
     providers: { ...DEFAULT_PROVIDERS },
     skills: defaultSkillsConfig(),
     mcp: defaultMcpConfig(),
+    tui: defaultTuiConfig(),
     coreVisualProfile: undefined,
     source: null,
     errors: [],
@@ -420,6 +427,16 @@ export function configFromParsed(parsed: Record<string, unknown>): SynaxConfig {
     }
   }
 
+  // TUI
+  if (parsed.tui && typeof parsed.tui === 'object' && !Array.isArray(parsed.tui)) {
+    const raw = parsed.tui as Record<string, unknown>;
+    const tui: TuiConfig = {};
+    if (typeof raw.mouse === 'boolean') tui.mouse = raw.mouse;
+    if (typeof raw.alternate_screen === 'boolean') tui.alternateScreen = raw.alternate_screen;
+    if (typeof raw.alternateScreen === 'boolean') tui.alternateScreen = raw.alternateScreen;
+    config.tui = tui;
+  }
+
   return config;
 }
 
@@ -593,6 +610,15 @@ function mergeConfigs(
           env: { ...existing?.env, ...server.env },
         };
       }
+    }
+
+    // Merge TUI
+    if (layer.config.tui) {
+      const prev = result.tui ?? { mouse: false, alternateScreen: true };
+      result.tui = {
+        mouse: layer.config.tui.mouse ?? prev.mouse,
+        alternateScreen: layer.config.tui.alternateScreen ?? layer.config.tui.alternate_screen ?? prev.alternateScreen,
+      };
     }
 
     if (layer.config.coreVisualProfile !== undefined) {
@@ -808,6 +834,13 @@ export function serializeEffectiveConfig(config: EffectiveSynaxConfig): string {
       lines.push('');
     }
   }
+
+  // TUI
+  const tui = config.tui ?? { mouse: false, alternateScreen: true };
+  lines.push('[tui]');
+  lines.push(`mouse = ${tui.mouse}`);
+  lines.push(`alternate_screen = ${tui.alternateScreen}`);
+  lines.push('');
 
   return lines.join('\n') + '\n';
 }

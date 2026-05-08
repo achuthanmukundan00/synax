@@ -69,6 +69,21 @@ export interface McpConfig {
   servers?: Record<string, McpServerConfig>;
 }
 
+// ─── TUI config ────────────────────────────────────────────
+
+export interface TuiConfig {
+  /** Enable SGR mouse tracking for app-managed wheel scrolling. Default false. */
+  mouse?: boolean;
+  /** Use alternate screen buffer. Default true. When false, prefer append-style output. */
+  alternateScreen?: boolean;
+  alternate_screen?: boolean;
+}
+
+export interface ResolvedTuiConfig {
+  mouse: boolean;
+  alternateScreen: boolean;
+}
+
 // ─── Full project config (extended) ────────────────────────
 
 export interface SynaxConfig {
@@ -77,6 +92,7 @@ export interface SynaxConfig {
   providers?: Record<string, ProviderConfig>;
   skills?: SkillsConfig;
   mcp?: McpConfig;
+  tui?: TuiConfig;
   coreVisualProfile?: string;
 }
 
@@ -130,6 +146,7 @@ export interface EffectiveSynaxConfig {
   providers: Record<string, ResolvedProviderConfig>;
   skills: ResolvedSkillsConfig;
   mcp: ResolvedMcpConfig;
+  tui?: ResolvedTuiConfig;
   coreVisualProfile?: string;
   /** The source path that provided the effective config, or null for defaults. */
   source: string | null;

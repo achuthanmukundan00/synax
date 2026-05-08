@@ -24,26 +24,44 @@ export interface InputStreamLike {
   off(event: 'data', listener: (chunk: Buffer) => void): void;
 }
 
+export interface TerminalSessionOptions {
+  /** Enable SGR mouse tracking for app-managed wheel scrolling. Default false. */
+  enableMouse?: boolean;
+  /** Use alternate screen buffer. Default true. */
+  alternateScreen?: boolean;
+}
+
 export interface TerminalSession {
   readonly columns: number;
   readonly rows: number;
   readonly isTTY: boolean;
+  readonly mouseEnabled: boolean;
+  readonly alternateScreenEnabled: boolean;
   start(): void;
   stop(): void;
   write(text: string): void;
   synchronizedWrite(text: string): void;
   clearScreen(): void;
+  /** Enable SGR mouse tracking at runtime. Idempotent. */
+  enableMouse(): void;
+  /** Disable SGR mouse tracking at runtime. Idempotent. */
+  disableMouse(): void;
 }
 
-export function createTerminalSession(streams?: {
-  stdin?: InputStreamLike;
-  stdout?: Writable & { isTTY?: boolean; columns?: number; rows?: number };
-}): TerminalSession {
+export function createTerminalSession(
+  streams?: {
+    stdin?: InputStreamLike;
+    stdout?: Writable & { isTTY?: boolean; columns?: number; rows?: number };
+  },
+  options?: TerminalSessionOptions,
+): TerminalSession {
   const stdin = streams?.stdin ?? (defaultStdin as unknown as InputStreamLike);
   const stdout =
     streams?.stdout ?? (defaultStdout as unknown as Writable & { isTTY?: boolean; columns?: number; rows?: number });
 
   const isTTY = Boolean(stdin.isTTY && stdout.isTTY && stdin.setRawMode);
+  let mouseEnabled = options?.enableMouse ?? false;
+  const alternateScreenEnabled = options?.alternateScreen ?? true;
 
   return {
     get columns(): number {
@@ -55,14 +73,30 @@ export function createTerminalSession(streams?: {
     get isTTY(): boolean {
       return isTTY;
     },
+    get mouseEnabled(): boolean {
+      return mouseEnabled;
+    },
+    get alternateScreenEnabled(): boolean {
+      return alternateScreenEnabled;
+    },
     start(): void {
       if (!isTTY) return;
       stdin.setRawMode?.(true);
       stdin.resume();
-      stdout.write(`${ALT_SCREEN}${HIDE_CURSOR}${ENABLE_MOUSE}${ENABLE_BRACKETED_PASTE}${CLEAR}${HOME}`);
+      const parts: string[] = [];
+      if (alternateScreenEnabled) parts.push(ALT_SCREEN);
+      parts.push(HIDE_CURSOR);
+      if (mouseEnabled) parts.push(ENABLE_MOUSE);
+      parts.push(ENABLE_BRACKETED_PASTE);
+      if (alternateScreenEnabled || mouseEnabled) {
+        parts.push(CLEAR, HOME);
+      }
+      stdout.write(parts.join(''));
     },
     stop(): void {
       if (!isTTY) return;
+      // Always defensively emit disable sequences — the terminal ignores
+      // them if the corresponding mode was never enabled.
       stdout.write(`${DISABLE_BRACKETED_PASTE}${DISABLE_MOUSE}${SHOW_CURSOR}${RESET_CURSOR_STYLE}${MAIN_SCREEN}`);
       stdin.setRawMode?.(false);
       stdin.pause();
@@ -75,6 +109,16 @@ export function createTerminalSession(streams?: {
     },
     clearScreen(): void {
       stdout.write(`${HOME}${CLEAR}`);
+    },
+    enableMouse(): void {
+      if (!isTTY || mouseEnabled) return;
+      mouseEnabled = true;
+      stdout.write(ENABLE_MOUSE);
+    },
+    disableMouse(): void {
+      if (!isTTY || !mouseEnabled) return;
+      mouseEnabled = false;
+      stdout.write(DISABLE_MOUSE);
     },
   };
 }

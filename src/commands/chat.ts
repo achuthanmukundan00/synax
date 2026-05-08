@@ -317,7 +317,9 @@ export function chatCommand(program: Command): void {
     .description('Start an interactive Synax agent shell')
     .option('-m, --message <message>', 'Run one chat turn and exit')
     .option('--plain', 'Use plain line-mode chat instead of full-screen TUI')
-    .action(async (options: { message?: string; plain?: boolean }) => {
+    .option('--mouse', 'Enable SGR mouse tracking for app-managed wheel scrolling')
+    .option('--no-alt-screen', 'Disable alternate screen buffer for better native scrollback/copy')
+    .action(async (options: { message?: string; plain?: boolean; mouse?: boolean; altScreen?: boolean }) => {
       const repoRoot = process.cwd();
       const loaded = loadProjectConfig(repoRoot);
       if (loaded.errors.length > 0) {
@@ -331,15 +333,19 @@ export function chatCommand(program: Command): void {
       const provider = providerDescription.normalizedConfig;
       const blockedMessage = providerRuntimeBlockedMessage(metadata, provider);
 
-      // Extract thinking level from the effective multi-provider config.
+      // Extract thinking level and TUI config from the effective multi-provider config.
       let thinkingLevel: import('../config/schema').ThinkingLevel = 'off';
       let skillMessages: string[] | undefined;
       let skillDiagnostics: SkillDiagnostic[] | undefined;
+      let enableMouse = false;
+      let alternateScreen = true;
       try {
         const effectiveConfig = loadSynaxConfig();
         if (effectiveConfig.active.thinking && effectiveConfig.active.thinking !== 'off') {
           thinkingLevel = effectiveConfig.active.thinking;
         }
+        enableMouse = effectiveConfig.tui?.mouse ?? false;
+        alternateScreen = effectiveConfig.tui?.alternateScreen ?? true;
         if (effectiveConfig.skills.enabled.length > 0) {
           const result = loadSkills(effectiveConfig.skills, repoRoot);
           skillMessages = result.systemMessages;
@@ -348,6 +354,9 @@ export function chatCommand(program: Command): void {
       } catch {
         // best-effort
       }
+      // CLI flags override config.
+      if (options.mouse) enableMouse = true;
+      if (options.altScreen === false) alternateScreen = false;
       const useTui = shouldUseInteractiveTui({
         plain: Boolean(options.plain),
         message: options.message,
@@ -393,6 +402,8 @@ export function chatCommand(program: Command): void {
 
       if (useTui) {
         await runInteractiveTui(session, {
+          enableMouse,
+          alternateScreen,
           blockedMessage,
           lastModelOutput: () => lastModelOutput,
           modelLabel,
