@@ -108,7 +108,7 @@ function renderHeader(lines: string[], width: number, state: InteractiveViewStat
   const header = [
     `\u001b[1;37mSynax v${pkg.version}\u001b[0m`,
     `${modeColor(state.coreMode)}${phaseLabel(run.phase)}\u001b[0m`,
-    elapsed(run.startedAtMs, elapsedEndMs(state)),
+    dim(elapsed(run.startedAtMs, elapsedEndMs(state))),
   ].join('  ');
   put(lines, 0, 2, clip(header, width - 4), width);
 }
@@ -327,13 +327,13 @@ function renderDirectivePanel(
 
   const label = metadataLabel ? ` ${truncateMiddle(metadataLabel, Math.max(4, inner - 6))} ` : '';
   const topFill = Math.max(0, inner - label.length);
-  const helpText = 'Enter submit | Ctrl+C exit | /help | !cmd shell';
+  const helpText = 'Enter submit  Ctrl+C exit  /help  !cmd shell';
   const bottomFill = Math.max(0, inner - helpText.length - 2);
 
   return [
-    `╔${'═'.repeat(topFill)}${label}╗`,
-    ...body.map((line) => `║ ${clip(line, inner - 2).padEnd(inner - 2, ' ')} ║`),
-    `╚ ${helpText} ${'═'.repeat(bottomFill)}╝`,
+    `${dim('┌')}${dim('─'.repeat(topFill))}${label ? dim(label) : ''}${dim('┐')}`,
+    ...body.map((line) => `${dim('│')} ${clip(line, inner - 2).padEnd(inner - 2, ' ')} ${dim('│')}`),
+    `${dim('└')} ${dim(helpText)} ${dim('─'.repeat(bottomFill))}${dim('┘')}`,
   ];
 }
 
@@ -367,11 +367,11 @@ function renderCoreModule(state: InteractiveViewState, width: number, maxHeight:
   const body = [
     ...core,
     '',
-    dim('Runtime'),
+    sectionLabel('Runtime'),
     ...runtimeTelemetryRows(state, inner),
     contextUsageBar(state.run, inner),
     '',
-    dim('Session'),
+    sectionLabel('Session'),
     ...sessionTelemetryRows(state.run, inner),
   ];
 
@@ -398,11 +398,11 @@ function renderCompactCoreModule(state: InteractiveViewState): string[] {
 function renderTelemetry(state: InteractiveViewState, width: number): string[] {
   const inner = Math.max(20, width);
   return [
-    dim('Runtime'),
+    sectionLabel('Runtime'),
     ...runtimeTelemetryRows(state, inner),
     contextUsageBar(state.run, inner),
     '',
-    dim('Session'),
+    sectionLabel('Session'),
     ...sessionTelemetryRows(state.run, inner),
   ].map((line) => clip(line, width));
 }
@@ -428,7 +428,7 @@ function sessionTelemetryRows(run: RunStateSnapshot, width: number): string[] {
 
   const rows: string[] = [];
   if (skills.length > 0) {
-    rows.push(instrumentRow('Skills', skills.join(', '), width, { color: '\u001b[32m' }));
+    rows.push(instrumentRow('Skills', skills.join(', '), width, { color: '\u001b[36m' }));
   }
   rows.push(
     instrumentRow('Thinking', run.thinkingEnabled === undefined ? '—' : run.thinkingEnabled ? 'on' : 'off', width, {
@@ -507,8 +507,8 @@ function contextUsageBar(run: RunStateSnapshot, width: number): string {
   if (!total || total <= 0) return dim(`[${'─'.repeat(barWidth)}]`);
   const ratio = Math.max(0, Math.min(1, used / total));
   const filled = Math.round(ratio * barWidth);
-  const glyph = ratio > 0.85 ? '▓' : '█';
-  return dim(`[${glyph.repeat(filled)}${'░'.repeat(barWidth - filled)}]`);
+  const glyph = ratio > 0.85 ? '━' : '━';
+  return `${dim('ctx ')}${modeColorForRatio(ratio)}${glyph.repeat(filled)}\u001b[0m${dim('─'.repeat(barWidth - filled + 1))}`;
 }
 
 function instrumentRow(
@@ -520,7 +520,7 @@ function instrumentRow(
   const labelWidth = 11;
   const valueWidth = Math.max(1, width - labelWidth - 1);
   const renderedValue = options.dimValue ? dim(truncateMiddle(value, valueWidth)) : truncateMiddle(value, valueWidth);
-  const prefix = `${label.padEnd(labelWidth, ' ')} `;
+  const prefix = `${dim(label.padEnd(labelWidth, ' '))} `;
   if (!options.color) return `${prefix}${renderedValue}`;
   return `${prefix}${options.color}${truncateMiddle(value, valueWidth)}\u001b[0m`;
 }
@@ -536,6 +536,15 @@ function panelTop(title: string, width: number): string {
   const label = ` ${title} `;
   const fill = Math.max(0, width - label.length);
   return dim(`┌${label}${'─'.repeat(fill)}┐`);
+}
+
+function sectionLabel(label: string): string {
+  return dim(label);
+}
+
+function modeColorForRatio(ratio: number): string {
+  if (ratio > 0.85) return '\u001b[33m';
+  return '\u001b[34m';
 }
 
 function centerVisible(line: string, width: number): string {
