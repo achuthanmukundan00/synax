@@ -52,7 +52,7 @@ function makeTestConfig(overrides: Partial<EffectiveSynaxConfig> = {}): Effectiv
         id: 'deepseek',
         name: 'DeepSeek',
         compatibility: 'openai-compatible',
-        enabled: true,
+        enabled: false,
         baseUrl: 'https://api.deepseek.com/v1',
         headers: {},
         models: [
@@ -208,6 +208,27 @@ describe('settings state — thinking control', () => {
 
     expect(selected.config.active.model).toBe('');
     expect(selected.config.active.thinking).toBe('off');
+  });
+
+  it('lists configured disabled providers in the active provider selector', () => {
+    const config = makeTestConfig();
+    const rows = getTabRows('model', config);
+    const activeProvider = rows.find((row) => row.id === 'active-provider');
+
+    expect(activeProvider?.options).toEqual(['relay', 'deepseek']);
+  });
+
+  it('selects a configured disabled provider without falling back to relay', () => {
+    const config = makeTestConfig();
+    const state = {
+      ...settingsReducer(createSettingsState(config), { type: 'open' }),
+      focus: 'rows' as const,
+      selectedRow: 0,
+    };
+    const selected = settingsReducer(state, { type: 'select_row' });
+
+    expect(selected.config.active.provider).toBe('deepseek');
+    expect(selected.config.active.model).toBe('deepseek-chat');
   });
 });
 
