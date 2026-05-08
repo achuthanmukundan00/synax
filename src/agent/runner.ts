@@ -347,11 +347,7 @@ export async function runAgentTurn(options: AgentRunnerOptions & { task: string 
       // Gate: prevent premature completion when the model claims success
       // without making any changes in patch mode. Read-only and verify
       // modes are exempt since they legitimately don't make changes.
-      if (
-        mode === 'patch' &&
-        changedFiles.length === 0 &&
-        isPrematureCompletionClaim(response.content)
-      ) {
+      if (mode === 'patch' && changedFiles.length === 0 && isPrematureCompletionClaim(response.content)) {
         conversation.messages.push({
           role: 'user',
           content:
@@ -535,16 +531,19 @@ function assistantMessage(response: ChatResponse, settings?: ContextBudgetSettin
     };
   }
 
-  return {
+  const message: AgentMessage = {
     role: 'assistant',
     content,
     ...reasoningFields,
-    tool_calls: response.toolCalls.map((call) => ({
+  };
+  if (response.toolCalls.length > 0) {
+    message.tool_calls = response.toolCalls.map((call) => ({
       id: call.id,
       type: 'function',
       function: { name: call.name, arguments: JSON.stringify(call.arguments) },
-    })),
-  };
+    }));
+  }
+  return message;
 }
 
 async function executeAgentTool(
@@ -1562,12 +1561,7 @@ function buildModelRequest(
   let assembled: AgentMessage[];
   let stats: AssemblyStats;
   if (nearBudget) {
-    const result = assembleModelMessages(
-      baseMessages,
-      settings,
-      conversation.inspectionLedger,
-      readCounts,
-    );
+    const result = assembleModelMessages(baseMessages, settings, conversation.inspectionLedger, readCounts);
     assembled = result.messages;
     stats = result.stats;
   } else {

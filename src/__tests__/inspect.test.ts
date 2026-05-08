@@ -4,6 +4,7 @@
 
 import { mkdirSync, writeFileSync, rmSync, existsSync, readFileSync } from 'fs';
 import { join } from 'path';
+import { tmpdir } from 'os';
 
 import {
   detectGitProfile,
@@ -26,7 +27,7 @@ import { createContextLedger } from '../tools';
 
 // ─── helpers ────────────────────────────────────────────────
 
-const TMP = join(__dirname, '..', '..', '..', 'tmp', 'synax-inspect-tests');
+const TMP = join(tmpdir(), 'synax-inspect-tests');
 
 function ensureTmp() {
   if (existsSync(TMP)) {
@@ -183,7 +184,7 @@ describe('loadProjectConfig for inspect', () => {
   });
 
   it('returns defaults when no config file', () => {
-    const tmpDir = join(__dirname, '..', '..', '..', 'tmp', 'synax-inspect-defaults');
+    const tmpDir = join(tmpdir(), 'synax-inspect-defaults');
     if (existsSync(tmpDir)) rmSync(tmpDir, { recursive: true, force: true });
     mkdirSync(tmpDir, { recursive: true });
     try {
