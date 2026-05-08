@@ -229,34 +229,35 @@ function stripAnsi(input: string): string {
   return input.replace(/\u001b\[[0-9;]*m/g, '');
 }
 
-function wrapText(text: string, maxWidth: number): string[] {
-  // eslint-disable-next-line no-control-regex
-  const stripped = text.replace(/\u001b\[[0-9;]*m/g, '');
+function wrapInputText(text: string, maxWidth: number): string[] {
+  const width = Math.max(1, maxWidth);
+  const stripped = stripAnsi(text);
   const lines: string[] = [];
   let current = '';
 
   for (let i = 0; i < stripped.length; i += 1) {
     const ch = stripped[i];
     if (ch === '\n') {
-      lines.push(current.trimEnd());
+      lines.push(current);
       current = '';
       continue;
     }
+
     current += ch;
-    if (current.length >= maxWidth) {
-      // try to break on last space
+    if (current.length >= width) {
       const lastSpace = current.lastIndexOf(' ');
-      if (lastSpace > maxWidth / 2) {
-        lines.push(current.slice(0, lastSpace).trimEnd());
+      if (lastSpace > width / 2 && lastSpace < current.length - 1) {
+        lines.push(current.slice(0, lastSpace));
         current = current.slice(lastSpace + 1);
       } else {
-        lines.push(current.slice(0, maxWidth));
-        current = current.slice(maxWidth);
+        lines.push(current.slice(0, width));
+        current = current.slice(width);
       }
     }
   }
-  if (current.trim().length > 0) lines.push(current.trimEnd());
-  return lines.length > 0 ? lines : [''];
+
+  if (current.length > 0 || lines.length === 0) lines.push(current);
+  return lines;
 }
 
 function renderInputDock(
@@ -265,7 +266,44 @@ function renderInputDock(
   metadataLabel?: string,
   maxBodyLines?: number,
 ): string[] {
-  return ['', ...renderDirectivePanel(objectiveInput, width, metadataLabel, maxBodyLines)];
+  return ['', '', ...renderDirectivePanel(objectiveInput, width, metadataLabel, maxBodyLines)];
+}
+
+export interface InputCursorPosition {
+  /** 0-indexed row within the full rendered layout. */
+  row: number;
+  /** 0-indexed column within the input body line. */
+  col: number;
+}
+
+/** Compute the cursor position for the input box within a rendered layout. */
+export function inputCursorPosition(
+  objectiveInput: string,
+  cols: number,
+  rows: number,
+  maxBodyLines?: number,
+): InputCursorPosition {
+  const width = Math.max(40, cols);
+  const renderWidth = terminalWriteWidth(width);
+  const height = Math.max(14, rows);
+  const effectiveMaxBodyLines = maxBodyLines ?? maxInputDockBodyLines(height);
+  const panelHeight = renderInputDock(objectiveInput, renderWidth, undefined, effectiveMaxBodyLines).length;
+  const bodyHeight = Math.max(1, height - panelHeight);
+  const inner = Math.max(8, renderWidth - 2);
+  const hasInput = objectiveInput.length > 0;
+  const wrapped = hasInput ? wrapInputText(objectiveInput, inner - 2) : [''];
+  const renderedBodyLineCount = hasInput
+    ? Math.max(INPUT_DOCK_MIN_NONEMPTY_BODY_LINES, Math.min(effectiveMaxBodyLines, wrapped.length))
+    : 1;
+  const visibleInputLineCount = hasInput ? Math.min(renderedBodyLineCount, wrapped.length) : 1;
+  const lastBodyLine = wrapped[wrapped.length - 1] ?? '';
+  const dockStartRow = bodyHeight;
+  // dock layout: ['', '', topBorder, bodyLine0, bodyLine1, ..., bottomBorder]
+  // first input body line is at dockStartRow + 1 (empty) + 1 (empty) + 1 (topBorder) = dockStartRow + 3
+  // padded body rows may follow short non-empty input; keep the cursor on the actual text line.
+  const row = dockStartRow + 2 + visibleInputLineCount;
+  const col = 2 + lastBodyLine.length;
+  return { row, col };
 }
 
 function renderDirectivePanel(
@@ -275,13 +313,13 @@ function renderDirectivePanel(
   maxBodyLines = INPUT_DOCK_MAX_BODY_LINES,
 ): string[] {
   const inner = Math.max(8, width - 2);
-  const trimmed = objectiveInput.trim();
-  const wrapped = trimmed ? wrapText(trimmed, inner - 2) : [];
-  const bodyLineCount = trimmed
+  const hasInput = objectiveInput.length > 0;
+  const wrapped = hasInput ? wrapInputText(objectiveInput, inner - 2) : [];
+  const bodyLineCount = hasInput
     ? Math.max(INPUT_DOCK_MIN_NONEMPTY_BODY_LINES, Math.min(maxBodyLines, wrapped.length))
     : 1;
   // Keep the tail visible so active typing stays in view at larger input sizes.
-  const body = trimmed
+  const body = hasInput
     ? wrapped
         .slice(-bodyLineCount)
         .concat(Array.from({ length: Math.max(0, bodyLineCount - wrapped.length) }, () => ''))
@@ -293,9 +331,9 @@ function renderDirectivePanel(
   const bottomFill = Math.max(0, inner - helpText.length - 2);
 
   return [
-    `┌${'─'.repeat(topFill)}${label}┐`,
-    ...body.map((line) => `│ ${clip(line, inner - 2).padEnd(inner - 2, ' ')} │`),
-    `└ ${helpText} ${'─'.repeat(bottomFill)}┘`,
+    `╔${'═'.repeat(topFill)}${label}╗`,
+    ...body.map((line) => `║ ${clip(line, inner - 2).padEnd(inner - 2, ' ')} ║`),
+    `╚ ${helpText} ${'═'.repeat(bottomFill)}╝`,
   ];
 }
 

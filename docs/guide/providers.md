@@ -1,105 +1,119 @@
 # Providers
 
-Synax supports OpenAI-compatible and Anthropic-compatible providers.
+Synax supports OpenAI-compatible and Anthropic Messages providers.
 You can configure multiple providers and switch between them at runtime.
 
-## Provider Compatibility
+## Provider Protocols
 
-| Type | Description |
-|------|-------------|
-| `openai-compatible` | Any service with an OpenAI-compatible `/v1/chat/completions` endpoint |
-| `anthropic-compatible` | Any service with an Anthropic-compatible `/v1/messages` endpoint |
+| Protocol | Description |
+|----------|-------------|
+| `openai-compatible` | Any service with an OpenAI-compatible `/chat/completions` endpoint |
+| `anthropic-messages` | Real Anthropic Messages API adapter via `/v1/messages` |
 
 ## Built-in Provider Presets
 
-Synax ships with defaults for common providers:
+Synax ships with presets for these providers:
 
-| Preset | Base URL | Notes |
-|--------|----------|-------|
-| Relay Local | `http://127.0.0.1:1234/v1` | Local llama.cpp / Relay server |
-| Relay Cloudflare | `https://ai.watchyourtemper.com/v1` | Cloudflare Tunnel + Relay |
-| OpenAI | `https://api.openai.com/v1` | Requires `OPENAI_API_KEY` |
-| Anthropic | `https://api.anthropic.com` | Requires `ANTHROPIC_API_KEY` |
-| OpenRouter | `https://openrouter.ai/api/v1` | Requires `OPENROUTER_API_KEY` |
+| Provider ID | Protocol | Base URL | Auth |
+|-------------|----------|----------|------|
+| `relay` | openai-compatible | `http://127.0.0.1:1234/v1` | none |
+| `custom` | openai-compatible | user-configured | optional |
+| `deepseek` | openai-compatible | `https://api.deepseek.com/v1` | `DEEPSEEK_API_KEY` |
+| `openrouter` | openai-compatible | `https://openrouter.ai/api/v1` | `OPENROUTER_API_KEY` |
+| `groq` | openai-compatible | `https://api.groq.com/openai/v1` | `GROQ_API_KEY` |
+| `anthropic` | anthropic-messages | `https://api.anthropic.com` | `ANTHROPIC_API_KEY` |
+| `mistral` | openai-compatible | `https://api.mistral.ai/v1` | `MISTRAL_API_KEY` |
+| `together` | openai-compatible | `https://api.together.xyz/v1` | `TOGETHER_API_KEY` |
+
+OpenAI-compatible providers (relay, custom, deepseek, openrouter, groq, mistral, together) share
+one client implementation. Anthropic uses a real Messages API adapter.
 
 ## Configuring a Provider
 
-### Local Relay Provider
+### Local Relay
 
 ```toml
-[active]
-provider = "relay-local"
-model = "Qwen3.6-35B-A3B-UD-IQ3_XXS.gguf"
-
-[providers.relay-local]
-enabled = true
-name = "Relay Local"
-compatibility = "openai-compatible"
+[provider]
+provider = "relay"
 base_url = "http://127.0.0.1:1234/v1"
-
-[[providers.relay-local.models]]
-id = "Qwen3.6-35B-A3B-UD-IQ3_XXS.gguf"
-display_name = "Qwen3.6 35B Local"
+model = "Qwen3.6-35B-A3B-UD-IQ3_XXS.gguf"
 context_window = 88000
-supports_thinking = false
 ```
 
-### Cloud Provider (OpenAI-compatible)
+### DeepSeek
 
 ```toml
-[active]
+[provider]
 provider = "deepseek"
 model = "deepseek-chat"
-
-[providers.deepseek]
-enabled = true
-name = "DeepSeek"
-compatibility = "openai-compatible"
-base_url = "https://api.deepseek.com/v1"
 api_key_env = "DEEPSEEK_API_KEY"
+context_window = 64000
+# Optional: override token pricing (defaults are preset)
+input_price_per_1m_tokens = 0.27
+output_price_per_1m_tokens = 1.10
+```
 
-[[providers.deepseek.models]]
-id = "deepseek-chat"
-display_name = "DeepSeek V3"
+### OpenRouter
+
+```toml
+[provider]
+provider = "openrouter"
+model = "deepseek/deepseek-chat"
+api_key_env = "OPENROUTER_API_KEY"
+context_window = 64000
+
+[provider.headers]
+HTTP-Referer = "https://github.com/achuthanmukundan00/synax"
+X-Title = "Synax"
+```
+
+OpenRouter automatically adds `HTTP-Referer` and `X-Title` default headers.
+You can override or add custom headers in the `[provider.headers]` section.
+
+### Groq
+
+```toml
+[provider]
+provider = "groq"
+model = "llama-3.3-70b-versatile"
+api_key_env = "GROQ_API_KEY"
 context_window = 128000
-supports_thinking = false
 ```
 
-### Custom OpenAI-Compatible Provider
+### Anthropic (real Messages adapter)
 
 ```toml
-[providers.custom]
-enabled = true
-name = "My Custom Endpoint"
-compatibility = "openai-compatible"
-base_url = "https://my-inference.example.com/v1"
-api_key_env = "CUSTOM_API_KEY"
-
-[providers.custom.headers]
-"X-Custom-Header" = "value"
-
-[[providers.custom.models]]
-id = "my-model"
-context_window = 65536
-supports_thinking = false
-```
-
-### Anthropic-Compatible Provider
-
-```toml
-[providers.claude]
-enabled = true
-name = "Claude via Proxy"
-compatibility = "anthropic-compatible"
-base_url = "https://anthropic-proxy.example.com/v1"
+[provider]
+provider = "anthropic"
+model = "claude-sonnet-4-5-20250929"
 api_key_env = "ANTHROPIC_API_KEY"
-
-[[providers.claude.models]]
-id = "claude-sonnet-4-5"
 context_window = 200000
-supports_thinking = true
-thinking_levels = ["off", "low", "medium", "high"]
-default_thinking = "medium"
+```
+
+Anthropic uses the real Messages API (`POST /v1/messages`) with `x-api-key`
+auth, not the OpenAI-compatible format. System prompts map to the top-level
+`system` field. Tool use is not yet supported for Anthropic.
+
+### Custom OpenAI-compatible
+
+```toml
+[provider]
+provider = "custom"
+base_url = "http://127.0.0.1:1234/v1"
+model = "local-model"
+api_key = "dummy"
+context_window = 131072
+```
+
+### Legacy Relay (backward compatible)
+
+Your existing Relay/local config keeps working:
+
+```toml
+[provider]
+kind = "openai-compatible"
+base_url = "http://127.0.0.1:1234/v1"
+model = "Qwen3.6-35B-A3B-UD-IQ3_XXS.gguf"
 ```
 
 ## API Key Configuration
@@ -107,7 +121,7 @@ default_thinking = "medium"
 Prefer `api_key_env` over `api_key`. The environment variable is never written to disk.
 
 ```toml
-api_key_env = "OPENAI_API_KEY"  # reads from process.env.OPENAI_API_KEY
+api_key_env = "DEEPSEEK_API_KEY"  # reads from process.env.DEEPSEEK_API_KEY
 ```
 
 Only use `api_key` for local servers that don't need auth:
@@ -116,58 +130,93 @@ Only use `api_key` for local servers that don't need auth:
 api_key = "sk-no-key-required"  # local relay servers
 ```
 
-## Custom Headers
+## Token Pricing & Session Spend
 
-Headers can reference environment variables using `${VAR_NAME}` syntax:
+Cloud providers have preset token pricing. You can override pricing in config:
 
 ```toml
-[providers.relay-local.headers]
-"CF-Access-Client-Id" = "${CF_ACCESS_CLIENT_ID}"
-"CF-Access-Client-Secret" = "${CF_ACCESS_CLIENT_SECRET}"
+[provider]
+provider = "deepseek"
+input_price_per_1m_tokens = 0.27   # USD per 1M input tokens
+output_price_per_1m_tokens = 1.10  # USD per 1M output tokens
+```
+
+Default pricing per provider:
+
+| Provider | Input ($/1M) | Output ($/1M) |
+|----------|-------------|---------------|
+| DeepSeek | $0.27 | $1.10 |
+| Groq | $0.59 | $0.79 |
+| Anthropic | $3.00 | $15.00 |
+| OpenRouter | varies | varies |
+
+When pricing is configured, the TUI shows a session spend indicator
+at the bottom of the screen: `Spend: $0.004`. Local providers show
+`Spend: local`.
+
+## Custom Headers
+
+```toml
+[provider.headers]
+"HTTP-Referer" = "https://github.com/achuthanmukundan00/synax"
+"X-Title" = "Synax"
+"X-Custom" = "value"
 ```
 
 ## Model Configuration
 
-Each provider can declare multiple models:
+Each provider supports context window configuration:
 
 ```toml
-[[providers.deepseek.models]]
-id = "deepseek-chat"
-display_name = "DeepSeek V3"
-context_window = 128000
-supports_thinking = false
-
-[[providers.deepseek.models]]
-id = "deepseek-reasoner"
-display_name = "DeepSeek R1"
-context_window = 128000
-supports_thinking = true
-thinking_levels = ["off", "low", "medium", "high", "auto"]
-default_thinking = "auto"
+[provider]
+provider = "deepseek"
+model = "deepseek-chat"
+context_window = 64000
 ```
 
-### Thinking Levels
+## Live Provider Smoke Tests
 
-When a model supports thinking:
+Smoke tests verify end-to-end connectivity with real providers.
+They require user-supplied API keys and are not run in CI.
 
-| Level | Description |
-|-------|-------------|
-| `off` | No thinking/reasoning tags |
-| `low` | Minimal reasoning |
-| `medium` | Balanced reasoning |
-| `high` | Extended reasoning |
-| `auto` | Model decides |
+```bash
+# Test Relay (local)
+SYNAX_LIVE_PROVIDER=relay npm run smoke:provider
 
-Models that don't support thinking will show `"n/a"` in the settings menu.
+# Test DeepSeek
+SYNAX_LIVE_PROVIDER=deepseek npm run smoke:provider
 
-## Testing Provider Connection
+# Test OpenRouter
+SYNAX_LIVE_PROVIDER=openrouter npm run smoke:provider
 
-From the TUI, type `/test-provider` to probe the active provider's models and chat endpoints.
+# Test Groq
+SYNAX_LIVE_PROVIDER=groq npm run smoke:provider
 
-## Switching Providers in the TUI
+# Test Anthropic
+SYNAX_LIVE_PROVIDER=anthropic npm run smoke:provider
 
+# Test custom endpoint
+SYNAX_LIVE_PROVIDER=custom SYNAX_CUSTOM_BASE_URL=http://127.0.0.1:1234/v1 npm run smoke:provider
+```
+
+Each smoke test sends a tiny prompt (`"Reply with exactly: synax-ok"`)
+and verifies the response. Streaming is also tested. Tests are skipped
+when required API keys are missing.
+
+## Switching Providers
+
+From the TUI:
 1. Press `/` and type `settings`
 2. Navigate to the **Model** tab
 3. Select **Active Provider** and choose from enabled providers
 4. Select **Active Model** to pick a model from that provider
 5. Changes persist automatically
+
+## Known Limitations
+
+- Anthropic tool use is not yet supported. Requesting tools with an
+  Anthropic provider will throw a clear error.
+- Streaming is implemented in the shared OpenAI-compatible client but
+  the Anthropic adapter only supports non-streaming requests.
+- Mistral and Together are available as presets on the shared
+  OpenAI-compatible client but lack dedicated smoke tests.
