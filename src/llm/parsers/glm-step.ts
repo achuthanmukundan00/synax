@@ -18,7 +18,7 @@
  */
 
 import type { ToolCallParser, ToolCallParseResult } from './types';
-import { extractDelimitedBlocks, safeJsonParse, generateCallId, sanitizeReasoningTags } from './utils';
+import { extractDelimitedBlocks, safeJsonParse, generateCallId, sanitizeReasoningTags, coerceValue } from './utils';
 
 // ─── GLM 4.5 ──────────────────────────────────────────────
 
@@ -293,7 +293,7 @@ function parseQwenFallback(sanitized: string, parserId: string): ToolCallParseRe
     const paramRegex = /<parameter=([^>\s]+)>\s*([\s\S]*?)\s*<\/parameter>/gi;
     for (const param of block.matchAll(paramRegex)) {
       const key = param[1]?.trim();
-      if (key) args[key] = (param[2] ?? '').trim();
+      if (key) args[key] = coerceValue((param[2] ?? '').trim());
     }
 
     calls.push({
