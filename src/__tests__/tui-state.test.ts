@@ -100,9 +100,9 @@ describe('tui-state', () => {
 
     expect(state.lastModelOutput).toBe('Inspecting the TUI state reducer before editing.');
     expect(state.timeline.map((item) => item.summary)).toEqual([
-      'Thinking · step 1',
-      'Thinking · Inspecting the TUI state reducer before editing.',
-      'Thinking · step 2',
+      'Working · step 1',
+      'Working · Inspecting the TUI state reducer before editing.',
+      'Working · step 2',
     ]);
   });
 
@@ -199,6 +199,30 @@ describe('tui-state', () => {
     expect(state.debugHistory[0].detail).toContain('checking status');
     expect(state.debugHistory[1].detail).toContain('git status --short');
     expect(state.debugHistory[2].detail).toContain('M src/tui/layout.ts');
+  });
+
+  it('appends streaming assistant deltas into one model transcript entry', () => {
+    let state = createInitialRunStateSnapshot(0);
+
+    state = applyEventToRunState(
+      state,
+      { type: 'assistant_delta', timestamp: new Date(1).toISOString(), reasoningContent: 'checking ' },
+      1,
+    );
+    state = applyEventToRunState(
+      state,
+      { type: 'assistant_delta', timestamp: new Date(2).toISOString(), reasoningContent: 'files\n' },
+      2,
+    );
+    state = applyEventToRunState(
+      state,
+      { type: 'assistant_delta', timestamp: new Date(3).toISOString(), content: 'I will read package.json.' },
+      3,
+    );
+
+    expect(state.debugHistory).toHaveLength(1);
+    expect(state.debugHistory[0].kind).toBe('model');
+    expect(state.debugHistory[0].detail).toBe('checking files\nI will read package.json.');
   });
 
   it('records a terminal completion summary', () => {
@@ -758,5 +782,30 @@ describe('tui-state', () => {
     expect(state.riskLine).toContain('blocker:');
     expect(state.riskLine).toContain('oldStr must match a prior read');
     expect(state.filesChangedThisRun).toEqual([]);
+  });
+
+  it('retains the full terminal issue while keeping the risk line clipped', () => {
+    let state = createInitialRunStateSnapshot(0);
+    const longError = `Provider error (400): ${'DeepSeek context overflow. '.repeat(30)}`;
+
+    state = applyEventToRunState(
+      state,
+      {
+        type: 'task_finished',
+        timestamp: new Date(1).toISOString(),
+        status: 'model_error',
+        toolCalls: 8,
+        maxToolCalls: 192,
+        modelSteps: 3,
+        maxModelSteps: 64,
+        changedFiles: [],
+        verification: 'not run',
+        error: longError,
+      },
+      1,
+    );
+
+    expect(state.riskLine.length).toBeLessThanOrEqual(123);
+    expect(state.terminalIssue).toBe(longError);
   });
 });

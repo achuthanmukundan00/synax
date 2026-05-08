@@ -128,8 +128,51 @@ describe('LLM client — basic chat', () => {
     const client = createOpenAICompatibleClient(makeConfig({ baseUrl: getServerUrl(srv) }));
     const resp = await client.chat({ messages: [{ role: 'user', content: 'hi' }] });
     // Content retains thinking tags so Qwen models get their reasoning echoed back.
-    // The TUI display layer strips tags via sanitizeReasoningTags.
+    // The transcript display layer now surfaces thinking text for observability.
     expect(resp.content).toBe('<think>secret</think>Hello');
+  });
+
+  test('streams reasoning and content deltas while returning the final response', async () => {
+    srv.close();
+    srv = await createMockServer((_req, res) => {
+      captured = _req;
+      res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+      res.write(
+        `data: ${JSON.stringify({
+          model: 'test-model',
+          choices: [{ delta: { reasoning_content: 'think ' } }],
+        })}\n\n`,
+      );
+      res.write(
+        `data: ${JSON.stringify({
+          model: 'test-model',
+          choices: [{ delta: { reasoning_content: 'more', content: 'Hel' } }],
+        })}\n\n`,
+      );
+      res.write(
+        `data: ${JSON.stringify({
+          model: 'test-model',
+          choices: [{ delta: { content: 'lo' }, finish_reason: 'stop' }],
+        })}\n\n`,
+      );
+      res.end('data: [DONE]\n\n');
+    });
+    const deltas: Array<{ content?: string; reasoningContent?: string }> = [];
+    const client = createOpenAICompatibleClient(makeConfig({ baseUrl: getServerUrl(srv) }));
+    const resp = await client.chat({
+      messages: [{ role: 'user', content: 'hi' }],
+      onDelta: (delta) => deltas.push(delta),
+    });
+
+    expect(JSON.parse(captured!.body).stream).toBe(true);
+    expect(deltas).toEqual([
+      { reasoningContent: 'think ' },
+      { reasoningContent: 'more' },
+      { content: 'Hel' },
+      { content: 'lo' },
+    ]);
+    expect(resp.reasoningContent).toBe('think more');
+    expect(resp.content).toBe('Hello');
   });
 
   test('parses provider reasoning fields separately from visible content', async () => {

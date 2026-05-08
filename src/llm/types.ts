@@ -167,4 +167,5 @@ export interface ChatOptions {
   temperature?: number;
   maxTokens?: number;
   signal?: AbortSignal;
+  onDelta?: (delta: { content?: string; reasoningContent?: string }) => void;
 }

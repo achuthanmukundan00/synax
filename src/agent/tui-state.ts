@@ -216,7 +216,7 @@ export function applyEventToRunState(state: RunStateSnapshot, event: AgentEvent,
     }
     case 'model_step_started': {
       next = withPhase(next, 'thinking', 'model step');
-      return withTimeline(next, 'thinking', `Thinking · step ${event.stepIndex ?? next.timeline.length + 1}`, 'S0');
+      return withTimeline(next, 'thinking', `Working · step ${event.stepIndex ?? next.timeline.length + 1}`, 'S0');
     }
     case 'context_budget_updated': {
       const prevInputTokens = next.sessionInputTokens ?? 0;
@@ -233,7 +233,7 @@ export function applyEventToRunState(state: RunStateSnapshot, event: AgentEvent,
     }
     case 'assistant_message': {
       const note = summarizeModelOutput(event.content);
-      next = withDebugHistory(next, {
+      next = upsertModelHistory(next, {
         atMs: nowMs,
         kind: 'model',
         summary: note || 'model response',
@@ -244,7 +244,19 @@ export function applyEventToRunState(state: RunStateSnapshot, event: AgentEvent,
         ...next,
         lastModelOutput: note,
       };
-      return withTimeline(next, next.phase, `Thinking · ${note}`, 'S0');
+      return withTimeline(next, next.phase, `Working · ${note}`, 'S0');
+    }
+    case 'assistant_delta': {
+      const content = formatAssistantDelta(event.content, event.reasoningContent);
+      if (!content) return next;
+      const latestDetail = appendToLatestModelDetail(next, content);
+      const note = summarizeModelOutput(latestDetail);
+      next = {
+        ...appendModelDeltaHistory(next, content, nowMs),
+        lastModelOutput: note || next.lastModelOutput,
+      };
+      if (!note) return next;
+      return withTimeline(next, next.phase, `Working · ${note}`, 'S0');
     }
     case 'command_output': {
       next = withDebugHistory(next, {
@@ -414,6 +426,10 @@ export function applyEventToRunState(state: RunStateSnapshot, event: AgentEvent,
       };
       if (event.error) {
         next = withRisk(next, `blocker: ${event.error}`, 'S3');
+        next = {
+          ...next,
+          terminalIssue: event.error,
+        };
       }
       if (event.status === 'completed') {
         const filesChangedThisRun = unique(event.changedFiles);
@@ -437,6 +453,10 @@ export function applyEventToRunState(state: RunStateSnapshot, event: AgentEvent,
     case 'error': {
       next = withPhase(next, 'error', 'runtime error');
       next = withRisk(next, event.message, 'S3');
+      next = {
+        ...next,
+        terminalIssue: event.message,
+      };
       return withTimeline(next, 'error', 'runtime error', 'S3');
     }
     default:
@@ -527,8 +547,51 @@ function withStatus(state: RunStateSnapshot, statusNote: string, severity: TuiSe
 const MAX_DEBUG_HISTORY = 200;
 
 function withDebugHistory(state: RunStateSnapshot, item: TuiDebugHistoryItem): RunStateSnapshot {
-  const debugHistory = [...state.debugHistory, { ...item, detail: clipText(item.detail, 50000) }];
+  const debugHistory = [...state.debugHistory, item];
   return { ...state, debugHistory: debugHistory.slice(Math.max(0, debugHistory.length - MAX_DEBUG_HISTORY)) };
+}
+
+function upsertModelHistory(state: RunStateSnapshot, item: TuiDebugHistoryItem): RunStateSnapshot {
+  const last = state.debugHistory[state.debugHistory.length - 1];
+  if (last?.kind === 'model' && (item.detail.startsWith(last.detail) || last.detail.startsWith(item.detail))) {
+    const debugHistory = state.debugHistory.slice(0, -1);
+    debugHistory.push(item.detail.length >= last.detail.length ? item : last);
+    return { ...state, debugHistory };
+  }
+  return withDebugHistory(state, item);
+}
+
+function appendModelDeltaHistory(state: RunStateSnapshot, content: string, nowMs: number): RunStateSnapshot {
+  const last = state.debugHistory[state.debugHistory.length - 1];
+  if (last?.kind === 'model') {
+    const detail = `${last.detail}${content}`;
+    const debugHistory = state.debugHistory.slice(0, -1);
+    debugHistory.push({
+      ...last,
+      atMs: nowMs,
+      summary: summarizeModelOutput(detail) || 'model response',
+      detail,
+    });
+    return { ...state, debugHistory };
+  }
+  return withDebugHistory(state, {
+    atMs: nowMs,
+    kind: 'model',
+    summary: summarizeModelOutput(content) || 'model response',
+    detail: content,
+  });
+}
+
+function appendToLatestModelDetail(state: RunStateSnapshot, content: string): string {
+  const last = state.debugHistory[state.debugHistory.length - 1];
+  return last?.kind === 'model' ? `${last.detail}${content}` : content;
+}
+
+function formatAssistantDelta(content?: string, reasoningContent?: string): string {
+  const parts: string[] = [];
+  if (reasoningContent) parts.push(reasoningContent);
+  if (content) parts.push(content);
+  return parts.join('');
 }
 
 function createEmptyVerificationState(): TuiVerificationState {

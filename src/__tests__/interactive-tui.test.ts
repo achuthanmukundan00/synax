@@ -528,7 +528,7 @@ describe('interactive layout visual agreements', () => {
       .map(stripAnsi)
       .join('\n');
 
-    expect(plain).toContain('Synax v0.0.21-alpha  Completed  0:25');
+    expect(plain).toContain('Synax v0.0.21-alpha  Ready  0:25');
   });
 
   it('renders terminal-state status bars in the header without redundant final summary blocks', () => {
@@ -561,7 +561,7 @@ describe('interactive layout visual agreements', () => {
       .map((line) => stripAnsi(line))
       .join('\n');
 
-    expect(successPlain).toContain('Completed');
+    expect(successPlain).toContain('Ready');
     expect(blockedPlain).toContain('Blocked');
     expect(failedPlain).toContain('Error');
     // No synthetic final summary block rendered.
@@ -644,9 +644,13 @@ describe('interactive layout visual agreements', () => {
 
     const noteLines = plain
       .split('\n')
-      .filter((line) => line.includes('Read the configuration') || line.includes('TAIL_MARKER'));
+      .filter(
+        (line) =>
+          (line.includes('Read the configuration') || line.includes('TAIL_MARKER')) && !line.includes('working'),
+      );
 
     expect(noteLines.join('\n')).toContain('TAIL_MARKER');
+    // Model notes now use pink star glyph and bold 'note' label, but prose wraps without ellipsis truncation.
     expect(noteLines.join('\n')).not.toContain('…');
   });
 
@@ -763,10 +767,10 @@ describe('interactive layout visual agreements', () => {
     expect(plain).not.toContain('model qwen');
     expect(plain).not.toContain('tools 3');
     expect(plain).not.toContain('files 2');
-    expect(plain).toContain('Model       qwen');
+    expect(plain).toContain('Model       Qwen');
     expect(plain).toContain('Provider    Relay');
     expect(plain).toContain('Context');
-    expect(plain).not.toContain('hidden chain');
+    expect(plain).toContain('hidden chain');
     expect(plain).toContain('read, bash');
     expect(plain).toContain('read src/tui/layout.ts');
     expect(plain).toContain('npm test src/__tests__/interactive-tui.test.ts');
@@ -1001,7 +1005,9 @@ describe('interactive layout visual agreements', () => {
       .map((line) => stripAnsi(line))
       .join('\n');
 
-    expect(plain).toContain('exit 0');
+    // Successful exit 0 is suppressed from command display.
+    expect(plain).toContain('npm test');
+    expect(plain).not.toContain('exit 0');
     expect(plain).not.toContain('exit 1');
   });
 
@@ -1073,7 +1079,7 @@ describe('interactive layout visual agreements', () => {
     expect(dock[0]).toMatch(/^┌─+ ~\/workspace\/git\/\.worktrees\/synax-tui {2}dev\/tui ┐\s*$/);
     expect(dock[1]).toMatch(/^│ Implement fixed-footprint reactor core rendering\s+│\s*$/);
     expect(dock[2]).toMatch(/^│\s+│\s*$/);
-    expect(dock[3]).toMatch(/^└ Enter submit {2}Ctrl\+C exit {2}\/help {2}!cmd shell ─+┘\s*$/);
+    expect(dock[3]).toMatch(/^└ Enter submit \| Ctrl\+C exit \| \/help \| !cmd shell ─+┘\s*$/);
   });
 
   it('keeps the input dock inside the terminal write-safe column', () => {
@@ -1124,7 +1130,8 @@ describe('interactive layout visual agreements', () => {
 
     expect(lines.at(-4)?.trim()).toBe('');
     expect(lines.at(-3)?.trimStart().startsWith('┌')).toBe(true);
-    expect(lines.at(-2)).toMatch(/^│\s+│\s*$/);
+    // Empty input now shows a placeholder instead of blank line.
+    expect(lines.at(-2)).toContain('Ask Synax');
     expect(lines.at(-1)?.trimStart().startsWith('└ Enter submit')).toBe(true);
   });
 
@@ -1195,7 +1202,9 @@ describe('interactive layout visual agreements', () => {
     expect(plain).toContain('Runtime');
     expect(plain).toContain('Session');
     expect(plain).toContain('Core        Loaded');
-    expect(plain).toContain('Model       Qwen3.6-35B-A3…XS.gguf');
+    // Friendly display name truncates in the 38-col side panel.
+    expect(plain).toContain('Model       Qwen3.6 35B A3');
+    expect(plain).toContain('Route       llama.cpp · Qw');
     expect(plain).toContain('Provider    llama.cpp');
     expect(plain).toContain('Context     8.2k / 131.1k');
     expect(plain).toContain('Context     8.2k / 131.1k (6%)');
@@ -1207,6 +1216,37 @@ describe('interactive layout visual agreements', () => {
     expect(plain).not.toContain('Core loaded');
     expect(plain).not.toContain('Session $');
     expect(plain).not.toContain('tools used bash');
+  });
+
+  it('keeps the context usage bar inside the core panel', () => {
+    const run = {
+      ...createInitialRunStateSnapshot(0),
+      phase: 'completed' as const,
+      modelId: 'qwen-local',
+      providerName: 'Relay',
+      coreLoaded: true,
+      contextUsedTokens: 11_200,
+      contextWindowTokens: 128_000,
+    };
+
+    const lines = renderLayout(
+      {
+        run,
+        objectiveInput: '',
+        coreMode: 'completed',
+        nowMs: 2000,
+      },
+      120,
+      30,
+    ).map(stripAnsi);
+    const contextBar = lines.find((line) => line.includes('│ctx '));
+
+    expect(contextBar).toBeDefined();
+    expect(contextBar).toContain('█');
+    expect(contextBar).toContain('░');
+    expect(contextBar).not.toContain('─');
+    expect(contextBar).not.toContain('…');
+    expect(lines.every((line) => line.length === 120)).toBe(true);
   });
 
   it('summarizes diff stat command output into semantic file change rows', () => {
@@ -1376,7 +1416,9 @@ describe('interactive layout visual agreements', () => {
 
     expect(plain).not.toContain('Transcript');
     expect(plain).toContain('I will check git status.');
-    expect(plain).toContain('$ git status --short  exit 1');
+    expect(plain).toContain('$ git status --short');
+    // No exit code in tool result — suppressed from display.
+    expect(plain).not.toContain('exit 1');
     expect(plain).toContain('M src/tui/layout.ts');
   });
 
@@ -1699,6 +1741,39 @@ describe('interactive layout visual agreements', () => {
       ),
     ).toBeGreaterThanOrEqual(0);
   });
+
+  it('allows scrolling through a single long completed transcript entry', () => {
+    const longFinalAnswer = Array.from(
+      { length: 80 },
+      (_, index) => `completed transcript paragraph ${index} with enough prose to wrap in the terminal viewport`,
+    ).join('\n');
+    const run = {
+      ...createInitialRunStateSnapshot(0),
+      phase: 'completed' as const,
+      terminal: 'completed' as const,
+      debugHistory: [
+        {
+          atMs: 1,
+          kind: 'model' as const,
+          summary: 'final answer',
+          detail: longFinalAnswer,
+        },
+      ],
+    };
+
+    const maxOffset = maxHistoryScrollOffset(
+      {
+        run,
+        objectiveInput: '',
+        coreMode: 'completed',
+        nowMs: 2000,
+      },
+      90,
+      24,
+    );
+
+    expect(maxOffset).toBeGreaterThan(40);
+  });
 });
 
 describe('interactive tui runtime', () => {
@@ -1864,8 +1939,10 @@ describe('interactive tui runtime', () => {
     const plain = stripAnsi(stdout.text());
     expect(session.handleShellCommand).toHaveBeenCalledWith('echo hello');
     expect(session.handleUserMessage).not.toHaveBeenCalled();
-    expect(plain).toContain('$ echo hello  exit 0');
+    expect(plain).toContain('$ echo hello');
     expect(plain).toContain('hello');
+    // Successful exit 0 is suppressed.
+    expect(plain).not.toContain('exit 0');
   });
 
   it('applies saved settings to runtime labels before the next submitted task', async () => {
@@ -1921,7 +1998,9 @@ describe('interactive tui runtime', () => {
 
     const plain = stripAnsi(stdout.text());
     expect(plain).toContain('DeepSeek');
-    expect(plain).toContain('deepseek-');
+    // Friendly model display name is used; raw route still visible.
+    expect(plain).toContain('DeepSeek');
+    expect(plain).toContain('DeepSeek …oner');
   });
 
   it('resets state and conversation on /new command', async () => {
