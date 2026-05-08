@@ -152,7 +152,10 @@ let callIdCounter = 0;
  * Uses the model-provided id if available, otherwise `call_N`.
  */
 export function generateCallId(provided?: string, index?: number): string {
-  if (provided && provided.trim().length > 0) return provided.trim();
+  if (provided && provided.trim().length > 0) {
+    const sanitized = provided.trim().replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 64);
+    if (sanitized.length > 0) return sanitized;
+  }
   const idx = index ?? ++callIdCounter;
   return `call_${idx}`;
 }
@@ -404,6 +407,7 @@ export interface DelimitedResult {
 export function extractDelimitedBlocks(content: string, openTag: string, closeTag: string): DelimitedResult {
   const blocks: string[] = [];
   const between: string[] = [];
+  let after = '';
 
   // Find first occurrence
   const firstOpen = content.indexOf(openTag);
@@ -417,8 +421,8 @@ export function extractDelimitedBlocks(content: string, openTag: string, closeTa
     const openIdx = remaining.indexOf(openTag);
 
     if (openIdx === -1) {
-      // No more open tags — remaining is trailing text
-      between.push(remaining);
+      // No more open tags — remaining is trailing text after last block
+      after = remaining;
       break;
     }
 
@@ -447,7 +451,7 @@ export function extractDelimitedBlocks(content: string, openTag: string, closeTa
     before,
     blocks,
     between,
-    after: '', // No trailing after — all covered by between or blocks
+    after,
   };
 }
 
