@@ -37,9 +37,9 @@
         <RuntimePanel :core="currentCore" />
       </div>
 
-      <!-- Terminal preview -->
-      <div class="landing-terminal">
-        <TerminalPreview :core="currentCore" />
+      <!-- Measured transcript hero -->
+      <div class="landing-transcript">
+        <CoreTranscriptHero :core="currentCore" />
       </div>
     </section>
 
@@ -72,7 +72,7 @@
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import AiCore from './AiCore.vue'
 import RuntimePanel from './RuntimePanel.vue'
-import TerminalPreview from './TerminalPreview.vue'
+import CoreTranscriptHero from './CoreTranscriptHero.vue'
 import { buildRuntimeScene, runtimeScenes } from '../runtime-core'
 
 const currentIndex = ref(0)

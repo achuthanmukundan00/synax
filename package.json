@@ -34,6 +34,7 @@
     "toml": "^3.0.0"
   },
   "devDependencies": {
+    "@chenglou/pretext": "^0.0.6",
     "@types/jest": "^29.5.14",
     "@types/node": "^22.19.17",
     "@typescript-eslint/eslint-plugin": "^8.28.1",
