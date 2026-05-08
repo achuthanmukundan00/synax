@@ -10,8 +10,6 @@ export interface TranscriptRenderState {
 
 /** Breathing glyph sequence for the working indicator. */
 const BREATHING_GLYPHS = ['◌', '◓', '◑', '◒'];
-const TYPEWRITER_CHARS_PER_SECOND = 70;
-const TYPEWRITER_INITIAL_CHARS = 24;
 
 // ─── Tool-summary detection ───────────────────────────────
 
@@ -32,9 +30,8 @@ export function renderTranscript(state: TranscriptRenderState, width: number): s
   const history = state.run.debugHistory;
   const completed = state.run.terminal === 'completed' || state.run.phase === 'completed';
   const isWorking = state.run.phase === 'thinking' && state.run.terminal === 'running';
-  const animateModelText = state.run.terminal === 'running';
-  const nowMs = state.nowMs ?? state.run.nowMs;
   let lastRenderedProse = '';
+  let wasPreviousNote = false;
 
   for (let i = 0; i < history.length; i += 1) {
     const item = history[i];
@@ -42,6 +39,7 @@ export function renderTranscript(state: TranscriptRenderState, width: number): s
     if (item.kind === 'user') {
       blocks.push(renderUserPrompt(item.detail || item.summary, width));
       lastRenderedProse = '';
+      wasPreviousNote = false;
       continue;
     }
 
@@ -56,15 +54,13 @@ export function renderTranscript(state: TranscriptRenderState, width: number): s
       }
       if (completed && isLastModel) {
         blocks.push(
-          renderReviewOutput(
-            typewriterText(prose || item.detail || item.summary, item.atMs, nowMs, animateModelText),
-            width,
-          ),
+          renderReviewOutput(prose || item.detail || item.summary, width),
         );
         lastRenderedProse = prose;
       } else if (prose) {
-        blocks.push(renderModelProse(typewriterText(prose, item.atMs, nowMs, animateModelText), width));
+        blocks.push(renderModelProse(prose, width, !wasPreviousNote));
         lastRenderedProse = prose;
+        wasPreviousNote = true;
       }
       // Model items with only tool-call content (no natural-language prose) are
       // not useful to render; the actual tool calls are rendered as separate entries.
@@ -73,11 +69,13 @@ export function renderTranscript(state: TranscriptRenderState, width: number): s
 
     if (item.kind === 'command') {
       blocks.push(renderEventBlock('command', item.detail || item.summary, width, Number.POSITIVE_INFINITY));
+      wasPreviousNote = false;
       continue;
     }
 
     if (item.kind === 'local_command') {
       blocks.push(renderCommandEvent(item.summary, { summary: item.summary, detail: item.detail }, width, completed));
+      wasPreviousNote = false;
       continue;
     }
 
@@ -85,10 +83,12 @@ export function renderTranscript(state: TranscriptRenderState, width: number): s
       // Final summary is intentionally not rendered in the transcript.
       // Completion state is communicated via the header, status bar, and
       // runtime panel. Internal summary data is preserved for logs and telemetry.
+      wasPreviousNote = false;
       continue;
     }
 
     if (item.kind === 'tool_call') {
+      wasPreviousNote = false;
       // Collect consecutive successful tool calls for grouping.
       const group = collectToolGroup(history, i, completed, width);
       if (group) {
@@ -104,6 +104,7 @@ export function renderTranscript(state: TranscriptRenderState, width: number): s
       continue;
     }
 
+    wasPreviousNote = false;
     blocks.push(renderEventBlock('tool', summarizeOutput(item.detail || item.summary), width));
   }
 
@@ -169,8 +170,32 @@ function renderEventBlock(label: string, body: string, width: number, maxLines =
 }
 
 function renderUserPrompt(body: string, width: number): string[] {
-  const wrapped = wrapText(body || 'no prompt', Math.max(12, width - 13));
-  return [eventHeader('user', ''), ...alignedField('prompt', wrapped, width, true)];
+  const innerWidth = Math.max(14, width - 4);
+  const contentWidth = Math.max(1, innerWidth - 4);
+  const wrapped = wrapText(body || 'no prompt', contentWidth);
+  const lines: string[] = [];
+
+  // Top border with bold label
+  const labelText = ' user prompt ';
+  const labelLen = labelText.length;
+  const topFill = Math.max(0, innerWidth - labelLen);
+  lines.push(` ${dim('╭─')}${boldDim(labelText)}${dim('─'.repeat(topFill))}${dim('╮')}`);
+
+  // Content lines (italic, dim)
+  if (wrapped.length === 0) {
+    lines.push(` ${dim('│')}${' '.repeat(innerWidth)}${dim('│')}`);
+  } else {
+    for (const line of wrapped) {
+      const visibleLen = visibleLength(line);
+      const padding = ' '.repeat(Math.max(0, contentWidth - visibleLen));
+      lines.push(` ${dim('│')}  ${dimI(line)}${padding}  ${dim('│')}`);
+    }
+  }
+
+  // Bottom border
+  lines.push(` ${dim('╰')}${dim('─'.repeat(innerWidth))}${dim('╯')}`);
+
+  return lines;
 }
 
 function renderToolEvent(
@@ -681,6 +706,10 @@ function pink(text: string): string {
   return `\u001b[35m${text}\u001b[0m`;
 }
 
+function boldDim(text: string): string {
+  return `\u001b[1;90m${text}\u001b[0m`;
+}
+
 function dim(text: string): string {
   return `\u001b[90m${text}\u001b[0m`;
 }
@@ -749,11 +778,10 @@ function isProcessChatter(text: string): boolean {
   return false;
 }
 
-/** Render model prose as a secondary note with pink star glyph, dim label, and dim wrapping text. */
-/** Render model prose as a secondary note with pink star glyph, dim label, and dim wrapping text. */
-/** Render model prose as a secondary note with pink star glyph, dim label, and dim wrapping text. */
-/** Render model prose as a secondary note with pink star glyph, dim label, and dim wrapping text. */
-function renderModelProse(prose: string, width: number): string[] {
+/** Render model prose as a note with pink star glyph and dim italic body.
+ *  When showHeading is false, the note heading is suppressed so
+ *  consecutive notes group cleanly under a single heading. */
+function renderModelProse(prose: string, width: number, showHeading: boolean): string[] {
   const glyph = '✽';
   const label = 'note';
 
@@ -765,18 +793,13 @@ function renderModelProse(prose: string, width: number): string[] {
   const wrapped = wrapText(prose, bodyWidth);
   if (wrapped.length === 0) return [];
 
-  return [
-    `${pink(glyph)} ${dim(label)} ${dimI(wrapped[0])}`,
-    ...wrapped.slice(1).map((line) => `${continuationIndent}${dimI(line)}`),
-  ];
-}
-
-function typewriterText(text: string, startedAtMs: number, nowMs: number, enabled: boolean): string {
-  if (!text || !enabled) return text;
-  const elapsedMs = Math.max(0, nowMs - startedAtMs);
-  const visibleChars = TYPEWRITER_INITIAL_CHARS + Math.floor((elapsedMs / 1000) * TYPEWRITER_CHARS_PER_SECOND);
-  if (visibleChars >= text.length) return text;
-  return text.slice(0, Math.max(1, visibleChars));
+  if (showHeading) {
+    return [
+      `${pink(glyph)} ${boldDim(label)} ${dimI(wrapped[0])}`,
+      ...wrapped.slice(1).map((line) => `${continuationIndent}${dimI(line)}`),
+    ];
+  }
+  return wrapped.map((line) => `${continuationIndent}${dimI(line)}`);
 }
 
 function renderWorkingShimmer(nowMs: number): string {
@@ -997,10 +1020,12 @@ function renderReviewOutput(body: string, width: number): string[] {
     .filter((line) => !isProcessChatter(line.trim()))
     .join('\n')
     .trim();
-  if (!clean) return [eventHeader('model', '')];
+  if (!clean) return [`${green('•')} ${boldDim('result')}`];
 
   const hasMd = /^#{1,3}\s|^[*\-+]\s|^```|^\d+\.\s|^>\s|^---+$/m.test(clean);
-  const lines: string[] = [eventHeader('result', '')];
+  // Accent header: dashed rule with bold result label in green
+  const accentWidth = Math.max(0, width - 6 - ' result '.length);
+  const lines: string[] = [`  ${dim('╌')} ${boldDim('result')} ${green('╌'.repeat(Math.max(0, accentWidth)))}`];
 
   if (hasMd) {
     const mdBlocks = renderMarkdownBlock(clean, width);
