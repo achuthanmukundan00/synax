@@ -1467,15 +1467,10 @@ function isSafeToolPreamble(text: string): boolean {
   const forbiddenPhrases = [
     'answer is',
     'final answer',
-    'therefore',
     'in summary',
-    'done',
-    'completed',
-    'i found',
-    'the result',
-    'conclusion',
+    'in conclusion',
+    'to summarize',
     'here is the answer',
-    'this means',
   ];
 
   return !forbiddenPhrases.some((phrase) => joined.includes(phrase));
