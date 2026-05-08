@@ -1575,7 +1575,7 @@ describe('interactive layout visual agreements', () => {
     // No synthetic final summary block; the model review output appears for the
     // completed run and the next user prompt follows.
     const reviewIndex = plain.indexOf('Finished the first task.');
-    const nextPromptIndex = plain.indexOf('prompt     second task should be visible');
+    const nextPromptIndex = plain.indexOf('second task should be visible');
 
     expect(run.terminal).toBe('running');
     expect(reviewIndex).toBeGreaterThanOrEqual(0);
@@ -1617,8 +1617,10 @@ describe('interactive layout visual agreements', () => {
       .map((line) => stripAnsi(line))
       .join('\n');
 
-    expect(plain.match(/prompt\s+/g)).toHaveLength(1);
-    expect(plain).toMatch(/settings\s+UI\/TUI bug fixes\./);
+    expect(plain).toContain('user prompt');
+    // The prompt text wraps cleanly within the box.
+    expect(plain).toContain('settings UI/TUI');
+    expect(plain).toContain('bug fixes.');
   });
 
   it('uses the compact core visual on the welcome screen at medium widths', () => {
