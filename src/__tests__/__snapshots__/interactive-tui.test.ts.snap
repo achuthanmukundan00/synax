@@ -1,7 +1,7 @@
 // Jest Snapshot v1, https://goo.gl/fbAQLP
 
 exports[`interactive layout visual agreements matches the active docked-core render snapshot 1`] = `
-"  Synax v0.0.2-alpha  Tool  0:02
+"  Synax v0.0.21-alpha  Tool  0:02
 
   ※ note       Inspecting files before editing.                                  ┌ Synax Core ──────────────────────┐
                                                                                  │               ˙˙ ˙·              │
@@ -36,7 +36,7 @@ exports[`interactive layout visual agreements matches the active docked-core ren
 `;
 
 exports[`interactive layout visual agreements matches the blocked budget-exhausted render snapshot 1`] = `
-"  Synax v0.0.2-alpha  Budget exhausted  0:00
+"  Synax v0.0.21-alpha  Budget exhausted  0:00
 
                                                                                  ┌ Synax Core ──────────────────────┐
                                                                                  │               .  ×               │
@@ -71,7 +71,7 @@ exports[`interactive layout visual agreements matches the blocked budget-exhaust
 `;
 
 exports[`interactive layout visual agreements matches the completed render snapshot 1`] = `
-"  Synax v0.0.2-alpha  Completed  0:00
+"  Synax v0.0.21-alpha  Completed  0:00
 
                                                                                  ┌ Synax Core ──────────────────────┐
                                                                                  │               ·  ·               │
@@ -106,7 +106,7 @@ exports[`interactive layout visual agreements matches the completed render snaps
 `;
 
 exports[`interactive layout visual agreements matches the idle large-core render snapshot 1`] = `
-"  Synax v0.0.2-alpha  Idle  0:02
+"  Synax v0.0.21-alpha  Idle  0:02
 
                                 ·  .
                             ·   ·  .  .             Runtime
@@ -133,7 +133,7 @@ exports[`interactive layout visual agreements matches the idle large-core render
 `;
 
 exports[`interactive layout visual agreements matches the narrow terminal fallback snapshot 1`] = `
-"  Synax v0.0.2-alpha  Thinking  0:02
+"  Synax v0.0.21-alpha  Thinking  0:02
 
   ※ note       Inspecting files before editing.
 
