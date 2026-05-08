@@ -35,6 +35,7 @@ import { writeFileSync, mkdirSync } from 'fs';
 import type { NormalizedProviderConfig, ProviderMetadata } from '../llm/types';
 import { detectDirtyTree, readLatestCheckpoint, undoLastEdit } from '../agent/safety';
 import { runInteractiveTui } from '../tui/interactive-tui';
+import { isSecretTrigger } from '../backrooms/trigger';
 
 const execFileAsync = promisify(execFile);
 
@@ -708,6 +709,22 @@ export async function runInlinePasteChat(
       stdout.write('\n');
       return;
     }
+
+    // Secret trigger: Synax Backrooms easter egg
+    const submittedText = flattenInlinePasteDraft(currentDraft).trim();
+    if (isSecretTrigger(submittedText)) {
+      stdout.write('\n');
+      draft = createInlinePasteInputSession();
+      try {
+        const { runSynaxBackrooms } = await import('../backrooms/runBackrooms');
+        await runSynaxBackrooms();
+      } finally {
+        stdout.write('liminal layer closed\n');
+      }
+      render();
+      return;
+    }
+
     if (kind === 'slash') {
       stdout.write('\n');
       const report = await session.handleSlashCommand(plainText);

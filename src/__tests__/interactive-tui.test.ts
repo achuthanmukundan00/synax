@@ -241,7 +241,7 @@ describe('diff renderer', () => {
     const diff = new DiffRenderer();
     const lines = Array.from({ length: 50 }, (_, i) => `line-${i}`);
     const out = diff.render(lines, 20, 5);
-    expect(out).toContain('\u001b[5;1Hline-4');
+    expect(out).toContain('\u001b[5;1H\u001b[0m\u001b[2Kline-4');
     expect(out).not.toContain('line-8');
   });
 
@@ -259,15 +259,27 @@ describe('diff renderer', () => {
 
     const out = diff.render(['xy'], 8, 1);
 
-    expect(out).toContain('\u001b[1;1Hxy\u001b[K');
+    expect(out).toContain('\u001b[1;1H\u001b[0m\u001b[2Kxy\u001b[0m');
   });
 
   it('avoids writing into the last terminal column to prevent prompt autowrap', () => {
     const diff = new DiffRenderer();
     const out = diff.render(['abcdefgh'], 8, 1);
 
-    expect(out).toContain('\u001b[1;1Habcdefg\u001b[K');
+    expect(out).toContain('\u001b[1;1H\u001b[0m\u001b[2Kabcdefg\u001b[0m');
     expect(out).not.toContain('\u001b[1;1Habcdefgh');
+  });
+
+  it('can invalidate cached lines after an external alternate-screen renderer runs', () => {
+    const diff = new DiffRenderer();
+    diff.render(['same'], 10, 1);
+    expect(diff.render(['same'], 10, 1)).toBe('');
+
+    diff.reset();
+    const out = diff.render(['same'], 10, 1);
+
+    expect(out).toContain('\u001b[2J');
+    expect(out).toContain('same');
   });
 });
 
@@ -2004,6 +2016,56 @@ describe('interactive tui runtime', () => {
     expect(plain).toContain('hello');
     // Successful exit 0 is suppressed.
     expect(plain).not.toContain('exit 0');
+  });
+
+  it('suspends chat input while the liminal renderer owns the terminal', async () => {
+    const stdin = createTtyInput();
+    const stdout = new CapturingWritable();
+    let resolveEntered: (() => void) | undefined;
+    let resolveExit: (() => void) | undefined;
+    const enteredLiminal = new Promise<void>((resolve) => {
+      resolveEntered = resolve;
+    });
+    const exitLiminal = new Promise<void>((resolve) => {
+      resolveExit = resolve;
+    });
+    const session: ChatSession = {
+      conversation: createChatSession({
+        repoRoot: process.cwd(),
+        config: { provider: { kind: 'openai-compatible', base_url: 'http://localhost/v1', model: 'fake' } },
+      }).conversation,
+      handleUserMessage: jest.fn(async () => ({
+        terminalState: 'completed' as const,
+        finalAnswer: 'done',
+        changedFiles: [],
+        workingTreeClean: true,
+        steps: 1,
+        toolCalls: 0,
+      })),
+      handleSlashCommand: jest.fn(),
+    };
+
+    const runPromise = runInteractiveTui(session, {
+      stdin,
+      stdout,
+      runLiminalLayer: async () => {
+        resolveEntered?.();
+        await exitLiminal;
+      },
+    });
+
+    stdin.write(Buffer.from(':synax/liminal/access/000\n', 'utf8'));
+    await enteredLiminal;
+    stdin.write(Buffer.from('q\n', 'utf8'));
+    await new Promise((resolve) => setTimeout(resolve, 220));
+    expect(session.handleUserMessage).not.toHaveBeenCalled();
+
+    resolveExit?.();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    stdin.write(Buffer.from('\u0003', 'utf8'));
+    await runPromise;
+
+    expect(stripAnsi(stdout.text())).toContain('liminal layer closed');
   });
 
   it('applies saved settings to runtime labels before the next submitted task', async () => {
