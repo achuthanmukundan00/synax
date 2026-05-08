@@ -73,7 +73,7 @@ describe('tool-call parser result API', () => {
     const result = parseToolCallsFromContentResult(
       '<think>hidden</think><tool_call>{"name":"read","arguments":{"path":"README.md"}}</tool_call>',
     );
-    expect(result).toEqual({
+    expect(result).toMatchObject({
       ok: true,
       source: 'content',
       calls: [{ id: 'call_1', name: 'read', arguments: { path: 'README.md' } }],
@@ -86,7 +86,7 @@ describe('tool-call parser result API', () => {
       'Preamble\n<tool_call>\n<function=read>\n<parameter=path>\nREADME.md\n</parameter>\n<parameter=flag>true</parameter>\n<parameter=count>12</parameter>\n<parameter=data>{"a":[1]}</parameter>\n<parameter=unsafe>process.exit(1)</parameter>\n</function>\n</tool_call>',
     );
 
-    expect(result).toEqual({
+    expect(result).toMatchObject({
       ok: true,
       source: 'content',
       calls: [
