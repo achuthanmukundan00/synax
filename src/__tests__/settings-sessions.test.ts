@@ -13,6 +13,7 @@ import { join } from 'path';
 
 import {
   createSettingsState,
+  getTabRows,
   settingsReducer,
   SETTINGS_TABS,
   clearTextInput,
@@ -187,6 +188,26 @@ describe('settings state — thinking control', () => {
     // The reducer itself doesn't toggle thinking when it's n/a.
     const state = settingsReducer(createSettingsState(config), { type: 'open' });
     expect(state.tab).toBe('model');
+  });
+
+  it('allows selecting no active model so the core can unload', () => {
+    const config = makeTestConfig();
+    const rows = getTabRows('model', config);
+    const activeModel = rows.find((row) => row.id === 'active-model');
+    expect(activeModel?.options).toEqual(['', 'qwen', 'deepseek-reasoner']);
+
+    const noModelIndex = rows.findIndex((row) => row.id === 'no-active-model');
+    expect(noModelIndex).toBeGreaterThanOrEqual(0);
+
+    const state = {
+      ...settingsReducer(createSettingsState(config), { type: 'open' }),
+      focus: 'rows' as const,
+      selectedRow: noModelIndex,
+    };
+    const selected = settingsReducer(state, { type: 'select_row' });
+
+    expect(selected.config.active.model).toBe('');
+    expect(selected.config.active.thinking).toBe('off');
   });
 });
 
@@ -719,7 +740,7 @@ describe('transcript rendering', () => {
 
     // The input dock should be compact: 3 lines (blank + border-top + body + border-bottom = 4)
     // but after the blank line prefix, the actual panel is 3 lines.
-    const panelStart = lines.findIndex((l: string) => l.includes('┌'));
+    const panelStart = lines.findIndex((l: string) => l.includes('╔'));
     expect(panelStart).toBeGreaterThan(-1);
 
     // Bottom border contains help text
@@ -742,7 +763,7 @@ describe('transcript rendering', () => {
     ).map(stripAll);
 
     // With multiline input, the panel expands
-    const multiPanelStart = lines.findIndex((l: string) => l.includes('┌'));
+    const multiPanelStart = lines.findIndex((l: string) => l.includes('╔'));
     const multiPanelLines = lines.slice(multiPanelStart);
     // Should have more than 3 lines (top + at least 2 body + bottom = 4+)
     expect(multiPanelLines.length).toBeGreaterThanOrEqual(4);
