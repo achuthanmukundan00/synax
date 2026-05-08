@@ -603,11 +603,11 @@ function selectToolCallParserMode(model: string, override?: string): ToolCallPar
     if (toolCallParserRegistry.get(normalizedOverride)) {
       return normalizedOverride;
     }
-    // Unknown parser — log warning and fall back to auto-detect
+    // Unknown parser — error out for explicit overrides to prevent silent misconfiguration
     if (normalizedOverride !== 'generic') {
-      process.stderr
-        .write(`[synax] ⚠ Unknown tool-call-parser "${override}". Using auto-detection. Available: ${toolCallParserRegistry.listIds().join(', ')}
-`);
+      throw new Error(
+        `Unknown tool-call-parser "${override}". Available: ${toolCallParserRegistry.listIds().join(', ')}`,
+      );
     }
   }
 
