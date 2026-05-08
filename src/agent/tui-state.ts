@@ -570,6 +570,24 @@ function upsertModelHistory(state: RunStateSnapshot, item: TuiDebugHistoryItem):
       return { ...state, debugHistory };
     }
   }
+  const itemSummary = summarizeModelOutput(item.detail);
+  if (itemSummary) {
+    let duplicateIndex = -1;
+    for (let i = state.debugHistory.length - 1; i >= 0; i -= 1) {
+      const historyItem = state.debugHistory[i];
+      if (historyItem.kind === 'user') break;
+      if (historyItem.kind === 'model' && summarizeModelOutput(historyItem.detail) === itemSummary) {
+        duplicateIndex = i;
+        break;
+      }
+    }
+    if (duplicateIndex >= 0) {
+      const duplicate = state.debugHistory[duplicateIndex];
+      const debugHistory = state.debugHistory.slice();
+      debugHistory[duplicateIndex] = item.detail.length >= duplicate.detail.length ? item : duplicate;
+      return { ...state, debugHistory };
+    }
+  }
   return withDebugHistory(state, item);
 }
 

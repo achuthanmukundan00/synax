@@ -2,6 +2,7 @@ import type { RunStateSnapshot } from '../agent/tui-state';
 
 export interface TranscriptRenderState {
   run: RunStateSnapshot;
+  nowMs?: number;
   lastModelOutput?: string;
   /** Whether activity/reasoning detail is expanded (Ctrl+O toggle). */
   activityExpanded?: boolean;
@@ -30,6 +31,7 @@ export function renderTranscript(state: TranscriptRenderState, width: number): s
   const completed = state.run.terminal === 'completed' || state.run.phase === 'completed';
   const isWorking = state.run.phase === 'thinking' && state.run.terminal === 'running';
   let lastRenderedProse = '';
+  let wasPreviousNote = false;
 
   for (let i = 0; i < history.length; i += 1) {
     const item = history[i];
@@ -37,6 +39,7 @@ export function renderTranscript(state: TranscriptRenderState, width: number): s
     if (item.kind === 'user') {
       blocks.push(renderUserPrompt(item.detail || item.summary, width));
       lastRenderedProse = '';
+      wasPreviousNote = false;
       continue;
     }
 
@@ -50,11 +53,14 @@ export function renderTranscript(state: TranscriptRenderState, width: number): s
         continue;
       }
       if (completed && isLastModel) {
-        blocks.push(renderReviewOutput(prose || item.detail || item.summary, width));
+        blocks.push(
+          renderReviewOutput(prose || item.detail || item.summary, width),
+        );
         lastRenderedProse = prose;
       } else if (prose) {
-        blocks.push(renderModelProse(prose, width));
+        blocks.push(renderModelProse(prose, width, !wasPreviousNote));
         lastRenderedProse = prose;
+        wasPreviousNote = true;
       }
       // Model items with only tool-call content (no natural-language prose) are
       // not useful to render; the actual tool calls are rendered as separate entries.
@@ -63,11 +69,13 @@ export function renderTranscript(state: TranscriptRenderState, width: number): s
 
     if (item.kind === 'command') {
       blocks.push(renderEventBlock('command', item.detail || item.summary, width, Number.POSITIVE_INFINITY));
+      wasPreviousNote = false;
       continue;
     }
 
     if (item.kind === 'local_command') {
       blocks.push(renderCommandEvent(item.summary, { summary: item.summary, detail: item.detail }, width, completed));
+      wasPreviousNote = false;
       continue;
     }
 
@@ -75,10 +83,12 @@ export function renderTranscript(state: TranscriptRenderState, width: number): s
       // Final summary is intentionally not rendered in the transcript.
       // Completion state is communicated via the header, status bar, and
       // runtime panel. Internal summary data is preserved for logs and telemetry.
+      wasPreviousNote = false;
       continue;
     }
 
     if (item.kind === 'tool_call') {
+      wasPreviousNote = false;
       // Collect consecutive successful tool calls for grouping.
       const group = collectToolGroup(history, i, completed, width);
       if (group) {
@@ -94,6 +104,7 @@ export function renderTranscript(state: TranscriptRenderState, width: number): s
       continue;
     }
 
+    wasPreviousNote = false;
     blocks.push(renderEventBlock('tool', summarizeOutput(item.detail || item.summary), width));
   }
 
@@ -127,7 +138,7 @@ export function renderTranscript(state: TranscriptRenderState, width: number): s
   if (isWorking) {
     const frameIdx = Math.floor((state.run.nowMs / 1000) * 3) % BREATHING_GLYPHS.length;
     const glyph = `\u001b[1;34m${BREATHING_GLYPHS[frameIdx]}\u001b[0m`;
-    const label = '\u001b[1;34mworking\u001b[0m';
+    const label = renderWorkingShimmer(state.run.nowMs);
     blocks.push(['', `${glyph} ${label}`]);
 
     if (state.activityExpanded) {
@@ -159,8 +170,32 @@ function renderEventBlock(label: string, body: string, width: number, maxLines =
 }
 
 function renderUserPrompt(body: string, width: number): string[] {
-  const wrapped = wrapText(body || 'no prompt', Math.max(12, width - 13));
-  return [eventHeader('user', ''), ...alignedField('prompt', wrapped, width, true)];
+  const innerWidth = Math.max(14, width - 4);
+  const contentWidth = Math.max(1, innerWidth - 4);
+  const wrapped = wrapText(body || 'no prompt', contentWidth);
+  const lines: string[] = [];
+
+  // Top border with bold label
+  const labelText = ' user prompt ';
+  const labelLen = labelText.length;
+  const topFill = Math.max(0, innerWidth - labelLen);
+  lines.push(` ${dim('╭─')}${boldDim(labelText)}${dim('─'.repeat(topFill))}${dim('╮')}`);
+
+  // Content lines (italic, dim)
+  if (wrapped.length === 0) {
+    lines.push(` ${dim('│')}${' '.repeat(innerWidth)}${dim('│')}`);
+  } else {
+    for (const line of wrapped) {
+      const visibleLen = visibleLength(line);
+      const padding = ' '.repeat(Math.max(0, contentWidth - visibleLen));
+      lines.push(` ${dim('│')}  ${dimI(line)}${padding}  ${dim('│')}`);
+    }
+  }
+
+  // Bottom border
+  lines.push(` ${dim('╰')}${dim('─'.repeat(innerWidth))}${dim('╯')}`);
+
+  return lines;
 }
 
 function renderToolEvent(
@@ -671,6 +706,10 @@ function pink(text: string): string {
   return `\u001b[35m${text}\u001b[0m`;
 }
 
+function boldDim(text: string): string {
+  return `\u001b[1;90m${text}\u001b[0m`;
+}
+
 function dim(text: string): string {
   return `\u001b[90m${text}\u001b[0m`;
 }
@@ -739,11 +778,10 @@ function isProcessChatter(text: string): boolean {
   return false;
 }
 
-/** Render model prose as a secondary note with pink star glyph, dim label, and dim wrapping text. */
-/** Render model prose as a secondary note with pink star glyph, dim label, and dim wrapping text. */
-/** Render model prose as a secondary note with pink star glyph, dim label, and dim wrapping text. */
-/** Render model prose as a secondary note with pink star glyph, dim label, and dim wrapping text. */
-function renderModelProse(prose: string, width: number): string[] {
+/** Render model prose as a note with pink star glyph and dim italic body.
+ *  When showHeading is false, the note heading is suppressed so
+ *  consecutive notes group cleanly under a single heading. */
+function renderModelProse(prose: string, width: number, showHeading: boolean): string[] {
   const glyph = '✽';
   const label = 'note';
 
@@ -755,10 +793,25 @@ function renderModelProse(prose: string, width: number): string[] {
   const wrapped = wrapText(prose, bodyWidth);
   if (wrapped.length === 0) return [];
 
-  return [
-    `${pink(glyph)} ${dim(label)} ${dimI(wrapped[0])}`,
-    ...wrapped.slice(1).map((line) => `${continuationIndent}${dimI(line)}`),
-  ];
+  if (showHeading) {
+    return [
+      `${pink(glyph)} ${boldDim(label)} ${dimI(wrapped[0])}`,
+      ...wrapped.slice(1).map((line) => `${continuationIndent}${dimI(line)}`),
+    ];
+  }
+  return wrapped.map((line) => `${continuationIndent}${dimI(line)}`);
+}
+
+function renderWorkingShimmer(nowMs: number): string {
+  const text = 'working';
+  const highlight = Math.floor((nowMs / 120) % (text.length + 3)) - 1;
+  let rendered = '';
+  for (let i = 0; i < text.length; i += 1) {
+    const style =
+      i === highlight ? '\u001b[1;97m' : i === highlight - 1 || i === highlight + 1 ? '\u001b[1;36m' : '\u001b[1;34m';
+    rendered += `${style}${text[i]}\u001b[0m`;
+  }
+  return rendered;
 }
 
 function renderTerminalIssue(issue: string, width: number): string[] {
@@ -967,10 +1020,12 @@ function renderReviewOutput(body: string, width: number): string[] {
     .filter((line) => !isProcessChatter(line.trim()))
     .join('\n')
     .trim();
-  if (!clean) return [eventHeader('model', '')];
+  if (!clean) return [`${green('•')} ${boldDim('result')}`];
 
   const hasMd = /^#{1,3}\s|^[*\-+]\s|^```|^\d+\.\s|^>\s|^---+$/m.test(clean);
-  const lines: string[] = [eventHeader('result', '')];
+  // Accent header: dashed rule with bold result label in green
+  const accentWidth = Math.max(0, width - 6 - ' result '.length);
+  const lines: string[] = [`  ${dim('╌')} ${boldDim('result')} ${green('╌'.repeat(Math.max(0, accentWidth)))}`];
 
   if (hasMd) {
     const mdBlocks = renderMarkdownBlock(clean, width);

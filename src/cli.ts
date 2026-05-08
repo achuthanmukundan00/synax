@@ -38,9 +38,20 @@ doctorCommand(program);
 // Inspect command (options registered in runInspectCommand)
 runInspectCommand(program);
 
-if (process.argv.length === 2) {
-  process.argv.push('chat');
-}
+// Hidden liminal command — intercepted before commander to avoid help exposure
+if (process.argv[2] === '__liminal__') {
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const { runSynaxBackrooms } = require('./backrooms/index.js');
+  runSynaxBackrooms().catch((err: unknown) => {
+    process.stderr.write(`liminal layer error: ${err instanceof Error ? err.message : String(err)}\n`);
+    process.exit(1);
+  });
+  // don't let commander parse this
+} else {
+  if (process.argv.length === 2) {
+    process.argv.push('chat');
+  }
 
-// Parse command line arguments
-void program.parseAsync(process.argv);
+  // Parse command line arguments
+  void program.parseAsync(process.argv);
+}

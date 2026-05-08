@@ -153,7 +153,10 @@ let callIdCounter = 0;
  */
 export function generateCallId(provided?: string, index?: number): string {
   if (provided && provided.trim().length > 0) {
-    const sanitized = provided.trim().replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 64);
+    const sanitized = provided
+      .trim()
+      .replace(/[^a-zA-Z0-9_-]/g, '_')
+      .slice(0, 64);
     if (sanitized.length > 0) return sanitized;
   }
   const idx = index ?? ++callIdCounter;

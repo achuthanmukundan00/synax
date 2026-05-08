@@ -11,6 +11,7 @@ import {
   flattenInlinePasteDraft,
   type ChatSession,
 } from '../commands/chat';
+import { isSecretTrigger } from '../backrooms/trigger';
 import { stdin as defaultStdin } from 'node:process';
 import { DiffRenderer } from './diff-renderer';
 import { inputCursorPosition, maxHistoryScrollOffset, renderLayout, type InteractiveViewState } from './layout';
@@ -18,7 +19,7 @@ import { createInputParser, MAX_INPUT_CHARS } from './input';
 import { createTerminalSession, type InputStreamLike, type TerminalSession } from './terminal';
 import type { Writable } from 'node:stream';
 import type { CoreMode } from './ai-core';
-import { filterCommands, type SlashCommand, type SlashCommandResult } from '../settings/slash-command-registry';
+import { filterCommands, getCommand, type SlashCommand, type SlashCommandResult } from '../settings/slash-command-registry';
 import { createSettingsState, settingsReducer, type SettingsState } from '../settings/settings-state';
 import { renderSettings } from '../settings/settings-renderer';
 import {
@@ -88,6 +89,8 @@ export async function runInteractiveTui(
     inputPricePer1MTokens?: number;
     /** Price per 1M output tokens for cost display. */
     outputPricePer1MTokens?: number;
+    /** Test seam for the hidden liminal layer. Defaults to the real renderer. */
+    runLiminalLayer?: () => Promise<void>;
     /**
      * Optional callback invoked after settings are persisted.
      * Return updated runtime labels to apply immediately in the TUI.
@@ -136,8 +139,22 @@ export async function runInteractiveTui(
   let resumeState: ResumePickerState | null = null;
   let exiting = false;
   let busy = false;
+  let externalRendererActive = false;
   let historyScrollOffset = 0;
   const diff = new DiffRenderer();
+
+  // Adaptive render loop — 60 FPS when active, 0 when idle.
+  const TARGET_FRAME_MS = 1000 / 60;
+  let renderLoopActive = false;
+  let lastFrameTime = 0;
+  let idleTimer: ReturnType<typeof setTimeout> | null = null;
+  const IDLE_GRACE_MS = 2000;
+
+  const needsRenderLoop = (): boolean =>
+    busy || state.terminal === 'running' || (settingsState?.active ?? false) || (resumeState?.active ?? false);
+
+  // startRenderLoop is assigned after paint() is defined.
+  let startRenderLoop: () => void = () => {};
   let runtimeLabels = {
     modelLabel: options?.modelLabel,
     thinkingEnabled: options?.thinkingEnabled,
@@ -168,7 +185,9 @@ export async function runInteractiveTui(
   // Wire the runtime event stream from ChatSession → TUI state reducer.
   // This ensures the TUI reflects REAL runtime state, not fake animation.
   session.setEventSink?.((event) => {
+    if (exiting) return;
     state = applyEventToRunState(state, event, Date.now());
+    startRenderLoop();
     paint(true);
   });
 
@@ -207,6 +226,8 @@ export async function runInteractiveTui(
   };
 
   const paint = (force = false): void => {
+    if (exiting) return;
+    if (externalRendererActive) return;
     clampHistoryScroll();
 
     // Settings modal takes over the entire screen
@@ -247,6 +268,9 @@ export async function runInteractiveTui(
 
   const finish = (): void => {
     exiting = true;
+    // Disconnect the event sink immediately so no further state updates
+    // trigger paint() after terminal cleanup.
+    session.setEventSink?.(null);
   };
 
   const submit = async (): Promise<void> => {
@@ -254,9 +278,49 @@ export async function runInteractiveTui(
     const plainText = draftPlainText(currentDraft).trim();
     const kind = classifyInlineSubmission(currentDraft);
     if (kind === 'empty' || busy) return;
+
+    // Secret trigger: Synax Backrooms easter egg
+    const submittedText = flattenInlinePasteDraft(currentDraft).trim();
+    if (isSecretTrigger(submittedText)) {
+      inputDraft = createInlinePasteInputSession();
+      paint(true);
+      externalRendererActive = true;
+      stdin?.off('data', onData);
+      terminal.stop();
+      let liminalOutput = 'liminal layer closed';
+      try {
+        if (options?.runLiminalLayer) {
+          await options.runLiminalLayer();
+        } else {
+          const { runSynaxBackrooms } = await import('../backrooms/runBackrooms');
+          await runSynaxBackrooms();
+        }
+      } catch (error) {
+        liminalOutput = `liminal layer error: ${error instanceof Error ? error.message : String(error)}`;
+      } finally {
+        externalRendererActive = false;
+        terminal.start();
+        stdin?.on('data', onData);
+        diff.reset();
+      }
+      state = applyEventToRunState(
+        state,
+        {
+          type: 'command_output',
+          timestamp: new Date().toISOString(),
+          command: 'liminal',
+          content: liminalOutput,
+        },
+        Date.now(),
+      );
+      paint(true);
+      return;
+    }
+
     const text = kind === 'slash' ? plainText : flattenInlinePasteDraft(currentDraft);
     inputDraft = createInlinePasteInputSession();
     busy = true;
+    startRenderLoop();
     paint(true);
 
     if (kind === 'slash') {
@@ -279,6 +343,22 @@ export async function runInteractiveTui(
         paint(true);
         return;
       }
+      // Check if this command opens the settings modal (or resume picker).
+      // The slash-command-registry is the source of truth for modal-triggering commands.
+      const slashCmd = getCommand(plainText.slice(1));
+      if (slashCmd?.opensSettings) {
+        openSettingsModal();
+        busy = false;
+        paint(true);
+        return;
+      }
+      if (slashCmd?.opensResume) {
+        openResumePicker();
+        busy = false;
+        paint(true);
+        return;
+      }
+
       const slash = await session.handleSlashCommand(text);
       if (slash.newSession) {
         state = createInitialRunStateSnapshot(Date.now());
@@ -781,16 +861,58 @@ export async function runInteractiveTui(
     paint();
   };
 
+  // ── Assign real render loop implementation (needs paint() in scope) ──
+
+  const scheduleFrame = (): void => {
+    if (exiting || !renderLoopActive) return;
+    const now = performance.now();
+    const elapsed = now - lastFrameTime;
+    if (elapsed >= TARGET_FRAME_MS) {
+      lastFrameTime = now;
+      paint();
+      if (!needsRenderLoop()) {
+        if (!idleTimer) idleTimer = setTimeout(() => stopRenderLoop(), IDLE_GRACE_MS);
+      } else if (idleTimer) {
+        clearTimeout(idleTimer);
+        idleTimer = null;
+      }
+    }
+    const delay = Math.max(1, TARGET_FRAME_MS - (performance.now() - lastFrameTime));
+    setTimeout(scheduleFrame, delay);
+  };
+
+  startRenderLoop = (): void => {
+    if (exiting) return;
+    if (idleTimer) {
+      clearTimeout(idleTimer);
+      idleTimer = null;
+    }
+    if (renderLoopActive) return;
+    renderLoopActive = true;
+    lastFrameTime = performance.now();
+    setTimeout(scheduleFrame, 0);
+  };
+
+  const stopRenderLoop = (): void => {
+    renderLoopActive = false;
+    if (idleTimer) {
+      clearTimeout(idleTimer);
+      idleTimer = null;
+    }
+  };
+
+  // ── Main event loop ──────────────────────────────────────────
+
   terminal.start();
-  const ticker = setInterval(() => paint(), 166);
   try {
+    startRenderLoop();
     paint(true);
     stdin?.on('data', onData);
     while (!exiting) {
       await new Promise((resolve) => setTimeout(resolve, 25));
     }
   } finally {
-    clearInterval(ticker);
+    stopRenderLoop();
     stdin?.off('data', onData);
     terminal.stop();
   }
