@@ -61,7 +61,7 @@ Set the provider model to the exact model ID Relay lists from `/models`:
 
 ```toml
 [provider]
-preset = "relay-local"
+preset = "relay"
 kind = "openai-compatible"
 base_url = "http://127.0.0.1:1234/v1"
 model = "Qwen3.6-35B-A3B-UD-IQ3_XXS.gguf"
@@ -172,7 +172,7 @@ mode = "sequential"
 defaultCommand = "npm run typecheck"
 
 [provider]
-preset = "relay-local"
+preset = "relay"
 kind = "openai-compatible"
 base_url = "http://127.0.0.1:1234/v1"
 model = "Qwen3.6-35B-A3B-UD-IQ3_XXS.gguf"

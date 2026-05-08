@@ -9,8 +9,10 @@ const SYNAX_BIN = path.resolve(__dirname, '../../dist/cli.js');
 function runSynax(args: string[], options: { cwd?: string; timeout?: number } = {}): string {
   try {
     const cmd = `node "${SYNAX_BIN}" ${args.map((a) => `'${a}'`).join(' ')}`;
+    const home = options.cwd ? path.join(options.cwd, '.home') : process.env.HOME;
     return execSync(cmd, {
       cwd: options.cwd,
+      env: { ...process.env, HOME: home, USERPROFILE: home },
       encoding: 'utf8',
       timeout: options.timeout ?? 15000,
       stdio: ['pipe', 'pipe', 'pipe'],
@@ -27,12 +29,14 @@ function runSynax(args: string[], options: { cwd?: string; timeout?: number } = 
 }
 
 function runSynaxDetailed(args: string[], options: { cwd?: string; timeout?: number } = {}) {
+  const home = options.cwd ? path.join(options.cwd, '.home') : process.env.HOME;
   return new Promise<{ status: number; stdout: string; stderr: string }>((resolve) => {
     execFile(
       'node',
       [SYNAX_BIN, ...args],
       {
         cwd: options.cwd,
+        env: { ...process.env, HOME: home, USERPROFILE: home },
         encoding: 'utf8',
         timeout: options.timeout ?? 15000,
       },

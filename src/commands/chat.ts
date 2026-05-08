@@ -1306,7 +1306,7 @@ function renderSettingsPanel(repoRoot: string, config: ProjectConfig): string {
     `Config file:    ${configPath}`,
     '',
     'Provider',
-    `  preset:       ${config.provider?.preset ?? 'relay-local'}`,
+    `  preset:       ${config.provider?.preset ?? 'relay'}`,
     `  base_url:     ${provider.baseUrl}`,
     `  model:        ${provider.model || '(not set)'}`,
     `  api_key_env:  ${config.provider?.api_key_env ?? config.provider?.apiKeyEnv ?? 'not set'}`,

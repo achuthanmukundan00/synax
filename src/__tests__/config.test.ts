@@ -41,13 +41,24 @@ import type { EffectiveSynaxConfig } from '../config/schema';
 // ─── helpers ────────────────────────────────────────────────
 
 const TMP = join(tmpdir(), 'synax-config-tests');
+const ORIGINAL_HOME = process.env.HOME;
+const ORIGINAL_USERPROFILE = process.env.USERPROFILE;
 
 function ensureTmp() {
   if (existsSync(TMP)) {
     rmSync(TMP, { recursive: true, force: true });
   }
   mkdirSync(TMP, { recursive: true });
+  const home = join(TMP, '.home');
+  mkdirSync(home, { recursive: true });
+  process.env.HOME = home;
+  process.env.USERPROFILE = home;
 }
+
+afterAll(() => {
+  restoreEnv('HOME', ORIGINAL_HOME);
+  restoreEnv('USERPROFILE', ORIGINAL_USERPROFILE);
+});
 
 // ─── discoverConfigPath ─────────────────────────────────────
 
@@ -739,7 +750,7 @@ api_key = "sk-test"
 core_visual_profile = "deepseek"
 
 [active]
-provider = "relay-local"
+provider = "relay"
 model = "Qwen3.6-35B-A3B-UD-IQ3_XXS.gguf"
 `,
       'utf-8',
@@ -785,7 +796,7 @@ id = "my-model"
     );
     const effective = loadSynaxConfig(TMP);
     // When active.provider is missing, the first enabled provider is selected.
-    // Both "relay-local" (default) and "custom" are enabled, but "custom" is
+    // Both "relay" (default) and "custom" are enabled, but "custom" is
     // loaded from local config and merged in — the order depends on merge logic.
     expect(effective.providers.custom).toBeDefined();
     expect(effective.providers.custom.models.some((m) => m.id === 'my-model')).toBe(true);
@@ -820,9 +831,35 @@ supports_thinking = false
   it('loading non-existent config returns defaults', () => {
     // Ensure no global config interferes
     const effective = loadSynaxConfig('/tmp/synax-nonexistent-' + Date.now());
-    expect(effective.active.provider).toBe('relay-local');
-    expect(effective.providers['relay-local']).toBeDefined();
+    expect(effective.active.provider).toBe('relay');
+    expect(effective.providers['relay']).toBeDefined();
     expect(effective.source).toBeNull();
+  });
+
+  it('normalizes legacy relay-local provider IDs to relay', () => {
+    const localPath = join(TMP, '.synax.toml');
+    writeFileSync(
+      localPath,
+      `
+[active]
+provider = "relay-local"
+model = "Qwen3.6-35B-A3B-UD-IQ3_XXS.gguf"
+
+[providers.relay-local]
+compatibility = "openai-compatible"
+base_url = "http://127.0.0.1:1234/v1"
+
+[[providers.relay-local.models]]
+id = "Qwen3.6-35B-A3B-UD-IQ3_XXS.gguf"
+`,
+      'utf-8',
+    );
+
+    const effective = loadSynaxConfig(TMP);
+
+    expect(effective.active.provider).toBe('relay');
+    expect(effective.providers.relay).toBeDefined();
+    expect(effective.providers['relay-local']).toBeUndefined();
   });
 });
 
@@ -863,10 +900,10 @@ describe('serializeEffectiveConfig (TOML hardening)', () => {
 
   it('serializes provider IDs with hyphens as bare keys', () => {
     const config: EffectiveSynaxConfig = {
-      active: { provider: 'relay-local', model: 'qwen', thinking: 'off' },
+      active: { provider: 'relay', model: 'qwen', thinking: 'off' },
       providers: {
-        'relay-local': {
-          id: 'relay-local',
+        relay: {
+          id: 'relay',
           name: 'Relay',
           compatibility: 'openai-compatible',
           enabled: true,
@@ -897,7 +934,7 @@ describe('serializeEffectiveConfig (TOML hardening)', () => {
     };
     const toml = serializeEffectiveConfig(config);
     // Hyphen is valid in TOML bare keys
-    expect(toml).toContain('[providers.relay-local]');
+    expect(toml).toContain('[providers.relay]');
     expect(toml).toContain('[providers.my-provider]');
   });
 
@@ -965,10 +1002,10 @@ describe('serializeEffectiveConfig (TOML hardening)', () => {
 
   it('serializes core visual profile for settings persistence', () => {
     const config: EffectiveSynaxConfig = {
-      active: { provider: 'relay-local', model: 'qwen', thinking: 'off' },
+      active: { provider: 'relay', model: 'qwen', thinking: 'off' },
       providers: {
-        'relay-local': {
-          id: 'relay-local',
+        relay: {
+          id: 'relay',
           name: 'Relay',
           compatibility: 'openai-compatible',
           enabled: true,
@@ -1033,10 +1070,10 @@ describe('writeSynaxConfig', () => {
 
 describe('buildConfigUpdate', () => {
   const baseConfig: EffectiveSynaxConfig = {
-    active: { provider: 'relay-local', model: 'qwen', thinking: 'off' },
+    active: { provider: 'relay', model: 'qwen', thinking: 'off' },
     providers: {
-      'relay-local': {
-        id: 'relay-local',
+      relay: {
+        id: 'relay',
         name: 'Relay',
         compatibility: 'openai-compatible',
         enabled: true,
@@ -1080,7 +1117,7 @@ describe('buildConfigUpdate', () => {
 
   it('preserves an intentionally empty active model', () => {
     const updated = buildConfigUpdate(
-      { ...baseConfig, active: { provider: 'relay-local', model: 'deepseek', thinking: 'auto' } },
+      { ...baseConfig, active: { provider: 'relay', model: 'deepseek', thinking: 'auto' } },
       { activeModel: '' },
     );
     expect(updated.active.model).toBe('');
@@ -1092,7 +1129,7 @@ describe('buildConfigUpdate', () => {
       { provider: { base_url: 'http://127.0.0.1:1234/v1', model: 'qwen' } },
       {
         ...baseConfig,
-        active: { provider: 'relay-local', model: 'deepseek', thinking: 'auto' },
+        active: { provider: 'relay', model: 'deepseek', thinking: 'auto' },
       },
     );
     const provider = normalizeProviderConfig(updated.provider ?? {});

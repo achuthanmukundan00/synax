@@ -31,10 +31,10 @@ import type {
 // ─── Defaults ──────────────────────────────────────────────
 
 const DEFAULT_MODELS: Record<string, ResolvedModelConfig[]> = {
-  'relay-local': [
+  relay: [
     {
       id: 'Qwen3.6-35B-A3B-UD-IQ3_XXS.gguf',
-      displayName: 'Qwen3.6 35B Local',
+      displayName: 'Qwen3.6 35B',
       contextWindow: 131072,
       supportsThinking: false,
       thinkingLevels: [],
@@ -102,15 +102,15 @@ const DEFAULT_MODELS: Record<string, ResolvedModelConfig[]> = {
 };
 
 const DEFAULT_PROVIDERS: Record<string, ResolvedProviderConfig> = {
-  'relay-local': {
-    id: 'relay-local',
-    name: 'Relay Local',
+  relay: {
+    id: 'relay',
+    name: 'Relay',
     compatibility: 'openai-compatible',
     enabled: true,
     baseUrl: 'http://127.0.0.1:1234/v1',
     apiKeyEnv: undefined,
     headers: {},
-    models: DEFAULT_MODELS['relay-local'] ?? [],
+    models: DEFAULT_MODELS.relay ?? [],
   },
   deepseek: {
     id: 'deepseek',
@@ -145,7 +145,7 @@ const DEFAULT_PROVIDERS: Record<string, ResolvedProviderConfig> = {
 };
 
 function defaultActiveConfig(): ResolvedActiveConfig {
-  const provider = 'relay-local';
+  const provider = 'relay';
   const models = DEFAULT_PROVIDERS[provider]?.models ?? [];
   return {
     provider,
@@ -205,6 +205,10 @@ export function parseSynaxToml(raw: string): { config: SynaxConfig; errors: stri
       errors: [`Failed to parse TOML: ${(err as Error).message}`],
     };
   }
+}
+
+function canonicalProviderId(id: string): string {
+  return id === 'relay-local' ? 'relay' : id;
 }
 
 export function parseProviderConfig(raw: Record<string, unknown>): ProviderConfig | null {
@@ -334,7 +338,7 @@ export function configFromParsed(parsed: Record<string, unknown>): SynaxConfig {
   if (parsed.active && typeof parsed.active === 'object') {
     const active = parsed.active as ActiveConfig;
     config.active = {
-      provider: typeof active.provider === 'string' ? active.provider : undefined,
+      provider: typeof active.provider === 'string' ? canonicalProviderId(active.provider) : undefined,
       model: typeof active.model === 'string' ? active.model : undefined,
       thinking: isThinkingLevel(String(active.thinking ?? '')) ? (active.thinking as ThinkingLevel) : undefined,
     };
@@ -350,8 +354,9 @@ export function configFromParsed(parsed: Record<string, unknown>): SynaxConfig {
     const providers: Record<string, ProviderConfig> = {};
     for (const [id, raw] of Object.entries(parsed.providers as Record<string, unknown>)) {
       if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
-        const parsed = parseProviderConfig({ id, ...(raw as Record<string, unknown>) });
-        if (parsed) providers[id] = parsed;
+        const providerId = canonicalProviderId(id);
+        const parsed = parseProviderConfig({ id: providerId, ...(raw as Record<string, unknown>) });
+        if (parsed) providers[providerId] = parsed;
       }
     }
     if (Object.keys(providers).length > 0) config.providers = providers;
@@ -522,7 +527,7 @@ function mergeConfigs(
     // Legacy single provider support: if no multi-provider config, use legacy.
     if (layer.config.provider && !layer.config.providers) {
       const legacy = layer.config.provider;
-      const providerId = (legacy.preset as string) || (legacy.id as string) || 'custom';
+      const providerId = canonicalProviderId((legacy.preset as string) || (legacy.id as string) || 'custom');
       const model = (legacy.model as string) || '';
       const baseUrl = (legacy.base_url as string) || (legacy.baseUrl as string) || '';
       const existing = result.providers[providerId];
@@ -538,6 +543,11 @@ function mergeConfigs(
         models: model ? [{ id: model }] : [],
       };
       result.providers[providerId] = resolveProvider(providerId, legacyProvider, existing);
+      result.active = {
+        ...result.active,
+        provider: providerId,
+        ...(model ? { model } : {}),
+      };
     }
 
     // Merge skills
