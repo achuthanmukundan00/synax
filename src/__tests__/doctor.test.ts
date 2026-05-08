@@ -20,12 +20,31 @@ import {
 } from '../commands/doctor';
 
 const TMP = join(tmpdir(), 'synax-doctor-tests');
+const ORIGINAL_HOME = process.env.HOME;
+const ORIGINAL_USERPROFILE = process.env.USERPROFILE;
 
 function ensureTmp() {
   if (existsSync(TMP)) {
     rmSync(TMP, { recursive: true, force: true });
   }
   mkdirSync(TMP, { recursive: true });
+  const home = join(TMP, '.home');
+  mkdirSync(home, { recursive: true });
+  process.env.HOME = home;
+  process.env.USERPROFILE = home;
+}
+
+afterAll(() => {
+  restoreEnv('HOME', ORIGINAL_HOME);
+  restoreEnv('USERPROFILE', ORIGINAL_USERPROFILE);
+});
+
+function restoreEnv(name: string, value: string | undefined): void {
+  if (value === undefined) {
+    delete process.env[name];
+  } else {
+    process.env[name] = value;
+  }
 }
 
 interface MockRequest {

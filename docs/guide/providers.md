@@ -37,7 +37,7 @@ one client implementation. Anthropic uses a real Messages API adapter.
 provider = "relay"
 base_url = "http://127.0.0.1:1234/v1"
 model = "Qwen3.6-35B-A3B-UD-IQ3_XXS.gguf"
-context_window = 88000
+context_window = 131072
 ```
 
 ### DeepSeek

@@ -6,6 +6,7 @@ import type { EffectiveSynaxConfig, ResolvedProviderConfig } from './schema';
 
 export type ProviderKind = 'openai-compatible' | 'anthropic-messages';
 export type ProviderPreset =
+  // Legacy alias for relay.
   | 'relay-local'
   | 'openai'
   | 'anthropic'
@@ -63,7 +64,8 @@ export interface AgentBudgetConfig {
 }
 
 function providerPresetDefaults(preset: string): ProviderConfig {
-  switch (preset) {
+  const canonicalPreset = canonicalProviderPreset(preset);
+  switch (canonicalPreset) {
     case 'openai':
       return {
         preset,
@@ -128,7 +130,7 @@ function providerPresetDefaults(preset: string): ProviderConfig {
       return { preset, kind: 'openai-compatible', base_url: '', model: '', api_key_env: '' };
     case 'relay':
       return {
-        preset,
+        preset: canonicalPreset,
         kind: 'openai-compatible',
         base_url: 'http://127.0.0.1:1234/v1',
         model: 'Qwen3.6-35B-A3B-UD-IQ3_XXS.gguf',
@@ -136,10 +138,9 @@ function providerPresetDefaults(preset: string): ProviderConfig {
       };
     case 'custom':
       return { preset, kind: 'openai-compatible', base_url: '', model: '', api_key_env: '' };
-    case 'relay-local':
     default:
       return {
-        preset: 'relay-local',
+        preset: 'relay',
         kind: 'openai-compatible',
         base_url: 'http://127.0.0.1:1234/v1',
         model: 'Qwen3.6-35B-A3B-UD-IQ3_XXS.gguf',
@@ -149,7 +150,7 @@ function providerPresetDefaults(preset: string): ProviderConfig {
 }
 
 function providerPresetContextWindowDefault(preset: string): number | undefined {
-  switch (preset) {
+  switch (canonicalProviderPreset(preset)) {
     case 'deepseek':
       return 1_000_000;
     case 'groq':
@@ -163,10 +164,14 @@ function providerPresetContextWindowDefault(preset: string): number | undefined 
     case 'openai':
       return 128_000;
     case 'relay':
-      return 88_000;
+      return 131_072;
     default:
       return undefined;
   }
+}
+
+function canonicalProviderPreset(preset: string): string {
+  return preset === 'relay-local' ? 'relay' : preset;
 }
 
 /**
@@ -254,7 +259,7 @@ export function normalizeProviderConfig(
   p: ProviderConfig,
   opts?: { thinkingLevel?: 'off' | 'low' | 'medium' | 'high' | 'auto' },
 ): import('../llm/types').NormalizedProviderConfig {
-  const presetDefaults = providerPresetDefaults(p.preset ?? 'relay-local');
+  const presetDefaults = providerPresetDefaults(p.preset ?? 'relay');
   const headersInput = p.custom_headers ?? p.customHeaders ?? presetDefaults.custom_headers;
   const customHeaders: Record<string, string> = {};
   for (const [name, value] of Object.entries(headersInput ?? {})) {
@@ -360,7 +365,7 @@ const DEFAULTS: ProjectConfig = {
   subagents: { enabled: false, mode: 'sequential' },
   verification: { defaultCommand: undefined },
   provider: {
-    preset: 'relay-local',
+    preset: 'relay',
     kind: 'openai-compatible',
     baseUrl: 'http://127.0.0.1:1234/v1',
     model: undefined,
@@ -831,12 +836,24 @@ export function loadProjectConfig(baseDir?: string): LoadProjectConfigResult {
       errors.push({ path: discoveredPath, message: `Failed to parse TOML: ${(err as Error).message}` });
     }
   }
+  const hasExplicitContextWindow =
+    hasContextWindowConfig(userConfig) ||
+    hasContextWindowConfig(config) ||
+    process.env.SYNAX_CONTEXT_BUDGET_TOKENS !== undefined;
   if (hasExtendedSettings) {
     const effectiveSettings = loadSynaxConfig(baseDir);
-    config = applyEffectiveSynaxConfigToProjectConfig(config, effectiveSettings);
+    const effectiveProjectConfig = applyEffectiveSynaxConfigToProjectConfig({}, effectiveSettings);
+    config = {
+      ...effectiveProjectConfig,
+      ...config,
+      provider: {
+        ...effectiveProjectConfig.provider,
+        ...config.provider,
+      },
+    };
   }
   const activeProviderPreset =
-    config.provider?.preset ?? userConfig.provider?.preset ?? DEFAULTS.provider?.preset ?? 'relay-local';
+    config.provider?.preset ?? userConfig.provider?.preset ?? DEFAULTS.provider?.preset ?? 'relay';
   const provider = {
     ...DEFAULTS.provider,
     ...providerPresetDefaults(activeProviderPreset),
@@ -872,14 +889,10 @@ export function loadProjectConfig(baseDir?: string): LoadProjectConfigResult {
     },
     errors,
   );
-  // Only apply provider default context window when no context has been
-  // set by any path (config file, extended settings, env vars, or DEFAULTS).
-  if (mergedConfig.contextWindowTokens === undefined && mergedConfig.contextBudgetTokens === undefined) {
-    const providerContextWindow = providerPresetContextWindowDefault(activeProviderPreset);
-    if (providerContextWindow !== undefined) {
-      mergedConfig.contextWindowTokens = providerContextWindow;
-      mergedConfig.contextBudgetTokens = providerContextWindow;
-    }
+  const providerContextWindow = providerPresetContextWindowDefault(activeProviderPreset);
+  if (!hasExtendedSettings && !hasExplicitContextWindow && providerContextWindow !== undefined) {
+    mergedConfig.contextWindowTokens = providerContextWindow;
+    mergedConfig.contextBudgetTokens = providerContextWindow;
   }
   const validationErrors = validateConfig(mergedConfig);
   errors.push(...validationErrors);
@@ -890,6 +903,19 @@ export function loadProjectConfig(baseDir?: string): LoadProjectConfigResult {
     source:
       path === null ? 'default' : basename(path) === '.synax.toml' && dirname(path) !== baseDir ? 'file' : 'explicit',
   };
+}
+
+function hasContextWindowConfig(config: ProjectConfig): boolean {
+  return (
+    config.contextBudgetTokens !== undefined ||
+    config.context_budget_tokens !== undefined ||
+    config.contextWindowTokens !== undefined ||
+    config.context_window_tokens !== undefined ||
+    config.agent?.contextBudgetTokens !== undefined ||
+    config.agent?.context_budget_tokens !== undefined ||
+    config.agent?.contextWindowTokens !== undefined ||
+    config.agent?.context_window_tokens !== undefined
+  );
 }
 
 function hasExtendedSettingsKeys(parsed: Record<string, unknown>): boolean {

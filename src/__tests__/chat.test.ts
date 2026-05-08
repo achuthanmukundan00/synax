@@ -431,7 +431,7 @@ describe('chat session', () => {
     const session = createChatSession({
       repoRoot: TMP,
       config: {
-        provider: { kind: 'openai-compatible', base_url: 'http://localhost/v1', model: 'fake', preset: 'relay-local' },
+        provider: { kind: 'openai-compatible', base_url: 'http://localhost/v1', model: 'fake', preset: 'relay' },
         contextBudgetTokens: 131072,
         maxModelSteps: 64,
         maxToolCalls: 192,

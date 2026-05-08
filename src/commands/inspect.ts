@@ -374,7 +374,7 @@ export function buildInspectConfigProfile(baseDir: string): ConfigProfile {
     tools: buildModelFacingTools({ bashEnabled: parsedConfig.config.tools?.bash?.enabled }).map((tool) => tool.name),
     shell: parsedConfig.config.tools?.shell ?? 'zsh',
     bash: parsedConfig.config.tools?.bash?.enabled ?? false,
-    providerPreset: parsedConfig.config.provider?.preset ?? 'relay-local',
+    providerPreset: parsedConfig.config.provider?.preset ?? 'relay',
   };
 
   if (configPath) {

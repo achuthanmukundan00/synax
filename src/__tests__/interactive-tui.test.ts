@@ -3,7 +3,7 @@ import { applyEventToRunState, createInitialRunStateSnapshot } from '../agent/tu
 import { resolveCoreVisualProfile } from '../tui/core-visual-profile';
 import { CORE_HEIGHT, CORE_WIDTH, modeColor, renderAiCore, renderDottedCore } from '../tui/ai-core';
 import { DiffRenderer } from '../tui/diff-renderer';
-import { runInteractiveTui } from '../tui/interactive-tui';
+import { renderAutocompleteOverlay, runInteractiveTui } from '../tui/interactive-tui';
 import { maxHistoryScrollOffset, renderLayout } from '../tui/layout';
 import { createInputParser, parseInputChunk } from '../tui/input';
 import { createTerminalSession } from '../tui/terminal';
@@ -215,7 +215,7 @@ describe('diff renderer', () => {
 describe('settings renderer', () => {
   it('shows Tab as the settings tab navigation key', () => {
     const config: EffectiveSynaxConfig = {
-      active: { provider: 'relay-local', model: 'qwen-local', thinking: 'off' },
+      active: { provider: 'relay', model: 'qwen-local', thinking: 'off' },
       providers: {},
       skills: { enabled: [], disabled: [] },
       mcp: { servers: {} },
@@ -228,6 +228,39 @@ describe('settings renderer', () => {
 
     expect(plain).toContain('Tab tabs');
     expect(plain).not.toContain('←/→ tabs');
+  });
+});
+
+describe('autocomplete overlay renderer', () => {
+  it('replaces rows in place instead of splitting transcript content', () => {
+    const lines = Array.from({ length: 18 }, (_, index) => `line-${index}`.padEnd(40, '.'));
+    const rendered = renderAutocompleteOverlay(
+      lines,
+      {
+        visible: true,
+        selection: 0,
+        filtered: [
+          {
+            name: 'settings',
+            description: 'Open settings menu',
+            category: 'settings',
+            handler: () => ({ handled: true, exit: false }),
+          },
+          {
+            name: 'model',
+            description: 'Select model',
+            category: 'settings',
+            handler: () => ({ handled: true, exit: false }),
+          },
+        ],
+      },
+      40,
+    );
+
+    expect(rendered).toHaveLength(lines.length);
+    expect(snapshotText(rendered)).toContain('-> /settings - Open settings menu');
+    expect(snapshotText(rendered)).not.toContain('line-10\n  -- commands --\nline-11');
+    expect(stripAnsi(rendered[10])).toHaveLength(39);
   });
 });
 

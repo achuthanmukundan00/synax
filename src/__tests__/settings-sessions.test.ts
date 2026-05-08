@@ -24,10 +24,10 @@ import type { EffectiveSynaxConfig } from '../config/schema';
 
 function makeTestConfig(overrides: Partial<EffectiveSynaxConfig> = {}): EffectiveSynaxConfig {
   return {
-    active: { provider: 'relay-local', model: 'qwen', thinking: 'off' },
+    active: { provider: 'relay', model: 'qwen', thinking: 'off' },
     providers: {
-      'relay-local': {
-        id: 'relay-local',
+      relay: {
+        id: 'relay',
         name: 'Relay',
         compatibility: 'openai-compatible',
         enabled: true,
@@ -181,7 +181,7 @@ describe('settings state — thinking control', () => {
   it('thinking control is disabled when supportsThinking is false', () => {
     // Config where only non-thinking model is active
     const config = makeTestConfig({
-      active: { provider: 'relay-local', model: 'qwen', thinking: 'off' },
+      active: { provider: 'relay', model: 'qwen', thinking: 'off' },
     });
     // The model tab rows should show thinking as dimmed 'n/a'
     // This is tested indirectly via getTabRows which is called by the reducer.
@@ -358,7 +358,7 @@ describe('session-store', () => {
       id,
       workspacePath: '/tmp/test',
       branch: 'main',
-      activeProvider: 'relay-local',
+      activeProvider: 'relay',
       activeModel: 'qwen',
     });
     expect(session.id).toBe(id);
