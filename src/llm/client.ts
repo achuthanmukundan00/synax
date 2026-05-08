@@ -10,9 +10,10 @@ import { type ContextLedger } from '../tools';
 import {
   type ToolCallParserMode,
   parseOpenAIToolCallsResult,
-  parseQwenToolCallsFromContentResult,
-  parseToolCallsFromContentResult,
   toOpenAIToolDefinition,
+  ensureParsersRegistered,
+  toolCallParserRegistry,
+  detectParserId,
 } from './tool-calls';
 
 // ---------------------------------------------------------------------------
@@ -158,18 +159,30 @@ function parseSuccessResponse(bodyText: string, parserMode: ToolCallParserMode):
   const content = rawContent;
   const reasoningContent = firstReasoningContent(choice?.message);
   const finishReason = choice?.finish_reason ?? null;
+
+  // Step 1: Parse native OpenAI tool_calls from the API response
   const standardToolCallResult = parseOpenAIToolCallsResult(choice?.message?.tool_calls);
   if (!standardToolCallResult.ok) {
     throw modelToolCallParseError(standardToolCallResult.message);
   }
-  const fallbackToolCallResult =
-    standardToolCallResult.calls.length > 0
-      ? ({ ok: true, source: 'none', calls: [] } as const)
-      : parserMode === 'qwen3_coder' || parserMode === 'qwen3_xml'
-        ? parseQwenToolCallsFromContentResult(content)
-        : parseToolCallsFromContentResult(content);
-  if (!fallbackToolCallResult.ok) {
-    throw modelToolCallParseError(fallbackToolCallResult.message);
+
+  // Step 2: If no native tool_calls, use the configured parser on text content
+  let fallbackToolCallResult: import('./tool-calls').ToolCallParseResult;
+  if (standardToolCallResult.calls.length > 0) {
+    fallbackToolCallResult = { ok: true, source: 'none', calls: [] };
+  } else {
+    // Resolve parser mode to a parser ID and use the registry
+    const parserId = resolveParserId(parserMode);
+    const parserResult = toolCallParserRegistry.parse(parserId, content);
+    if (parserResult.ok) {
+      fallbackToolCallResult = {
+        ok: true,
+        source: parserResult.calls.length > 0 ? 'content' : 'none',
+        calls: parserResult.calls,
+      };
+    } else {
+      throw modelToolCallParseError(parserResult.error ?? 'content parser failed');
+    }
   }
 
   return {
@@ -192,6 +205,17 @@ function parseSuccessResponse(bodyText: string, parserMode: ToolCallParserMode):
         }
       : null,
   };
+}
+
+/**
+ * Resolve a parser mode string to a registered parser ID.
+ */
+function resolveParserId(parserMode: ToolCallParserMode): string {
+  // Normalize known aliases
+  const normalized = parserMode.trim().toLowerCase();
+  if (normalized === 'qwen3_coder') return 'qwen3_xml';
+  if (normalized === 'generic' || normalized.length === 0) return 'generic';
+  return normalized;
 }
 
 async function dispatchStreamingRequest(
@@ -570,14 +594,27 @@ function normalizeMessagesForProvider(
 }
 
 function selectToolCallParserMode(model: string, override?: string): ToolCallParserMode {
-  const normalizedOverride = (override ?? '').trim().toLowerCase();
-  if (normalizedOverride === 'qwen3_xml' || normalizedOverride === 'qwen3_coder') return normalizedOverride;
-  if (normalizedOverride === 'generic' || normalizedOverride.length > 0) return 'generic';
+  ensureParsersRegistered();
 
-  const lowerModel = model.toLowerCase();
-  if (lowerModel.includes('qwen3.6') || lowerModel.includes('qwen3.5') || lowerModel.includes('qwen3-coder')) {
-    return 'qwen3_coder';
+  // Explicit override always wins
+  const normalizedOverride = (override ?? '').trim().toLowerCase();
+  if (normalizedOverride.length > 0) {
+    // Validate that the parser exists
+    if (toolCallParserRegistry.get(normalizedOverride)) {
+      return normalizedOverride;
+    }
+    // Unknown parser — log warning and fall back to auto-detect
+    if (normalizedOverride !== 'generic') {
+      process.stderr
+        .write(`[synax] ⚠ Unknown tool-call-parser "${override}". Using auto-detection. Available: ${toolCallParserRegistry.listIds().join(', ')}
+`);
+    }
   }
+
+  // Auto-detect from model name using conservative patterns
+  const detected = detectParserId(model);
+  if (detected) return detected;
+
   return 'generic';
 }
 
