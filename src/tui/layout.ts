@@ -85,7 +85,7 @@ export function maxHistoryScrollOffset(state: InteractiveViewState, _cols: numbe
   const visibleRows = Math.max(1, bodyHeight - 3);
   const sideWidth = operationalSideWidth(renderWidth, bodyHeight);
   const transcriptWidth = sideWidth > 0 ? renderWidth - sideWidth - 5 : renderWidth - 4;
-  const transcriptLines = renderTranscript(state, Math.max(24, transcriptWidth));
+  const transcriptLines = renderTranscript({ ...state, nowMs: state.nowMs }, Math.max(24, transcriptWidth));
   return Math.max(0, transcriptLines.length - visibleRows);
 }
 
@@ -129,7 +129,7 @@ function renderOperationalSurface(
   const showHeaderCore = !showSideCore && width >= 70 && bodyHeight >= 18;
   const sideWidth = operationalSideWidth(width, bodyHeight);
   const transcriptWidth = operationalTranscriptWidth(width, bodyHeight);
-  const transcriptLines = renderTranscript(state, Math.max(24, transcriptWidth));
+  const transcriptLines = renderTranscript({ ...state, nowMs: state.nowMs }, Math.max(24, transcriptWidth));
   const visibleRows = Math.max(1, bodyHeight - 3);
   const maxScrollOffset = Math.max(0, transcriptLines.length - visibleRows);
   const scrollOffset = Math.min(maxScrollOffset, Math.max(0, state.historyScrollOffset ?? 0));

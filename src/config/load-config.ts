@@ -241,7 +241,7 @@ function canonicalProviderId(id: string): string {
 
 export function parseProviderConfig(raw: Record<string, unknown>): ProviderConfig | null {
   if (typeof raw.id !== 'string') return null;
-  const compat = raw.compatibility;
+  const compat = raw.compatibility ?? 'openai-compatible';
   if (compat !== 'openai-compatible' && compat !== 'anthropic-compatible') return null;
 
   const rawModels = Array.isArray(raw.models) ? (raw.models as Record<string, unknown>[]) : [];

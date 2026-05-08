@@ -19,7 +19,7 @@ import { createInputParser, MAX_INPUT_CHARS } from './input';
 import { createTerminalSession, type InputStreamLike, type TerminalSession } from './terminal';
 import type { Writable } from 'node:stream';
 import type { CoreMode } from './ai-core';
-import { filterCommands, type SlashCommand, type SlashCommandResult } from '../settings/slash-command-registry';
+import { filterCommands, getCommand, type SlashCommand, type SlashCommandResult } from '../settings/slash-command-registry';
 import { createSettingsState, settingsReducer, type SettingsState } from '../settings/settings-state';
 import { renderSettings } from '../settings/settings-renderer';
 import {
@@ -185,6 +185,7 @@ export async function runInteractiveTui(
   // Wire the runtime event stream from ChatSession → TUI state reducer.
   // This ensures the TUI reflects REAL runtime state, not fake animation.
   session.setEventSink?.((event) => {
+    if (exiting) return;
     state = applyEventToRunState(state, event, Date.now());
     startRenderLoop();
     paint(true);
@@ -225,6 +226,7 @@ export async function runInteractiveTui(
   };
 
   const paint = (force = false): void => {
+    if (exiting) return;
     if (externalRendererActive) return;
     clampHistoryScroll();
 
@@ -266,6 +268,9 @@ export async function runInteractiveTui(
 
   const finish = (): void => {
     exiting = true;
+    // Disconnect the event sink immediately so no further state updates
+    // trigger paint() after terminal cleanup.
+    session.setEventSink?.(null);
   };
 
   const submit = async (): Promise<void> => {
@@ -338,6 +343,22 @@ export async function runInteractiveTui(
         paint(true);
         return;
       }
+      // Check if this command opens the settings modal (or resume picker).
+      // The slash-command-registry is the source of truth for modal-triggering commands.
+      const slashCmd = getCommand(plainText.slice(1));
+      if (slashCmd?.opensSettings) {
+        openSettingsModal();
+        busy = false;
+        paint(true);
+        return;
+      }
+      if (slashCmd?.opensResume) {
+        openResumePicker();
+        busy = false;
+        paint(true);
+        return;
+      }
+
       const slash = await session.handleSlashCommand(text);
       if (slash.newSession) {
         state = createInitialRunStateSnapshot(Date.now());
@@ -843,7 +864,7 @@ export async function runInteractiveTui(
   // ── Assign real render loop implementation (needs paint() in scope) ──
 
   const scheduleFrame = (): void => {
-    if (!renderLoopActive) return;
+    if (exiting || !renderLoopActive) return;
     const now = performance.now();
     const elapsed = now - lastFrameTime;
     if (elapsed >= TARGET_FRAME_MS) {
@@ -861,6 +882,7 @@ export async function runInteractiveTui(
   };
 
   startRenderLoop = (): void => {
+    if (exiting) return;
     if (idleTimer) {
       clearTimeout(idleTimer);
       idleTimer = null;

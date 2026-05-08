@@ -24,6 +24,8 @@ import {
   MIN_TERMINAL_ROWS,
 } from './types';
 
+const HELD_ACTION_TTL_MS = 140;
+
 /**
  * Run the Synax Backrooms. Returns a Promise that resolves when the user exits.
  * Handles all terminal setup/teardown safely.
@@ -71,9 +73,10 @@ export async function runSynaxBackrooms(options?: BackroomsOptions): Promise<voi
 
   // ─── Input handling ────────────────────────────────────────
 
-  // Raw terminals do not send key-up events reliably, so movement uses
-  // frame-local impulses from keypress/key-repeat input.
-  const pendingMovement = new Set<BackroomsAction>();
+  // Raw terminals do not send key-up events reliably, so held movement is
+  // approximated with short-lived key-repeat state. This allows WASD movement
+  // and arrow rotation to overlap without leaving keys stuck after release.
+  const heldMovement = new Map<BackroomsAction, number>();
 
   const processAction = (action: BackroomsAction): void => {
     switch (action) {
@@ -83,7 +86,7 @@ export async function runSynaxBackrooms(options?: BackroomsOptions): Promise<voi
       case 'strafe_right':
       case 'turn_left':
       case 'turn_right':
-        pendingMovement.add(action);
+        heldMovement.set(action, Date.now() + HELD_ACTION_TTL_MS);
         break;
       case 'toggle_overlay':
         state.showLogOverlay = !state.showLogOverlay;
@@ -137,8 +140,7 @@ export async function runSynaxBackrooms(options?: BackroomsOptions): Promise<voi
       const deltaSec = Math.min((now - lastFrameTime) / 1000, 0.1); // cap delta to avoid spiral
       lastFrameTime = now;
 
-      processMovement(state, pendingMovement, deltaSec);
-      pendingMovement.clear();
+      processMovement(state, activeMovementActions(heldMovement, now), deltaSec);
 
       // Ambient log drip
       state.ambientTimer += deltaSec;
@@ -176,7 +178,19 @@ function frameColumns(columns: number): number {
 
 // ─── Movement ─────────────────────────────────────────────────
 
-function processMovement(state: GameState, keysDown: Set<BackroomsAction>, deltaSec: number): void {
+function activeMovementActions(heldMovement: Map<BackroomsAction, number>, nowMs: number): Set<BackroomsAction> {
+  const active = new Set<BackroomsAction>();
+  for (const [action, expiresAtMs] of heldMovement) {
+    if (expiresAtMs <= nowMs) {
+      heldMovement.delete(action);
+      continue;
+    }
+    active.add(action);
+  }
+  return active;
+}
+
+export function processMovement(state: GameState, keysDown: Set<BackroomsAction>, deltaSec: number): void {
   const moveStep = MOVE_SPEED * deltaSec;
   const rotateStep = ROTATE_SPEED * deltaSec;
   const level = currentLevelFor(state);
@@ -184,20 +198,30 @@ function processMovement(state: GameState, keysDown: Set<BackroomsAction>, delta
   const cos = Math.cos(state.playerAngle);
   const sin = Math.sin(state.playerAngle);
 
-  // Forward/back
+  let moveX = 0;
+  let moveY = 0;
+
   if (keysDown.has('move_forward')) {
-    tryMove(state, state.playerX + cos * moveStep, state.playerY + sin * moveStep, level);
+    moveX += cos;
+    moveY += sin;
   }
   if (keysDown.has('move_back')) {
-    tryMove(state, state.playerX - cos * moveStep, state.playerY - sin * moveStep, level);
+    moveX -= cos;
+    moveY -= sin;
   }
-
-  // Strafe
   if (keysDown.has('strafe_left')) {
-    tryMove(state, state.playerX + sin * moveStep, state.playerY - cos * moveStep, level);
+    moveX += sin;
+    moveY -= cos;
   }
   if (keysDown.has('strafe_right')) {
-    tryMove(state, state.playerX - sin * moveStep, state.playerY + cos * moveStep, level);
+    moveX -= sin;
+    moveY += cos;
+  }
+
+  const magnitude = Math.hypot(moveX, moveY);
+  if (magnitude > 0) {
+    const scale = moveStep / magnitude;
+    tryMove(state, state.playerX + moveX * scale, state.playerY + moveY * scale, level);
   }
 
   // Rotation

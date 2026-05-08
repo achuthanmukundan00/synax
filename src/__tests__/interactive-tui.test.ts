@@ -705,7 +705,7 @@ describe('interactive layout visual agreements', () => {
         run,
         objectiveInput: '',
         coreMode: 'thinking',
-        nowMs: 2000,
+        nowMs: 5000,
       },
       72,
       24,

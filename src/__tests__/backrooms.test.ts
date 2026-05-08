@@ -4,8 +4,9 @@
  */
 import { isSecretTrigger, SECRET_TRIGGER } from '../backrooms/trigger';
 import { generateLiminalLevel, generateRoomName, nextLiminalSeed } from '../backrooms/procedural';
-import { tryMove } from '../backrooms/runBackrooms';
-import type { GameState, LevelDef } from '../backrooms/types';
+import { parseBackroomsInput } from '../backrooms/input';
+import { processMovement, tryMove } from '../backrooms/runBackrooms';
+import { MOVE_SPEED, type GameState, type LevelDef } from '../backrooms/types';
 
 describe('Synax Backrooms secret trigger', () => {
   describe('exact-match detection', () => {
@@ -92,6 +93,23 @@ describe('Synax Backrooms terminal safety', () => {
   });
 });
 
+describe('Synax Backrooms input and movement', () => {
+  it('parses WASD movement and arrow rotation from the same terminal chunk', () => {
+    expect(parseBackroomsInput('w\x1b[C')).toEqual(['move_forward', 'turn_right']);
+  });
+
+  it('moves and rotates in the same frame', () => {
+    const level = openTestLevel();
+    const state = testGameState(level);
+
+    processMovement(state, new Set(['move_forward', 'turn_right']), 0.5);
+
+    expect(state.playerX).toBeCloseTo(1.5 + MOVE_SPEED * 0.5);
+    expect(state.playerY).toBeCloseTo(1.5);
+    expect(state.playerAngle).toBeGreaterThan(0);
+  });
+});
+
 describe('Synax Backrooms small terminal', () => {
   it('returns early when terminal is too small', () => {
     // We test that the validation constants exist
@@ -100,6 +118,45 @@ describe('Synax Backrooms small terminal', () => {
     expect(MIN_TERMINAL_ROWS).toBe(12);
   });
 });
+
+function openTestLevel(): LevelDef {
+  return {
+    name: 'test chamber',
+    map: [
+      [1, 1, 1, 1, 1],
+      [1, 0, 0, 0, 1],
+      [1, 0, 0, 0, 1],
+      [1, 0, 0, 0, 1],
+      [1, 1, 1, 1, 1],
+    ],
+    playerStart: { x: 1.5, y: 1.5 },
+    playerAngle: 0,
+    walls: [{ id: 1, color: [20, 20, 20] }],
+    floorColor: [0, 0, 0],
+    ceilingColor: [0, 0, 0],
+    textFragments: [],
+    ambientLogs: [],
+  };
+}
+
+function testGameState(level: LevelDef): GameState {
+  return {
+    levels: [level],
+    levelIndex: 0,
+    playerX: level.playerStart.x,
+    playerY: level.playerStart.y,
+    playerAngle: level.playerAngle,
+    showLogOverlay: false,
+    showHelp: false,
+    logLines: [],
+    exited: false,
+    debug: false,
+    ambientTimer: 0,
+    ambientIndex: 0,
+    frameCount: 0,
+    generatedDepth: 0,
+  };
+}
 
 describe('Synax Backrooms generated exploration', () => {
   it('generates deterministic rooms with liminal wall exits', () => {
