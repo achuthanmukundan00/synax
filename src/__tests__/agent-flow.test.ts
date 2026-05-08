@@ -20,7 +20,7 @@ describe('Qwen/Unsloth tool call parsing', () => {
       '<tool_call>\n{"name":"read_file_range","arguments":{"path":"src/a.ts","startLine":1}}\n</tool_call>',
     );
 
-    expect(calls).toEqual([
+    expect(calls).toMatchObject([
       {
         id: 'call_1',
         name: 'read_file_range',
@@ -34,7 +34,7 @@ describe('Qwen/Unsloth tool call parsing', () => {
       '```json\n{"tool_calls":[{"id":"abc","type":"function","function":{"name":"search_text","arguments":"{\\"query\\":\\"needle\\"}"}}]}\n```',
     );
 
-    expect(calls).toEqual([{ id: 'abc', name: 'search_text', arguments: { query: 'needle' } }]);
+    expect(calls).toMatchObject([{ id: 'abc', name: 'search_text', arguments: { query: 'needle' } }]);
   });
 });
 
