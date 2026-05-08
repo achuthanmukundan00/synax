@@ -36,7 +36,7 @@ export interface ProviderFactoryInput {
   /** Price per 1M output tokens in USD (overrides preset default). */
   outputPricePer1MTokens?: number;
   /** Thinking level for providers that support extended reasoning (e.g. DeepSeek). */
-  thinkingLevel?: 'off' | 'low' | 'medium' | 'high' | 'auto';
+  thinkingLevel?: import('../config/schema').ThinkingLevel;
 }
 
 // ─── Factory result ────────────────────────────────────

@@ -75,17 +75,19 @@ export function renderSettings(state: SettingsState, width: number, height: numb
 
 function renderTabBar(active: SettingsTab, width: number): string {
   let result = '';
-  for (const tab of SETTINGS_TABS) {
+  for (let i = 0; i < SETTINGS_TABS.length; i++) {
+    const tab = SETTINGS_TABS[i];
     const label = tabLabel(tab);
     if (tab === active) {
       result += ` ${invert(label)} `;
     } else {
       result += ` ${dim(label)} `;
     }
-    result += dim('|');
+    // Only add separator between tabs, not after the last one.
+    if (i < SETTINGS_TABS.length - 1) {
+      result += dim('|');
+    }
   }
-  // Remove trailing separator
-  result = result.slice(0, -1);
 
   // Pad to width
   const visible = stripAnsi(result).length;

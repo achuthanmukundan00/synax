@@ -1225,7 +1225,8 @@ describe('interactive layout visual agreements', () => {
       modelId: 'qwen-local',
       providerName: 'Relay',
       coreLoaded: true,
-      contextUsedTokens: 11_200,
+      // Use 15 % usage so the bar renders with filled blocks (bar is hidden below 10 %).
+      contextUsedTokens: 19_200,
       contextWindowTokens: 128_000,
     };
 

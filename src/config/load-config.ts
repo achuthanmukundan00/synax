@@ -46,8 +46,8 @@ const DEFAULT_MODELS: Record<string, ResolvedModelConfig[]> = {
       displayName: 'DeepSeek V4 Pro',
       contextWindow: 1_000_000,
       supportsThinking: true,
-      thinkingLevels: ['off', 'low', 'medium', 'high'],
-      defaultThinkingLevel: 'off',
+      thinkingLevels: ['off', 'high', 'xhigh'],
+      defaultThinkingLevel: 'high',
     },
     {
       id: 'deepseek-chat',
@@ -61,8 +61,8 @@ const DEFAULT_MODELS: Record<string, ResolvedModelConfig[]> = {
       displayName: 'DeepSeek Reasoner (R1)',
       contextWindow: 1_000_000,
       supportsThinking: true,
-      thinkingLevels: ['off', 'low', 'medium', 'high'],
-      defaultThinkingLevel: 'medium',
+      thinkingLevels: ['off', 'high', 'xhigh'],
+      defaultThinkingLevel: 'high',
     },
   ],
   openai: [
@@ -116,7 +116,7 @@ const DEFAULT_PROVIDERS: Record<string, ResolvedProviderConfig> = {
     id: 'deepseek',
     name: 'DeepSeek',
     compatibility: 'openai-compatible',
-    enabled: true,
+    enabled: false,
     baseUrl: 'https://api.deepseek.com/v1',
     apiKeyEnv: 'DEEPSEEK_API_KEY',
     headers: {},
@@ -126,7 +126,7 @@ const DEFAULT_PROVIDERS: Record<string, ResolvedProviderConfig> = {
     id: 'openai',
     name: 'OpenAI',
     compatibility: 'openai-compatible',
-    enabled: true,
+    enabled: false,
     baseUrl: 'https://api.openai.com/v1',
     apiKeyEnv: 'OPENAI_API_KEY',
     headers: {},
@@ -136,11 +136,32 @@ const DEFAULT_PROVIDERS: Record<string, ResolvedProviderConfig> = {
     id: 'anthropic',
     name: 'Anthropic',
     compatibility: 'anthropic-compatible',
-    enabled: true,
+    enabled: false,
     baseUrl: 'https://api.anthropic.com/v1',
     apiKeyEnv: 'ANTHROPIC_API_KEY',
     headers: {},
     models: DEFAULT_MODELS.anthropic ?? [],
+  },
+  openrouter: {
+    id: 'openrouter',
+    name: 'OpenRouter',
+    compatibility: 'openai-compatible',
+    enabled: false,
+    baseUrl: 'https://openrouter.ai/api/v1',
+    apiKeyEnv: 'OPENROUTER_API_KEY',
+    headers: {
+      'HTTP-Referer': 'https://github.com/achuthanmukundan00/synax',
+      'X-Title': 'Synax',
+    },
+    models: [
+      {
+        id: 'openrouter/auto',
+        displayName: 'OpenRouter (auto)',
+        contextWindow: 64000,
+        supportsThinking: false,
+        thinkingLevels: [],
+      },
+    ],
   },
 };
 
@@ -272,7 +293,7 @@ function parseModelConfig(raw: Record<string, unknown>): ModelConfig | null {
 }
 
 function isThinkingLevel(value: string): value is ThinkingLevel {
-  return ['off', 'low', 'medium', 'high', 'auto'].includes(value);
+  return ['off', 'low', 'medium', 'high', 'xhigh', 'auto'].includes(value);
 }
 
 function parseContextWindow(raw: Record<string, unknown>): number | undefined {
@@ -415,7 +436,7 @@ export function validateSynaxConfig(config: SynaxConfig): string[] {
       errors.push('active.model must be a string');
     }
     if (config.active.thinking !== undefined && !isThinkingLevel(config.active.thinking)) {
-      errors.push(`active.thinking must be one of: off, low, medium, high, auto`);
+      errors.push(`active.thinking must be one of: off, low, medium, high, xhigh, auto`);
     }
   }
 
@@ -634,8 +655,11 @@ function resolveActive(effective: EffectiveSynaxConfig): void {
   const providerId = effective.active.provider;
   const provider = providerId ? effective.providers[providerId] : undefined;
 
-  if (!isQueryableProvider(provider)) {
-    // Fall back to the first provider that has enough local config to answer.
+  // When the user explicitly selected a provider, honour that choice even if
+  // the provider is not flagged as enabled in defaults. The enabled flag
+  // controls visibility in the settings UI, not the active resolution path.
+  if (!provider || !provider.baseUrl.trim() || provider.models.length === 0) {
+    // Fall back to the first queryable provider.
     const first = Object.values(effective.providers).find(isQueryableProvider);
     if (first) {
       effective.active.provider = first.id;

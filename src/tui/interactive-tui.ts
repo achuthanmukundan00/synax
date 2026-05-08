@@ -233,8 +233,9 @@ export async function runInteractiveTui(
 
     // Position and show cursor beam in the input box.
     const cursor = inputCursorPosition(viewState().objectiveInput, terminal.columns, terminal.rows);
-    // Terminal cursor positions are 1-indexed.
-    terminal.write(`\u001b[${cursor.row + 1};${cursor.col + 1}H\u001b[?25h`);
+    // Terminal cursor positions are 1-indexed. Use beam cursor style to avoid
+    // overwriting the first character of placeholder text.
+    terminal.write(`\u001b[${cursor.row + 1};${cursor.col + 1}H\u001b[5 q\u001b[?25h`);
   };
 
   const finish = (): void => {
