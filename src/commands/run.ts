@@ -76,6 +76,8 @@ export function runCommand(program: Command): void {
             renderer?.finish?.();
             if (!renderer) {
               printReport(report, activities);
+            } else if (report.terminalState !== 'completed') {
+              printTuiFailure(report);
             }
             if (report.terminalState !== 'completed') {
               process.exitCode = 1;
@@ -185,6 +187,10 @@ function printReport(report: Awaited<ReturnType<typeof runAgentTask>>, activitie
   if (report.terminalState !== 'completed') {
     console.log(`Terminal state: ${report.terminalState}`);
   }
+  if (report.error) {
+    console.log('Error:');
+    console.log(report.error);
+  }
   console.log(`Model steps: ${report.steps}`);
   console.log(`Tool calls: ${report.toolCalls.length} / ${report.maxToolCalls}`);
   console.log(`Context budget: ${report.contextBudgetTokens}`);
@@ -216,4 +222,40 @@ function printReport(report: Awaited<ReturnType<typeof runAgentTask>>, activitie
   }
   console.log('Final:');
   console.log(report.finalAnswer || '(none)');
+}
+
+function printTuiFailure(report: Awaited<ReturnType<typeof runAgentTask>>): void {
+  console.error(`[synax] Run failed: ${report.terminalState}`);
+  if (report.error) {
+    console.error(`[synax] Next: ${classifyFailureNextAction(report.error)}`);
+    console.error(report.error);
+  }
+}
+
+function classifyFailureNextAction(error: string): string {
+  const lower = error.toLowerCase();
+  if (
+    lower.includes('provider error') ||
+    lower.includes('connection failed') ||
+    lower.includes('network error') ||
+    lower.includes('timed out') ||
+    lower.includes('api key') ||
+    lower.includes('401') ||
+    lower.includes('403') ||
+    lower.includes('429') ||
+    lower.includes('deepseek')
+  ) {
+    return 'check provider/server/config, then rerun';
+  }
+  if (lower.includes('context budget') || lower.includes('max tool calls')) {
+    return 'narrow the prompt or raise the configured budget/limits';
+  }
+  if (
+    lower.includes('malformed tool call') ||
+    lower.includes('ambiguous mixed output') ||
+    lower.includes('recoverable tool errors')
+  ) {
+    return 're-prompt Synax with a smaller, more explicit task';
+  }
+  return 'inspect the error below, then rerun';
 }

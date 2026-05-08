@@ -667,6 +667,8 @@ export async function runInteractiveTui(
       }
 
       // Normal input routing
+      // TODO: Esc does not currently interrupt an active run. When implemented,
+      // add `Esc interrupt` to the footer help text in layout.ts.
       if (event.type === 'arrow_up' || event.type === 'scroll_history_up') {
         if (autocomplete.visible) {
           autocomplete.selection = Math.max(0, autocomplete.selection - 1);

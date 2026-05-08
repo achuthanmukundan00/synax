@@ -10,6 +10,20 @@ export interface TranscriptRenderState {
 /** Breathing glyph sequence for the working indicator. */
 const BREATHING_GLYPHS = ['◌', '◓', '◑', '◒'];
 
+// ─── Tool-summary detection ───────────────────────────────
+
+/** Detect notes that are only tool-call summaries with no useful prose.
+ *  These should not appear in the user transcript or as working preview text. */
+function isToolSummaryNote(text: string): boolean {
+  const stripped = text
+    .replace(/<think>[\s\S]*?<\/think>/gi, '')
+    .replace(/<thinking>[\s\S]*?<\/thinking>/gi, '')
+    .replace(/<tool_call>[\s\S]*?<\/tool_call>/gi, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return /^[-–—>→]*\s*\d+\s+tool call\(s\):\s*[A-Za-z0-9_,\s.-]+$/i.test(stripped);
+}
+
 export function renderTranscript(state: TranscriptRenderState, width: number): string[] {
   const blocks: string[][] = [];
   const history = state.run.debugHistory;
@@ -28,7 +42,7 @@ export function renderTranscript(state: TranscriptRenderState, width: number): s
       const prose = extractModelProse(item.detail || item.summary);
       const isLastModel = i === history.length - 1 || !history.slice(i + 1).some((h) => h.kind === 'model');
       if (completed && isLastModel) {
-        blocks.push(renderReviewOutput(item.detail || item.summary, width));
+        blocks.push(renderReviewOutput(prose || item.detail || item.summary, width));
       } else if (prose) {
         blocks.push(renderModelProse(prose, width));
       }
@@ -91,6 +105,11 @@ export function renderTranscript(state: TranscriptRenderState, width: number): s
   if (hasVerificationEvents) {
     blocks.push(['']);
     blocks.push(renderVerification(state.run, width));
+  }
+
+  if (state.run.terminal !== 'completed' && state.run.terminalIssue) {
+    blocks.push(['']);
+    blocks.push(renderTerminalIssue(state.run.terminalIssue, width));
   }
 
   // Working indicator and activity preview — placed at the bottom so it remains
@@ -184,9 +203,9 @@ function renderCommandEvent(
   const exitCode = parsed?.exitCode;
   const failed = exitCode !== undefined && exitCode !== 0;
 
-  // Compressed mode (after completion): show command + exit code on header line.
+  // Compressed mode (after completion): show command header, suppress exit 0.
   if (compressed && !failed && parsed) {
-    const exitPart = exitCode !== undefined ? `exit ${exitCode}` : '';
+    const exitPart = exitCode !== undefined && exitCode !== 0 ? `failed exit ${exitCode}` : '';
     const block = [commandRow(command, exitPart || 'ok', width)];
 
     // For git diff --stat, extract changed-files summary.
@@ -198,13 +217,27 @@ function renderCommandEvent(
   }
 
   // Expanded mode: full detail (active execution or failed commands).
-  const state = parsed ? `exit ${exitCode ?? 1}` : 'requested';
+  // Suppress exit 0 for successful commands; show only failure/nonzero exit.
+  const state = ((): string => {
+    if (!parsed) return 'running';
+    if (exitCode === 0) return '';
+    if (exitCode !== undefined) return `failed exit ${exitCode}`;
+    return '';
+  })();
   const block = [commandRow(command, state, width)];
   if (!result) return block;
 
   if (failed) {
     block.push(detailRow('exit', String(exitCode ?? 1), width));
     if (parsed?.duration) block.push(detailRow('meta', parsed.duration, width));
+  }
+
+  // For commit commands, extract and show the commit message on a separate line.
+  if (/^git\s+commit\b/.test(command.trim())) {
+    const commitMsg = extractCommitMessage(command);
+    if (commitMsg) {
+      block.push(detailRow('message', commitMsg, width));
+    }
   }
 
   const output = colorizeCommandOutput(command, summarizeCommandDisplay(command, parsed?.output ?? '')).trim();
@@ -423,8 +456,6 @@ function extractChangedSummary(output: string): string {
 
 function cleanModelOutput(output: string): string {
   return stripTerminalControl(output)
-    .replace(/<think>[\s\S]*?<\/think>/gi, '')
-    .replace(/<thinking>[\s\S]*?<\/thinking>/gi, '')
     .replace(/<tool_call>[\s\S]*?<\/tool_call>/gi, '')
     .replace(/\s+/g, ' ')
     .trim();
@@ -432,6 +463,18 @@ function cleanModelOutput(output: string): string {
 
 function isGitDiffCommand(command: string): boolean {
   return /^git\s+diff\b/.test(command.trim());
+}
+
+/** Extract the commit message from a git commit command line.
+ *  Handles: git commit -m "message"  and  git commit --message "message" */
+function extractCommitMessage(command: string): string | null {
+  const trimmed = command.trim();
+  const match = /git\s+commit\b.*(?:-m|--message)\s+"([^"]+)"/.exec(trimmed);
+  if (match) return match[1];
+  // Try single-quoted variant
+  const sqMatch = /git\s+commit\b.*(?:-m|--message)\s+'([^']+)'/.exec(trimmed);
+  if (sqMatch) return sqMatch[1];
+  return null;
 }
 
 function wrapText(text: string, maxWidth: number): string[] {
@@ -540,7 +583,7 @@ function eventHeader(label: string, state: string, width: number = 120): string 
 function commandRow(command: string, state: string, width: number): string {
   const stateText = state ? `  ${dim(state)}` : '';
   const available = Math.max(1, width - 4 - visibleLength(state));
-  return `${yellow('$')} ${yellow(clip(command || 'bash', available))}${stateText}`;
+  return `${yellow('$')} ${clip(command || 'bash', available)}${stateText}`;
 }
 
 function detailRow(label: string, value: string, width: number): string {
@@ -578,8 +621,8 @@ function dropCommandEcho(command: string, output: string): string {
 
 function eventGlyph(label: string): string {
   if (label === 'user') return dim('•');
-  if (label === 'model') return dim('•');
-  if (label === 'review') return dim('•');
+  if (label === 'model') return pink('✽');
+  if (label === 'result') return dim('•');
   if (label === 'bash' || label === 'read' || label === 'write' || label === 'edit') return yellow('$');
   if (label === 'verify') return '\u001b[32m√\u001b[0m';
   return dim('?');
@@ -605,6 +648,10 @@ function yellow(text: string): string {
   return `\u001b[33m${text}\u001b[0m`;
 }
 
+function pink(text: string): string {
+  return `\u001b[35m${text}\u001b[0m`;
+}
+
 function dim(text: string): string {
   return `\u001b[90m${text}\u001b[0m`;
 }
@@ -613,14 +660,34 @@ function plural(count: number, singular: string): string {
   return `${count} ${count === 1 ? singular : `${singular}s`}`;
 }
 
+/** Get the latest useful process/thought text for the live working preview.
+ *  Uses model-visible thinking/output text from the transcript.
+ *  Filters out tool-summary-only noise. */
+function getLatestUsefulProcessText(run: RunStateSnapshot): string | null {
+  // Search debug history in reverse for model items with useful prose.
+  for (let i = run.debugHistory.length - 1; i >= 0; i -= 1) {
+    const item = run.debugHistory[i];
+    if (item.kind !== 'model') continue;
+    const prose = extractModelProse(item.detail || item.summary);
+    if (!prose || isToolSummaryNote(prose)) continue;
+    // Avoid repeated identical text (e.g. model re-emitting same plan).
+    return prose;
+  }
+  return null;
+}
+
 /** Extract a safe activity/reasoning preview from the run state. */
 function activityPreviewText(run: RunStateSnapshot): string {
-  // Prefer lifecycle-based activity labels derived from real runtime state.
+  // First try: latest useful model prose from debug history.
+  const processText = getLatestUsefulProcessText(run);
+  if (processText) return clipText(processText, 120);
+
+  // Fallback: lifecycle-based activity labels derived from real runtime state.
   const latest = run.timeline[run.timeline.length - 1];
   if (latest) {
     const summary = latest.summary.toLowerCase();
     if (summary.includes('objective registered') || summary.includes('task started')) return 'inspecting context…';
-    if (summary.includes('model step') || summary.includes('thinking')) return 'planning next action…';
+    if (summary.includes('model step') || summary.includes('working')) return 'planning next action…';
     if (summary.includes('tool') && summary.includes('read')) return 'reading file…';
     if (summary.includes('tool') && (summary.includes('write') || summary.includes('edit'))) return 'editing file…';
     if (summary.includes('tool') && summary.includes('bash')) return 'running bash…';
@@ -663,28 +730,70 @@ function clipText(value: string, max: number): string {
 // ─── Model prose rendering ─────────────────────────────────
 
 /** Extract meaningful natural-language prose from model output,
- *  stripping think blocks, tool_call XML, and excess whitespace. */
+ *  stripping think blocks, tool_call XML, and excess whitespace.
+ *  Returns empty string when content is only tool-call summaries. */
 function extractModelProse(detail: string): string {
   const clean = detail
-    .replace(/<think>[\s\S]*?<\/think>/gi, '')
-    .replace(/<thinking>[\s\S]*?<\/thinking>/gi, '')
     .replace(/<tool_call>[\s\S]*?<\/tool_call>/gi, '')
-    .replace(/\s*[-–—>→]*\s*\d+\s+tool call\(s\):\s*[A-Za-z0-9_,\s.-]+$/i, '')
-    .replace(/\s+/g, ' ')
+    .replace(/\s*[-–—>→]*\s*\d+\s+tool call\(s\):\s*[A-Za-z0-9_,\s.-]+$/gi, '')
+    .replace(/<\/?(?:think|thinking)>/gi, '')
+    .replace(/[ \t]+/g, ' ')
     .trim();
+  // If the remaining text is itself only a tool-summary line, return empty.
+  if (isToolSummaryNote(clean)) return '';
   return clean;
 }
 
-/** Render model prose prominently, with full text wrapping and no truncation. */
+/** Render model prose prominently with pink star glyph and full text wrapping. */
 function renderModelProse(prose: string, width: number): string[] {
   const lines: string[] = [];
   const proseWidth = Math.max(20, width - 6);
   const wrapped = wrapText(prose, proseWidth);
-  lines.push(`${dim('•')} ${wrapped[0]}`);
+  lines.push(`${pink('✽')} ${bold('note').padEnd(9, ' ')} ${wrapped[0]}`);
   for (let i = 1; i < wrapped.length; i += 1) {
-    lines.push(`  ${wrapped[i]}`);
+    lines.push(`  ${' '.repeat(10)} ${wrapped[i]}`);
   }
   return lines;
+}
+
+function renderTerminalIssue(issue: string, width: number): string[] {
+  const lines = wrapText(stripTerminalControl(issue).trim() || 'unknown failure', Math.max(20, width - 14));
+  return [
+    eventHeader('error', 'terminal issue', width),
+    detailRow('next', classifyTerminalIssue(issue), width),
+    ...alignedField('message', lines, width, true),
+  ];
+}
+
+function classifyTerminalIssue(issue: string): string {
+  const lower = issue.toLowerCase();
+  if (
+    lower.includes('provider error') ||
+    lower.includes('connection failed') ||
+    lower.includes('network error') ||
+    lower.includes('timed out') ||
+    lower.includes('api key') ||
+    lower.includes('401') ||
+    lower.includes('403') ||
+    lower.includes('429') ||
+    lower.includes('deepseek')
+  ) {
+    return 'check provider/server/config, then rerun';
+  }
+  if (lower.includes('context budget') || lower.includes('max tool calls')) {
+    return 'narrow the prompt or raise the configured budget/limits';
+  }
+  if (
+    lower.includes('malformed tool call') ||
+    lower.includes('ambiguous mixed output') ||
+    lower.includes('recoverable tool errors')
+  ) {
+    return 're-prompt Synax with a smaller, more explicit task';
+  }
+  if (lower.includes('verification failed')) {
+    return 'inspect verification output and rerun after fixing';
+  }
+  return 'inspect the message below, then rerun';
 }
 
 // ─── Tool group rendering ───────────────────────────────────
@@ -850,7 +959,7 @@ function renderReviewOutput(body: string, width: number): string[] {
   if (!clean) return [eventHeader('model', '')];
 
   const hasMd = /^#{1,3}\s|^[*\-+]\s|^```|^\d+\.\s|^>\s|^---+$/m.test(clean);
-  const lines: string[] = [eventHeader('review', '')];
+  const lines: string[] = [eventHeader('result', '')];
 
   if (hasMd) {
     const mdBlocks = renderMarkdownBlock(clean, width);

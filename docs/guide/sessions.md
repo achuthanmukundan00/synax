@@ -73,7 +73,7 @@ When you resume a session:
 2. Provider/model settings are restored if still available
 3. If the provider/model is missing, Synax shows a configuration blocked state
 4. The previous session status is preserved:
-   - **Completed** → ready for a new message
+   - **Ready** → ready for a new message
    - **Failed/Blocked** → shows the last blocker, ready to continue
 
 ## Session Lifecycle

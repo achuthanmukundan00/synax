@@ -293,6 +293,7 @@ export async function runAgentTurn(options: AgentRunnerOptions & { task: string 
           tools,
           temperature: 0,
           maxTokens: 2048,
+          onDelta: (delta) => emitAssistantDelta(options, delta),
         });
       } else {
         // Within budget: build assembled model request proactively
@@ -302,6 +303,7 @@ export async function runAgentTurn(options: AgentRunnerOptions & { task: string 
           tools,
           temperature: 0,
           maxTokens: 2048,
+          onDelta: (delta) => emitAssistantDelta(options, delta),
         });
       }
     } catch (error) {
@@ -506,6 +508,16 @@ export async function runAgentTurn(options: AgentRunnerOptions & { task: string 
     }
     flushContentToolResults(conversation, response, contentToolResults);
   }
+}
+
+function emitAssistantDelta(options: AgentRunnerOptions, delta: { content?: string; reasoningContent?: string }): void {
+  if (!delta.content && !delta.reasoningContent) return;
+  options.onEvent?.({
+    type: 'assistant_delta',
+    timestamp: eventNow(),
+    content: delta.content,
+    reasoningContent: delta.reasoningContent,
+  });
 }
 
 function assistantMessage(response: ChatResponse, settings?: ContextBudgetSettings): AgentMessage {
@@ -1492,14 +1504,15 @@ function errorMessage(error: unknown): string {
  */
 function formatModelResponseActivity(response: ChatResponse, _step: number): AgentActivity {
   const lines: string[] = [];
+  const reasoningContent = response.reasoningContent?.trim();
   const trimmedContent = response.content.trim();
 
+  if (reasoningContent && !trimmedContent.includes(reasoningContent)) {
+    lines.push(`<thinking>\n${reasoningContent}\n</thinking>`);
+  }
+
   if (trimmedContent.length > 0) {
-    // Show substantially more model output so users can see what the model is thinking.
-    // 1200 chars is enough to surface reasoning, thinking tags, and tool-call intent
-    // without flooding the terminal.
-    const preview = trimmedContent.length > 1200 ? trimmedContent.slice(0, 1200) + '…' : trimmedContent;
-    lines.push(preview);
+    lines.push(trimmedContent);
   }
 
   if (response.toolCalls.length > 0) {
@@ -1510,7 +1523,7 @@ function formatModelResponseActivity(response: ChatResponse, _step: number): Age
   return {
     kind: 'model_response',
     message: lines.join('\n') || '(empty response)',
-    modelOutput: response.content,
+    modelOutput: lines.join('\n'),
     toolCallCount: response.toolCalls.length,
   };
 }
