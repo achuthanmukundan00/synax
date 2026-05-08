@@ -203,13 +203,19 @@ If you see `<tool_call>...</tool_call>` markup in the assistant output instead o
 
 ### Parser Not Found
 
-If you see `unknown parser: "xyz"`:
+If you set `tool_call_parser` to a value that doesn't match any registered parser, Synax throws an immediate error:
+
+```
+Unknown tool-call-parser "xyz". Available: qwen3_xml, hermes, llama3_json, ...
+```
+
+This prevents silent misconfiguration — an explicit override is treated as intentional. To see all available parsers:
 
 ```bash
 synax inspect --parsers
 ```
 
-This lists all available parsers and their model families.
+If you want to disable content parsing without specifying a parser, use `tool_call_parser = "openai"` (passthrough mode).
 
 ### Parser Produces No Calls
 
