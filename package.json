@@ -1,6 +1,6 @@
 {
   "name": "synax",
-  "version": "0.0.2-alpha",
+  "version": "0.0.21-alpha",
   "description": "A local-first coding agent for consumer-GPU developers",
   "main": "dist/index.js",
   "bin": {
