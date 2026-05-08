@@ -599,6 +599,36 @@ describe('interactive layout visual agreements', () => {
     ).toMatchSnapshot();
   });
 
+  it('wraps long model notes instead of clipping them with ellipses', () => {
+    const longInstruction =
+      'Read the configuration file, then update the provider model setting, then run typecheck and report the exact command result so the user can follow the instruction without guessing. TAIL_MARKER';
+    const run = {
+      ...createInitialRunStateSnapshot(0),
+      phase: 'thinking' as const,
+      debugHistory: [{ atMs: 1, kind: 'model' as const, summary: 'model response', detail: longInstruction }],
+    };
+
+    const plain = renderLayout(
+      {
+        run,
+        objectiveInput: '',
+        coreMode: 'thinking',
+        nowMs: 2000,
+      },
+      72,
+      24,
+    )
+      .map(stripAnsi)
+      .join('\n');
+
+    const noteLines = plain
+      .split('\n')
+      .filter((line) => line.includes('note') || line.includes('Read the configuration') || line.includes('TAIL_MARKER'));
+
+    expect(noteLines.join('\n')).toContain('TAIL_MARKER');
+    expect(noteLines.join('\n')).not.toContain('…');
+  });
+
   it('uses the compact core on the empty idle surface at medium widths', () => {
     const run = createInitialRunStateSnapshot(0);
     const lines = renderLayout(

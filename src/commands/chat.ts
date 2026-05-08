@@ -619,7 +619,7 @@ export function compactHome(path: string): string {
 
 export function providerNameFromPreset(preset: string | undefined): string | undefined {
   if (!preset) return undefined;
-  if (preset === 'relay-local' || preset === 'relay-cloudflare') return 'Relay';
+  if (preset === 'relay-local' || preset === 'relay-cloudflare' || preset === 'relay-cf') return 'Relay';
   if (preset === 'openai') return 'OpenAI';
   if (preset === 'anthropic') return 'Anthropic';
   if (preset === 'openrouter') return 'OpenRouter';
