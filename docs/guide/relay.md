@@ -53,7 +53,6 @@ Synax currently normalizes these provider presets:
 | Preset                     | Use                                              |
 | -------------------------- | ------------------------------------------------ |
 | `relay-local`              | Default local Relay endpoint at `127.0.0.1:1234` |
-| `relay-cloudflare`         | Relay behind Cloudflare Access headers           |
 | `openai`                   | OpenAI-compatible cloud endpoint                 |
 | `anthropic`                | Experimental OpenAI-compatible config shape only |
 | `openrouter`               | OpenRouter-compatible endpoint                   |
@@ -82,14 +81,6 @@ For custom headers:
 ```toml
 [provider.custom_headers]
 "X-Example-Header" = "value"
-```
-
-Environment references are supported in custom header values:
-
-```toml
-[provider.custom_headers]
-"CF-Access-Client-Id" = "$SYNAX_CF_ACCESS_CLIENT_ID"
-"CF-Access-Client-Secret" = "$SYNAX_CF_ACCESS_CLIENT_SECRET"
 ```
 
 Synax does not log API keys.

@@ -197,14 +197,14 @@ describe('runDoctor', () => {
   it('does not treat unauthenticated base URL failures as final provider truth when chat works', async () => {
     const srv = await createMockServer((req, res) => {
       if (req.path === '/v1/models') {
-        expect(req.headers['x-cloudflare-access-client-id']).toBe('test-client');
+        expect(req.headers['x-custom-header']).toBe('test-value');
         res.writeHead(404, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ error: { message: 'models endpoint unavailable' } }));
         return;
       }
 
       if (req.path === '/v1/chat/completions') {
-        expect(req.headers['x-cloudflare-access-client-id']).toBe('test-client');
+        expect(req.headers['x-custom-header']).toBe('test-value');
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(
           JSON.stringify({
@@ -229,7 +229,7 @@ describe('runDoctor', () => {
           'timeout_seconds = 1',
           '',
           '[provider.custom_headers]',
-          '"X-Cloudflare-Access-Client-Id" = "test-client"',
+          '"X-Custom-Header" = "test-value"',
         ].join('\n'),
         'utf-8',
       );

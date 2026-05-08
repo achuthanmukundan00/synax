@@ -65,6 +65,18 @@ export async function runAgentTask(options: RunTaskOptions): Promise<RunTaskRepo
   }
 
   const providerInput = toProviderFactoryInput(projectConfig.config);
+
+  // Load effective config once for thinking level and skills.
+  let effectiveConfig;
+  try {
+    effectiveConfig = loadSynaxConfig(options.repoRoot);
+  } catch {
+    effectiveConfig = undefined;
+  }
+  if (effectiveConfig?.active.thinking && effectiveConfig.active.thinking !== 'off') {
+    providerInput.thinkingLevel = effectiveConfig.active.thinking;
+  }
+
   let factoryResult;
   try {
     factoryResult = createLLMClient(providerInput);
@@ -113,14 +125,9 @@ export async function runAgentTask(options: RunTaskOptions): Promise<RunTaskRepo
   });
   // Load configured skills for injection into agent context.
   let skillMessages: string[] | undefined;
-  try {
-    const effectiveConfig = loadSynaxConfig(options.repoRoot);
-    if (effectiveConfig.skills.enabled.length > 0) {
-      const result = loadSkills(effectiveConfig.skills, options.repoRoot);
-      skillMessages = result.systemMessages;
-    }
-  } catch {
-    // best-effort
+  if (effectiveConfig?.skills.enabled.length) {
+    const result = loadSkills(effectiveConfig.skills, options.repoRoot);
+    skillMessages = result.systemMessages;
   }
 
   const turn = await runAgentTurn({

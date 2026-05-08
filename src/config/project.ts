@@ -4,10 +4,9 @@ import { parse as parseToml } from 'toml';
 import { loadSynaxConfig } from './load-config';
 import type { EffectiveSynaxConfig, ResolvedProviderConfig } from './schema';
 
-export type ProviderKind = 'openai-compatible';
+export type ProviderKind = 'openai-compatible' | 'anthropic-messages';
 export type ProviderPreset =
   | 'relay-local'
-  | 'relay-cloudflare'
   | 'openai'
   | 'anthropic'
   | 'openrouter'
@@ -65,17 +64,6 @@ export interface AgentBudgetConfig {
 
 function providerPresetDefaults(preset: string): ProviderConfig {
   switch (preset) {
-    case 'relay-cloudflare':
-      return {
-        preset,
-        kind: 'openai-compatible',
-        base_url: 'https://ai.watchyourtemper.com/v1',
-        model: 'Qwen3.6-35B-A3B-UD-IQ3_XXS.gguf',
-        custom_headers: {
-          'CF-Access-Client-Id': '$SYNAX_CF_ACCESS_CLIENT_ID',
-          'CF-Access-Client-Secret': '$SYNAX_CF_ACCESS_CLIENT_SECRET',
-        },
-      };
     case 'openai':
       return {
         preset,
@@ -181,19 +169,6 @@ function providerPresetContextWindowDefault(preset: string): number | undefined 
   }
 }
 
-function hasExplicitContextWindow(config: ProjectConfig): boolean {
-  return (
-    config.contextBudgetTokens !== undefined ||
-    config.context_budget_tokens !== undefined ||
-    config.contextWindowTokens !== undefined ||
-    config.context_window_tokens !== undefined ||
-    config.agent?.contextBudgetTokens !== undefined ||
-    config.agent?.context_budget_tokens !== undefined ||
-    config.agent?.contextWindowTokens !== undefined ||
-    config.agent?.context_window_tokens !== undefined
-  );
-}
-
 /**
  * Convert legacy ProjectConfig provider section to ProviderFactoryInput
  * for the new provider factory. Preserves backward compatibility.
@@ -211,6 +186,7 @@ export interface ProviderFactoryInput {
   kind?: string;
   inputPricePer1MTokens?: number;
   outputPricePer1MTokens?: number;
+  thinkingLevel?: 'off' | 'low' | 'medium' | 'high' | 'auto';
 }
 
 export function toProviderFactoryInput(config: ProjectConfig): ProviderFactoryInput {
@@ -240,8 +216,6 @@ export function toProviderFactoryInput(config: ProjectConfig): ProviderFactoryIn
   // Map legacy preset names to new provider IDs
   const providerMap: Record<string, string> = {
     'relay-local': 'relay',
-    'relay-cloudflare': 'relay',
-    'relay-cf': 'relay',
     'custom-openai-compatible': 'custom',
     openai: 'custom', // OpenAI uses custom base URL
     openrouter: 'openrouter',
@@ -789,9 +763,11 @@ function stringValue(value: unknown): string | undefined {
 
 function projectProviderFromEffectiveProvider(provider: ResolvedProviderConfig, model: string): ProviderConfig {
   const apiKey = provider.apiKey === '••••' ? undefined : provider.apiKey;
+  const kind: ProviderKind =
+    provider.compatibility === 'anthropic-compatible' ? 'anthropic-messages' : 'openai-compatible';
   return {
     preset: provider.id,
-    kind: 'openai-compatible',
+    kind,
     base_url: provider.baseUrl,
     baseUrl: provider.baseUrl,
     model,
@@ -855,10 +831,6 @@ export function loadProjectConfig(baseDir?: string): LoadProjectConfigResult {
       errors.push({ path: discoveredPath, message: `Failed to parse TOML: ${(err as Error).message}` });
     }
   }
-  const hasExplicitContextConfig =
-    hasExplicitContextWindow(userConfig) ||
-    hasExplicitContextWindow(config) ||
-    process.env.SYNAX_CONTEXT_BUDGET_TOKENS !== undefined;
   if (hasExtendedSettings) {
     const effectiveSettings = loadSynaxConfig(baseDir);
     config = applyEffectiveSynaxConfigToProjectConfig(config, effectiveSettings);
@@ -900,7 +872,9 @@ export function loadProjectConfig(baseDir?: string): LoadProjectConfigResult {
     },
     errors,
   );
-  if (!hasExtendedSettings && !hasExplicitContextConfig) {
+  // Only apply provider default context window when no context has been
+  // set by any path (config file, extended settings, env vars, or DEFAULTS).
+  if (mergedConfig.contextWindowTokens === undefined && mergedConfig.contextBudgetTokens === undefined) {
     const providerContextWindow = providerPresetContextWindowDefault(activeProviderPreset);
     if (providerContextWindow !== undefined) {
       mergedConfig.contextWindowTokens = providerContextWindow;

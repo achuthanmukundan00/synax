@@ -51,12 +51,15 @@ export function runCommand(program: Command): void {
               verificationProfile: options.verificationProfile,
               repairAttempts: repairAttemptsResult.value,
               onActivity(activity) {
-                if (activity.kind === 'model_response' && activity.message.trim().length > 0) {
-                  renderer?.onEvent({
-                    type: 'assistant_message',
-                    timestamp: new Date().toISOString(),
-                    content: activity.message,
-                  });
+                if (activity.kind === 'model_response') {
+                  const fullContent = activity.modelOutput || activity.message;
+                  if (fullContent.trim().length > 0) {
+                    renderer?.onEvent({
+                      type: 'assistant_message',
+                      timestamp: new Date().toISOString(),
+                      content: fullContent,
+                    });
+                  }
                 }
                 if (renderer) return;
                 activities.push(activity.message);
@@ -145,6 +148,8 @@ export function runCommand(program: Command): void {
             contextWindowTokens: loaded.config.contextWindowTokens ?? loaded.config.contextBudgetTokens,
             coreVisualProfile: loaded.config.coreVisualProfile,
             coreLoaded: blockedMessage === undefined,
+            inputPricePer1MTokens: metadata.inputPricePer1MTokens,
+            outputPricePer1MTokens: metadata.outputPricePer1MTokens,
           });
         } else {
           console.log('[synax] Run command initialized. Use --task or --plan to specify work.');

@@ -46,7 +46,7 @@ export interface ChatSession {
   /** Install a runtime event sink for real-time TUI state updates. */
   setEventSink?: (sink: ((event: import('../agent/events').AgentEvent) => void) | null) => void;
   /** Refresh the session's config reference (called after settings changes). */
-  refreshConfig?: (config: ProjectConfig) => void;
+  refreshConfig?: (config: ProjectConfig, thinkingLevel?: 'off' | 'low' | 'medium' | 'high' | 'auto') => void;
 }
 
 export interface ChatTurnReport {
@@ -125,6 +125,8 @@ export function createChatSession(options: {
 
   /** Config wrapper: the TUI updates this reference when settings change. */
   const configRef: { current: ProjectConfig } = { current: options.config };
+  /** Thinking level ref: the TUI updates this when settings change. */
+  let thinkingLevelRef: 'off' | 'low' | 'medium' | 'high' | 'auto' | undefined = options.thinkingLevel;
 
   const getConfig = (): ProjectConfig => configRef.current;
 
@@ -133,12 +135,15 @@ export function createChatSession(options: {
     setEventSink: (sink) => {
       eventSink = sink;
     },
-    refreshConfig: (config: ProjectConfig) => {
+    refreshConfig: (config: ProjectConfig, thinkingLevel?: 'off' | 'low' | 'medium' | 'high' | 'auto') => {
       configRef.current = config;
+      if (thinkingLevel !== undefined) thinkingLevelRef = thinkingLevel;
     },
     async handleUserMessage(message: string): Promise<ChatTurnReport> {
       const config = getConfig();
-      const factoryResult = createLLMClient(toProviderFactoryInput(config));
+      const factoryInput = toProviderFactoryInput(config);
+      if (thinkingLevelRef) factoryInput.thinkingLevel = thinkingLevelRef;
+      const factoryResult = createLLMClient(factoryInput);
       const client = factoryResult.client;
       const beforeHead = await gitHead(options.repoRoot);
       const result = await runAgentTurn({
@@ -159,18 +164,22 @@ export function createChatSession(options: {
         },
         onActivity(activity) {
           options.onActivity?.(activity);
-          if (options.tui && activity.kind === 'model_response' && activity.message.trim().length > 0) {
-            eventSink?.({
-              type: 'assistant_message',
-              timestamp: new Date().toISOString(),
-              content: activity.message,
-            });
+          if (options.tui && activity.kind === 'model_response') {
+            const fullContent = activity.modelOutput || activity.message;
+            if (fullContent.trim().length > 0) {
+              eventSink?.({
+                type: 'assistant_message',
+                timestamp: new Date().toISOString(),
+                content: fullContent,
+              });
+            }
           }
           if (!options.tui) {
             if (activity.kind === 'model_response') {
               const label = `[synax] model step resp`;
-              if (activity.message) {
-                console.log(`${label}:\n${activity.message.replace(/^/gm, '  ')}`);
+              const msg = activity.message;
+              if (msg) {
+                console.log(`${label}:\n${msg.replace(/^/gm, '  ')}`);
               }
             } else {
               console.log(`[synax] ${activity.kind}: ${activity.message}`);
@@ -396,21 +405,23 @@ export function chatCommand(program: Command): void {
           coreVisualProfile: loaded.config.coreVisualProfile,
           coreLoaded: blockedMessage === undefined,
           activeSkills: skillDiagnostics?.filter((d) => d.loaded).map((d) => d.id),
+          inputPricePer1MTokens: metadata.inputPricePer1MTokens,
+          outputPricePer1MTokens: metadata.outputPricePer1MTokens,
           onSettingsConfigChanged: (settingsConfig) => {
             loaded.config = applyEffectiveSynaxConfigToProjectConfig(loaded.config, settingsConfig);
-            // Keep the session's config reference in sync with the updated project config.
-            session.refreshConfig?.(loaded.config);
             const nextThinkingLevel = settingsConfig.active.thinking ?? thinkingLevel;
-            const nextProvider = normalizeProviderConfig(loaded.config.provider ?? {}, {
-              thinkingLevel: nextThinkingLevel,
-            });
+            // Keep the session's config reference and thinking level in sync.
+            session.refreshConfig?.(loaded.config, nextThinkingLevel);
             const nextDescription = describeLLMProvider(toProviderFactoryInput(loaded.config));
-            const nextBlockedMessage = providerRuntimeBlockedMessage(nextDescription.metadata, nextProvider);
+            const nextBlockedMessage = providerRuntimeBlockedMessage(
+              nextDescription.metadata,
+              nextDescription.normalizedConfig,
+            );
             const activeProvider = settingsConfig.providers[settingsConfig.active.provider];
             const activeModel = activeProvider?.models.find((model) => model.id === settingsConfig.active.model);
             return {
-              modelLabel: nextProvider.model.trim() || undefined,
-              endpointLabel: nextProvider.baseUrl || undefined,
+              modelLabel: nextDescription.normalizedConfig.model.trim() || undefined,
+              endpointLabel: nextDescription.normalizedConfig.baseUrl || undefined,
               providerName:
                 activeProvider?.name ??
                 nextDescription.metadata.displayName ??
@@ -420,6 +431,8 @@ export function chatCommand(program: Command): void {
               coreVisualProfile: loaded.config.coreVisualProfile,
               thinkingEnabled: nextThinkingLevel !== 'off',
               coreLoaded: nextBlockedMessage === undefined,
+              inputPricePer1MTokens: nextDescription.metadata.inputPricePer1MTokens,
+              outputPricePer1MTokens: nextDescription.metadata.outputPricePer1MTokens,
             };
           },
         });
@@ -619,7 +632,7 @@ export function compactHome(path: string): string {
 
 export function providerNameFromPreset(preset: string | undefined): string | undefined {
   if (!preset) return undefined;
-  if (preset === 'relay-local' || preset === 'relay-cloudflare' || preset === 'relay-cf') return 'Relay';
+  if (preset === 'relay-local' || preset === 'relay') return 'Relay';
   if (preset === 'openai') return 'OpenAI';
   if (preset === 'anthropic') return 'Anthropic';
   if (preset === 'openrouter') return 'OpenRouter';

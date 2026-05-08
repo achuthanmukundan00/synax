@@ -72,8 +72,7 @@ supports_thinking = false
 
 ```toml
 [providers.relay-local.headers]
-"CF-Access-Client-Id" = "${CF_ACCESS_CLIENT_ID}"
-"CF-Access-Client-Secret" = "${CF_ACCESS_CLIENT_SECRET}"
+"X-Custom-Header" = "${MY_ENV_VAR}"
 ```
 
 ### Skills

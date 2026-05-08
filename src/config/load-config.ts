@@ -713,7 +713,8 @@ export function serializeEffectiveConfig(config: EffectiveSynaxConfig): string {
     lines.push(`compatibility = "${provider.compatibility}"`);
     lines.push(`base_url = "${escapeTomlString(provider.baseUrl)}"`);
     if (provider.apiKeyEnv) lines.push(`api_key_env = "${provider.apiKeyEnv}"`);
-    if (provider.apiKey) lines.push(`api_key = "••••"`); // never write raw secret
+    // Never persist api_key values — they should always come from env vars.
+    // Writing a masked value like "••••" would corrupt the key on the next load.
 
     if (Object.keys(provider.headers).length > 0) {
       lines.push('');

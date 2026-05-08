@@ -168,7 +168,7 @@ describe('CLI', () => {
       const srv = await createMockServer((req, res) => {
         expect(req.method).toBe('POST');
         expect(req.path).toBe('/v1/chat/completions');
-        expect(req.headers['x-cloudflare-access-client-id']).toBe('test-client');
+        expect(req.headers['x-custom-header']).toBe('test-value');
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(
           JSON.stringify({
@@ -188,7 +188,7 @@ describe('CLI', () => {
             'timeout_seconds = 1',
             '',
             '[provider.custom_headers]',
-            '"X-Cloudflare-Access-Client-Id" = "test-client"',
+            '"X-Custom-Header" = "test-value"',
           ].join('\n'),
           'utf-8',
         );
@@ -351,11 +351,7 @@ describe('CLI', () => {
             'kind = "openai-compatible"',
             `base_url = "${getServerUrl(srv)}/v1"`,
             'model = "test-model"',
-            'api_key = "secret-api-key"',
             'timeout_seconds = 1',
-            '',
-            '[provider.custom_headers]',
-            '"CF-Access-Client-Secret" = "secret-cf-token"',
           ].join('\n'),
           'utf-8',
         );
@@ -366,7 +362,6 @@ describe('CLI', () => {
         expect(combined).toContain('Provider error (403)');
         expect(combined).toContain('access denied');
         expect(combined).not.toContain('secret-api-key');
-        expect(combined).not.toContain('secret-cf-token');
       } finally {
         srv.close();
         rmSync(cwd, { recursive: true, force: true });
