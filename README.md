@@ -260,4 +260,4 @@ npm run synax -- doctor --full
 
 ## License
 
-MIT
+Apache 2.0
