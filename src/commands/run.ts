@@ -104,15 +104,19 @@ export function runCommand(program: Command): void {
           const metadata = providerDescription.metadata;
           const blockedMessage = providerRuntimeBlockedMessage(metadata, providerDescription.normalizedConfig);
 
-          // Extract thinking level from the effective multi-provider config.
+          // Extract thinking level and TUI config from the effective multi-provider config.
           let thinkingLevel: import('../config/schema').ThinkingLevel = 'off';
           let skillMessages: string[] | undefined;
           let skillDiagnostics: SkillDiagnostic[] | undefined;
+          let enableMouse = false;
+          let alternateScreen = true;
           try {
             const effectiveConfig = loadSynaxConfig();
             if (effectiveConfig.active.thinking && effectiveConfig.active.thinking !== 'off') {
               thinkingLevel = effectiveConfig.active.thinking;
             }
+            enableMouse = effectiveConfig.tui?.mouse ?? false;
+            alternateScreen = effectiveConfig.tui?.alternateScreen ?? true;
             if (effectiveConfig.skills.enabled.length > 0) {
               const result = loadSkills(effectiveConfig.skills, repoRoot);
               skillMessages = result.systemMessages;
@@ -139,6 +143,8 @@ export function runCommand(program: Command): void {
           const cwdLabel = compactHome(repoRoot);
           const gitBranch = await currentGitBranch(repoRoot);
           await runInteractiveTui(session, {
+            enableMouse,
+            alternateScreen,
             blockedMessage,
             lastModelOutput: () => lastModelOutput,
             modelLabel,

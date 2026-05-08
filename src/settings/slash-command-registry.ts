@@ -220,6 +220,12 @@ export function registerBuiltinCommands(): void {
       category: 'debug',
       handler: () => ({ handled: false }),
     },
+    {
+      name: 'mouse',
+      description: 'Toggle mouse mode (SGR tracking for wheel scroll)',
+      category: 'navigation',
+      handler: () => ({ handled: true, output: '[synax] mouse toggled' }),
+    },
   ];
 
   for (const cmd of commands) {

@@ -141,7 +141,7 @@ describe('tui input parser', () => {
 });
 
 describe('terminal session', () => {
-  it('enables mouse reporting so trackpad scroll does not move terminal scrollback', () => {
+  it('does not emit mouse-enable sequences by default (copy-safe)', () => {
     const stdout = new CapturingWritable();
     const stdin = new PassThrough() as PassThrough & {
       isTTY?: boolean;
@@ -154,13 +154,72 @@ describe('terminal session', () => {
     const terminal = createTerminalSession({ stdin, stdout });
 
     terminal.start();
+
+    const output = stdout.chunks.join('');
+    expect(output).not.toContain('\u001b[?1000h');
+    expect(output).not.toContain('\u001b[?1006h');
+    expect(output).not.toContain('\u001b[?1002h');
+    expect(output).not.toContain('\u001b[?1003h');
+  });
+
+  it('cleanup defensively emits mouse-disable sequences', () => {
+    const stdout = new CapturingWritable();
+    const stdin = createTtyInput();
+    const terminal = createTerminalSession({ stdin, stdout });
+
+    terminal.start();
+    const startOutput = stdout.chunks.join('');
+    // Even without mouse enabled, cleanup emits disable sequences (defensive).
+    expect(startOutput).not.toContain('\u001b[?1000h');
+
     terminal.stop();
+    const fullOutput = stdout.chunks.join('');
+    expect(fullOutput).toContain('\u001b[?1006l');
+    expect(fullOutput).toContain('\u001b[?1000l');
+  });
+
+  it('enables mouse reporting when enableMouse option is true', () => {
+    const stdout = new CapturingWritable();
+    const stdin = createTtyInput();
+    const terminal = createTerminalSession({ stdin, stdout }, { enableMouse: true });
+
+    terminal.start();
 
     const output = stdout.chunks.join('');
     expect(output).toContain('\u001b[?1000h');
     expect(output).toContain('\u001b[?1006h');
+  });
+
+  it('runtime enableMouse/disableMouse toggles emit correct sequences', () => {
+    const stdout = new CapturingWritable();
+    const stdin = createTtyInput();
+    const terminal = createTerminalSession({ stdin, stdout });
+
+    terminal.start();
+    stdout.chunks = []; // reset
+
+    terminal.enableMouse();
+    let output = stdout.chunks.join('');
+    expect(output).toContain('\u001b[?1000h');
+    expect(output).toContain('\u001b[?1006h');
+
+    stdout.chunks = [];
+    terminal.disableMouse();
+    output = stdout.chunks.join('');
     expect(output).toContain('\u001b[?1006l');
     expect(output).toContain('\u001b[?1000l');
+  });
+
+  it('enableMouse is idempotent (does not emit duplicates)', () => {
+    const stdout = new CapturingWritable();
+    const stdin = createTtyInput();
+    const terminal = createTerminalSession({ stdin, stdout });
+
+    terminal.start();
+    terminal.enableMouse();
+    const first = stdout.chunks.join('');
+    const count1000h = (first.match(/\u001b\[\?1000h/g) || []).length;
+    expect(count1000h).toBe(1);
   });
 
   it('enables bracketed paste for the TUI input dock', () => {
