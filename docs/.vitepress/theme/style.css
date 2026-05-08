@@ -191,8 +191,8 @@
   margin-bottom: 2rem;
 }
 
-/* Terminal preview */
-.landing-terminal {
+/* Measured transcript hero */
+.landing-transcript {
   z-index: 1;
   position: relative;
   max-width: 560px;
