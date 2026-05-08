@@ -83,7 +83,7 @@ exports[`interactive layout visual agreements matches the completed render snaps
                                                                                  │              .    .              │
                                                                                  │                                  │
                                                                                  │Runtime                           │
-                                                                                 │Core        Unloaded              │
+                                                                                 │Core        Complete              │
                                                                                  │Model       —                     │
                                                                                  │Provider    —                     │
                                                                                  │Context     —                     │
@@ -137,8 +137,8 @@ exports[`interactive layout visual agreements matches the narrow terminal fallba
 
   ✽ note Inspecting files before editing.
 
-  ◌ working  Inspecting files before edit…
-
+  ◌ working  Inspecting files before
+               editing.
 
 
 
