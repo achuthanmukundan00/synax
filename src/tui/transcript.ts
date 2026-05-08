@@ -670,7 +670,7 @@ function extractModelProse(detail: string): string {
 /** Render model prose prominently, with full text wrapping and no truncation. */
 function renderModelProse(prose: string, width: number): string[] {
   const lines: string[] = [];
-  const proseWidth = Math.max(20, width - 4);
+  const proseWidth = Math.max(20, width - 13);
   const wrapped = wrapText(prose, proseWidth);
   lines.push(`\u001b[35m※\u001b[0m ${bold('note'.padEnd(10, ' '))} ${wrapped[0]}`);
   for (let i = 1; i < wrapped.length; i += 1) {
@@ -763,7 +763,7 @@ function renderMarkdownBlock(md: string, width: number): string[] {
       continue;
     }
     if (inCodeBlock) {
-      lines.push(`  ${dim(line.slice(0, Math.max(1, width - 4)))}`);
+      lines.push(`  ${dim(line)}`);
       continue;
     }
 
@@ -778,9 +778,9 @@ function renderMarkdownBlock(md: string, width: number): string[] {
     if (heading) {
       const level = heading[1].length;
       const text = heading[2];
-      if (level === 1) lines.push(`\u001b[1;4;37m${clip(text, Math.max(1, width - 4))}\u001b[0m`);
-      else if (level === 2) lines.push(`\u001b[1;37m${clip(text, Math.max(1, width - 4))}\u001b[0m`);
-      else lines.push(`\u001b[1;33m${clip(text, Math.max(1, width - 4))}\u001b[0m`);
+      if (level === 1) lines.push(`\u001b[1;4;37m${text}\u001b[0m`);
+      else if (level === 2) lines.push(`\u001b[1;37m${text}\u001b[0m`);
+      else lines.push(`\u001b[1;33m${text}\u001b[0m`);
       continue;
     }
 
@@ -821,7 +821,7 @@ function renderMarkdownBlock(md: string, width: number): string[] {
 }
 
 /** Render inline Markdown: bold, inline code, and links. */
-function renderInlineMd(text: string, maxWidth: number): string {
+function renderInlineMd(text: string, _maxWidth: number): string {
   let result = text;
   // Bold
   result = result.replace(/[*]{2}(.+?)[*]{2}/g, `\u001b[1;37m$1\u001b[0m`);
@@ -829,7 +829,7 @@ function renderInlineMd(text: string, maxWidth: number): string {
   result = result.replace(/`([^`]+)`/g, `\u001b[33m$1\u001b[0m`);
   // Links (keep text, drop URL)
   result = result.replace(new RegExp(String.raw`\[([^\]]+)\]\([^)]+\)`, 'g'), `\u001b[4;36m$1\u001b[0m`);
-  return clip(result, maxWidth);
+  return result;
 }
 
 /** Render the final model output — uses markdown formatting when applicable,
@@ -847,22 +847,16 @@ function renderReviewOutput(body: string, width: number): string[] {
 
   if (hasMd) {
     const mdBlocks = renderMarkdownBlock(clean, width);
-    const maxMd = 40;
-    const visible = mdBlocks.slice(0, maxMd);
-    for (const line of visible) {
-      lines.push(`  ${clip(line, Math.max(1, width - 4))}`);
-    }
-    if (mdBlocks.length > maxMd) {
-      lines.push(`  ${dim(`… ${mdBlocks.length - maxMd} more lines`)}`);
+    for (const line of mdBlocks) {
+      for (const wrappedLine of wrapText(line, Math.max(1, width - 4))) {
+        lines.push(`  ${wrappedLine}`);
+      }
     }
   } else {
     const resultWidth = Math.max(20, width - 8);
     const wrapped = wrapText(clean, resultWidth);
-    for (const line of wrapped.slice(0, 30)) {
-      lines.push(`  ${clip(line, Math.max(1, width - 4))}`);
-    }
-    if (wrapped.length > 30) {
-      lines.push(`  ${dim(`… ${wrapped.length - 30} more lines`)}`);
+    for (const line of wrapped) {
+      lines.push(`  ${line}`);
     }
   }
   return lines;
