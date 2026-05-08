@@ -1,3 +1,5 @@
+import type { ThinkingLevel } from '../config/schema';
+
 export interface ChatMessage {
   role: 'system' | 'user' | 'assistant';
   content: string;
@@ -127,7 +129,7 @@ export interface NormalizedProviderConfig {
   customHeaders?: Record<string, string>;
   timeoutMs?: number;
   /** Thinking level from active config. When not 'off', providers may enable extended reasoning. */
-  thinkingLevel?: 'off' | 'low' | 'medium' | 'high' | 'auto';
+  thinkingLevel?: ThinkingLevel;
 }
 
 export interface ChatResponse {

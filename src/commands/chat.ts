@@ -46,7 +46,7 @@ export interface ChatSession {
   /** Install a runtime event sink for real-time TUI state updates. */
   setEventSink?: (sink: ((event: import('../agent/events').AgentEvent) => void) | null) => void;
   /** Refresh the session's config reference (called after settings changes). */
-  refreshConfig?: (config: ProjectConfig, thinkingLevel?: 'off' | 'low' | 'medium' | 'high' | 'auto') => void;
+  refreshConfig?: (config: ProjectConfig, thinkingLevel?: import('../config/schema').ThinkingLevel) => void;
 }
 
 export interface ChatTurnReport {
@@ -109,7 +109,7 @@ export function createChatSession(options: {
   repoRoot: string;
   config: ProjectConfig;
   /** Thinking level from effective config. When not 'off', enables provider-level thinking. */
-  thinkingLevel?: 'off' | 'low' | 'medium' | 'high' | 'auto';
+  thinkingLevel?: import('../config/schema').ThinkingLevel;
   onActivity?: (activity: AgentActivity) => void;
   /** Suppress stdout writes (for TUI mode). */
   tui?: boolean;
@@ -126,7 +126,7 @@ export function createChatSession(options: {
   /** Config wrapper: the TUI updates this reference when settings change. */
   const configRef: { current: ProjectConfig } = { current: options.config };
   /** Thinking level ref: the TUI updates this when settings change. */
-  let thinkingLevelRef: 'off' | 'low' | 'medium' | 'high' | 'auto' | undefined = options.thinkingLevel;
+  let thinkingLevelRef: import('../config/schema').ThinkingLevel | undefined = options.thinkingLevel;
 
   const getConfig = (): ProjectConfig => configRef.current;
 
@@ -135,7 +135,7 @@ export function createChatSession(options: {
     setEventSink: (sink) => {
       eventSink = sink;
     },
-    refreshConfig: (config: ProjectConfig, thinkingLevel?: 'off' | 'low' | 'medium' | 'high' | 'auto') => {
+    refreshConfig: (config: ProjectConfig, thinkingLevel?: import('../config/schema').ThinkingLevel) => {
       configRef.current = config;
       if (thinkingLevel !== undefined) thinkingLevelRef = thinkingLevel;
     },
@@ -332,7 +332,7 @@ export function chatCommand(program: Command): void {
       const blockedMessage = providerRuntimeBlockedMessage(metadata, provider);
 
       // Extract thinking level from the effective multi-provider config.
-      let thinkingLevel: 'off' | 'low' | 'medium' | 'high' | 'auto' = 'off';
+      let thinkingLevel: import('../config/schema').ThinkingLevel = 'off';
       let skillMessages: string[] | undefined;
       let skillDiagnostics: SkillDiagnostic[] | undefined;
       try {

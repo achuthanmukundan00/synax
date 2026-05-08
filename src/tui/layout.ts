@@ -527,6 +527,8 @@ function contextUsageBar(run: RunStateSnapshot, width: number): string {
   const barWidth = Math.max(1, width - prefix.length);
   if (!total || total <= 0) return dim(`${prefix}${'░'.repeat(barWidth)}`);
   const ratio = Math.max(0, Math.min(1, used / total));
+  // Hide the bar when usage is negligible (< 10 %) to reduce visual noise.
+  if (ratio < 0.1) return dim(`${prefix}${'░'.repeat(barWidth)}`);
   const filled = Math.round(ratio * barWidth);
   return `${dim(prefix)}${modeColorForRatio(ratio)}${'█'.repeat(filled)}\u001b[0m${dim('░'.repeat(barWidth - filled))}`;
 }

@@ -3,6 +3,7 @@ import type { Writable } from 'node:stream';
 
 const HIDE_CURSOR = '\u001b[?25l';
 const SHOW_CURSOR = '\u001b[?25h';
+const RESET_CURSOR_STYLE = '\u001b[0 q';
 const ALT_SCREEN = '\u001b[?1049h';
 const MAIN_SCREEN = '\u001b[?1049l';
 const CLEAR = '\u001b[2J';
@@ -62,7 +63,7 @@ export function createTerminalSession(streams?: {
     },
     stop(): void {
       if (!isTTY) return;
-      stdout.write(`${DISABLE_BRACKETED_PASTE}${DISABLE_MOUSE}${SHOW_CURSOR}${MAIN_SCREEN}`);
+      stdout.write(`${DISABLE_BRACKETED_PASTE}${DISABLE_MOUSE}${SHOW_CURSOR}${RESET_CURSOR_STYLE}${MAIN_SCREEN}`);
       stdin.setRawMode?.(false);
       stdin.pause();
     },

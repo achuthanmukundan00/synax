@@ -105,7 +105,7 @@ export function runCommand(program: Command): void {
           const blockedMessage = providerRuntimeBlockedMessage(metadata, providerDescription.normalizedConfig);
 
           // Extract thinking level from the effective multi-provider config.
-          let thinkingLevel: 'off' | 'low' | 'medium' | 'high' | 'auto' = 'off';
+          let thinkingLevel: import('../config/schema').ThinkingLevel = 'off';
           let skillMessages: string[] | undefined;
           let skillDiagnostics: SkillDiagnostic[] | undefined;
           try {

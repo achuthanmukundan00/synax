@@ -10,7 +10,7 @@
 
 export type ProviderCompatibility = 'openai-compatible' | 'anthropic-compatible';
 
-export type ThinkingLevel = 'off' | 'low' | 'medium' | 'high' | 'auto';
+export type ThinkingLevel = 'off' | 'low' | 'medium' | 'high' | 'xhigh' | 'auto';
 
 export interface ModelConfig {
   id: string;

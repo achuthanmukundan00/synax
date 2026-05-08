@@ -29,22 +29,32 @@ export function renderTranscript(state: TranscriptRenderState, width: number): s
   const history = state.run.debugHistory;
   const completed = state.run.terminal === 'completed' || state.run.phase === 'completed';
   const isWorking = state.run.phase === 'thinking' && state.run.terminal === 'running';
+  let lastRenderedProse = '';
 
   for (let i = 0; i < history.length; i += 1) {
     const item = history[i];
 
     if (item.kind === 'user') {
       blocks.push(renderUserPrompt(item.detail || item.summary, width));
+      lastRenderedProse = '';
       continue;
     }
 
     if (item.kind === 'model') {
       const prose = extractModelProse(item.detail || item.summary);
+      // Deduplicate adjacent model entries with identical prose.
+      // Streaming delta → final assistant_message can produce near-duplicates;
+      // this catch-all prevents double rendering.
       const isLastModel = i === history.length - 1 || !history.slice(i + 1).some((h) => h.kind === 'model');
+      if (prose && prose === lastRenderedProse && !isLastModel) {
+        continue;
+      }
       if (completed && isLastModel) {
         blocks.push(renderReviewOutput(prose || item.detail || item.summary, width));
+        lastRenderedProse = prose;
       } else if (prose) {
         blocks.push(renderModelProse(prose, width));
+        lastRenderedProse = prose;
       }
       // Model items with only tool-call content (no natural-language prose) are
       // not useful to render; the actual tool calls are rendered as separate entries.
@@ -741,7 +751,31 @@ function extractModelProse(detail: string): string {
     .trim();
   // If the remaining text is itself only a tool-summary line, return empty.
   if (isToolSummaryNote(clean)) return '';
+  // Filter process-chatter that narrates intended future actions.
+  if (isProcessChatter(clean)) return '';
   return clean;
+}
+
+/** Detect agent self-narration / process-chatter that doesn't add factual content.
+ *  These phrases imply future actions that should be visible as tool commands
+ *  or results — not rendered as standalone notes. */
+function isProcessChatter(text: string): boolean {
+  const normalized = text.toLowerCase().trim();
+  // Short stand-alone chatter fragments.
+  if (
+    /^(let me|i'll|i will|i am going to|i need to|i should|let's|we'll|we will)\b/i.test(normalized) &&
+    normalized.length < 180
+  ) {
+    // Check if it reads like a self-narration of intended next actions.
+    const chatterPatterns = [
+      /(?:^|[.!?;]\s+)let me\b.*\b(diff|show|display|print|output|list|check|inspect|run|execute|fetch|get|pull|read|write|edit|commit|push|format|render|view|see|look|verify|confirm)/i,
+      /(?:^|[.!?;]\s+)i'll\b.*\b(show|display|print|output|list|check|inspect|run|execute|fetch|get|pull|read|write|edit|commit|push|format|render|view|see|look|verify|confirm)/i,
+      /(?:^|[.!?;]\s+)i (?:am going to|need to|should)\b.*\b(show|display|print|output|list|check|inspect|run|execute|fetch|get|pull|read|write|edit|commit|push|format|render|view|see|look|verify|confirm)/i,
+      /\bfor completeness\b/i,
+    ];
+    if (chatterPatterns.some((p) => p.test(normalized))) return true;
+  }
+  return false;
 }
 
 /** Render model prose prominently with pink star glyph and full text wrapping. */
@@ -951,10 +985,16 @@ function renderInlineMd(text: string, _maxWidth: number): string {
 /** Render the final model output — uses markdown formatting when applicable,
  *  otherwise renders as plain wrapped text. */
 function renderReviewOutput(body: string, width: number): string[] {
-  const clean = body
+  let clean = body
     .replace(/<think>[\s\S]*?<\/think>/gi, '')
     .replace(/<thinking>[\s\S]*?<\/thinking>/gi, '')
     .replace(/<tool_call>[\s\S]*?<\/tool_call>/gi, '')
+    .trim();
+  // Filter process-chatter lines from the final result.
+  clean = clean
+    .split('\n')
+    .filter((line) => !isProcessChatter(line.trim()))
+    .join('\n')
     .trim();
   if (!clean) return [eventHeader('model', '')];
 

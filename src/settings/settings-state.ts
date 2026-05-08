@@ -295,9 +295,12 @@ function buildModelRows(config: EffectiveSynaxConfig): SettingsRow[] {
   for (const model of provider?.models ?? []) {
     const isActive = model.id === active.model;
     const ctxStr = model.contextWindow ? `ctx ${formatContext(model.contextWindow)}` : '';
-    const thinkStr = model.supportsThinking
-      ? `think ${model.defaultThinkingLevel ?? model.thinkingLevels[0] ?? 'off'}`
-      : 'think n/a';
+    // For the active model row, display the resolved active thinking level.
+    // For inactive rows, display the model's default thinking level.
+    const resolvedThink = isActive
+      ? active.thinking
+      : (model.defaultThinkingLevel ?? model.thinkingLevels[0] ?? undefined);
+    const thinkStr = model.supportsThinking ? `think ${resolvedThink ?? 'off'}` : 'think n/a';
     rows.push({
       id: `model-${model.id}`,
       label: isActive ? `→ ${model.id}` : `  ${model.id}`,
