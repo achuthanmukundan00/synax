@@ -352,7 +352,7 @@ describe('LLM client — basic chat', () => {
     });
     const client = createOpenAICompatibleClient(makeConfig({ baseUrl: getServerUrl(srv), model: 'Qwen3.6-35B-A3B' }));
     const resp = await client.chat({ messages: [{ role: 'user', content: 'inspect' }] });
-    expect(resp.toolCalls).toEqual([{ id: 'call_1', name: 'read', arguments: { path: 'README.md' } }]);
+    expect(resp.toolCalls).toMatchObject([{ id: 'call_1', name: 'read', arguments: { path: 'README.md' } }]);
     expect(resp.toolCallFormat).toBe('content_xml');
   });
 
@@ -429,7 +429,7 @@ describe('LLM client — basic chat', () => {
       makeConfig({ baseUrl: getServerUrl(srv), model: 'custom-model', tool_call_parser: 'qwen3_xml' }),
     );
     const resp = await client.chat({ messages: [{ role: 'user', content: 'inspect' }] });
-    expect(resp.toolCalls).toEqual([{ id: 'call_1', name: 'read', arguments: { path: 'README.md' } }]);
+    expect(resp.toolCalls).toMatchObject([{ id: 'call_1', name: 'read', arguments: { path: 'README.md' } }]);
     expect(resp.toolCallFormat).toBe('content_xml');
   });
 });

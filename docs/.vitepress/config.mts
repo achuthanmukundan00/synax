@@ -28,6 +28,7 @@ export default defineConfig({
           { text: 'Sessions', link: '/guide/sessions' },
           { text: 'Commands', link: '/guide/commands' },
           { text: 'Agent Loop and Tools', link: '/guide/agent-loop' },
+          { text: 'Tool-Call Parsing', link: '/guide/tool-call-parsing' },
           { text: 'Safety and Context', link: '/guide/safety-context' },
           { text: 'Compatibility Reports', link: '/guide/compatibility' },
           { text: 'Development', link: '/guide/development' },
