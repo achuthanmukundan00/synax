@@ -13,7 +13,7 @@ import {
 } from '../commands/chat';
 import { stdin as defaultStdin } from 'node:process';
 import { DiffRenderer } from './diff-renderer';
-import { maxHistoryScrollOffset, renderLayout, type InteractiveViewState } from './layout';
+import { inputCursorPosition, maxHistoryScrollOffset, renderLayout, type InteractiveViewState } from './layout';
 import { createInputParser, MAX_INPUT_CHARS } from './input';
 import { createTerminalSession, type InputStreamLike } from './terminal';
 import type { Writable } from 'node:stream';
@@ -193,6 +193,7 @@ export async function runInteractiveTui(
       const settingsLines = renderSettings(settingsState, terminal.columns, terminal.rows);
       const out = diff.render(settingsLines, terminal.columns, terminal.rows);
       if (out || force) terminal.synchronizedWrite(out || '');
+      terminal.write('\u001b[?25l');
       return;
     }
 
@@ -201,6 +202,7 @@ export async function runInteractiveTui(
       const resumeLines = renderResumePicker(resumeState, terminal.columns, terminal.rows);
       const out = diff.render(resumeLines, terminal.columns, terminal.rows);
       if (out || force) terminal.synchronizedWrite(out || '');
+      terminal.write('\u001b[?25l');
       return;
     }
 
@@ -214,6 +216,11 @@ export async function runInteractiveTui(
     const out = diff.render(lines, terminal.columns, terminal.rows);
     if (!out && !force) return;
     terminal.synchronizedWrite(out || '');
+
+    // Position and show cursor beam in the input box.
+    const cursor = inputCursorPosition(viewState().objectiveInput, terminal.columns, terminal.rows);
+    // Terminal cursor positions are 1-indexed.
+    terminal.write(`\u001b[${cursor.row + 1};${cursor.col + 1}H\u001b[?25h`);
   };
 
   const finish = (): void => {

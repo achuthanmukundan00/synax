@@ -531,16 +531,19 @@ function assistantMessage(response: ChatResponse, settings?: ContextBudgetSettin
     };
   }
 
-  return {
+  const message: AgentMessage = {
     role: 'assistant',
     content,
     ...reasoningFields,
-    tool_calls: response.toolCalls.map((call) => ({
+  };
+  if (response.toolCalls.length > 0) {
+    message.tool_calls = response.toolCalls.map((call) => ({
       id: call.id,
       type: 'function',
       function: { name: call.name, arguments: JSON.stringify(call.arguments) },
-    })),
-  };
+    }));
+  }
+  return message;
 }
 
 async function executeAgentTool(
