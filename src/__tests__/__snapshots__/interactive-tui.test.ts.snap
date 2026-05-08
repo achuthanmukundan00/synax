@@ -29,10 +29,10 @@ exports[`interactive layout visual agreements matches the active docked-core ren
 
 
 
-┌─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
-│ continue polishing the feed                                                                                         │
-│                                                                                                                     │
-└ Enter submit | Ctrl+C exit | /help | !cmd shell ────────────────────────────────────────────────────────────────────┘"
+╔═════════════════════════════════════════════════════════════════════════════════════════════════════════════════════╗
+║ continue polishing the feed                                                                                         ║
+║                                                                                                                     ║
+╚ Enter submit | Ctrl+C exit | /help | !cmd shell ════════════════════════════════════════════════════════════════════╝"
 `;
 
 exports[`interactive layout visual agreements matches the blocked budget-exhausted render snapshot 1`] = `
@@ -65,9 +65,9 @@ exports[`interactive layout visual agreements matches the blocked budget-exhaust
 
 
 
-┌─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
-│                                                                                                                     │
-└ Enter submit | Ctrl+C exit | /help | !cmd shell ────────────────────────────────────────────────────────────────────┘"
+╔═════════════════════════════════════════════════════════════════════════════════════════════════════════════════════╗
+║                                                                                                                     ║
+╚ Enter submit | Ctrl+C exit | /help | !cmd shell ════════════════════════════════════════════════════════════════════╝"
 `;
 
 exports[`interactive layout visual agreements matches the completed render snapshot 1`] = `
@@ -100,9 +100,9 @@ exports[`interactive layout visual agreements matches the completed render snaps
 
 
 
-┌─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
-│                                                                                                                     │
-└ Enter submit | Ctrl+C exit | /help | !cmd shell ────────────────────────────────────────────────────────────────────┘"
+╔═════════════════════════════════════════════════════════════════════════════════════════════════════════════════════╗
+║                                                                                                                     ║
+╚ Enter submit | Ctrl+C exit | /help | !cmd shell ════════════════════════════════════════════════════════════════════╝"
 `;
 
 exports[`interactive layout visual agreements matches the idle large-core render snapshot 1`] = `
@@ -127,9 +127,9 @@ exports[`interactive layout visual agreements matches the idle large-core render
 
 
 
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                                                                             │
-└ Enter submit | Ctrl+C exit | /help | !cmd shell ────────────────────────────┘"
+╔═════════════════════════════════════════════════════════════════════════════╗
+║                                                                             ║
+╚ Enter submit | Ctrl+C exit | /help | !cmd shell ════════════════════════════╝"
 `;
 
 exports[`interactive layout visual agreements matches the narrow terminal fallback snapshot 1`] = `
@@ -147,8 +147,8 @@ exports[`interactive layout visual agreements matches the narrow terminal fallba
 
 
 
-┌─────────────────────────────────────────────────────┐
-│ short task                                          │
-│                                                     │
-└ Enter submit | Ctrl+C exit | /help | !cmd shell ────┘"
+╔═════════════════════════════════════════════════════╗
+║ short task                                          ║
+║                                                     ║
+╚ Enter submit | Ctrl+C exit | /help | !cmd shell ════╝"
 `;
