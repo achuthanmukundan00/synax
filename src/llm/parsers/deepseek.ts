@@ -97,13 +97,15 @@ function parseHermesStyleBlocks(
     const block = delimited.blocks[i].trim();
     if (!block) continue;
 
+    const nonToolContent = [delimited.before, ...delimited.between, delimited.after].filter(Boolean).join('\n').trim();
+
     const parsed = safeJsonParse(block);
     if (!parsed.ok) {
       return {
         ok: false,
         parserId,
         calls: [],
-        content: `${delimited.before}\n${delimited.after}`.trim(),
+        content: nonToolContent,
         error: `DeepSeek tool_call block ${i + 1}: ${parsed.error}`,
       };
     }
@@ -113,7 +115,7 @@ function parseHermesStyleBlocks(
         ok: false,
         parserId,
         calls: [],
-        content: `${delimited.before}\n${delimited.after}`.trim(),
+        content: nonToolContent,
         error: `DeepSeek tool_call block ${i + 1}: expected JSON object`,
       };
     }
@@ -125,7 +127,7 @@ function parseHermesStyleBlocks(
         ok: false,
         parserId,
         calls: [],
-        content: `${delimited.before}\n${delimited.after}`.trim(),
+        content: nonToolContent,
         error: `DeepSeek tool_call block ${i + 1}: missing "name"`,
       };
     }
