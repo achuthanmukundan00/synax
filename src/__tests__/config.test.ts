@@ -688,6 +688,48 @@ supports_thinking = false
     expect(loaded.config.contextBudgetTokens).toBe(1_000_000);
   });
 
+  it('uses provider preset context windows for legacy provider config when context is not explicit', () => {
+    const localPath = join(TMP, '.synax.toml');
+    writeFileSync(
+      localPath,
+      `
+[provider]
+preset = "deepseek"
+model = "deepseek-chat"
+api_key = "sk-test"
+`,
+      'utf-8',
+    );
+
+    const loaded = loadProjectConfig(TMP);
+
+    expect(loaded.errors).toEqual([]);
+    expect(loaded.config.contextWindowTokens).toBe(1_000_000);
+    expect(loaded.config.contextBudgetTokens).toBe(1_000_000);
+  });
+
+  it('preserves explicit context windows over provider preset defaults', () => {
+    const localPath = join(TMP, '.synax.toml');
+    writeFileSync(
+      localPath,
+      `
+context_window_tokens = 65536
+
+[provider]
+preset = "deepseek"
+model = "deepseek-chat"
+api_key = "sk-test"
+`,
+      'utf-8',
+    );
+
+    const loaded = loadProjectConfig(TMP);
+
+    expect(loaded.errors).toEqual([]);
+    expect(loaded.config.contextWindowTokens).toBe(65_536);
+    expect(loaded.config.contextBudgetTokens).toBe(65_536);
+  });
+
   it('preserves core visual profile through effective config loading', () => {
     const localPath = join(TMP, '.synax.toml');
     writeFileSync(

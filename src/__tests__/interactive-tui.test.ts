@@ -998,10 +998,10 @@ describe('interactive layout visual agreements', () => {
     expect(plain).not.toContain('Directive');
     expect(plain).toContain('The renderer now keeps the prompt inside a proper box.');
     expect(plain).not.toContain('Qwen3.6-35B-A3B-UD-IQ3_XXS.gguf');
-    expect(dock[0]).toMatch(/^┌─+ ~\/workspace\/git\/\.worktrees\/synax-tui {2}dev\/tui ┐\s*$/);
-    expect(dock[1]).toMatch(/^│ Implement fixed-footprint reactor core rendering\s+│\s*$/);
-    expect(dock[2]).toMatch(/^│\s+│\s*$/);
-    expect(dock[3]).toMatch(/^└ Enter submit \| Ctrl\+C exit \| \/help \| !cmd shell ─+┘\s*$/);
+    expect(dock[0]).toMatch(/^╔═+ ~\/workspace\/git\/\.worktrees\/synax-tui {2}dev\/tui ╗\s*$/);
+    expect(dock[1]).toMatch(/^║ Implement fixed-footprint reactor core rendering\s+║\s*$/);
+    expect(dock[2]).toMatch(/^║\s+║\s*$/);
+    expect(dock[3]).toMatch(/^╚ Enter submit \| Ctrl\+C exit \| \/help \| !cmd shell ═+╝\s*$/);
   });
 
   it('keeps the input dock inside the terminal write-safe column', () => {
@@ -1021,10 +1021,10 @@ describe('interactive layout visual agreements', () => {
 
     expect(lines).toHaveLength(24);
     expect(lines.every((line) => line.length === 90)).toBe(true);
-    expect(dock[0].endsWith('┐ ')).toBe(true);
-    expect(dock[1].endsWith('│ ')).toBe(true);
-    expect(dock[2].endsWith('│ ')).toBe(true);
-    expect(dock[3].endsWith('┘ ')).toBe(true);
+    expect(dock[0].endsWith('╗ ')).toBe(true);
+    expect(dock[1].endsWith('║ ')).toBe(true);
+    expect(dock[2].endsWith('║ ')).toBe(true);
+    expect(dock[3].endsWith('╝ ')).toBe(true);
   });
 
   it('reserves a blank gutter between long transcript output and the input dock', () => {
@@ -1051,9 +1051,9 @@ describe('interactive layout visual agreements', () => {
     ).map(stripAnsi);
 
     expect(lines.at(-4)?.trim()).toBe('');
-    expect(lines.at(-3)?.trimStart().startsWith('┌')).toBe(true);
-    expect(lines.at(-2)).toMatch(/^│\s+│\s*$/);
-    expect(lines.at(-1)?.trimStart().startsWith('└ Enter submit')).toBe(true);
+    expect(lines.at(-3)?.trimStart().startsWith('╔')).toBe(true);
+    expect(lines.at(-2)).toMatch(/^║\s+║\s*$/);
+    expect(lines.at(-1)?.trimStart().startsWith('╚ Enter submit')).toBe(true);
   });
 
   it('renders unloaded core as inert and still', () => {

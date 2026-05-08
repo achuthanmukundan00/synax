@@ -160,6 +160,40 @@ function providerPresetDefaults(preset: string): ProviderConfig {
   }
 }
 
+function providerPresetContextWindowDefault(preset: string): number | undefined {
+  switch (preset) {
+    case 'deepseek':
+      return 1_000_000;
+    case 'groq':
+    case 'mistral':
+    case 'together':
+      return 128_000;
+    case 'anthropic':
+      return 200_000;
+    case 'openrouter':
+      return 64_000;
+    case 'openai':
+      return 128_000;
+    case 'relay':
+      return 88_000;
+    default:
+      return undefined;
+  }
+}
+
+function hasExplicitContextWindow(config: ProjectConfig): boolean {
+  return (
+    config.contextBudgetTokens !== undefined ||
+    config.context_budget_tokens !== undefined ||
+    config.contextWindowTokens !== undefined ||
+    config.context_window_tokens !== undefined ||
+    config.agent?.contextBudgetTokens !== undefined ||
+    config.agent?.context_budget_tokens !== undefined ||
+    config.agent?.contextWindowTokens !== undefined ||
+    config.agent?.context_window_tokens !== undefined
+  );
+}
+
 /**
  * Convert legacy ProjectConfig provider section to ProviderFactoryInput
  * for the new provider factory. Preserves backward compatibility.
@@ -820,6 +854,10 @@ export function loadProjectConfig(baseDir?: string): LoadProjectConfigResult {
       errors.push({ path: discoveredPath, message: `Failed to parse TOML: ${(err as Error).message}` });
     }
   }
+  const hasExplicitContextConfig =
+    hasExplicitContextWindow(userConfig) ||
+    hasExplicitContextWindow(config) ||
+    process.env.SYNAX_CONTEXT_BUDGET_TOKENS !== undefined;
   if (hasExtendedSettings) {
     const effectiveSettings = loadSynaxConfig(baseDir);
     config = applyEffectiveSynaxConfigToProjectConfig(config, effectiveSettings);
@@ -861,6 +899,13 @@ export function loadProjectConfig(baseDir?: string): LoadProjectConfigResult {
     },
     errors,
   );
+  if (!hasExtendedSettings && !hasExplicitContextConfig) {
+    const providerContextWindow = providerPresetContextWindowDefault(activeProviderPreset);
+    if (providerContextWindow !== undefined) {
+      mergedConfig.contextWindowTokens = providerContextWindow;
+      mergedConfig.contextBudgetTokens = providerContextWindow;
+    }
+  }
   const validationErrors = validateConfig(mergedConfig);
   errors.push(...validationErrors);
   return {
