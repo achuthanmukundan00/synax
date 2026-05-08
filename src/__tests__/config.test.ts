@@ -459,15 +459,19 @@ thinking = "extreme"
     expect(errors).toHaveLength(0);
   });
 
-  it('drops providers without compatibility field', () => {
+  it('defaults compatibility to openai-compatible when omitted', () => {
     const toml = `
-[providers.broken]
-name = "Broken"
-# missing compatibility and base_url
+[providers.custom]
+name = "Custom Provider"
+base_url = "http://127.0.0.1:8080/v1"
+
+[[providers.custom.models]]
+id = "local-model"
 `;
     const { config, errors } = parseSynaxToml(toml);
-    // Provider without compatibility is silently dropped by the parser.
-    expect(config.providers?.broken).toBeUndefined();
+    // Providers without explicit compatibility no longer get silently dropped.
+    expect(config.providers?.custom).toBeDefined();
+    expect(config.providers?.custom?.compatibility).toBe('openai-compatible');
     expect(errors).toHaveLength(0);
   });
 

@@ -251,9 +251,7 @@ function buildModelRows(config: EffectiveSynaxConfig): SettingsRow[] {
     label: 'Active Provider',
     value: provider?.name ?? active.provider,
     kind: 'select',
-    options: Object.values(config.providers)
-      .filter((p) => p.enabled)
-      .map((p) => p.id),
+    options: selectableProviderIds(config),
   });
 
   rows.push({
@@ -549,11 +547,8 @@ function handleSelect(state: SettingsState, row: SettingsRow): SettingsState {
   const next = { ...state, dirty: true };
 
   if (row.id === 'active-provider') {
-    const providerIds = Object.values(next.config.providers)
-      .filter((provider) => provider.enabled)
-      .map((provider) => provider.id);
     next.config = buildConfigUpdate(next.config, {
-      activeProvider: nextOption(next.config.active.provider, providerIds),
+      activeProvider: nextOption(next.config.active.provider, selectableProviderIds(next.config)),
     });
   }
 
@@ -590,6 +585,12 @@ function nextOption(current: string, options: string[]): string {
   const currentIndex = options.indexOf(current);
   if (currentIndex < 0) return options[0];
   return options[(currentIndex + 1) % options.length];
+}
+
+function selectableProviderIds(config: EffectiveSynaxConfig): string[] {
+  return Object.values(config.providers)
+    .filter((provider) => provider.baseUrl.trim() && provider.models.length > 0)
+    .map((provider) => provider.id);
 }
 
 function applyTextCommit(state: SettingsState, rowId: string, value: string): SettingsState {
