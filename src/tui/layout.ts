@@ -83,8 +83,10 @@ export function maxHistoryScrollOffset(state: InteractiveViewState, _cols: numbe
   const panelHeight = inputDockHeight(state.objectiveInput, renderWidth, maxInputDockBodyLines(height));
   const bodyHeight = Math.max(1, height - panelHeight);
   const visibleRows = Math.max(1, bodyHeight - 3);
-  const estimatedLines = state.run.debugHistory.length * 4;
-  return Math.max(0, estimatedLines - visibleRows);
+  const sideWidth = operationalSideWidth(renderWidth, bodyHeight);
+  const transcriptWidth = sideWidth > 0 ? renderWidth - sideWidth - 5 : renderWidth - 4;
+  const transcriptLines = renderTranscript(state, Math.max(24, transcriptWidth));
+  return Math.max(0, transcriptLines.length - visibleRows);
 }
 
 function renderWelcome(lines: string[], width: number, bodyHeight: number, state: InteractiveViewState): void {
@@ -165,8 +167,7 @@ function elapsed(startedAtMs: number, nowMs: number): string {
 }
 
 function clip(text: string, width: number): string {
-  const visible = stripAnsi(text);
-  if (visible.length <= width) return text;
+  if (visibleLength(text) <= width) return text;
   const target = Math.max(0, width - 1);
   let visibleCount = 0;
   let out = '';
@@ -191,9 +192,9 @@ function clip(text: string, width: number): string {
 }
 
 function pad(line: string, width: number): string {
-  const visible = stripAnsi(line);
-  if (visible.length >= width) return line;
-  return `${line}${' '.repeat(width - visible.length)}`;
+  const visible = visibleLength(line);
+  if (visible >= width) return line;
+  return `${line}${' '.repeat(width - visible)}`;
 }
 
 function sliceVisible(line: string, start: number, end: number): string {
@@ -227,6 +228,10 @@ function sliceVisible(line: string, start: number, end: number): string {
 function stripAnsi(input: string): string {
   // eslint-disable-next-line no-control-regex
   return input.replace(/\u001b\[[0-9;]*m/g, '');
+}
+
+function visibleLength(input: string): number {
+  return stripAnsi(input).length;
 }
 
 function wrapInputText(text: string, maxWidth: number): string[] {
@@ -327,12 +332,15 @@ function renderDirectivePanel(
 
   const label = metadataLabel ? ` ${truncateMiddle(metadataLabel, Math.max(4, inner - 6))} ` : '';
   const topFill = Math.max(0, inner - label.length);
-  const helpText = 'Enter submit  Ctrl+C exit  /help  !cmd shell';
+  const helpText = 'Enter submit | Ctrl+C exit | /help | !cmd shell';
   const bottomFill = Math.max(0, inner - helpText.length - 2);
+
+  const placeholder = hasInput ? '' : dimI('Ask Synax to inspect, edit, test, or commit…');
+  const displayBody = hasInput ? body : [placeholder || ''];
 
   return [
     `${dim('┌')}${dim('─'.repeat(topFill))}${label ? dim(label) : ''}${dim('┐')}`,
-    ...body.map((line) => `${dim('│')} ${clip(line, inner - 2).padEnd(inner - 2, ' ')} ${dim('│')}`),
+    ...displayBody.map((line) => `${dim('│')} ${pad(clip(line, inner - 2), inner - 2)} ${dim('│')}`),
     `${dim('└')} ${dim(helpText)} ${dim('─'.repeat(bottomFill))}${dim('┘')}`,
   ];
 }
@@ -410,16 +418,26 @@ function renderTelemetry(state: InteractiveViewState, width: number): string[] {
 function runtimeTelemetryRows(state: InteractiveViewState, width: number): string[] {
   const run = state.run;
   const model = state.modelLabel || run.modelId || modelFromProvider(run.providerLabel);
+  const friendlyModel = model ? friendlyModelDisplayName(model) : '';
+  const route = routeDisplayLine(state.endpointLabel, state.modelLabel, run);
   const provider = providerLabel(state.endpointLabel, run);
   const context = contextLine(run);
   const valueWidth = Math.max(4, width - 12);
 
-  return [
+  const rows = [
     instrumentRow('Core', run.coreLoaded || model ? 'Loaded' : 'Unloaded', width, { color: modeColor(state.coreMode) }),
-    instrumentRow('Model', model ? truncateMiddle(model, valueWidth) : '—', width, { dimValue: !model }),
+    instrumentRow('Model', friendlyModel ? truncateMiddle(friendlyModel, valueWidth) : '—', width, {
+      dimValue: !model,
+    }),
+  ];
+  if (route && route !== model) {
+    rows.push(instrumentRow('Route', truncateMiddle(route, valueWidth), width, { dimValue: true }));
+  }
+  rows.push(
     instrumentRow('Provider', provider === 'unknown' ? '—' : provider, width, { dimValue: provider === 'unknown' }),
     instrumentRow('Context', context, width, { dimValue: context === '—' }),
-  ];
+  );
+  return rows;
 }
 
 function sessionTelemetryRows(run: RunStateSnapshot, width: number): string[] {
@@ -453,13 +471,15 @@ function put(lines: string[], y: number, x: number, text: string, width: number)
   if (y < 0 || y >= lines.length || x >= width) return;
   const base = pad(lines[y], width);
   const left = sliceVisible(base, 0, Math.max(0, x));
-  const rightStart = Math.min(width, x + stripAnsi(text).length);
+  const rightStart = Math.min(width, x + visibleLength(text));
   const right = sliceVisible(base, rightStart, width);
   lines[y] = `${left}${text}${right}`;
 }
 
 function phaseLabel(phase: string): string {
+  if (phase === 'thinking') return 'Working';
   if (phase === 'tool_execution') return 'Tool';
+  if (phase === 'completed') return 'Ready';
   if (phase === 'budget_exhausted') return 'Budget exhausted';
   return `${phase.slice(0, 1).toUpperCase()}${phase.slice(1)}`;
 }
@@ -503,12 +523,12 @@ function contextLine(run: RunStateSnapshot): string {
 function contextUsageBar(run: RunStateSnapshot, width: number): string {
   const total = run.contextWindowTokens;
   const used = run.contextUsedTokens ?? 0;
-  const barWidth = Math.max(8, width - 2);
-  if (!total || total <= 0) return dim(`[${'─'.repeat(barWidth)}]`);
+  const prefix = 'ctx ';
+  const barWidth = Math.max(1, width - prefix.length);
+  if (!total || total <= 0) return dim(`${prefix}${'░'.repeat(barWidth)}`);
   const ratio = Math.max(0, Math.min(1, used / total));
   const filled = Math.round(ratio * barWidth);
-  const glyph = ratio > 0.85 ? '━' : '━';
-  return `${dim('ctx ')}${modeColorForRatio(ratio)}${glyph.repeat(filled)}\u001b[0m${dim('─'.repeat(barWidth - filled + 1))}`;
+  return `${dim(prefix)}${modeColorForRatio(ratio)}${'█'.repeat(filled)}\u001b[0m${dim('░'.repeat(barWidth - filled))}`;
 }
 
 function instrumentRow(
@@ -548,7 +568,7 @@ function modeColorForRatio(ratio: number): string {
 }
 
 function centerVisible(line: string, width: number): string {
-  const visible = stripAnsi(line).length;
+  const visible = visibleLength(line);
   if (visible >= width) return clip(line, width);
   const left = Math.floor((width - visible) / 2);
   return `${' '.repeat(left)}${line}${' '.repeat(width - visible - left)}`;
@@ -576,6 +596,44 @@ function locationLabel(cwdLabel?: string, gitBranch?: string): string | undefine
   return `${cwdLabel}  ${gitBranch}`;
 }
 
+/** Derive a friendly human-readable model name from a raw model ID.
+ *  e.g. "baidu/cobuddy:free" → "Cobuddy: Free" */
+function friendlyModelDisplayName(modelId: string): string {
+  if (!modelId) return '';
+  let name = modelId;
+  // Strip provider namespace prefix
+  const lastSlash = name.lastIndexOf('/');
+  if (lastSlash >= 0 && lastSlash < name.length - 1) {
+    name = name.slice(lastSlash + 1);
+  }
+  // Make separators readable
+  name = name.replace(/-/g, ' ');
+  name = name.replace(/_/g, ' ');
+  name = name.replace(/:/g, ': ');
+  // Capitalize first letter of each word
+  name = name.replace(/\b\w/g, (c) => c.toUpperCase());
+  // Collapse multiple spaces
+  name = name.replace(/\s+/g, ' ').trim();
+  return name;
+}
+
+/** Build a route display line showing provider and raw model ID. */
+function routeDisplayLine(
+  _endpointLabel: string | undefined,
+  modelLabel: string | undefined,
+  run: RunStateSnapshot,
+): string {
+  const providerName = run.providerName && run.providerName !== 'unknown' ? run.providerName : '';
+  const model = modelLabel || run.modelId || '';
+  if (!model) return '';
+  if (providerName) return `${providerName} · ${model}`;
+  return model;
+}
+
 function dim(text: string): string {
   return `\u001b[90m${text}\u001b[0m`;
+}
+
+function dimI(text: string): string {
+  return `\u001b[3;90m${text}\u001b[0m`;
 }

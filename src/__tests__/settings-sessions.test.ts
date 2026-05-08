@@ -651,9 +651,10 @@ describe('transcript rendering', () => {
     const lines = renderTranscript({ run }, 80).map(stripAll);
     const text = lines.join('\n');
 
-    // Compressed mode: command line shown with exit status, no separate exit row
+    // Compressed mode: command line shown with ok status, exit 0 suppressed.
     expect(text).toContain('$ git diff --cached --stat');
-    expect(text).toContain('exit 0');
+    expect(text).toContain('ok');
+    expect(text).not.toContain('exit 0');
     expect(text).toContain('git diff --cached --stat');
     // Should show changed-files summary from diff --stat
     expect(text).toContain('changed');
@@ -703,6 +704,35 @@ describe('transcript rendering', () => {
     expect(text).toContain('4.4s');
     // Failed output should be visible
     expect(text).toContain('FAIL');
+  });
+
+  it('renders thinking text and the full terminal issue with a next action', () => {
+    const issue = `Provider error (400): DeepSeek rejected the request after many reads.\n${'context line '.repeat(40)}`;
+    const run: RunStateSnapshot = {
+      ...createInitialRunStateSnapshot(0),
+      terminal: 'failed',
+      phase: 'error',
+      terminalIssue: issue,
+      debugHistory: [
+        {
+          atMs: 0,
+          kind: 'model',
+          summary: 'model response',
+          detail: '<thinking>checking repository context</thinking>\nI will inspect the config.',
+        },
+      ],
+    };
+
+    const lines = renderTranscript({ run }, 80).map(stripAll);
+    const text = lines.join('\n');
+
+    expect(text).toContain('checking repository context');
+    expect(text).toContain('I will inspect the config.');
+    expect(text).toContain('error      terminal issue');
+    expect(text).toContain('check provider/server/config, then rerun');
+    expect(text).toContain('DeepSeek rejected the request after many');
+    expect(text).toContain('reads.');
+    expect(text).toContain('context line');
   });
 
   it('right panel title is Synax Core', () => {

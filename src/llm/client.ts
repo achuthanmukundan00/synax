@@ -119,8 +119,8 @@ function parseErrorResponse(status: number, bodyText: string): LlmError {
       detail = String((parsed as Record<string, unknown>).error);
     }
   } catch {
-    // Not JSON — use raw body (truncated)
-    detail = bodyText.trim().slice(0, 500) || undefined;
+    // Not JSON — use the raw body so provider failures remain diagnosable.
+    detail = bodyText.trim() || undefined;
   }
 
   const type = classifyStatus(status);
@@ -154,7 +154,7 @@ function parseSuccessResponse(bodyText: string, parserMode: ToolCallParserMode):
   const rawContent = choice?.message?.content ?? '';
   // Preserve raw content: thinking tags (<think>/<thinking>) are kept in the
   // stored content so Qwen-style reasoning is echoed back to the model.
-  // Tool-call parsers sanitize internally; the TUI display layer strips tags.
+  // Tool-call parsers sanitize internally; the transcript display layer surfaces tags.
   const content = rawContent;
   const reasoningContent = firstReasoningContent(choice?.message);
   const finishReason = choice?.finish_reason ?? null;
@@ -192,6 +192,158 @@ function parseSuccessResponse(bodyText: string, parserMode: ToolCallParserMode):
         }
       : null,
   };
+}
+
+async function dispatchStreamingRequest(
+  url: string,
+  body: unknown,
+  headers: Record<string, string>,
+  timeoutMs: number,
+  onDelta: NonNullable<ChatOptions['onDelta']>,
+): Promise<{ status: number; bodyText: string; headers: Record<string, string> }> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { ...headers, Accept: 'text/event-stream, application/json' },
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+    const respHeaders: Record<string, string> = {};
+    res.headers.forEach((v, k) => {
+      respHeaders[k] = v;
+    });
+    if (!res.ok || !res.body) {
+      clearTimeout(timer);
+      return { status: res.status, bodyText: await res.text(), headers: respHeaders };
+    }
+
+    const parsed = await readOpenAIStream(res.body, onDelta);
+    clearTimeout(timer);
+    return { status: res.status, bodyText: JSON.stringify(parsed), headers: respHeaders };
+  } catch (err) {
+    clearTimeout(timer);
+    const msg = describeNetworkError(err);
+    if (err instanceof DOMException && err.name === 'AbortError') {
+      throw providerError('timeout', `Request timed out after ${timeoutMs}ms`, { detail: msg });
+    }
+    if (msg.includes('ECONNREFUSED') || msg.includes('ENOTFOUND') || msg.includes('connect ECONNREFUSED')) {
+      throw providerError('connection', `Connection failed: ${msg}`, { retryable: true, detail: msg });
+    }
+    throw providerError('connection', `Network error: ${msg}`, { retryable: true, detail: msg });
+  }
+}
+
+async function readOpenAIStream(
+  body: ReadableStream<Uint8Array>,
+  onDelta: NonNullable<ChatOptions['onDelta']>,
+): Promise<unknown> {
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let content = '';
+  let reasoningContent = '';
+  let model = '';
+  let finishReason: string | null = null;
+  let usage: unknown;
+  const toolCalls = new Map<number, { id?: string; name?: string; arguments: string }>();
+
+  for (;;) {
+    const { value, done } = await reader.read();
+    buffer += decoder.decode(value, { stream: !done });
+    const parts = buffer.split(/\r?\n\r?\n/);
+    buffer = parts.pop() ?? '';
+    for (const part of parts) {
+      const payloads = part
+        .split(/\r?\n/)
+        .filter((line) => line.startsWith('data:'))
+        .map((line) => line.slice(5).trim());
+      for (const payload of payloads) {
+        if (!payload || payload === '[DONE]') continue;
+        const parsed = JSON.parse(payload) as StreamChunk;
+        if (parsed.model) model = parsed.model;
+        if (parsed.usage) usage = parsed.usage;
+        const choice = parsed.choices?.[0];
+        if (!choice) continue;
+        if (choice.finish_reason !== undefined) finishReason = choice.finish_reason;
+        const delta = choice.delta ?? {};
+        const contentDelta = delta.content ?? '';
+        const reasoningDelta = delta.reasoning_content ?? delta.reasoning ?? delta.reasoning_text ?? '';
+        if (reasoningDelta) {
+          reasoningContent += reasoningDelta;
+          onDelta({ reasoningContent: reasoningDelta });
+        }
+        if (contentDelta) {
+          content += contentDelta;
+          onDelta({ content: contentDelta });
+        }
+        collectToolCallDeltas(toolCalls, delta.tool_calls);
+      }
+    }
+    if (done) break;
+  }
+
+  return {
+    model,
+    choices: [
+      {
+        message: {
+          role: 'assistant',
+          content,
+          reasoning_content: reasoningContent || undefined,
+          tool_calls: Array.from(toolCalls.entries()).map(([, call], index) => ({
+            id: call.id ?? `call_${index}`,
+            type: 'function',
+            function: { name: call.name ?? '', arguments: call.arguments },
+          })),
+        },
+        finish_reason: finishReason,
+      },
+    ],
+    usage,
+  };
+}
+
+interface StreamChunk {
+  model?: string;
+  choices?: Array<{
+    delta?: {
+      content?: string;
+      reasoning_content?: string;
+      reasoning?: string;
+      reasoning_text?: string;
+      tool_calls?: Array<{
+        index?: number;
+        id?: string;
+        function?: {
+          name?: string;
+          arguments?: string;
+        };
+      }>;
+    };
+    finish_reason?: string | null;
+  }>;
+  usage?: unknown;
+}
+
+type StreamToolCallDelta = NonNullable<NonNullable<StreamChunk['choices']>[number]['delta']>['tool_calls'];
+
+function collectToolCallDeltas(
+  toolCalls: Map<number, { id?: string; name?: string; arguments: string }>,
+  deltas: StreamToolCallDelta,
+): void {
+  if (!Array.isArray(deltas)) return;
+  for (const delta of deltas) {
+    const index = typeof delta.index === 'number' ? delta.index : toolCalls.size;
+    const current = toolCalls.get(index) ?? { arguments: '' };
+    toolCalls.set(index, {
+      id: delta.id ?? current.id,
+      name: delta.function?.name ?? current.name,
+      arguments: `${current.arguments}${delta.function?.arguments ?? ''}`,
+    });
+  }
 }
 
 function modelToolCallParseError(message: string): Error {
@@ -263,7 +415,7 @@ export function createOpenAICompatibleClient(
           requireReasoningContent: Boolean(isDeepSeek && thinkingEnabled),
         }),
         temperature: opts.temperature ?? 0,
-        stream: false,
+        stream: Boolean(opts.onDelta),
         ...(opts.maxTokens !== undefined ? { max_tokens: opts.maxTokens } : {}),
         ...(opts.tools && opts.tools.length > 0
           ? { tools: opts.tools.map(toOpenAIToolDefinition), tool_choice: 'auto' }
@@ -271,7 +423,9 @@ export function createOpenAICompatibleClient(
         ...(isDeepSeek ? deepSeekThinkingParams(cfg.thinkingLevel) : {}),
       };
 
-      const result = await dispatchRequest(endpoint, body, headers, timeoutMs);
+      const result = opts.onDelta
+        ? await dispatchStreamingRequest(endpoint, body, headers, timeoutMs, opts.onDelta)
+        : await dispatchRequest(endpoint, body, headers, timeoutMs);
 
       if (result.status >= 200 && result.status < 300) {
         const response = parseSuccessResponse(result.bodyText, parserMode);

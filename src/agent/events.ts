@@ -85,6 +85,7 @@ export type AgentEvent =
       stderr: string;
     })
   | (AgentEventBase & { type: 'assistant_message'; content: string })
+  | (AgentEventBase & { type: 'assistant_delta'; content?: string; reasoningContent?: string })
   | (AgentEventBase & {
       type: 'task_finished';
       status: TerminalState;
