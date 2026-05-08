@@ -104,7 +104,7 @@ export function detectParserId(modelId: string): string | undefined {
     { pattern: /\bqwen3\.5\b/i, parser: 'qwen3_xml' },
     { pattern: /\bqwen3\b/i, parser: 'qwen3_xml' },
     { pattern: /\bqwen2\.5\b/i, parser: 'hermes' }, // Qwen2.5 uses Hermes-style
-    { pattern: /\bqwen\b/i, parser: 'qwen3_xml' }, // broadly Qwen → XML
+    // No broad /\bqwen\b/i catch-all — Qwen3.X / Qwen3-Coder / Qwen3 are matched above.
 
     // Hermes family
     { pattern: /\bhermes\b/i, parser: 'hermes' },
@@ -154,7 +154,7 @@ export function detectParserId(modelId: string): string | undefined {
     // Step family
     { pattern: /\bstep-?3\.5\b/i, parser: 'step3p5' },
     { pattern: /\bstep-?3\b/i, parser: 'step3' },
-    { pattern: /\bstep\b/i, parser: 'step3' },
+    // No broad /\bstep\b/i catch-all — "step" is a common word in unrelated model names.
 
     // Kimi
     { pattern: /\bkimi[-_]?k2\b/i, parser: 'kimi_k2' },
