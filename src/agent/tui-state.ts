@@ -527,7 +527,7 @@ function withStatus(state: RunStateSnapshot, statusNote: string, severity: TuiSe
 const MAX_DEBUG_HISTORY = 200;
 
 function withDebugHistory(state: RunStateSnapshot, item: TuiDebugHistoryItem): RunStateSnapshot {
-  const debugHistory = [...state.debugHistory, { ...item, detail: clipText(item.detail, 6000) }];
+  const debugHistory = [...state.debugHistory, { ...item, detail: clipText(item.detail, 50000) }];
   return { ...state, debugHistory: debugHistory.slice(Math.max(0, debugHistory.length - MAX_DEBUG_HISTORY)) };
 }
 

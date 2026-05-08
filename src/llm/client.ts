@@ -333,8 +333,15 @@ function firstReasoningContent(
 }
 
 function isDeepSeekProvider(cfg: NormalizedProviderConfig, baseUrl: string): boolean {
-  const haystack = `${cfg.model} ${baseUrl}`.toLowerCase();
-  return haystack.includes('deepseek');
+  // Official DeepSeek API endpoint
+  if (/api\.deepseek\.com/i.test(baseUrl)) return true;
+
+  // Local relay/proxy forwarding to DeepSeek: match on model name only
+  // when the base URL is clearly local (not a known cloud endpoint).
+  const isLocal = /^(?:https?:\/\/)?(?:127\.0\.0\.1|localhost)(?::\d+)?/i.test(baseUrl);
+  if (!isLocal) return false;
+
+  return /deepseek/i.test(cfg.model ?? '');
 }
 
 function deepSeekThinkingParams(level: NormalizedProviderConfig['thinkingLevel']): Record<string, unknown> {

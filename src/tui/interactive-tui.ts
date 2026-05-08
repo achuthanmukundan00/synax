@@ -59,6 +59,10 @@ export async function runInteractiveTui(
     coreVisualProfile?: string;
     /** Whether the active provider/model can be queried right now. */
     coreLoaded?: boolean;
+    /** Price per 1M input tokens for cost display. */
+    inputPricePer1MTokens?: number;
+    /** Price per 1M output tokens for cost display. */
+    outputPricePer1MTokens?: number;
     /**
      * Optional callback invoked after settings are persisted.
      * Return updated runtime labels to apply immediately in the TUI.
@@ -71,6 +75,8 @@ export async function runInteractiveTui(
       contextWindowTokens?: number;
       coreVisualProfile?: string;
       coreLoaded?: boolean;
+      inputPricePer1MTokens?: number;
+      outputPricePer1MTokens?: number;
     };
   },
 ): Promise<void> {
@@ -108,6 +114,8 @@ export async function runInteractiveTui(
     contextWindowTokens: options?.contextWindowTokens,
     coreVisualProfile: options?.coreVisualProfile,
     coreLoaded: options?.coreLoaded,
+    inputPricePer1MTokens: options?.inputPricePer1MTokens,
+    outputPricePer1MTokens: options?.outputPricePer1MTokens,
   };
   const applyOptionsToState = (): void => {
     state = {
@@ -118,6 +126,8 @@ export async function runInteractiveTui(
       thinkingEnabled: runtimeLabels.thinkingEnabled,
       activeSkills: options?.activeSkills ?? [],
       coreLoaded: runtimeLabels.coreLoaded ?? true,
+      inputPricePer1MTokens: runtimeLabels.inputPricePer1MTokens,
+      outputPricePer1MTokens: runtimeLabels.outputPricePer1MTokens,
       sessionSpendLabel: isLocalEndpoint(runtimeLabels.endpointLabel ?? '') ? 'local' : undefined,
     };
   };
@@ -334,6 +344,8 @@ export async function runInteractiveTui(
         maxToolCalls: 0,
         tools: [],
         task: text,
+        inputPricePer1MTokens: runtimeLabels.inputPricePer1MTokens,
+        outputPricePer1MTokens: runtimeLabels.outputPricePer1MTokens,
       },
       Date.now(),
     );

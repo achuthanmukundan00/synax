@@ -518,25 +518,13 @@ describe('interactive layout visual agreements', () => {
     };
 
     // Header phase label renders terminal state (no synthetic final summary block).
-    const successPlain = renderLayout(
-      { run: success, objectiveInput: '', coreMode: 'completed', nowMs: 0 },
-      100,
-      24,
-    )
+    const successPlain = renderLayout({ run: success, objectiveInput: '', coreMode: 'completed', nowMs: 0 }, 100, 24)
       .map((line) => stripAnsi(line))
       .join('\n');
-    const blockedPlain = renderLayout(
-      { run: blocked, objectiveInput: '', coreMode: 'blocked', nowMs: 0 },
-      100,
-      24,
-    )
+    const blockedPlain = renderLayout({ run: blocked, objectiveInput: '', coreMode: 'blocked', nowMs: 0 }, 100, 24)
       .map((line) => stripAnsi(line))
       .join('\n');
-    const failedPlain = renderLayout(
-      { run: failed, objectiveInput: '', coreMode: 'failure', nowMs: 0 },
-      100,
-      24,
-    )
+    const failedPlain = renderLayout({ run: failed, objectiveInput: '', coreMode: 'failure', nowMs: 0 }, 100, 24)
       .map((line) => stripAnsi(line))
       .join('\n');
 
@@ -623,7 +611,9 @@ describe('interactive layout visual agreements', () => {
 
     const noteLines = plain
       .split('\n')
-      .filter((line) => line.includes('note') || line.includes('Read the configuration') || line.includes('TAIL_MARKER'));
+      .filter(
+        (line) => line.includes('note') || line.includes('Read the configuration') || line.includes('TAIL_MARKER'),
+      );
 
     expect(noteLines.join('\n')).toContain('TAIL_MARKER');
     expect(noteLines.join('\n')).not.toContain('…');

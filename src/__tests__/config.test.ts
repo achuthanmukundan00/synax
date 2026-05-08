@@ -94,9 +94,9 @@ describe('normalizeProviderConfig', () => {
       kind: 'openai-compatible',
       base_url: 'http://127.0.0.1:1234/v1',
       model: 'test-model',
-      custom_headers: { 'CF-Access-Client-Id': 'client-id' },
+      custom_headers: { 'X-Custom-Header': 'value-1' },
     });
-    expect(normalized.customHeaders).toEqual({ 'CF-Access-Client-Id': 'client-id' });
+    expect(normalized.customHeaders).toEqual({ 'X-Custom-Header': 'value-1' });
   });
 
   it('supports timeout_ms and timeoutMs aliases', () => {
@@ -958,8 +958,9 @@ describe('serializeEffectiveConfig (TOML hardening)', () => {
       errors: [],
     };
     const toml = serializeEffectiveConfig(config);
-    expect(toml).toContain('••••');
+    // api_key is never persisted — it should always come from env vars.
     expect(toml).not.toContain('secret-12345');
+    expect(toml).not.toContain('api_key');
   });
 
   it('serializes core visual profile for settings persistence', () => {

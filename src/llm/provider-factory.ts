@@ -35,6 +35,8 @@ export interface ProviderFactoryInput {
   inputPricePer1MTokens?: number;
   /** Price per 1M output tokens in USD (overrides preset default). */
   outputPricePer1MTokens?: number;
+  /** Thinking level for providers that support extended reasoning (e.g. DeepSeek). */
+  thinkingLevel?: 'off' | 'low' | 'medium' | 'high' | 'auto';
 }
 
 // ─── Factory result ────────────────────────────────────
@@ -63,6 +65,9 @@ function resolveProviderId(input: ProviderFactoryInput): string {
   if (input.preset && isKnownProviderId(input.preset)) {
     return input.preset;
   }
+  if (input.kind === 'anthropic-messages') {
+    return 'anthropic';
+  }
   if (input.kind === 'openai-compatible') {
     return 'custom';
   }
@@ -83,30 +88,6 @@ function resolveApiKey(input: ProviderFactoryInput, presetApiKeyEnv?: string): s
     }
   }
   return undefined;
-}
-
-/**
- * Auto-detect Cloudflare Access environment variables and inject them
- * as request headers for self-hosted providers behind CF Access.
- *
- * Only adds headers that aren't already present in mergedHeaders,
- * so explicit config always takes precedence.
- */
-function injectCfAccessHeaders(mergedHeaders: Record<string, string>): void {
-  const CF_CLIENT_ID = 'CF-Access-Client-Id';
-  const CF_CLIENT_SECRET = 'CF-Access-Client-Secret';
-
-  // Prefer Synax-specific env vars as fallback for legacy compat,
-  // but standard CF_ACCESS_* vars are the primary path.
-  if (!(CF_CLIENT_ID in mergedHeaders)) {
-    const id = process.env.CF_ACCESS_CLIENT_ID ?? process.env.SYNAX_CF_ACCESS_CLIENT_ID;
-    if (id?.trim()) mergedHeaders[CF_CLIENT_ID] = id.trim();
-  }
-
-  if (!(CF_CLIENT_SECRET in mergedHeaders)) {
-    const secret = process.env.CF_ACCESS_CLIENT_SECRET ?? process.env.SYNAX_CF_ACCESS_CLIENT_SECRET;
-    if (secret?.trim()) mergedHeaders[CF_CLIENT_SECRET] = secret.trim();
-  }
 }
 
 // ─── Factory ───────────────────────────────────────────
@@ -150,11 +131,7 @@ function resolveProviderConfig(input: ProviderFactoryInput): ResolvedProviderFac
     Object.assign(mergedHeaders, input.customHeaders);
   }
 
-  // Auto-detect Cloudflare Access env vars for self-hosted providers.
-  // Custom headers take precedence over auto-detected values.
-  if (!preset.cloud) {
-    injectCfAccessHeaders(mergedHeaders);
-  }
+  // Custom headers take precedence over preset defaults.
 
   // Build normalized config for OpenAI-compatible path
   const normalizedConfig: NormalizedProviderConfig = {
@@ -164,6 +141,7 @@ function resolveProviderConfig(input: ProviderFactoryInput): ResolvedProviderFac
     apiKey,
     customHeaders: Object.keys(mergedHeaders).length > 0 ? mergedHeaders : undefined,
     timeoutMs: input.timeoutMs ?? 120000,
+    thinkingLevel: input.thinkingLevel,
   };
 
   // Build metadata for TUI/status display
