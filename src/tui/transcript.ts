@@ -56,7 +56,7 @@ export function renderTranscript(state: TranscriptRenderState, width: number): s
 
     if (item.kind === 'tool_call') {
       // Collect consecutive successful tool calls for grouping.
-      const group = collectToolGroup(history, i, completed);
+      const group = collectToolGroup(history, i, completed, width);
       if (group) {
         blocks.push(group.block);
         i = group.nextIndex - 1;
@@ -187,9 +187,7 @@ function renderCommandEvent(
   // Compressed mode (after completion): show command + exit code on header line.
   if (compressed && !failed && parsed) {
     const exitPart = exitCode !== undefined ? `exit ${exitCode}` : '';
-    const headerState = exitPart ? exitPart : 'ok';
-    const block = [eventHeader('bash', headerState, width)];
-    block.push(detailRow('command', command, width));
+    const block = [commandRow(command, exitPart || 'ok', width)];
 
     // For git diff --stat, extract changed-files summary.
     if (isGitDiffCommand(command)) {
@@ -201,8 +199,7 @@ function renderCommandEvent(
 
   // Expanded mode: full detail (active execution or failed commands).
   const state = parsed ? `exit ${exitCode ?? 1}` : 'requested';
-  const block = [eventHeader('bash', state, width)];
-  block.push(detailRow('command', command, width));
+  const block = [commandRow(command, state, width)];
   if (!result) return block;
 
   if (failed) {
@@ -537,7 +534,13 @@ function sliceAnsi(input: string, start: number, end: number): string {
 function eventHeader(label: string, state: string, width: number = 120): string {
   const available = Math.max(1, width - 14);
   const glyph = eventGlyph(label);
-  return `${glyph} ${bold(label.padEnd(10, ' '))} ${clip(state, available)}`;
+  return `${glyph} ${dim(label.padEnd(10, ' '))} ${clip(state, available)}`;
+}
+
+function commandRow(command: string, state: string, width: number): string {
+  const stateText = state ? `  ${dim(state)}` : '';
+  const available = Math.max(1, width - 4 - visibleLength(state));
+  return `${yellow('$')} ${yellow(clip(command || 'bash', available))}${stateText}`;
 }
 
 function detailRow(label: string, value: string, width: number): string {
@@ -574,10 +577,10 @@ function dropCommandEcho(command: string, output: string): string {
 }
 
 function eventGlyph(label: string): string {
-  if (label === 'user') return '\u001b[36m@\u001b[0m';
-  if (label === 'model') return '\u001b[35m※\u001b[0m';
-  if (label === 'review') return '\u001b[35m※\u001b[0m';
-  if (label === 'bash' || label === 'read' || label === 'write' || label === 'edit') return '\u001b[33m$\u001b[0m';
+  if (label === 'user') return dim('•');
+  if (label === 'model') return dim('•');
+  if (label === 'review') return dim('•');
+  if (label === 'bash' || label === 'read' || label === 'write' || label === 'edit') return yellow('$');
   if (label === 'verify') return '\u001b[32m√\u001b[0m';
   return dim('?');
 }
@@ -596,6 +599,10 @@ function green(text: string): string {
 
 function cyan(text: string): string {
   return `\u001b[36m${text}\u001b[0m`;
+}
+
+function yellow(text: string): string {
+  return `\u001b[33m${text}\u001b[0m`;
 }
 
 function dim(text: string): string {
@@ -662,6 +669,7 @@ function extractModelProse(detail: string): string {
     .replace(/<think>[\s\S]*?<\/think>/gi, '')
     .replace(/<thinking>[\s\S]*?<\/thinking>/gi, '')
     .replace(/<tool_call>[\s\S]*?<\/tool_call>/gi, '')
+    .replace(/\s*[-–—>→]*\s*\d+\s+tool call\(s\):\s*[A-Za-z0-9_,\s.-]+$/i, '')
     .replace(/\s+/g, ' ')
     .trim();
   return clean;
@@ -670,11 +678,11 @@ function extractModelProse(detail: string): string {
 /** Render model prose prominently, with full text wrapping and no truncation. */
 function renderModelProse(prose: string, width: number): string[] {
   const lines: string[] = [];
-  const proseWidth = Math.max(20, width - 13);
+  const proseWidth = Math.max(20, width - 6);
   const wrapped = wrapText(prose, proseWidth);
-  lines.push(`\u001b[35m※\u001b[0m ${bold('note'.padEnd(10, ' '))} ${wrapped[0]}`);
+  lines.push(`${dim('•')} ${wrapped[0]}`);
   for (let i = 1; i < wrapped.length; i += 1) {
-    lines.push(`  ${' '.repeat(10)} ${wrapped[i]}`);
+    lines.push(`  ${wrapped[i]}`);
   }
   return lines;
 }
@@ -691,6 +699,7 @@ function collectToolGroup(
   history: RunStateSnapshot['debugHistory'],
   startIndex: number,
   compressed: boolean,
+  width: number,
 ): ToolGroupResult | null {
   if (!compressed) return null;
   const group: Array<{ call: ParsedToolCall; result: string }> = [];
@@ -716,7 +725,7 @@ function collectToolGroup(
   if (group.length < 2) return null;
 
   return {
-    block: renderToolGroup(group, 120),
+    block: renderToolGroup(group, width),
     nextIndex: i,
   };
 }
@@ -726,9 +735,7 @@ function renderToolGroup(group: Array<{ call: ParsedToolCall; result: string }>,
   const toolCounts = new Map<string, number>();
   for (const g of group) toolCounts.set(g.call.name, (toolCounts.get(g.call.name) ?? 0) + 1);
   const summary = [...toolCounts.entries()].map(([name, count]) => (count > 1 ? `${name} ×${count}` : name)).join(', ');
-  lines.push(
-    `\u001b[33m◇\u001b[0m ${bold('inspected'.padEnd(10, ' '))} ${dim(clip(summary, Math.max(1, width - 14)))}`,
-  );
+  lines.push(`${dim('•')} ${dim('tools'.padEnd(10, ' '))} ${dim(clip(summary, Math.max(1, width - 14)))}`);
 
   // Show up to 3 command previews
   const previews = group.slice(0, 3);

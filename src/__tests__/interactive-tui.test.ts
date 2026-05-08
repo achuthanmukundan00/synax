@@ -377,7 +377,7 @@ describe('ai core renderer', () => {
   it('keeps material state color selection stable', () => {
     expect(modeColor('blocked')).toBe('\u001b[33m');
     expect(modeColor('failure')).toBe('\u001b[31m');
-    expect(modeColor('verifying')).toBe('\u001b[32m');
+    expect(modeColor('verifying')).toBe('\u001b[34m');
     expect(modeColor('completed')).toBe('\u001b[32m');
     expect(modeColor('planning')).toBe('\u001b[34m');
   });
@@ -644,9 +644,7 @@ describe('interactive layout visual agreements', () => {
 
     const noteLines = plain
       .split('\n')
-      .filter(
-        (line) => line.includes('note') || line.includes('Read the configuration') || line.includes('TAIL_MARKER'),
-      );
+      .filter((line) => line.includes('Read the configuration') || line.includes('TAIL_MARKER'));
 
     expect(noteLines.join('\n')).toContain('TAIL_MARKER');
     expect(noteLines.join('\n')).not.toContain('…');
@@ -1046,7 +1044,7 @@ describe('interactive layout visual agreements', () => {
     expect(mediumPlain).toMatch(/[·•◎╱╲]/);
     expect(smallPlain).toContain('Synax');
     expect(smallPlain).toContain('Inspecting files before editing.');
-    expect(smallPlain).not.toMatch(/[·•◎╱╲◆━×]/);
+    expect(smallPlain).not.toMatch(/[◎╱╲◆━×]/);
   });
 
   it('renders a closed input dock with cwd and branch instead of model id', () => {
@@ -1072,10 +1070,10 @@ describe('interactive layout visual agreements', () => {
     expect(plain).not.toContain('Directive');
     expect(plain).toContain('The renderer now keeps the prompt inside a proper box.');
     expect(plain).not.toContain('Qwen3.6-35B-A3B-UD-IQ3_XXS.gguf');
-    expect(dock[0]).toMatch(/^╔═+ ~\/workspace\/git\/\.worktrees\/synax-tui {2}dev\/tui ╗\s*$/);
-    expect(dock[1]).toMatch(/^║ Implement fixed-footprint reactor core rendering\s+║\s*$/);
-    expect(dock[2]).toMatch(/^║\s+║\s*$/);
-    expect(dock[3]).toMatch(/^╚ Enter submit \| Ctrl\+C exit \| \/help \| !cmd shell ═+╝\s*$/);
+    expect(dock[0]).toMatch(/^┌─+ ~\/workspace\/git\/\.worktrees\/synax-tui {2}dev\/tui ┐\s*$/);
+    expect(dock[1]).toMatch(/^│ Implement fixed-footprint reactor core rendering\s+│\s*$/);
+    expect(dock[2]).toMatch(/^│\s+│\s*$/);
+    expect(dock[3]).toMatch(/^└ Enter submit {2}Ctrl\+C exit {2}\/help {2}!cmd shell ─+┘\s*$/);
   });
 
   it('keeps the input dock inside the terminal write-safe column', () => {
@@ -1095,10 +1093,10 @@ describe('interactive layout visual agreements', () => {
 
     expect(lines).toHaveLength(24);
     expect(lines.every((line) => line.length === 90)).toBe(true);
-    expect(dock[0].endsWith('╗ ')).toBe(true);
-    expect(dock[1].endsWith('║ ')).toBe(true);
-    expect(dock[2].endsWith('║ ')).toBe(true);
-    expect(dock[3].endsWith('╝ ')).toBe(true);
+    expect(dock[0].endsWith('┐ ')).toBe(true);
+    expect(dock[1].endsWith('│ ')).toBe(true);
+    expect(dock[2].endsWith('│ ')).toBe(true);
+    expect(dock[3].endsWith('┘ ')).toBe(true);
   });
 
   it('reserves a blank gutter between long transcript output and the input dock', () => {
@@ -1125,9 +1123,9 @@ describe('interactive layout visual agreements', () => {
     ).map(stripAnsi);
 
     expect(lines.at(-4)?.trim()).toBe('');
-    expect(lines.at(-3)?.trimStart().startsWith('╔')).toBe(true);
-    expect(lines.at(-2)).toMatch(/^║\s+║\s*$/);
-    expect(lines.at(-1)?.trimStart().startsWith('╚ Enter submit')).toBe(true);
+    expect(lines.at(-3)?.trimStart().startsWith('┌')).toBe(true);
+    expect(lines.at(-2)).toMatch(/^│\s+│\s*$/);
+    expect(lines.at(-1)?.trimStart().startsWith('└ Enter submit')).toBe(true);
   });
 
   it('renders unloaded core as inert and still', () => {
@@ -1377,10 +1375,8 @@ describe('interactive layout visual agreements', () => {
     const plain = lines.map((line) => stripAnsi(line)).join('\n');
 
     expect(plain).not.toContain('Transcript');
-    expect(plain).toContain('note');
     expect(plain).toContain('I will check git status.');
-    expect(plain).toContain('bash       exit 1');
-    expect(plain).toContain('command    git status --short');
+    expect(plain).toContain('$ git status --short  exit 1');
     expect(plain).toContain('M src/tui/layout.ts');
   });
 
@@ -1609,7 +1605,7 @@ describe('interactive layout visual agreements', () => {
 
     expect(plain).toContain('read       src/components/surfaces');
     expect(plain).toContain('…');
-    expect(plain).toContain('command    npm test');
+    expect(plain).toContain('$ npm test');
     expect(lines.every((line) => line.length === 82)).toBe(true);
   });
 
@@ -1868,7 +1864,7 @@ describe('interactive tui runtime', () => {
     const plain = stripAnsi(stdout.text());
     expect(session.handleShellCommand).toHaveBeenCalledWith('echo hello');
     expect(session.handleUserMessage).not.toHaveBeenCalled();
-    expect(plain).toContain('command    echo hello');
+    expect(plain).toContain('$ echo hello  exit 0');
     expect(plain).toContain('hello');
   });
 

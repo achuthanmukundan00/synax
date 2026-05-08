@@ -651,8 +651,8 @@ describe('transcript rendering', () => {
     const lines = renderTranscript({ run }, 80).map(stripAll);
     const text = lines.join('\n');
 
-    // Compressed mode: command line shown, exit on header, no separate exit row
-    expect(text).toContain('bash');
+    // Compressed mode: command line shown with exit status, no separate exit row
+    expect(text).toContain('$ git diff --cached --stat');
     expect(text).toContain('exit 0');
     expect(text).toContain('git diff --cached --stat');
     // Should show changed-files summary from diff --stat
@@ -740,7 +740,7 @@ describe('transcript rendering', () => {
 
     // The input dock should be compact: 3 lines (blank + border-top + body + border-bottom = 4)
     // but after the blank line prefix, the actual panel is 3 lines.
-    const panelStart = lines.findIndex((l: string) => l.includes('╔'));
+    const panelStart = lines.findIndex((l: string) => l.includes('┌'));
     expect(panelStart).toBeGreaterThan(-1);
 
     // Bottom border contains help text
@@ -763,7 +763,7 @@ describe('transcript rendering', () => {
     ).map(stripAll);
 
     // With multiline input, the panel expands
-    const multiPanelStart = lines.findIndex((l: string) => l.includes('╔'));
+    const multiPanelStart = lines.findIndex((l: string) => l.includes('┌'));
     const multiPanelLines = lines.slice(multiPanelStart);
     // Should have more than 3 lines (top + at least 2 body + bottom = 4+)
     expect(multiPanelLines.length).toBeGreaterThanOrEqual(4);
