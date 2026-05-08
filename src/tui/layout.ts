@@ -425,7 +425,7 @@ function runtimeTelemetryRows(state: InteractiveViewState, width: number): strin
   const valueWidth = Math.max(4, width - 12);
 
   const rows = [
-    instrumentRow('Core', run.coreLoaded || model ? 'Loaded' : 'Unloaded', width, { color: modeColor(state.coreMode) }),
+    instrumentRow('Core', coreStatusLabel(state), width, { color: modeColor(state.coreMode) }),
     instrumentRow('Model', friendlyModel ? truncateMiddle(friendlyModel, valueWidth) : '—', width, {
       dimValue: !model,
     }),
@@ -497,6 +497,13 @@ function providerLabel(endpointLabel: string | undefined, run: RunStateSnapshot)
   if (/anthropic/i.test(endpoint)) return 'Anthropic';
   if (/openrouter/i.test(endpoint)) return 'OpenRouter';
   return endpoint ? 'OpenAI-compatible' : 'unknown';
+}
+
+function coreStatusLabel(state: InteractiveViewState): string {
+  if (state.run.terminal === 'completed' || state.run.phase === 'completed') return 'Complete';
+  if (state.run.coreLoaded) return 'Loaded';
+  const model = state.modelLabel || state.run.modelId || modelFromProvider(state.run.providerLabel);
+  return model ? 'Loaded' : 'Unloaded';
 }
 
 function coreModelId(state: InteractiveViewState): string {

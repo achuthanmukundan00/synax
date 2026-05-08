@@ -103,7 +103,7 @@ export function renderTranscript(state: TranscriptRenderState, width: number): s
     ? cleanModelOutput(state.run.lastModelOutput || state.lastModelOutput || '')
     : '';
   if (fallbackModel) {
-    blocks.push(renderEventBlock('model', fallbackModel, width));
+    blocks.push(renderEventBlock('model', fallbackModel, width, Number.POSITIVE_INFINITY));
   }
 
   if (state.run.patchPreview) {
@@ -129,8 +129,14 @@ export function renderTranscript(state: TranscriptRenderState, width: number): s
     const glyph = `\u001b[34m${BREATHING_GLYPHS[frameIdx]}\u001b[0m`;
     const label = '\u001b[34mworking\u001b[0m';
     const preview = activityPreviewText(state.run);
-    const previewLine = `${glyph} ${label}  ${dimI(truncate(preview, Math.max(1, width - 22)))}`;
-    blocks.push([previewLine]);
+    const previewWidth = Math.max(1, width - 22);
+    const wrappedPreview = wrapText(preview, previewWidth);
+    const previewLines: string[] = [];
+    previewLines.push(`${glyph} ${label}  ${dimI(wrappedPreview[0] || '')}`);
+    for (let p = 1; p < wrappedPreview.length; p += 1) {
+      previewLines.push(`  ${' '.repeat(10)} ${dimI(wrappedPreview[p])}`);
+    }
+    blocks.push(previewLines);
 
     if (state.activityExpanded) {
       blocks.push(renderExpandedActivity(state.run, width));
@@ -161,7 +167,7 @@ function renderEventBlock(label: string, body: string, width: number, maxLines =
 }
 
 function renderUserPrompt(body: string, width: number): string[] {
-  const wrapped = wrapText(body || 'no prompt', Math.max(12, width - 13)).slice(0, 4);
+  const wrapped = wrapText(body || 'no prompt', Math.max(12, width - 13));
   return [eventHeader('user', ''), ...alignedField('prompt', wrapped, width, true)];
 }
 
@@ -778,14 +784,14 @@ function isProcessChatter(text: string): boolean {
   return false;
 }
 
-/** Render model prose prominently with pink star glyph and full text wrapping. */
+/** Render model prose as a secondary note with pink star glyph, dim label, and dim wrapping text. */
 function renderModelProse(prose: string, width: number): string[] {
   const lines: string[] = [];
   const proseWidth = Math.max(20, width - 6);
   const wrapped = wrapText(prose, proseWidth);
-  lines.push(`${pink('✽')} ${bold('note').padEnd(9, ' ')} ${wrapped[0]}`);
+  lines.push(`${pink('✽')} ${dim('note').padEnd(9, ' ')} ${dim(wrapped[0])}`);
   for (let i = 1; i < wrapped.length; i += 1) {
-    lines.push(`  ${' '.repeat(10)} ${wrapped[i]}`);
+    lines.push(`  ${' '.repeat(10)} ${dim(wrapped[i])}`);
   }
   return lines;
 }
