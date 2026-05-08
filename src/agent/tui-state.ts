@@ -883,12 +883,32 @@ function summarizeModelOutput(content: string): string {
   return clipText(normalized, 120);
 }
 
+/** Maximum byte size for edit-preview diffs stored in run state.
+ *  Prevents the TUI from choking on massive diffs while keeping
+ *  normal previews intact. When exceeded, an explicit truncation
+ *  note is appended. */
+const MAX_PATCH_PREVIEW_BYTES = 35_000;
+
 function clipPatchPreview(diff: string): string {
-  return diff
-    .split('\n')
-    .slice(0, 20)
-    .map((line) => clipText(line, 160))
-    .join('\n');
+  const buf = Buffer.from(diff, 'utf-8');
+  if (buf.length <= MAX_PATCH_PREVIEW_BYTES) return diff;
+
+  // Truncate at the nearest newline boundary below the byte cap.
+  const truncated = buf.slice(0, MAX_PATCH_PREVIEW_BYTES);
+  let end = truncated.length;
+  // Walk backwards from the cap to find the last newline.
+  while (end > 0 && truncated[end - 1] !== 0x0a) {
+    end -= 1;
+  }
+  // If we can't find a newline within a reasonable search window, hard-cut.
+  if (end === 0 || end < MAX_PATCH_PREVIEW_BYTES * 0.5) {
+    end = truncated.length;
+  }
+  const safe = truncated.slice(0, end).toString('utf-8');
+  const omittedBytes = buf.length - end;
+  const omittedKB = (omittedBytes / 1024).toFixed(1);
+  return `${safe}
+\n[Edit preview truncated: ${omittedKB} kB omitted]`;
 }
 
 function completionSummary(modelSteps: number, toolCalls: number, changedFiles: number): string {
