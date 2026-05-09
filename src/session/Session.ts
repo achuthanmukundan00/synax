@@ -1,8 +1,3 @@
-import { existsSync } from 'fs';
-import { mkdir, readFile } from 'fs/promises';
-import { dirname, isAbsolute, relative, resolve } from 'path';
-import { execFile } from 'child_process';
-import { promisify } from 'util';
 import { EventEmitter } from 'events';
 
 import { type Logger } from '../logging/index.js';
@@ -10,15 +5,8 @@ import type { SpanTracer } from '../telemetry/SpanTracer';
 import { type ChatOptions, type ChatResponse } from '../llm/types';
 import { type ParsedToolCall } from '../llm/tool-calls';
 import { createInspectionLedger, createToolRegistry, type InspectionLedger } from '../tools';
-import { normalizeRepoPath } from '../tools/policy';
 import { type ToolDefinition, type ToolRegistry, type ToolResult } from '../tools/types';
-import {
-  applyReplaceInFile,
-  createPatchPreview,
-  validateReplaceInFile,
-  type PatchPreview,
-  type ReplaceInFilePatch,
-} from '../agent/patch';
+import { type PatchPreview } from '../agent/patch';
 import {
   assembleModelMessages,
   compactMessagesMultiStage,
@@ -36,16 +24,16 @@ import {
   type ContextBudgetSettings,
   type TokenLedger,
 } from '../agent/context-budget';
-import { atomicWriteFile, writeLastEditRecord } from '../agent/safety';
 import { eventNow, type AgentEvent, type TerminalState } from '../agent/events';
 import {
-  canMutatePath,
   describeToolCall,
   guardBroadTask,
   guardUnsupportedTask,
   getAllowedModelTools,
   type RunMode,
 } from '../agent/task-policy';
+import { ActionExecutor, createDefaultHandlerMap } from '../actions/ActionExecutor';
+import { estimateReadResultTokens } from '../actions/handlers/read-handler';
 
 // Re-export types for backward compatibility with runner.ts consumers.
 export type AgentTerminalState = TerminalState;
@@ -136,10 +124,7 @@ export interface AgentTurnResult {
 
 const DEFAULT_MAX_TOOL_CALLS = 192;
 const MAX_CONSECUTIVE_RECOVERABLE_TOOL_ERRORS = 3;
-const MAX_IDENTICAL_READS_PER_TURN = 3;
 const MAX_TOTAL_READS_PER_TURN = 24;
-const MAX_IDENTICAL_BASH_COMMANDS_PER_TURN = 3;
-const execFileAsync = promisify(execFile);
 
 // ─── Session Class ───────────────────────────────────────────────────────────
 
@@ -173,6 +158,8 @@ export class Session {
   tracer?: SpanTracer;
   /** Simple event bus — will be swapped for typed EventBus in M1 #04. */
   readonly eventBus: EventEmitter = new EventEmitter();
+  /** Typed tool dispatch — extracted from the old executeAgentTool switch. */
+  readonly executor: ActionExecutor;
   /** Holographic memory — null until M4 #12. */
   readonly memory: null = null;
 
@@ -215,6 +202,11 @@ export class Session {
         ledger: this.conversation.inspectionLedger,
       });
     this.contextBudget = resolveContextBudgetSettings(options.contextBudget ?? {});
+    this.executor = new ActionExecutor({
+      handlers: createDefaultHandlerMap(),
+      repoRoot: options.repoRoot,
+      registry: this.registry,
+    });
   }
 
   // ── Static factory ──────────────────────────────────────────────────────
@@ -559,9 +551,9 @@ export class Session {
             detail: JSON.stringify(call.arguments, null, 2),
           });
 
-          const result =
-            detectRepeatedBashCommand(call, identicalBashCounts) ??
-            (await executeAgentTool(call, {
+          const result = await this.executor.execute(
+            call,
+            {
               repoRoot: this.repoRoot,
               registry,
               ledger: conversation.inspectionLedger,
@@ -583,7 +575,9 @@ export class Session {
                   ...preview,
                 });
               },
-            }));
+            },
+            identicalBashCounts,
+          );
 
           if (call.name === 'read') {
             totalReadCalls += 1;
@@ -690,15 +684,7 @@ export class Session {
   }
 }
 
-// ─── Internal Tool Execution (moved from runner.ts) ──────────────────────────
-
-interface AgentToolExecutionResult {
-  success: boolean;
-  toolResult: ToolResult;
-  changedFile?: string;
-  error?: string;
-  terminalState?: AgentTerminalState;
-}
+// ─── Model-facing tool definitions ───────────────────────────────────────────
 
 function buildModelFacingTools(options: ModelToolSurfaceOptions = {}): ToolDefinition[] {
   const bashEnabled = options.bashEnabled ?? true;
@@ -902,434 +888,6 @@ function assistantMessage(response: ChatResponse, settings?: ContextBudgetSettin
   return message;
 }
 
-async function executeAgentTool(
-  call: ParsedToolCall,
-  context: {
-    repoRoot: string;
-    registry: ToolRegistry;
-    ledger: InspectionLedger;
-    mode: RunMode;
-    readCache: Map<string, ToolResult>;
-    identicalReadCounts: Map<string, number>;
-    totalReadCalls: number;
-    totalReadResultTokens: number;
-    readResultBudget: ContextBudgetSettings;
-    ensureCheckpoint?: () => Promise<unknown>;
-    approvePatch?: (preview: PatchPreview) => PatchApprovalDecision | Promise<PatchApprovalDecision>;
-    onPatchPreview?: (preview: PatchPreview) => void;
-  },
-): Promise<AgentToolExecutionResult> {
-  if (call.name === 'read') {
-    return executeReadTool(
-      call.arguments,
-      context.registry,
-      context.ledger,
-      context.readCache,
-      context.identicalReadCounts,
-      context.totalReadCalls,
-      context.totalReadResultTokens,
-      context.readResultBudget,
-    );
-  }
-
-  if (call.name === 'edit' || call.name === 'replace_in_file') {
-    return executeReplaceInFile(call.arguments, context, call.name);
-  }
-
-  if (call.name === 'write' || call.name === 'create_file') {
-    return executeCreateFile(call.arguments, context, call.name);
-  }
-
-  if (call.name === 'bash') {
-    return executeBashTool(call.arguments, context.repoRoot);
-  }
-
-  const toolResult = await context.registry.execute(call.name, call.arguments);
-  return {
-    success: toolResult.success,
-    toolResult,
-    error: toolResult.error,
-  };
-}
-
-async function executeReadTool(
-  input: Record<string, unknown>,
-  registry: ToolRegistry,
-  ledger: InspectionLedger,
-  readCache: Map<string, ToolResult>,
-  identicalReadCounts: Map<string, number>,
-  totalReadCalls: number,
-  totalReadResultTokens: number,
-  readResultBudget: ContextBudgetSettings,
-): Promise<AgentToolExecutionResult> {
-  if (totalReadCalls >= MAX_TOTAL_READS_PER_TURN) {
-    return toolFailure('read', `total read limit reached for this turn: ${MAX_TOTAL_READS_PER_TURN}`);
-  }
-
-  const repetitionKey = readRepetitionKey(input);
-  const seenCount = identicalReadCounts.get(repetitionKey) ?? 0;
-
-  if (seenCount >= MAX_IDENTICAL_READS_PER_TURN) {
-    const orientation = ledger.getOrientation();
-    return toolFailure(
-      'read',
-      `Read loop detected: same file/query read ${seenCount + 1} times. ` +
-        `Use targeted reads or search instead.\n\n${orientation}`,
-    );
-  }
-  identicalReadCounts.set(repetitionKey, seenCount + 1);
-
-  const showNudge = seenCount >= 2;
-
-  const signature = readSignature(input);
-  const cached = readCache.get(signature);
-  if (cached) {
-    if (showNudge && cached.success && typeof cached.output === 'object' && cached.output !== null) {
-      const nudged = {
-        ...cached,
-        output: {
-          ...(cached.output as Record<string, unknown>),
-          guidance:
-            'Already read this file. Use search (query) or targeted line ranges (startLine/endLine) to inspect specific sections.',
-        },
-      };
-      return publicToolResult('read', nudged);
-    }
-    return publicToolResult('read', cached);
-  }
-
-  if (typeof input.query === 'string' && input.query.trim().length > 0) {
-    const result = await registry.execute('search_text', input);
-    const normalized = normalizeReadToolResult(result, readResultBudget, totalReadResultTokens, ledger);
-    readCache.set(signature, normalized);
-    return publicToolResult('read', normalized);
-  }
-  if (typeof input.path === 'string' && input.path.trim().length > 0) {
-    const result = await registry.execute('read_file_range', input);
-    const normalized = normalizeReadToolResult(result, readResultBudget, totalReadResultTokens, ledger);
-    if (showNudge && normalized.success && typeof normalized.output === 'object' && normalized.output !== null) {
-      (normalized.output as Record<string, unknown>).guidance =
-        'Already read this file. Use search (query) or targeted line ranges (startLine/endLine) to inspect specific sections.';
-    }
-    readCache.set(signature, normalized);
-    return publicToolResult('read', normalized);
-  }
-  const result = await registry.execute('list_files', input);
-  const normalized = normalizeReadToolResult(result, readResultBudget, totalReadResultTokens, ledger);
-  readCache.set(signature, normalized);
-  return publicToolResult('read', normalized);
-}
-
-async function executeReplaceInFile(
-  input: Record<string, unknown>,
-  context: {
-    repoRoot: string;
-    ledger: InspectionLedger;
-    mode: RunMode;
-    ensureCheckpoint?: () => Promise<unknown>;
-    approvePatch?: (preview: PatchPreview) => PatchApprovalDecision | Promise<PatchApprovalDecision>;
-    onPatchPreview?: (preview: PatchPreview) => void;
-  },
-  toolName = 'replace_in_file',
-): Promise<AgentToolExecutionResult> {
-  const patch = coercePatch(input);
-  if (!patch) {
-    return toolFailure(toolName, 'path, oldStr, and newStr are required');
-  }
-
-  if (context.mode === 'read-only' || context.mode === 'verify') {
-    return toolFailure(toolName, `${context.mode} mode does not allow edits`);
-  }
-
-  const mutationPath = canMutatePath(context.mode, context.repoRoot, patch.path);
-  if (!mutationPath.ok) {
-    return toolFailure(toolName, mutationPath.reason ?? 'mutation path rejected');
-  }
-
-  await context.ensureCheckpoint?.();
-
-  const validation = await validateReplaceInFile(patch, {
-    repoRoot: context.repoRoot,
-  });
-  if (!validation.ok) {
-    return toolFailure(toolName, validation.message);
-  }
-
-  const preview = createPatchPreview(validation);
-  context.onPatchPreview?.(preview);
-  const decision = context.approvePatch ? await context.approvePatch(preview) : 'accept';
-  if (decision === 'reject') {
-    const error = `patch rejected for ${preview.path}`;
-    return {
-      success: false,
-      error,
-      terminalState: 'user_input_required',
-      toolResult: {
-        success: false,
-        toolName,
-        error,
-        output: { path: preview.path, diff: preview.diff, decision },
-      },
-    };
-  }
-
-  const applied = await applyReplaceInFile(patch, {
-    repoRoot: context.repoRoot,
-  });
-  if (!applied.ok) {
-    return toolFailure(toolName, applied.message);
-  }
-  await writeLastEditRecord(context.repoRoot, {
-    path: applied.path,
-    before: applied.before,
-    after: applied.after,
-    timestamp: new Date().toISOString(),
-  });
-
-  return {
-    success: true,
-    changedFile: applied.path,
-    toolResult: {
-      success: true,
-      toolName,
-      output: {
-        path: applied.path,
-        diff: preview.diff,
-      },
-    },
-  };
-}
-
-async function executeCreateFile(
-  input: Record<string, unknown>,
-  context: {
-    repoRoot: string;
-    mode: RunMode;
-    ensureCheckpoint?: () => Promise<unknown>;
-  },
-  toolName = 'create_file',
-): Promise<AgentToolExecutionResult> {
-  if (typeof input.path !== 'string' || typeof input.content !== 'string') {
-    return toolFailure(toolName, 'path and content are required');
-  }
-
-  if (context.mode === 'read-only' || context.mode === 'verify') {
-    return toolFailure(toolName, `${context.mode} mode does not allow writes`);
-  }
-
-  const target = normalizeRepoPath(context.repoRoot, input.path);
-  if (!target.ok || !target.absolutePath || target.path === undefined) {
-    return toolFailure(toolName, target.reason ?? 'invalid path');
-  }
-  const mutationPath = canMutatePath(context.mode, context.repoRoot, target.path);
-  if (!mutationPath.ok) {
-    return toolFailure(toolName, mutationPath.reason ?? 'mutation path rejected');
-  }
-  if (existsSync(target.absolutePath)) {
-    return toolFailure(toolName, `file already exists: ${target.path}`);
-  }
-
-  if (Buffer.byteLength(input.content, 'utf-8') > 16 * 1024) {
-    return toolFailure(toolName, 'create_file content is too large; write a smaller text file');
-  }
-
-  await context.ensureCheckpoint?.();
-  await mkdir(dirname(target.absolutePath), { recursive: true });
-  await atomicWriteFile(target.absolutePath, input.content);
-  const written = await readFile(target.absolutePath, 'utf-8');
-  return {
-    success: true,
-    changedFile: target.path,
-    toolResult: {
-      success: true,
-      toolName,
-      output: {
-        path: target.path,
-        bytes: Buffer.byteLength(written, 'utf-8'),
-      },
-    },
-  };
-}
-
-function publicToolResult(toolName: string, result: ToolResult): AgentToolExecutionResult {
-  return {
-    success: result.success,
-    toolResult: { ...result, toolName },
-    error: result.error,
-  };
-}
-
-async function executeBashTool(input: Record<string, unknown>, repoRoot: string): Promise<AgentToolExecutionResult> {
-  const command = resolveShellCommand(input);
-  if (!command) {
-    return toolFailure('bash', 'command is required');
-  }
-
-  const blockReason = detectBlockedCommand(command);
-  if (blockReason) {
-    return toolFailure('bash', `Blocked: ${blockReason}`);
-  }
-
-  const plan = planBashCommand(command, repoRoot);
-  const safetyWarnings = detectDangerousCommandWarnings(plan.command);
-
-  try {
-    const { stdout, stderr } = await execFileAsync('/bin/bash', ['-lc', plan.command], {
-      cwd: repoRoot,
-      maxBuffer: 256 * 1024,
-      timeout: 30_000,
-    });
-    return {
-      success: true,
-      toolResult: {
-        success: true,
-        toolName: 'bash',
-        output: {
-          command: plan.command,
-          ...(plan.originalCommand !== plan.command ? { originalCommand: plan.originalCommand } : {}),
-          ...(plan.cwdRecovery ? { cwdRecovery: plan.cwdRecovery } : {}),
-          safetyWarnings,
-          stdout: String(stdout ?? ''),
-          stderr: String(stderr ?? ''),
-          exitCode: 0,
-        },
-      },
-    };
-  } catch (error) {
-    const e = error as { stdout?: string | Buffer; stderr?: string | Buffer; code?: number };
-    return {
-      success: false,
-      error: errorMessage(error),
-      toolResult: {
-        success: false,
-        toolName: 'bash',
-        error: errorMessage(error),
-        output: {
-          command: plan.command,
-          ...(plan.originalCommand !== plan.command ? { originalCommand: plan.originalCommand } : {}),
-          ...(plan.cwdRecovery ? { cwdRecovery: plan.cwdRecovery } : {}),
-          safetyWarnings,
-          stdout: typeof e.stdout === 'string' ? e.stdout : (e.stdout?.toString('utf-8') ?? ''),
-          stderr: typeof e.stderr === 'string' ? e.stderr : (e.stderr?.toString('utf-8') ?? ''),
-          exitCode: typeof e.code === 'number' ? e.code : 1,
-        },
-      },
-    };
-  }
-}
-
-interface BashCommandPlan {
-  command: string;
-  originalCommand: string;
-  cwdRecovery?: string;
-}
-
-function planBashCommand(command: string, repoRoot: string): BashCommandPlan {
-  const parsed = parseLeadingAbsoluteCd(command);
-  if (!parsed || !parsed.rest.trim()) return { command, originalCommand: command };
-
-  const root = resolve(repoRoot);
-  const target = resolve(parsed.target);
-  if (!isAbsolute(parsed.target)) return { command, originalCommand: command };
-
-  if (!existsSync(target)) {
-    return {
-      command: parsed.rest.trim(),
-      originalCommand: command,
-      cwdRecovery: `stale leading cd target did not exist: ${target}; running command body from ${root}`,
-    };
-  }
-
-  if (!isPathInside(root, target)) {
-    return {
-      command: parsed.rest.trim(),
-      originalCommand: command,
-      cwdRecovery: `stale leading cd target was outside the repository root: ${target}; running command body from ${root}`,
-    };
-  }
-
-  return { command, originalCommand: command };
-}
-
-function parseLeadingAbsoluteCd(command: string): { target: string; rest: string } | null {
-  const match = /^\s*cd\s+((?:"(?:[^"\\]|\\.)*"|'[^']*'|[^;&|]+?))\s*&&\s*([\s\S]+)$/u.exec(command);
-  if (!match) return null;
-  return { target: unquoteShellPath(match[1].trim()), rest: match[2] };
-}
-
-function unquoteShellPath(path: string): string {
-  if (path.length >= 2 && path.startsWith('"') && path.endsWith('"')) {
-    return path.slice(1, -1).replace(/\\(["\\$`])/g, '$1');
-  }
-  if (path.length >= 2 && path.startsWith("'") && path.endsWith("'")) {
-    return path.slice(1, -1);
-  }
-  return path;
-}
-
-function isPathInside(root: string, candidate: string): boolean {
-  const rel = relative(root, candidate);
-  return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
-}
-
-function detectRepeatedBashCommand(call: ParsedToolCall, counts: Map<string, number>): AgentToolExecutionResult | null {
-  if (call.name !== 'bash') return null;
-  const command = resolveShellCommand(call.arguments);
-  if (!command) return null;
-  const key = normalizeShellCommand(command);
-  const seen = counts.get(key) ?? 0;
-  counts.set(key, seen + 1);
-  if (seen < MAX_IDENTICAL_BASH_COMMANDS_PER_TURN) return null;
-
-  return toolFailure(
-    'bash',
-    `Bash loop detected: command repeated ${seen + 1} times without completing the task: ${command}`,
-  );
-}
-
-function resolveShellCommand(input: Record<string, unknown>): string | null {
-  if (typeof input.command === 'string' && input.command.trim().length > 0) {
-    return input.command.trim();
-  }
-  return null;
-}
-
-function normalizeShellCommand(command: string): string {
-  return command.replace(/\s+/g, ' ').trim();
-}
-
-function detectBlockedCommand(command: string): string | null {
-  const normalized = command.toLowerCase().replace(/\s+/g, ' ').trim();
-  if (/\bcurl\b.*\|\s*(bash|sh)\b/.test(normalized)) return 'remote script execution via curl|bash is blocked';
-  if (/\bwget\b.*\|\s*(bash|sh)\b/.test(normalized)) return 'remote script execution via wget|bash is blocked';
-  if (/\brm\s+-rf\s+\/(?=[\s;|&)"']|$)/.test(normalized)) return 'destructive delete of root (rm -rf /) is blocked';
-  if (/\brm\s+-rf\s+~(?=[\s;|&)"']|$)/.test(normalized)) return 'destructive delete of home (rm -rf ~) is blocked';
-  if (/\bmkfs(\.| )/.test(normalized)) return 'filesystem formatting (mkfs) is blocked';
-  if (/\bdd\s+if=.*\s+of=\/dev\//.test(normalized)) return 'raw block device write (dd to /dev) is blocked';
-  if (/\bshutdown\b|\breboot\b|\bhalt\b/.test(normalized)) return 'system power-state command is blocked';
-  return null;
-}
-
-function detectDangerousCommandWarnings(command: string): string[] {
-  const normalized = command.toLowerCase().replace(/\s+/g, ' ').trim();
-  const warnings: string[] = [];
-  const patterns: Array<{ pattern: RegExp; warning: string }> = [
-    {
-      pattern: /\brm\s+-rf\s+\.(?=[\s;|&)"']|$)/,
-      warning: 'destructive delete of current directory (`rm -rf .`) detected',
-    },
-    { pattern: /\brm\s+-rf\s+\/etc(?=[\s;|&/)"']|$)/, warning: 'system directory deletion (`rm -rf /etc`) detected' },
-    { pattern: /\bchmod\s+-r\s+0{0,2}\s+\//, warning: 'broad permission reset on root detected' },
-    { pattern: /\bchown\s+-r\s+.+\s+\//, warning: 'recursive ownership change on root detected' },
-    { pattern: /\brm\s+-rf\s+\/usr\b/, warning: 'system directory deletion (`rm -rf /usr`) detected' },
-    { pattern: /\brm\s+-rf\s+\/var\b/, warning: 'system directory deletion (`rm -rf /var`) detected' },
-  ];
-  for (const entry of patterns) {
-    if (entry.pattern.test(normalized)) warnings.push(entry.warning);
-  }
-  return warnings;
-}
-
 function isRecoverableToolError(call: ParsedToolCall, result: { success: boolean; error?: string }): boolean {
   if (result.success) return false;
   if (call.name === 'bash') return !isBashLoopError(result.error);
@@ -1354,17 +912,6 @@ function isBashLoopError(error: string | undefined): boolean {
 function isEditRecoverableError(error: string | undefined): boolean {
   if (error === undefined) return false;
   return error.includes('oldStr no longer matches') || error.includes('oldStr must match exactly once');
-}
-
-function coercePatch(input: Record<string, unknown>): ReplaceInFilePatch | null {
-  if (typeof input.path !== 'string' || typeof input.oldStr !== 'string' || typeof input.newStr !== 'string') {
-    return null;
-  }
-  return {
-    path: input.path,
-    oldStr: input.oldStr,
-    newStr: input.newStr,
-  };
 }
 
 function toolResultMessage(call: ParsedToolCall, content: string): AgentMessage {
@@ -1419,37 +966,6 @@ function flushContentToolResults(
 
 function toolCallFormat(response: ChatResponse): NonNullable<ChatResponse['toolCallFormat']> {
   return response.toolCallFormat ?? 'openai';
-}
-
-function readSignature(input: Record<string, unknown>): string {
-  return JSON.stringify({
-    path: typeof input.path === 'string' ? input.path : undefined,
-    query: typeof input.query === 'string' ? input.query : undefined,
-    startLine: typeof input.startLine === 'number' ? input.startLine : undefined,
-    endLine: typeof input.endLine === 'number' ? input.endLine : undefined,
-    maxFiles: typeof input.maxFiles === 'number' ? input.maxFiles : undefined,
-    maxMatches: typeof input.maxMatches === 'number' ? input.maxMatches : undefined,
-  });
-}
-
-function readRepetitionKey(input: Record<string, unknown>): string {
-  if (typeof input.query === 'string' && input.query.trim().length > 0) {
-    return `query:${input.query.trim()}`;
-  }
-  if (typeof input.path === 'string' && input.path.trim().length > 0) {
-    const start = typeof input.startLine === 'number' ? input.startLine : 0;
-    const end = typeof input.endLine === 'number' ? input.endLine : 0;
-    return `path:${input.path.trim()}:${start}-${end}`;
-  }
-  return 'list:.';
-}
-
-function toolFailure(toolName: string, error: string): { success: false; toolResult: ToolResult; error: string } {
-  return {
-    success: false,
-    error,
-    toolResult: { success: false, toolName, error },
-  };
 }
 
 function formatToolResultDetail(toolResult: ToolResult): string {
@@ -1509,71 +1025,6 @@ function guardModelRequestMultiStage(
     messages: result.activeMessages,
     compaction: result.compaction,
   };
-}
-
-function normalizeReadToolResult(
-  result: ToolResult,
-  settings: ContextBudgetSettings,
-  totalReadResultTokens: number,
-  ledger: InspectionLedger,
-): ToolResult {
-  if (!result.success) return result;
-  const serialized = JSON.stringify(result.output);
-  const estimatedOriginalTokens = estimateTokens(serialized);
-  const remaining = Math.max(0, settings.maxTotalReadResultTokensPerTurn - totalReadResultTokens);
-  const cap = Math.min(settings.maxSingleReadResultTokens, remaining);
-
-  if (cap <= 0) {
-    const path = readPathFromOutput(result.output);
-    return {
-      success: true,
-      toolName: result.toolName,
-      output: {
-        path,
-        omitted: true,
-        reason: 'turn token budget exceeded',
-        guidance: 'use targeted read/search',
-        estimatedOriginalTokens,
-        estimatedReturnedTokens: 0,
-      },
-    };
-  }
-
-  const truncated = truncateForTokenBudget(serialized, cap);
-  if (!truncated.truncated) {
-    return result;
-  }
-
-  const path = readPathFromOutput(result.output);
-  if (path) ledger.markPathAsTruncated(path);
-
-  return {
-    success: true,
-    toolName: result.toolName,
-    output: {
-      path,
-      estimatedOriginalTokens,
-      estimatedReturnedTokens: estimateTokens(truncated.text),
-      truncated: true,
-      message: 'read result truncated to stay within context budget. Use targeted read/search for more.',
-      content: truncated.text,
-    },
-  };
-}
-
-function estimateReadResultTokens(toolResult: ToolResult): number {
-  if (!toolResult.success) return 0;
-  const output = toolResult.output;
-  if (output && typeof output === 'object' && (output as { omitted?: boolean }).omitted) {
-    return 0;
-  }
-  return estimateTokens(JSON.stringify(toolResult.output));
-}
-
-function readPathFromOutput(output: unknown): string | undefined {
-  if (!output || typeof output !== 'object') return undefined;
-  const path = (output as { path?: unknown }).path;
-  return typeof path === 'string' ? path : undefined;
 }
 
 function isPrematureCompletionClaim(text: string): boolean {
