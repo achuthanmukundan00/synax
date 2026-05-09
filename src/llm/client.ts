@@ -15,6 +15,9 @@ import {
   toolCallParserRegistry,
   detectParserId,
 } from './tool-calls';
+import { repairJson } from './repair/json-repair';
+import { repairXml } from './repair/xml-repair';
+import { sanitizeReasoning } from './repair/reasoning-sanitizer';
 
 // ---------------------------------------------------------------------------
 // Error helpers
@@ -167,7 +170,11 @@ function parseSuccessResponse(bodyText: string, parserMode: ToolCallParserMode):
   }
 
   // Step 2: If no native tool_calls, use the configured parser on text content
-  let fallbackToolCallResult: import('./tool-calls').ToolCallParseResult;
+  let fallbackToolCallResult: {
+    ok: true;
+    source: 'openai' | 'content' | 'none';
+    calls: import('./tool-calls').ParsedToolCall[];
+  };
   if (standardToolCallResult.calls.length > 0) {
     fallbackToolCallResult = { ok: true, source: 'none', calls: [] };
   } else {
@@ -181,7 +188,13 @@ function parseSuccessResponse(bodyText: string, parserMode: ToolCallParserMode):
         calls: parserResult.calls,
       };
     } else {
-      throw modelToolCallParseError(parserResult.error ?? 'content parser failed');
+      // Step 2a: Attempt repair before giving up
+      const repairedResult = tryRepairAndParse(content, parserId);
+      if (repairedResult) {
+        fallbackToolCallResult = repairedResult;
+      } else {
+        throw modelToolCallParseError(parserResult.error ?? 'content parser failed');
+      }
     }
   }
 
@@ -409,6 +422,41 @@ function modelToolCallParseError(message: string): Error {
   const error = new Error(`model emitted malformed tool call output: ${message}`);
   error.name = 'ModelToolCallParseError';
   return error;
+}
+
+// ─── Repair-and-retry helpers ─────────────────────────────
+
+/**
+ * Try to repair raw model content and re-parse tool calls.
+ * Applies reasoning sanitization, then JSON repair (most common),
+ * then XML repair (Qwen family). Returns parsed results or null.
+ */
+type RepairParseSuccess = { ok: true; source: 'content'; calls: import('./tool-calls').ParsedToolCall[] };
+
+function tryRepairAndParse(content: string, parserId: string): RepairParseSuccess | null {
+  // Sanitize reasoning tags first — they often contaminate tool-call blocks
+  const sanitized = sanitizeReasoning(content).content;
+  if (!sanitized) return null;
+
+  // Try JSON repair (applies to llama3_json, hermes, mistral, deepseek, etc.)
+  const jsonRepaired = repairJson(sanitized);
+  if (jsonRepaired) {
+    const result = toolCallParserRegistry.parse(parserId, jsonRepaired.repaired);
+    if (result.ok && result.calls.length > 0) {
+      return { ok: true, source: 'content', calls: result.calls };
+    }
+  }
+
+  // Try XML repair (applies to qwen3_xml and other tag-based parsers)
+  const xmlRepaired = repairXml(sanitized);
+  if (xmlRepaired) {
+    const result = toolCallParserRegistry.parse(parserId, xmlRepaired.repaired);
+    if (result.ok && result.calls.length > 0) {
+      return { ok: true, source: 'content', calls: result.calls };
+    }
+  }
+
+  return null;
 }
 
 // ---------------------------------------------------------------------------
