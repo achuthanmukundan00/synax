@@ -1,5 +1,6 @@
 import { type AgentMessage } from '../session/Session';
 import { type InspectionLedger } from '../tools/ledger';
+import { DeterministicCompactor } from '../compaction/DeterministicCompactor';
 
 export interface ContextBudgetSettings {
   contextWindowTokens: number;
@@ -219,13 +220,15 @@ export function formatContextBudgetError(details: RequestBudgetErrorDetails): st
 // Multi-stage compaction
 // ---------------------------------------------------------------------------
 
-export type CompactionStage = 1 | 2 | 3 | 4;
+export type CompactionStage = 0 | 1 | 2 | 3 | 4;
 
 export interface CompactionResult {
   activeMessages: AgentMessage[];
   compaction: CompactionRecord | null;
   stage: CompactionStage;
   tokensAfter: number;
+  /** Optional deterministic compaction stats (set on stage 0). */
+  deterministicStats?: { savedTokens: number; techniques: string[] };
 }
 
 /**
@@ -236,6 +239,47 @@ export interface CompactionResult {
  */
 export function compactMessagesMultiStage(messages: AgentMessage[], settings: ContextBudgetSettings): CompactionResult {
   const effectiveLimit = settings.contextWindowTokens - settings.reservedOutputTokens;
+
+  // Stage 0: deterministic zero-token compression
+  // Only run for aggressive/moderate strategies; skip for light/none
+  const skipDeterministic = settings.strategyReserveTokens !== undefined && settings.strategyReserveTokens >= 32768;
+  if (!skipDeterministic) {
+    const compactor = new DeterministicCompactor();
+    const compacted = compactor.compact(messages);
+    if (compacted.stats.savedTokens > 0) {
+      const tokensAfter = estimateRequestTokens(messages);
+      if (tokensAfter <= effectiveLimit) {
+        return {
+          activeMessages: messages,
+          compaction: null,
+          stage: 0,
+          tokensAfter,
+          deterministicStats: {
+            savedTokens: compacted.stats.savedTokens,
+            techniques: compacted.stats.techniques,
+          },
+        };
+      }
+      return {
+        activeMessages: messages,
+        compaction: {
+          type: 'compaction',
+          stage: 0,
+          summary: `Deterministic compaction saved ${compacted.stats.savedTokens} tokens`,
+          firstKeptEntryId: 'deterministic',
+          tokensBefore: compacted.stats.originalTokens,
+          tokensAfter: compacted.stats.afterTokens,
+          createdAt: new Date().toISOString(),
+        },
+        stage: 0,
+        tokensAfter,
+        deterministicStats: {
+          savedTokens: compacted.stats.savedTokens,
+          techniques: compacted.stats.techniques,
+        },
+      };
+    }
+  }
 
   // Stage 1: normal compaction with dynamic tail sizing
   const stage1Tail = computeTailTokens(settings);
