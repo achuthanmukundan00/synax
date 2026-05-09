@@ -36,6 +36,7 @@ import { ActionExecutor, createDefaultHandlerMap } from '../actions/ActionExecut
 import { estimateReadResultTokens } from '../actions/handlers/read-handler';
 import { NodeExecutionEnv } from '../env/NodeExecutionEnv';
 import type { ExecutionEnv } from '../env/ExecutionEnv';
+import { RecoveryManager } from '../recovery/RecoveryManager';
 
 // Re-export types for backward compatibility with runner.ts consumers.
 export type AgentTerminalState = TerminalState;
@@ -166,6 +167,8 @@ export class Session {
   readonly env: ExecutionEnv;
   /** Holographic memory — null until M4 #12. */
   readonly memory: null = null;
+  /** Recovery manager — applies recovery recipes on failure scenarios. */
+  readonly recovery: RecoveryManager = new RecoveryManager();
 
   constructor(options: {
     repoRoot: string;
@@ -266,6 +269,47 @@ export class Session {
   /** No-op shutdown — placeholder for future lifecycle hooks. */
   shutdown(): void {
     this.eventBus.removeAllListeners();
+  }
+
+  // ── Recovery-aware turn ────────────────────────────────────────────────
+
+  /**
+   * Execute a turn with automatic recovery from known failure scenarios.
+   *
+   * Wraps startTurn() in a recovery loop that handles:
+   * - Empty model responses → inject nudge + retry
+   * - Bash failures → feed stderr back to model
+   * - Context exhaustion → inject compaction nudge
+   * - Infinite loops → inject steering message
+   */
+  async startTurnWithRecovery(task: string): Promise<AgentTurnResult> {
+    this.recovery.resetForTurn();
+
+    let result = await this.startTurn(task);
+    let recoveryAttempt = 0;
+    const MAX_RECOVERY_RETRIES = 2;
+
+    while (recoveryAttempt < MAX_RECOVERY_RETRIES) {
+      const scenario = classifyResultForRecovery(result);
+      if (!scenario) break;
+
+      const recoveryResult = await this.recovery.attemptRecovery({
+        scenario,
+        conversation: result.conversation as unknown as import('../recovery/types').RecoveryConversation,
+        task,
+        attempt: recoveryAttempt,
+        details: result.error,
+        stderr: scenario === 'bash_failure' ? result.error : undefined,
+      });
+
+      if (!recoveryResult?.recovered) break;
+
+      // Apply the injected nudge and retry the turn
+      result = await this.startTurn(task);
+      recoveryAttempt++;
+    }
+
+    return result;
   }
 
   // ── Core turn loop ──────────────────────────────────────────────────────
@@ -1213,4 +1257,42 @@ function buildModelRequest(
   resetTokenLedger(conversation.tokenLedger);
   estimateIncrementalTokens(withOrientation, conversation.tokenLedger);
   return withOrientation;
+}
+
+/**
+ * Classify a turn result for recovery eligibility.
+ * Returns the failure scenario if the result indicates a recoverable failure.
+ */
+function classifyResultForRecovery(result: AgentTurnResult): import('../recovery/types').FailureScenario | null {
+  // Empty or near-empty model response with error
+  if (
+    result.terminalState === 'model_error' &&
+    result.error &&
+    (result.error.toLowerCase().includes('empty') ||
+      result.error.toLowerCase().includes('no content') ||
+      result.error.toLowerCase().includes('no response'))
+  ) {
+    return 'empty_response';
+  }
+
+  // Bash failure with stderr
+  if (
+    result.terminalState === 'tool_error' &&
+    result.error &&
+    result.toolCalls.some((tc) => tc.name === 'bash' && !tc.success && tc.error?.includes('exit code'))
+  ) {
+    return 'bash_failure';
+  }
+
+  // Budget exhaustion
+  if (result.terminalState === 'budget_exhausted') {
+    return 'context_exhaustion';
+  }
+
+  // Tool error with possible loop
+  if (result.terminalState === 'tool_error' && result.error?.includes('too many consecutive')) {
+    return 'infinite_loop';
+  }
+
+  return null;
 }
