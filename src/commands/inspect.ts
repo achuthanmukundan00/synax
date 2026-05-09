@@ -21,7 +21,7 @@ import {
   type LocalDocsDiscovery,
   type LocalDocsSearchResult,
 } from '../context/local-docs';
-import { buildModelFacingTools } from '../agent/runner';
+import { Session } from '../session/Session';
 import { resolveContextBudgetSettings } from '../agent/context-budget';
 import { createContextLedger, type ContextLedger, type ModelCallEntry } from '../tools';
 
@@ -371,7 +371,7 @@ export function buildInspectConfigProfile(baseDir: string): ConfigProfile {
     contextBudgetTokens: parsedConfig.config.contextBudgetTokens,
     maxModelSteps: parsedConfig.config.maxModelSteps,
     maxToolCalls: parsedConfig.config.maxToolCalls,
-    tools: buildModelFacingTools({ bashEnabled: parsedConfig.config.tools?.bash?.enabled }).map((tool) => tool.name),
+    tools: Session.buildModelTools({ bashEnabled: parsedConfig.config.tools?.bash?.enabled }).map((tool) => tool.name),
     shell: parsedConfig.config.tools?.shell ?? 'zsh',
     bash: parsedConfig.config.tools?.bash?.enabled ?? false,
     providerPreset: parsedConfig.config.provider?.preset ?? 'relay',

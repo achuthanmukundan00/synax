@@ -1,7 +1,6 @@
 import { NormalRenderer, QuietRenderer, JsonlRenderer, DebugRenderer } from '../agent/renderers';
 import { runVerification } from '../agent/verification';
-import type { ModelToolSurfaceOptions } from '../agent/runner';
-import { buildModelFacingTools } from '../agent/runner';
+import { Session, type ModelToolSurfaceOptions } from '../session/Session';
 import { discoverLocalDocs, readLocalDoc } from '../context/local-docs';
 import { createOpenAICompatibleClient } from '../llm/client';
 import type { NormalizedProviderConfig } from '../llm/types';
@@ -64,7 +63,7 @@ export function createBuiltinExtensions(): BuiltinExtensions {
     },
     createProviderAdapter,
     createRenderer,
-    createModelTools: buildModelFacingTools,
+    createModelTools: Session.buildModelTools,
     mcpBridge: guardedMcpBridge,
   };
 }

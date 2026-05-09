@@ -18,15 +18,12 @@ import { loadSkills, type SkillDiagnostic } from '../agent/skills';
 import pkg from '../../package.json';
 import { createLLMClient, describeLLMProvider } from '../llm/provider-factory';
 import {
-  createAgentConversation,
-  buildModelFacingTools,
-  resetAgentConversation,
-  runAgentTurn,
+  Session,
   type AgentConversation,
   type AgentTerminalState,
   type AgentBudgetSnapshot,
   type AgentActivity,
-} from '../agent/runner';
+} from '../session/Session';
 import { runVerification, type VerificationResult } from '../agent/verification';
 import { buildProjectProfile, formatTextProfile } from '../config/profile';
 import { buildInspectConfigProfile } from './inspect';
@@ -119,7 +116,7 @@ export function createChatSession(options: {
   /** Skill diagnostics for display/debug. */
   skillDiagnostics?: SkillDiagnostic[];
 }): ChatSession {
-  const conversation = createAgentConversation({
+  const conversation = Session.createConversation({
     skillMessages: options.skillMessages,
   });
   let eventSink: ((event: import('../agent/events').AgentEvent) => void) | null = null;
@@ -147,14 +144,12 @@ export function createChatSession(options: {
       const factoryResult = createLLMClient(factoryInput);
       const client = factoryResult.client;
       const beforeHead = await gitHead(options.repoRoot);
-      const result = await runAgentTurn({
+      const turnSession = new Session({
         repoRoot: options.repoRoot,
-        task: message,
         client,
-        conversation,
-        maxSteps: config.maxModelSteps,
         maxToolCalls: config.maxToolCalls,
-        tools: { bashEnabled: config.tools?.bash?.enabled },
+        bashEnabled: config.tools?.bash?.enabled,
+        conversation,
         contextBudget: {
           contextBudgetTokens: config.contextBudgetTokens,
           contextWindowTokens: config.contextWindowTokens,
@@ -203,6 +198,7 @@ export function createChatSession(options: {
           }
         },
       });
+      const result = await turnSession.startTurn(message);
       const afterHead = await gitHead(options.repoRoot);
       const changedByCommit =
         beforeHead && afterHead && beforeHead !== afterHead
@@ -886,11 +882,32 @@ async function handleSlashCommand(
     };
   }
   if (command === '/clear') {
-    resetAgentConversation(context.conversation, { skillMessages: context.skillMessages });
+    // Use a temporary session wrapper for standalone conversation reset
+    const tempSession = new Session({
+      repoRoot: context.repoRoot,
+      client: {
+        chat: async () => {
+          throw new Error('noop');
+        },
+      },
+      conversation: context.conversation,
+      skillMessages: context.skillMessages,
+    });
+    tempSession.resetConversation({ skillMessages: context.skillMessages });
     return { handled: true, output: '[synax] conversation cleared' };
   }
   if (command === '/new') {
-    resetAgentConversation(context.conversation, { skillMessages: context.skillMessages });
+    const tempSession2 = new Session({
+      repoRoot: context.repoRoot,
+      client: {
+        chat: async () => {
+          throw new Error('noop');
+        },
+      },
+      conversation: context.conversation,
+      skillMessages: context.skillMessages,
+    });
+    tempSession2.resetConversation({ skillMessages: context.skillMessages });
     return { handled: true, output: '[synax] new session started', newSession: true };
   }
   if (command === '/settings') {
@@ -900,7 +917,7 @@ async function handleSlashCommand(
     return { handled: true, output: applySettingsSet(trimmedCommand, context.config) };
   }
   if (command === '/tools') {
-    const exposed = buildModelFacingTools({ bashEnabled: context.config.tools?.bash?.enabled }).map(
+    const exposed = Session.buildModelTools({ bashEnabled: context.config.tools?.bash?.enabled }).map(
       (tool) => tool.name,
     );
     return {
@@ -1326,7 +1343,7 @@ function renderSettingsPanel(repoRoot: string, config: ProjectConfig): string {
   const provider = normalizeProviderConfig(config.provider ?? {});
   const headers = Object.keys(config.provider?.custom_headers ?? config.provider?.customHeaders ?? {});
   const configPath = discoverConfigPath(repoRoot) ?? '(defaults)';
-  const exposed = buildModelFacingTools({ bashEnabled: config.tools?.bash?.enabled }).map((tool) => tool.name);
+  const exposed = Session.buildModelTools({ bashEnabled: config.tools?.bash?.enabled }).map((tool) => tool.name);
   return [
     'Settings',
     '--------',
