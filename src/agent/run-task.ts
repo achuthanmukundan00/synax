@@ -7,7 +7,7 @@ import { runVerification, type VerificationResult } from './verification';
 import { eventNow, type AgentEvent } from './events';
 import { createSafetyCheckpoint, detectDirtyTree, writeRunLog } from './safety';
 import { normalizeRunMode, type RunMode } from './task-policy';
-import { type Logger } from '../logging/index.js';
+import { type Logger, createLogger } from '../logging/index';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 import { createEventStore } from '../store/EventStore';
@@ -169,7 +169,7 @@ export async function runAgentTask(options: RunTaskOptions): Promise<RunTaskRepo
     maxToolCalls: projectConfig.config.maxToolCalls,
     bashEnabled: projectConfig.config.tools?.bash?.enabled,
     skillMessages,
-    logger: options.logger,
+    logger: eventStore ? createLogger({ sessionId, eventStore }) : options.logger,
     contextBudget: {
       contextBudgetTokens: projectConfig.config.contextBudgetTokens,
       contextWindowTokens: projectConfig.config.contextWindowTokens,
@@ -284,7 +284,7 @@ export async function runAgentTask(options: RunTaskOptions): Promise<RunTaskRepo
         maxToolCalls: Math.max(8, Math.floor((projectConfig.config.maxToolCalls ?? 192) / 2)),
         bashEnabled: projectConfig.config.tools?.bash?.enabled,
         skillMessages,
-        logger: options.logger,
+        logger: eventStore ? createLogger({ sessionId, eventStore }) : options.logger,
         contextBudget: {
           contextBudgetTokens: projectConfig.config.contextBudgetTokens,
           contextWindowTokens: projectConfig.config.contextWindowTokens,

@@ -162,6 +162,42 @@ export class EventStore {
       });
   }
 
+  /**
+   * Append a structured log event to the store.
+   * Implements LoggerEventStore interface for Logger integration.
+   */
+  appendLogEvent(entry: {
+    level: string;
+    message: string;
+    timestamp: string;
+    context?: Record<string, unknown>;
+    error?: string;
+  }): void {
+    if (!this.db) return;
+    try {
+      this.db
+        .prepare(
+          `INSERT INTO log_events (level, message, timestamp, context, session_id, error)
+         VALUES (@level, @message, @timestamp, @context, @sessionId, @error)`,
+        )
+        .run({
+          level: entry.level,
+          message: entry.message,
+          timestamp: entry.timestamp,
+          context: entry.context ? JSON.stringify(entry.context) : null,
+          sessionId: (entry.context?.sessionId as string) ?? null,
+          error: entry.error ?? null,
+        });
+    } catch {
+      // Best-effort — logging must not crash
+    }
+  }
+
+  /** Whether the store is available (connected, ready). */
+  get available(): boolean {
+    return this.isOpen;
+  }
+
   /** Get event count for a session (for sequence tracking). */
   getEventCount(sessionId: string): number {
     if (!this.db) return 0;
