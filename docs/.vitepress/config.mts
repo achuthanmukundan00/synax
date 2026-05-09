@@ -2,7 +2,7 @@ import { defineConfig } from 'vitepress';
 
 export default defineConfig({
   title: 'Synax',
-  description: 'Local-first CLI coding agent for Relay-compatible local inference',
+  description: 'Local-first CLI coding agent with multi-provider routing and native tool-call parsers for 26 model families',
   base: '/',
   cleanUrls: true,
   themeConfig: {

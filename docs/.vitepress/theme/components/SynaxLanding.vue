@@ -46,23 +46,23 @@
     <!-- Principle cards -->
     <section class="landing-principles">
       <div class="principle-card">
-        <h3>Observable runtime.</h3>
-        <p>See when the model is loaded. See when it is working. See when tools are active. See when the run succeeds or fails.</p>
+        <h3>Multi-provider routing.</h3>
+        <p>Local Relay. Cloud APIs. Anthropic Messages. OpenRouter. One agent loop routes reads, edits, and tool calls through any OpenAI-compatible endpoint.</p>
       </div>
       <div class="principle-card">
-        <h3>Local models, real work.</h3>
-        <p>Run agent workflows on open-weight models and consumer GPUs. No cloud required. Compatible with any OpenAI-compatible endpoint.</p>
+        <h3>Native tool-call parsers.</h3>
+        <p>26 model families parsed natively. Qwen XML, Hermes JSON, Llama Pythonic, DeepSeek, Mistral — Synax extracts tool calls from raw model output without vLLM normalization.</p>
       </div>
       <div class="principle-card">
         <h3>Contained, not chaotic.</h3>
-        <p>Failures are surfaced as runtime states, not buried in noise. The chamber holds &mdash; the model thinks &mdash; the state shows.</p>
+        <p>Budget-aware context compaction. Observable runtime states. Verification lifecycle tracking. Failures are surfaced, not buried in noise.</p>
       </div>
     </section>
 
     <!-- Docs entry -->
     <section class="landing-docs-entry">
-      <h2>Make local models useful.</h2>
-      <p>Synax is a local-first coding agent that gives local, open, and low-cost models a stateful runtime: containment, tool execution, verification, and failure handling. Provider-compatible when you need a fallback, local-first by default.</p>
+      <h2>Local models, real work.</h2>
+      <p>Synax is a local-first coding agent built for developers running open-weight models on consumer GPUs. It gives local, open, and low-cost models a stateful runtime — containment, tool execution, verification, and failure handling — plus native tool-call parsers that keep you independent of server-side normalization. Provider-compatible when you need a fallback, local-first by default.</p>
       <a href="/guide/getting-started">→ Read the docs</a>
     </section>
   </div>

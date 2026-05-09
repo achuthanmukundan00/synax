@@ -36,7 +36,37 @@ Synax works with defaults, but a `.synax.toml` makes provider and verification b
 cp .synax.toml.example .synax.toml
 ```
 
-Edit the model name to match the model exposed by Relay.
+Pick a provider. Local Relay is the default:
+
+```toml
+[provider]
+provider = "relay"
+base_url = "http://127.0.0.1:1234/v1"
+model = "Qwen3.6-35B-A3B-UD-IQ3_XXS.gguf"
+context_window = 131072
+```
+
+Cloud providers need an API key:
+
+```toml
+[provider]
+provider = "deepseek"
+model = "deepseek-chat"
+api_key_env = "DEEPSEEK_API_KEY"
+```
+
+Built-in presets: `relay`, `deepseek`, `anthropic`, `openrouter`, `groq`, `mistral`, `together`, and `custom` for any OpenAI-compatible endpoint.
+
+For local models, set `tool_call_parser` to match your model family so Synax can extract tool calls from raw output:
+
+```toml
+[provider]
+provider = "relay"
+model = "Qwen3.6-35B-A3B"
+tool_call_parser = "qwen3_xml"
+```
+
+Synax auto-detects the parser from your model name if you don't set it explicitly. See the [Tool-Call Parsing guide](/guide/tool-call-parsing) for the full parser matrix.
 
 ## Check The Setup
 

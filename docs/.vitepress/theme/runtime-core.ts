@@ -284,6 +284,43 @@ export const runtimeScenes: RuntimeSceneDef[] = [
       { kind: 'kv', key: 'ctx', value: '0 / 128000' },
     ],
   },
+  {
+    id: 'qwen-multi',
+    modelId: 'qwen-coder',
+    coreName: 'Qwen',
+    provider: 'relay(local)',
+    state: 'idle',
+    context: '0 / 32768',
+    headline: 'One runtime, every provider.',
+    subheadline: 'Route local Relay, cloud APIs, or custom endpoints through the same agent loop.',
+    intensity: 0.42,
+    terminal: [
+      { kind: 'kv', key: 'core', value: 'qwen-coder', tone: 'model' },
+      { kind: 'kv', key: 'provider', value: 'relay (local)' },
+      { kind: 'kv', key: 'routing', value: 'deepseek → anthropic → groq' },
+      { kind: 'kv', key: 'state', value: 'idle', tone: 'model' },
+      { kind: 'kv', key: 'ctx', value: '0 / 32768' },
+    ],
+  },
+  {
+    id: 'deepseek-parsers',
+    modelId: 'deepseek-coder',
+    coreName: 'DeepSeek',
+    provider: 'relay(local)',
+    state: 'tool-running',
+    context: '18420 / 65536',
+    headline: '26 native tool-call parsers.',
+    subheadline: 'Qwen XML, Hermes JSON, Llama Pythonic, DeepSeek, Mistral — no vLLM normalization needed.',
+    intensity: 0.78,
+    terminal: [
+      { kind: 'command', value: 'parse qwen3_xml → tool_call', tone: 'working' },
+      { kind: 'command', value: 'parse hermes → tool_call', tone: 'working' },
+      { kind: 'command', value: 'parse deepseek_v3 → tool_call', tone: 'working' },
+      { kind: 'command', value: 'parse llama4_pythonic → tool_call', tone: 'working' },
+      { kind: 'kv', key: 'state', value: 'tool-running', tone: 'working' },
+      { kind: 'kv', key: 'ctx', value: '18420 / 65536' },
+    ],
+  },
 ]
 
 export function resolveCoreVisualProfile(modelId: string): CoreVisualProfile {
