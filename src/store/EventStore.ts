@@ -11,6 +11,7 @@ import { dirname, join } from 'path';
 import Database from 'better-sqlite3';
 import type { AgentEvent } from '../agent/events';
 import { ALL_DDL, SCHEMA_VERSION_PRAGMA, type SessionRecord } from './schema';
+import { HolographicMemory } from '../memory/HolographicMemory';
 
 export type { SessionRecord };
 
@@ -30,6 +31,8 @@ export class EventStore {
   private insertEventStmt: Database.Statement | null = null;
   private insertSpanStmt: Database.Statement | null = null;
   private dbPath: string;
+  /** Holographic memory — shares this store's DB connection. */
+  readonly memory: HolographicMemory;
 
   constructor(dbPath?: string) {
     this.dbPath = dbPath ?? defaultDbPath();
@@ -39,6 +42,7 @@ export class EventStore {
       // EventStore is optional — agent works without persistence
       this.db = null;
     }
+    this.memory = new HolographicMemory(this.db);
   }
 
   get isOpen(): boolean {
