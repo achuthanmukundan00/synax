@@ -10,6 +10,10 @@ export interface ContextBudgetSettings {
   keepRecentToolTurns?: number;
   /** Fraction of effective input limit at which proactive assembly compaction triggers. 0 = always, 1 = never. Default 0.8. */
   assemblyCompactionThreshold?: number;
+  /** Strategy-based reserve override (internal, set by run-task). */
+  strategyReserveTokens?: number;
+  /** Strategy-based window override for 'off' mode (internal). */
+  strategyWindowOverride?: number;
 }
 
 export interface CompactionRecord {
@@ -64,11 +68,23 @@ export function resolveContextBudgetSettings(config: {
   maxTotalReadResultTokensPerTurn?: number;
   keepRecentToolTurns?: number;
   assemblyCompactionThreshold?: number;
+  /** Strategy-based reserve override. Takes precedence over explicit reservedOutputTokens. */
+  strategyReserveTokens?: number;
+  /** Strategy-based window override (for 'off' mode). */
+  strategyWindowOverride?: number;
 }): ContextBudgetSettings {
+  const contextWindowTokens =
+    config.strategyWindowOverride ??
+    config.contextWindowTokens ??
+    config.contextBudgetTokens ??
+    DEFAULT_SETTINGS.contextWindowTokens;
+
+  const reservedOutputTokens =
+    config.strategyReserveTokens ?? config.reservedOutputTokens ?? DEFAULT_SETTINGS.reservedOutputTokens;
+
   return {
-    contextWindowTokens:
-      config.contextWindowTokens ?? config.contextBudgetTokens ?? DEFAULT_SETTINGS.contextWindowTokens,
-    reservedOutputTokens: config.reservedOutputTokens ?? DEFAULT_SETTINGS.reservedOutputTokens,
+    contextWindowTokens,
+    reservedOutputTokens,
     keepRecentTokens: config.keepRecentTokens ?? DEFAULT_SETTINGS.keepRecentTokens,
     maxSingleReadResultTokens: config.maxSingleReadResultTokens ?? DEFAULT_SETTINGS.maxSingleReadResultTokens,
     maxTotalReadResultTokensPerTurn:

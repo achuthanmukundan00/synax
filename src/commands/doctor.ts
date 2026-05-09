@@ -4,6 +4,7 @@ import { loadProjectConfig, toProviderFactoryInput, type ProjectConfig } from '.
 import pkg from '../../package.json';
 import { createLLMClient } from '../llm/provider-factory';
 import type { NormalizedProviderConfig } from '../llm/types';
+import { resolveStrategy } from '../context/ContextStrategy';
 
 // ---------------------------------------------------------------------------
 // Doctor diagnostic types
@@ -24,6 +25,7 @@ export interface DoctorFullReport {
   packageManager: DiagnosticResult;
   configuredCommands: DiagnosticResult;
   contextBudget: DiagnosticResult;
+  contextStrategy?: DiagnosticResult;
   relayHealth: DiagnosticResult;
 }
 
@@ -252,6 +254,26 @@ export function checkConfiguredCommands(config: ProjectConfig): DiagnosticResult
 }
 
 // ---------------------------------------------------------------------------
+// Context strategy check
+// ---------------------------------------------------------------------------
+
+export function checkContextStrategy(contextWindow?: number): DiagnosticResult {
+  if (contextWindow === undefined) {
+    return warn(
+      'context-strategy',
+      'Context window unknown; using default moderate strategy',
+      'Set contextWindowTokens in .synax.toml or configure provider preset',
+    );
+  }
+  const strategy = resolveStrategy(contextWindow);
+  return pass(
+    'context-strategy',
+    `${strategy.label} — context window: ${formatContext(contextWindow)}, reserve: ${formatContext(strategy.reserveTokens)}`,
+    `Compact: ${strategy.compact === false ? 'none' : strategy.compact}`,
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Context budget check
 // ---------------------------------------------------------------------------
 
@@ -365,6 +387,7 @@ async function runQuickDoctor(baseDir?: string): Promise<DoctorFullReport> {
   const cfg = checkConfig(baseDir);
   const budget = checkContextBudget(config);
   const commands = checkConfiguredCommands(config);
+  const strategy = checkContextStrategy(config.contextWindowTokens);
 
   const providerReachability: DiagnosticResult = skip('provider-reachability');
   const modelRequest: DiagnosticResult = skip('model-request');
@@ -378,6 +401,7 @@ async function runQuickDoctor(baseDir?: string): Promise<DoctorFullReport> {
     packageManager: pm,
     configuredCommands: commands,
     contextBudget: budget,
+    contextStrategy: strategy,
     relayHealth,
   };
 }
@@ -413,6 +437,8 @@ async function runFullDoctor(baseDir?: string): Promise<DoctorFullReport> {
     return report;
   }
 
+  const contextWindow = metadata.contextWindow ?? config.contextWindowTokens ?? config.contextBudgetTokens;
+  const strategy = checkContextStrategy(contextWindow);
   const providerReachability = await checkProviderReachability(normalizedConfig);
   const modelRequest = await checkModelRequest(client);
   const relayHealth = await checkRelayHealth(
@@ -420,7 +446,7 @@ async function runFullDoctor(baseDir?: string): Promise<DoctorFullReport> {
     normalizedConfig.apiKey,
     normalizedConfig.customHeaders,
   );
-  return { ...report, providerReachability, modelRequest, relayHealth };
+  return { ...report, contextStrategy: strategy, providerReachability, modelRequest, relayHealth };
 }
 
 // ---------------------------------------------------------------------------
@@ -437,6 +463,12 @@ export async function runDoctor(mode: DoctorMode = 'quick', baseDir?: string): P
 // ---------------------------------------------------------------------------
 // Report formatting
 // ---------------------------------------------------------------------------
+
+function formatContext(tokens: number): string {
+  if (tokens >= 1_000_000) return `${(tokens / 1_000_000).toFixed(1)}M`;
+  if (tokens >= 1_000) return `${Math.round(tokens / 1_000)}K`;
+  return `${tokens}`;
+}
 
 function statusIcon(status: DiagnosticResult['status']): string {
   switch (status) {
@@ -461,6 +493,7 @@ export function formatReport(report: DoctorFullReport, compact: boolean = false)
     { label: 'Git Repository', result: report.repo },
     { label: 'Config', result: report.config },
     { label: 'Package Manager', result: report.packageManager },
+    { label: 'Context Strategy', result: report.contextStrategy ?? skip('context-strategy') },
     { label: 'Context Budget', result: report.contextBudget },
     { label: 'Configured Commands', result: report.configuredCommands },
     { label: 'Provider Reachability', result: report.providerReachability },
