@@ -44,7 +44,13 @@ export interface BashAction {
   command: string;
 }
 
-export type AgentAction = ReadAction | EditAction | WriteAction | BashAction;
+export interface SearchMemoryAction {
+  kind: 'search_memory';
+  query: string;
+  maxResults?: number;
+}
+
+export type AgentAction = ReadAction | EditAction | WriteAction | BashAction | SearchMemoryAction;
 
 // ─── Execution context ────────────────────────────────────
 
@@ -63,6 +69,7 @@ export interface ExecutionContext {
   ensureCheckpoint?: () => Promise<unknown>;
   approvePatch?: (preview: PatchPreview) => PatchApprovalDecision | Promise<PatchApprovalDecision>;
   onPatchPreview?: (preview: PatchPreview) => void;
+  memory?: import('../memory/HolographicMemory').HolographicMemory | null;
 }
 
 // ─── Handler type ─────────────────────────────────────────
@@ -130,6 +137,15 @@ export function toAgentAction(call: ParsedToolCall): AgentAction | null {
         return null;
       }
       return { kind: 'bash', command: args.command.trim() };
+    case 'search_memory':
+      if (typeof args.query !== 'string' || args.query.trim().length === 0) {
+        return null;
+      }
+      return {
+        kind: 'search_memory',
+        query: args.query.trim(),
+        maxResults: typeof args.maxResults === 'number' ? args.maxResults : undefined,
+      };
     default:
       // Unknown tool — let the registry handle it
       return null;

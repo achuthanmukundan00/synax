@@ -791,6 +791,7 @@ export class Session {
                     ...preview,
                   });
                 },
+                memory: this.memory,
               },
               identicalBashCounts,
             );
@@ -1083,6 +1084,42 @@ function buildModelFacingTools(options: ModelToolSurfaceOptions = {}): ToolDefin
       },
     });
   }
+
+  // search_memory: always available (read-only, no fs access)
+  tools.push({
+    name: 'search_memory',
+    description:
+      'Search conversation history for past actions, errors, file changes, and context. ' +
+      'Use this to recall what you did in earlier turns instead of re-reading files.',
+    inputSchema: {
+      type: 'object',
+      required: ['query'],
+      properties: {
+        query: {
+          type: 'string',
+          description: 'Search query. Uses FTS5 with stemming — "error login" matches "errors" and "logging".',
+        },
+        maxResults: {
+          type: 'number',
+          description: 'Maximum results to return (1-20, default 10).',
+        },
+      },
+      additionalProperties: false,
+    },
+    safetyPolicy: {
+      readOnly: true,
+      rejectsUnsafePaths: false,
+      boundedOutput: true,
+    },
+    ledgerBehavior: 'none',
+    async execute() {
+      return {
+        success: false,
+        toolName: 'search_memory',
+        error: 'handled by the agent runner',
+      };
+    },
+  });
 
   return tools.filter((tool) => allowedNames.includes(tool.name));
 }
