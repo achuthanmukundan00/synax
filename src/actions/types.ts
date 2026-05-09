@@ -12,6 +12,7 @@ import type { TerminalState } from '../agent/events';
 import type { ContextBudgetSettings } from '../agent/context-budget';
 import type { ParsedToolCall } from '../llm/tool-calls';
 import type { RunMode } from '../agent/task-policy';
+import type { ExecutionEnv } from '../env/ExecutionEnv';
 
 // ─── Action types ─────────────────────────────────────────
 
@@ -53,6 +54,7 @@ export interface ExecutionContext {
   registry: import('../tools/types').ToolRegistry;
   ledger: InspectionLedger;
   mode: RunMode;
+  env: ExecutionEnv;
   readCache: Map<string, ToolResult>;
   identicalReadCounts: Map<string, number>;
   totalReadCalls: number;
