@@ -123,9 +123,10 @@ function eventSummary(ev: { type: string; payload: Record<string, unknown> }): s
 
 function runStats(store: EventStore, options: MetricsOptions): void {
   const stats = store.getAggregateStats();
+  const tokenStats = store.getTokenStats();
 
   if (options.json) {
-    console.log(JSON.stringify(stats, null, 2));
+    console.log(JSON.stringify({ ...stats, tokenStats }, null, 2));
     return;
   }
 
@@ -144,6 +145,20 @@ function runStats(store: EventStore, options: MetricsOptions): void {
   console.log(`  Avg tool calls:      ${stats.avgToolCalls}`);
   console.log(`  Total tool calls:    ${stats.totalToolCalls}`);
   console.log('');
+
+  if (tokenStats.turnCount > 0) {
+    console.log('Token Usage (all sessions):');
+    console.log(`  Total input tokens:   ${tokenStats.totalInputTokens.toLocaleString()}`);
+    console.log(`  Total output tokens:  ${tokenStats.totalOutputTokens.toLocaleString()}`);
+    console.log(`  Total tokens:         ${tokenStats.totalTokens.toLocaleString()}`);
+    if (tokenStats.totalEstimatedCost > 0) {
+      console.log(`  Estimated cost:       $${tokenStats.totalEstimatedCost.toFixed(4)}`);
+    } else {
+      console.log(`  Estimated cost:       $0.00 (local models)`);
+    }
+    console.log(`  Model turns tracked:  ${tokenStats.turnCount}`);
+    console.log('');
+  }
 
   if (stats.topModels.length > 0) {
     console.log('Top Models:');

@@ -292,6 +292,47 @@ export class EventStore {
     }));
   }
 
+  /** Get cumulative token usage and cost from token_usage events. */
+  getTokenStats(sessionId?: string): {
+    totalInputTokens: number;
+    totalOutputTokens: number;
+    totalTokens: number;
+    totalEstimatedCost: number;
+    turnCount: number;
+  } {
+    if (!this.db) {
+      return { totalInputTokens: 0, totalOutputTokens: 0, totalTokens: 0, totalEstimatedCost: 0, turnCount: 0 };
+    }
+
+    const clause = sessionId ? 'WHERE session_id = ?' : '';
+    const params = sessionId ? [sessionId] : [];
+
+    const rows = this.db
+      .prepare(
+        `SELECT payload FROM events WHERE type = 'token_usage' ${clause} ORDER BY sequence ASC`,
+      )
+      .all(...params) as Array<{ payload: string }>;
+
+    let totalInputTokens = 0;
+    let totalOutputTokens = 0;
+    let totalEstimatedCost = 0;
+
+    for (const row of rows) {
+      const payload = safeJsonParse<Record<string, unknown>>(row.payload, {});
+      totalInputTokens += (payload.inputTokens as number) ?? 0;
+      totalOutputTokens += (payload.outputTokens as number) ?? 0;
+      totalEstimatedCost += (payload.estimatedCost as number) ?? 0;
+    }
+
+    return {
+      totalInputTokens,
+      totalOutputTokens,
+      totalTokens: totalInputTokens + totalOutputTokens,
+      totalEstimatedCost: Math.round(totalEstimatedCost * 10000) / 10000,
+      turnCount: rows.length,
+    };
+  }
+
   /** Get aggregated statistics for sessions within the given number of days. */
   getAggregateStats(days = 30): {
     totalSessions: number;

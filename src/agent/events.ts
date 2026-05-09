@@ -98,7 +98,13 @@ export type AgentEvent =
       verification: string;
       error?: string;
     })
-  | (AgentEventBase & { type: 'error'; message: string });
+  | (AgentEventBase & { type: 'error'; message: string })
+  | (AgentEventBase & {
+      type: 'token_usage';
+      inputTokens: number;
+      outputTokens: number;
+      estimatedCost: number;
+    });
 
 export function eventNow(): string {
   return new Date().toISOString();
