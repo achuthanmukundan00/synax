@@ -225,6 +225,12 @@ export async function runAgentTask(options: RunTaskOptions): Promise<RunTaskRepo
       return checkpoint;
     },
   });
+
+  // Wire holographic memory from EventStore into Session
+  if (eventStore?.memory.isAvailable) {
+    session.memory = eventStore.memory;
+  }
+
   const turn = await session.startTurn(options.task);
   const checkpointRecord = checkpoint as { id: string; statusPath: string; diffPath: string } | null;
 
