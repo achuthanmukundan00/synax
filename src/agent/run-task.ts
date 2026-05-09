@@ -2,7 +2,7 @@ import { loadProjectConfig, toProviderFactoryInput } from '../config/project';
 import { loadSynaxConfig } from '../config/load-config';
 import { loadSkills } from './skills';
 import { createLLMClient } from '../llm/provider-factory';
-import { buildModelFacingTools, runAgentTurn, type AgentActivity, type AgentTerminalState } from './runner';
+import { Session, type AgentActivity, type AgentTerminalState } from '../session/Session';
 import { runVerification, type VerificationResult } from './verification';
 import { eventNow, type AgentEvent } from './events';
 import { createSafetyCheckpoint, detectDirtyTree, writeRunLog } from './safety';
@@ -135,7 +135,7 @@ export async function runAgentTask(options: RunTaskOptions): Promise<RunTaskRepo
   const dirtyTree = await detectDirtyTree(options.repoRoot);
   const beforeHead = await gitHead(options.repoRoot);
   let checkpoint: { id: string; statusPath: string; diffPath: string } | null = null;
-  const tools = buildModelFacingTools({ bashEnabled: projectConfig.config.tools?.bash?.enabled, mode }).map(
+  const tools = Session.buildModelTools({ bashEnabled: projectConfig.config.tools?.bash?.enabled, mode }).map(
     (tool) => tool.name,
   );
   wrappedOnEvent({
@@ -162,14 +162,12 @@ export async function runAgentTask(options: RunTaskOptions): Promise<RunTaskRepo
     skillMessages = result.systemMessages;
   }
 
-  const turn = await runAgentTurn({
+  const session = new Session({
     repoRoot: options.repoRoot,
-    task: options.task,
     client,
     mode,
-    maxSteps: projectConfig.config.maxModelSteps,
     maxToolCalls: projectConfig.config.maxToolCalls,
-    tools: { bashEnabled: projectConfig.config.tools?.bash?.enabled, mode },
+    bashEnabled: projectConfig.config.tools?.bash?.enabled,
     skillMessages,
     logger: options.logger,
     contextBudget: {
@@ -202,6 +200,7 @@ export async function runAgentTask(options: RunTaskOptions): Promise<RunTaskRepo
       return checkpoint;
     },
   });
+  const turn = await session.startTurn(options.task);
   const checkpointRecord = checkpoint as { id: string; statusPath: string; diffPath: string } | null;
 
   const verificationCommand = projectConfig.config.verification?.defaultCommand;
@@ -278,14 +277,12 @@ export async function runAgentTask(options: RunTaskOptions): Promise<RunTaskRepo
         command: verificationCommand,
         summary: `repair ${attempt}/${maxRepairAttempts}`,
       });
-      const repair = await runAgentTurn({
+      const repairSession = new Session({
         repoRoot: options.repoRoot,
-        task: `Verification failed. Fix the changed files and make verification pass. Failure output:\n${verification.stderr.slice(0, 1000)}`,
         client,
         mode,
-        maxSteps: Math.max(4, Math.floor((projectConfig.config.maxModelSteps ?? 64) / 2)),
         maxToolCalls: Math.max(8, Math.floor((projectConfig.config.maxToolCalls ?? 192) / 2)),
-        tools: { bashEnabled: projectConfig.config.tools?.bash?.enabled, mode },
+        bashEnabled: projectConfig.config.tools?.bash?.enabled,
         skillMessages,
         logger: options.logger,
         contextBudget: {
@@ -301,6 +298,9 @@ export async function runAgentTask(options: RunTaskOptions): Promise<RunTaskRepo
         approvePatch: () => (options.yes ? 'accept' : 'reject'),
         ensureCheckpoint: async () => checkpoint ?? (checkpoint = await createSafetyCheckpoint(options.repoRoot)),
       });
+      const repair = await repairSession.startTurn(
+        `Verification failed. Fix the changed files and make verification pass. Failure output:\n${verification.stderr.slice(0, 1000)}`,
+      );
       repairedTurn = repair;
       if (repair.changedFiles.length > 0) {
         const rStarted = Date.now();

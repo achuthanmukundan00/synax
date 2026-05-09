@@ -1,4 +1,4 @@
-import { type AgentMessage } from './runner';
+import { type AgentMessage } from '../session/Session';
 import { type InspectionLedger } from '../tools/ledger';
 
 export interface ContextBudgetSettings {
