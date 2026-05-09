@@ -156,7 +156,7 @@ async function checkProviderReachability(
 // Model request check
 // ---------------------------------------------------------------------------
 
-async function checkModelRequest(client: import('../agent/runner').AgentClient): Promise<DiagnosticResult> {
+async function checkModelRequest(client: import('../session/Session').AgentClient): Promise<DiagnosticResult> {
   try {
     const start = performance.now();
     const response = await client.chat({
