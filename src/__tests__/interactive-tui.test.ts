@@ -218,6 +218,7 @@ describe('terminal session', () => {
     terminal.start();
     terminal.enableMouse();
     const first = stdout.chunks.join('');
+    // eslint-disable-next-line no-control-regex
     const count1000h = (first.match(/\u001b\[\?1000h/g) || []).length;
     expect(count1000h).toBe(1);
   });

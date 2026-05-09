@@ -56,9 +56,9 @@ program.hook('preAction', (thisCommand) => {
 
 // Hidden liminal command — intercepted before commander to avoid help exposure
 if (process.argv[2] === '__liminal__') {
-  // eslint-disable-next-line @typescript-eslint/no-var-requires
-  const { runSynaxBackrooms } = require('./backrooms/index.js');
-  runSynaxBackrooms().catch((err: unknown) => {
+  import('./backrooms/index.js').then(({ runSynaxBackrooms }) => {
+    return runSynaxBackrooms();
+  }).catch((err: unknown) => {
     process.stderr.write(`liminal layer error: ${err instanceof Error ? err.message : String(err)}\n`);
     process.exit(1);
   });
