@@ -12,7 +12,7 @@
 import { createOpenAICompatibleClient } from './client';
 import { createAnthropicAdapter } from './anthropic-adapter';
 import { getAllProviderPresets, getProviderPreset, isKnownProviderId } from './provider-presets';
-import type { AgentClient } from '../agent/runner';
+import type { AgentClient } from '../session/Session';
 import type { NormalizedProviderConfig, ProviderMetadata, ProviderPreset, ProviderProtocol } from './types';
 import type { ContextLedger } from '../tools';
 
