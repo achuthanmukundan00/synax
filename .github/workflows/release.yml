@@ -1,0 +1,73 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to release (e.g. 0.0.23-alpha)'
+        required: true
+        type: string
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm run format:check
+
+  test:
+    needs: quality
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      - run: npm ci
+      - run: npm test
+
+  release:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Set version
+        run: |
+          npm version ${{ github.event.inputs.version }} --no-git-tag-version
+
+      - run: npm ci
+      - run: npm run build
+
+      - name: Create package tarball
+        run: |
+          npm pack
+          shasum -a 256 synax-*.tgz > SHASUMS256.txt
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ github.event.inputs.version }}
+          name: v${{ github.event.inputs.version }}
+          body: |
+            Synax v${{ github.event.inputs.version }}
+
+            See [CHANGELOG](./CHANGELOG.md) for details.
+          files: |
+            synax-*.tgz
+            SHASUMS256.txt
+          draft: true
+          generate_release_notes: true
