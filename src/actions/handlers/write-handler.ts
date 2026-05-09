@@ -2,12 +2,8 @@
  * Write tool handler — extracted from Session.ts.
  *
  * Handles: creating new files with path validation, existence checks,
- * size limits, and atomic writes.
+ * size limits, and atomic writes. All filesystem ops go through ExecutionEnv.
  */
-
-import { existsSync } from 'fs';
-import { mkdir, readFile } from 'fs/promises';
-import { dirname } from 'path';
 
 import type { WriteAction, ExecutionContext, AgentToolExecutionResult } from '../types';
 import { toolFailure } from '../types';
@@ -32,7 +28,7 @@ export async function handleWrite(action: WriteAction, context: ExecutionContext
   if (!mutationPath.ok) {
     return toolFailure(toolName, mutationPath.reason ?? 'mutation path rejected');
   }
-  if (existsSync(target.absolutePath)) {
+  if (context.env.fileExists(target.absolutePath)) {
     return toolFailure(toolName, `file already exists: ${target.path}`);
   }
 
@@ -41,9 +37,8 @@ export async function handleWrite(action: WriteAction, context: ExecutionContext
   }
 
   await context.ensureCheckpoint?.();
-  await mkdir(dirname(target.absolutePath), { recursive: true });
-  await atomicWriteFile(target.absolutePath, action.content);
-  const written = await readFile(target.absolutePath, 'utf-8');
+  await atomicWriteFile(target.absolutePath, action.content, context.env);
+  const written = await context.env.readFile(target.absolutePath);
   return {
     success: true,
     changedFile: target.path,

@@ -3,17 +3,14 @@
  *
  * Handles: bash execution with safety blocking, command planning,
  * dangerous pattern detection, and repetition detection.
+ * All filesystem/process operations go through ExecutionEnv.
  */
 
-import { existsSync } from 'fs';
-import { execFile } from 'child_process';
-import { promisify } from 'util';
 import { resolve, relative, isAbsolute } from 'path';
 
 import type { BashAction, ExecutionContext, AgentToolExecutionResult } from '../types';
 import { toolFailure } from '../types';
-
-const execFileAsync = promisify(execFile);
+import type { ExecutionEnv, ExecResult } from '../../env/ExecutionEnv';
 
 // ─── Public handler ───────────────────────────────────────
 
@@ -28,52 +25,29 @@ export async function handleBash(action: BashAction, context: ExecutionContext):
     return toolFailure('bash', `Blocked: ${blockReason}`);
   }
 
-  const plan = planBashCommand(command, context.repoRoot);
+  const plan = planBashCommand(command, context.repoRoot, context.env);
   const safetyWarnings = detectDangerousCommandWarnings(plan.command);
 
-  try {
-    const { stdout, stderr } = await execFileAsync('/bin/bash', ['-lc', plan.command], {
-      cwd: context.repoRoot,
-      maxBuffer: 256 * 1024,
-      timeout: 30_000,
-    });
-    return {
-      success: true,
-      toolResult: {
-        success: true,
-        toolName: 'bash',
-        output: {
-          command: plan.command,
-          ...(plan.originalCommand !== plan.command ? { originalCommand: plan.originalCommand } : {}),
-          ...(plan.cwdRecovery ? { cwdRecovery: plan.cwdRecovery } : {}),
-          safetyWarnings,
-          stdout: String(stdout ?? ''),
-          stderr: String(stderr ?? ''),
-          exitCode: 0,
-        },
+  const result: ExecResult = await context.env.execCommand(plan.command, context.repoRoot);
+
+  return {
+    success: result.exitCode === 0,
+    error: result.exitCode !== 0 ? result.stderr || `exit code ${result.exitCode}` : undefined,
+    toolResult: {
+      success: result.exitCode === 0,
+      toolName: 'bash',
+      error: result.exitCode !== 0 ? result.stderr || `exit code ${result.exitCode}` : undefined,
+      output: {
+        command: plan.command,
+        ...(plan.originalCommand !== plan.command ? { originalCommand: plan.originalCommand } : {}),
+        ...(plan.cwdRecovery ? { cwdRecovery: plan.cwdRecovery } : {}),
+        safetyWarnings,
+        stdout: result.stdout,
+        stderr: result.stderr,
+        exitCode: result.exitCode,
       },
-    };
-  } catch (error) {
-    const e = error as { stdout?: string | Buffer; stderr?: string | Buffer; code?: number };
-    return {
-      success: false,
-      error: errorMessage(error),
-      toolResult: {
-        success: false,
-        toolName: 'bash',
-        error: errorMessage(error),
-        output: {
-          command: plan.command,
-          ...(plan.originalCommand !== plan.command ? { originalCommand: plan.originalCommand } : {}),
-          ...(plan.cwdRecovery ? { cwdRecovery: plan.cwdRecovery } : {}),
-          safetyWarnings,
-          stdout: typeof e.stdout === 'string' ? e.stdout : (e.stdout?.toString('utf-8') ?? ''),
-          stderr: typeof e.stderr === 'string' ? e.stderr : (e.stderr?.toString('utf-8') ?? ''),
-          exitCode: typeof e.code === 'number' ? e.code : 1,
-        },
-      },
-    };
-  }
+    },
+  };
 }
 
 // ─── Command planning ─────────────────────────────────────
@@ -84,7 +58,7 @@ interface BashCommandPlan {
   cwdRecovery?: string;
 }
 
-function planBashCommand(command: string, repoRoot: string): BashCommandPlan {
+function planBashCommand(command: string, repoRoot: string, env: ExecutionEnv): BashCommandPlan {
   const parsed = parseLeadingAbsoluteCd(command);
   if (!parsed || !parsed.rest.trim()) return { command, originalCommand: command };
 
@@ -92,7 +66,7 @@ function planBashCommand(command: string, repoRoot: string): BashCommandPlan {
   const target = resolve(parsed.target);
   if (!isAbsolute(parsed.target)) return { command, originalCommand: command };
 
-  if (!existsSync(target)) {
+  if (!env.fileExists(target)) {
     return {
       command: parsed.rest.trim(),
       originalCommand: command,
@@ -164,12 +138,6 @@ function detectDangerousCommandWarnings(command: string): string[] {
     if (entry.pattern.test(normalized)) warnings.push(entry.warning);
   }
   return warnings;
-}
-
-// ─── Utilities ────────────────────────────────────────────
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }
 
 /**
