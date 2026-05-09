@@ -234,7 +234,8 @@ export async function runAgentTurn(options: AgentRunnerOptions & { task: string 
   // Start a turn-level span for this agent run.
   const turnSpan = options.tracer?.startSpan({ kind: 'turn', metadata: { task: options.task.slice(0, 120) } });
 
-  for (let step = 1; ; step += 1) {
+  try {
+    for (let step = 1; ; step += 1) {
     let response: ChatResponse;
     let modelSpan: ReturnType<SpanTracer['startSpan']> | undefined;
     try {
@@ -440,6 +441,11 @@ export async function runAgentTurn(options: AgentRunnerOptions & { task: string 
             })
           : undefined;
       if (toolCalls.length >= maxToolCalls) {
+        // End tool execution span before returning
+        if (options.tracer && toolExecSpan) {
+          options.tracer.addEvent(toolExecSpan, 'max_tool_calls_exceeded', { limit: maxToolCalls });
+          options.tracer.endSpan(toolExecSpan);
+        }
         logger?.warn('Max tool calls exceeded', {
           current: toolCalls.length,
           limit: maxToolCalls,
@@ -599,6 +605,11 @@ export async function runAgentTurn(options: AgentRunnerOptions & { task: string 
       }
     }
     flushContentToolResults(conversation, response, contentToolResults);
+  }
+  } finally {
+    if (options.tracer && turnSpan) {
+      options.tracer.endSpan(turnSpan);
+    }
   }
 }
 
