@@ -129,6 +129,7 @@ describe('extension interfaces', () => {
       'read',
       'write',
       'edit',
+      'search_memory',
     ]);
 
     await expect(

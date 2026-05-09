@@ -17,7 +17,7 @@ export interface UnsupportedTaskGuardResult {
 const DOCS_MUTATION_ROOTS = ['README.md', 'AGENTS.md', 'docs/', 'specs/'];
 
 export function getAllowedModelTools(mode: RunMode, bashEnabled: boolean): string[] {
-  const base = bashEnabled ? ['read', 'bash'] : ['read'];
+  const base = bashEnabled ? ['read', 'bash', 'search_memory'] : ['read', 'search_memory'];
   if (mode === 'read-only' || mode === 'verify') {
     return base;
   }
@@ -139,6 +139,10 @@ export function describeToolCall(name: string, input: Record<string, unknown>): 
           ? input.operation
           : 'status';
     return action === 'diff' ? 'git diff' : 'git status';
+  }
+
+  if (name === 'search_memory') {
+    return typeof input.query === 'string' ? `search_memory: ${input.query.slice(0, 80)}` : 'search_memory';
   }
 
   return `${name}`;
