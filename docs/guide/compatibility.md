@@ -62,7 +62,7 @@ Caveats:
 
 ```json
 {
-  "synax_version": "0.0.2-alpha",
+  "synax_version": "0.0.22-alpha",
   "tested_at": "2026-05-05",
   "tester": "manual",
   "provider_gateway": "Relay",
