@@ -236,16 +236,16 @@ export class EventStore {
        FROM sessions ORDER BY created_at DESC LIMIT ?`,
       )
       .all(limit) as Array<{
-        id: string;
-        repo_root: string;
-        mode: string;
-        model: string;
-        created_at: string;
-        terminal_state: string | null;
-        steps: number;
-        tool_calls: number;
-        changed_files: string;
-      }>;
+      id: string;
+      repo_root: string;
+      mode: string;
+      model: string;
+      created_at: string;
+      terminal_state: string | null;
+      steps: number;
+      tool_calls: number;
+      changed_files: string;
+    }>;
     return rows.map((r) => ({
       id: r.id,
       repoRoot: r.repo_root,
@@ -308,9 +308,7 @@ export class EventStore {
     const params = sessionId ? [sessionId] : [];
 
     const rows = this.db
-      .prepare(
-        `SELECT payload FROM events WHERE type = 'token_usage' ${clause} ORDER BY sequence ASC`,
-      )
+      .prepare(`SELECT payload FROM events WHERE type = 'token_usage' ${clause} ORDER BY sequence ASC`)
       .all(...params) as Array<{ payload: string }>;
 
     let totalInputTokens = 0;
@@ -361,9 +359,9 @@ export class EventStore {
 
     const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
 
-    const countRow = this.db
-      .prepare('SELECT COUNT(*) as total FROM sessions WHERE created_at >= ?')
-      .get(since) as { total: number } | undefined;
+    const countRow = this.db.prepare('SELECT COUNT(*) as total FROM sessions WHERE created_at >= ?').get(since) as
+      | { total: number }
+      | undefined;
     const totalSessions = countRow?.total ?? 0;
 
     const completedRow = this.db
@@ -382,7 +380,9 @@ export class EventStore {
       .prepare(
         'SELECT AVG(steps) as avgSteps, AVG(tool_calls) as avgToolCalls, SUM(tool_calls) as totalToolCalls FROM sessions WHERE created_at >= ?',
       )
-      .get(since) as { avgSteps: number | null; avgToolCalls: number | null; totalToolCalls: number | null } | undefined;
+      .get(since) as
+      | { avgSteps: number | null; avgToolCalls: number | null; totalToolCalls: number | null }
+      | undefined;
 
     const topModels = this.db
       .prepare(

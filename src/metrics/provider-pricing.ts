@@ -40,7 +40,7 @@ const PRICING: Record<string, ProviderPricing> = {
   'xai/grok-3-mini': { inputPer1M: 0.3, outputPer1M: 0.5 },
 
   // Qwen (local models via Relay — free)
-  'qwen': { inputPer1M: 0, outputPer1M: 0 },
+  qwen: { inputPer1M: 0, outputPer1M: 0 },
 };
 
 /**
