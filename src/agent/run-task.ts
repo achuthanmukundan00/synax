@@ -183,6 +183,8 @@ export async function runAgentTask(options: RunTaskOptions): Promise<RunTaskRepo
     repoRoot: options.repoRoot,
     client,
     mode,
+    sessionId,
+    memory: eventStore?.memory,
     maxToolCalls: projectConfig.config.maxToolCalls,
     bashEnabled: projectConfig.config.tools?.bash?.enabled,
     skillMessages,
@@ -226,12 +228,7 @@ export async function runAgentTask(options: RunTaskOptions): Promise<RunTaskRepo
     },
   });
 
-  // Wire holographic memory from EventStore into Session
-  if (eventStore?.memory.isAvailable) {
-    session.memory = eventStore.memory;
-  }
-
-  const turn = await session.startTurn(options.task);
+  const turn = await session.startTurnWithRecovery(options.task);
   const checkpointRecord = checkpoint as { id: string; statusPath: string; diffPath: string } | null;
 
   const verificationCommand = projectConfig.config.verification?.defaultCommand;
@@ -312,6 +309,8 @@ export async function runAgentTask(options: RunTaskOptions): Promise<RunTaskRepo
         repoRoot: options.repoRoot,
         client,
         mode,
+        sessionId,
+        memory: eventStore?.memory,
         maxToolCalls: Math.max(8, Math.floor((projectConfig.config.maxToolCalls ?? 192) / 2)),
         bashEnabled: projectConfig.config.tools?.bash?.enabled,
         skillMessages,
@@ -329,7 +328,7 @@ export async function runAgentTask(options: RunTaskOptions): Promise<RunTaskRepo
         approvePatch: () => (options.yes ? 'accept' : 'reject'),
         ensureCheckpoint: async () => checkpoint ?? (checkpoint = await createSafetyCheckpoint(options.repoRoot)),
       });
-      const repair = await repairSession.startTurn(
+      const repair = await repairSession.startTurnWithRecovery(
         `Verification failed. Fix the changed files and make verification pass. Failure output:\n${verification.stderr.slice(0, 1000)}`,
       );
       repairedTurn = repair;

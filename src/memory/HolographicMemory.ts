@@ -56,6 +56,9 @@ export interface HandoffManifest {
 export class HolographicMemory {
   private db: Database.Database | null;
   private insertStmt: Database.Statement | null = null;
+  /** Count of store errors since construction. Non-zero means FTS5 is silently failing. */
+  storeErrorCount = 0;
+  private _storeErrorWarned = false;
 
   constructor(db: Database.Database | null) {
     this.db = db;
@@ -96,6 +99,14 @@ export class HolographicMemory {
       });
     } catch {
       // Fire-and-forget: never crash the agent on memory failures
+      this.storeErrorCount += 1;
+      if (!this._storeErrorWarned && this.storeErrorCount >= 3) {
+        this._storeErrorWarned = true;
+        // Log to stderr as a last resort — logger may not be available
+        console.error(
+          `[synax] HolographicMemory: ${this.storeErrorCount} store() failures. FTS5 may be unavailable or corrupt.`,
+        );
+      }
     }
   }
 

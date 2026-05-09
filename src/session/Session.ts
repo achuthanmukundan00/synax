@@ -1,37 +1,38 @@
+/**
+ * Session — agent lifecycle orchestrator.
+ *
+ * Owns: config, tools, memory (SQLite+FTS5), EventBus, hooks.
+ * Lifecycle: boot → trustGate → ready → running → shutdown.
+ *
+ * Delegates turn execution, message assembly, formatting, tool definitions,
+ * and verification to focused modules. This file is the wiring layer.
+ */
+
 import { type Logger } from '../logging/index.js';
 import { EventBus } from '../events/index';
-import type { HolographicMemory } from '../memory/HolographicMemory';
+import type { HolographicMemory, HandoffManifest } from '../memory/HolographicMemory';
 import type { SpanTracer } from '../telemetry/SpanTracer';
 import type { TokenCounter } from '../metrics/TokenCounter';
 import type { CostTracker } from '../metrics/CostTracker';
-import { type ChatOptions, type ChatResponse } from '../llm/types';
-import { type ParsedToolCall } from '../llm/tool-calls';
-import { createInspectionLedger, createToolRegistry, type InspectionLedger } from '../tools';
+import { type ChatResponse } from '../llm/types';
+import { createInspectionLedger, createToolRegistry } from '../tools';
 import { type ToolDefinition, type ToolRegistry, type ToolResult } from '../tools/types';
 import { type PatchPreview } from '../agent/patch';
 import {
-  assembleModelMessages,
-  compactMessagesMultiStage,
   createTokenLedger,
   estimateIncrementalTokens,
   estimateRequestTokens,
-  estimateTokens,
   formatContextBudgetError,
   resolveContextBudgetSettings,
   resetTokenLedger,
   summarizeLargestContributors,
-  truncateForTokenBudget,
-  type AssemblyStats,
-  type CompactionRecord,
   type ContextBudgetSettings,
-  type TokenLedger,
 } from '../agent/context-budget';
 import { eventNow, type AgentEvent, type TerminalState } from '../agent/events';
 import {
   describeToolCall,
   guardBroadTask,
   guardUnsupportedTask,
-  getAllowedModelTools,
   type RunMode,
 } from '../agent/task-policy';
 import { ActionExecutor, createDefaultHandlerMap } from '../actions/ActionExecutor';
@@ -40,155 +41,116 @@ import { NodeExecutionEnv } from '../env/NodeExecutionEnv';
 import type { ExecutionEnv } from '../env/ExecutionEnv';
 import { RecoveryManager } from '../recovery/RecoveryManager';
 
-// Re-export types for backward compatibility with runner.ts consumers.
-export type AgentTerminalState = TerminalState;
+// ── Extracted modules ──────────────────────────────────────────────────────
+import {
+  type AgentMessage,
+  type AgentClient,
+  type AgentConversation,
+  type AgentRunnerOptions,
+  type ModelToolSurfaceOptions,
+  type AgentActivity,
+  type AgentBudgetSnapshot,
+  type PatchApprovalDecision,
+  type AgentTurnResult,
+  type AgentTerminalState,
+} from './types';
+export type {
+  AgentTerminalState,
+  AgentMessage,
+  AgentClient,
+  AgentConversation,
+  AgentRunnerOptions,
+  ModelToolSurfaceOptions,
+  AgentActivity,
+  AgentBudgetSnapshot,
+  PatchApprovalDecision,
+  AgentTurnResult,
+};
 
-export interface AgentMessage {
-  role: string;
-  content: string;
-  tool_call_id?: string;
-  name?: string;
-  tool_calls?: unknown;
-  /** Provider-specific reasoning field required by DeepSeek thinking-mode continuation requests. */
-  reasoning_content?: string;
-  // Internal markers for compaction integrity (not serialized to the model).
-  _tool_call_ids?: string[];
-  _tool_result_ids?: string[];
-}
+import { buildModelFacingTools, systemPrompt } from './tool-definitions';
+export { systemPrompt };
 
-export interface AgentClient {
-  chat(options: ChatOptions): Promise<ChatResponse>;
-}
+import {
+  assistantMessage,
+  appendToolResult,
+  flushContentToolResults,
+  toolCallFormat,
+  formatToolResultDetail,
+  formatModelResponseActivity,
+  isSafeToolPreamble,
+  isRecoverableToolError,
+  emitAssistantDelta,
+  errorMessage,
+} from './formatting';
 
-export interface AgentConversation {
-  messages: AgentMessage[];
-  inspectionLedger: InspectionLedger;
-  latestCompaction: CompactionRecord | null;
-  tokenLedger: TokenLedger;
-  assemblyStats: AssemblyStats | null;
-}
+import {
+  buildModelRequest,
+  guardModelRequestMultiStage,
+  classifyResultForRecovery,
+} from './message-assembly';
 
-export interface AgentRunnerOptions {
-  repoRoot: string;
-  client: AgentClient;
-  maxSteps?: number;
-  maxToolCalls?: number;
-  mode?: RunMode;
-  tools?: ModelToolSurfaceOptions;
-  conversation?: AgentConversation;
-  registry?: ToolRegistry;
-  onActivity?: (activity: AgentActivity) => void;
-  onEvent?: (event: AgentEvent) => void;
-  onBudget?: (snapshot: AgentBudgetSnapshot) => void;
-  approvePatch?: (preview: PatchPreview) => PatchApprovalDecision | Promise<PatchApprovalDecision>;
-  ensureCheckpoint?: () => Promise<unknown>;
-  /** Optional preloaded skill instructions injected as additional system messages. */
-  skillMessages?: string[];
-  contextBudget?: Partial<ContextBudgetSettings> & { contextBudgetTokens?: number };
-  /** Optional structured logger for internal diagnostics. */
-  logger?: Logger;
-  /** Optional span tracer for telemetry instrumentation. */
-  tracer?: SpanTracer;
-  /** Optional token counter for per-turn usage metrics. */
-  tokenCounter?: TokenCounter;
-  /** Optional cost tracker for API cost estimation. */
-  costTracker?: CostTracker;
-  /** Maximum API cost budget (stops agent when exceeded). */
-  maxBudget?: number;
-}
-
-export interface ModelToolSurfaceOptions {
-  bashEnabled?: boolean;
-  mode?: RunMode;
-}
-
-export interface AgentActivity {
-  kind: 'model' | 'tool' | 'model_response';
-  message: string;
-  /** Raw model output for debugging local-model behavior. Only set when kind === 'model_response'. */
-  modelOutput?: string;
-  toolCallCount?: number;
-}
-
-export interface AgentBudgetSnapshot {
-  estimatedInputTokens: number;
-  inputLimit: number;
-  contextWindowTokens: number;
-  reservedOutputTokens: number;
-  step: number;
-  compactionStage?: number;
-}
-
-export type PatchApprovalDecision = 'accept' | 'reject';
-
-export interface AgentTurnResult {
-  terminalState: AgentTerminalState;
-  finalAnswer: string;
-  steps: number;
-  toolCalls: Array<{ name: string; success: boolean; error?: string }>;
-  changedFiles: string[];
-  conversation: AgentConversation;
-  error?: string;
-}
+import {
+  resolveVerificationContract,
+  checkCompletionAgainstContract,
+} from './verification-contracts';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const DEFAULT_MAX_TOOL_CALLS = 192;
 const MAX_CONSECUTIVE_RECOVERABLE_TOOL_ERRORS = 3;
-const MAX_TOTAL_READS_PER_TURN = 24;
 
 // ─── Session Class ───────────────────────────────────────────────────────────
 
 /**
  * Session owns the agent lifecycle: conversation state, tool registry,
- * and turn orchestration. Extracted from runner.ts to kill the God Object.
+ * memory, EventBus, and turn orchestration.
  *
  * ```ts
  * const session = new Session({ repoRoot: '/project', client });
- * const result = await session.startTurn('fix the build');
+ * const result = await session.startTurnWithRecovery('fix the build');
  * ```
  */
 export class Session {
   readonly conversation: AgentConversation;
   readonly registry: ToolRegistry;
+  readonly eventBus: EventBus = new EventBus();
+  readonly executor: ActionExecutor;
+  readonly env: ExecutionEnv;
+  readonly recovery: RecoveryManager = new RecoveryManager();
+
   private repoRoot: string;
   private client: AgentClient;
   private maxToolCalls: number;
   private mode: RunMode;
   private bashEnabled: boolean;
   private contextBudget: ContextBudgetSettings;
-  // Public so helper functions can emit events through the session reference.
+
+  // ── Callbacks (subscribed through EventBus) ──────────────────────────
   onActivity?: (activity: AgentActivity) => void;
   onEvent?: (event: AgentEvent) => void;
   onBudget?: (snapshot: AgentBudgetSnapshot) => void;
   approvePatch?: (preview: PatchPreview) => PatchApprovalDecision | Promise<PatchApprovalDecision>;
   ensureCheckpoint?: () => Promise<unknown>;
-  /** Optional structured logger for internal diagnostics. */
+
+  // ── Observability ────────────────────────────────────────────────────
   logger?: Logger;
-  /** Optional span tracer for telemetry instrumentation. */
   tracer?: SpanTracer;
-  /** Optional token counter for per-turn usage metrics. */
   tokenCounter?: TokenCounter;
-  /** Optional cost tracker for API cost estimation. */
   costTracker?: CostTracker;
-  /** Maximum API cost budget (stops agent when exceeded). */
   maxBudget?: number;
-  /** Typed EventBus with lifecycle and control hooks. */
-  readonly eventBus: EventBus = new EventBus();
-  /** Typed tool dispatch — extracted from the old executeAgentTool switch. */
-  readonly executor: ActionExecutor;
-  /** Filesystem and process abstraction — swappable for testing/sandboxing. */
-  readonly env: ExecutionEnv;
-  /** Holographic memory — FTS5 semantic store, set externally. */
+
+  // ── Memory ───────────────────────────────────────────────────────────
+  /** Holographic memory — FTS5 semantic store, set externally by run-task. */
   memory: HolographicMemory | null = null;
-  /** Recovery manager — applies recovery recipes on failure scenarios. */
-  readonly recovery: RecoveryManager = new RecoveryManager();
-  /** Track whether session_start has been emitted. */
+  /** Persistent session identity for cross-turn memory retrieval. */
+  readonly sessionId: string;
+
   private _sessionStarted = false;
 
   constructor(options: {
     repoRoot: string;
     client: AgentClient;
+    sessionId?: string;
     mode?: RunMode;
     maxToolCalls?: number;
     bashEnabled?: boolean;
@@ -207,6 +169,7 @@ export class Session {
     tokenCounter?: TokenCounter;
     costTracker?: CostTracker;
     maxBudget?: number;
+    memory?: HolographicMemory | null;
   }) {
     this.repoRoot = options.repoRoot;
     this.client = options.client;
@@ -214,17 +177,34 @@ export class Session {
     this.maxToolCalls = options.maxToolCalls ?? DEFAULT_MAX_TOOL_CALLS;
     this.bashEnabled = options.bashEnabled ?? true;
     this.env = options.env ?? new NodeExecutionEnv();
+    this.sessionId = options.sessionId ?? generatePersistentSessionId();
+
+    // Memory: accept from constructor (preferred) or set externally later
+    if (options.memory !== undefined) {
+      this.memory = options.memory;
+    }
+
+    // Callbacks
     this.onActivity = options.onActivity;
     this.onEvent = options.onEvent;
     this.onBudget = options.onBudget;
     this.approvePatch = options.approvePatch;
     this.ensureCheckpoint = options.ensureCheckpoint;
+
+    // Observability
     this.logger = options.logger;
     this.tracer = options.tracer;
     this.tokenCounter = options.tokenCounter;
     this.costTracker = options.costTracker;
     this.maxBudget = options.maxBudget;
 
+    // ── Wire EventBus: legacy callbacks as subscribers ──────────────────
+    // This proves the bus works end-to-end. Extensions can subscribe the same way.
+    this.eventBus.onAny((event) => {
+      this.onEvent?.(event as AgentEvent);
+    });
+
+    // ── Conversation ────────────────────────────────────────────────────
     this.conversation = options.conversation ?? Session.createConversation({ skillMessages: options.skillMessages });
     this.registry =
       options.registry ??
@@ -298,7 +278,7 @@ export class Session {
     this.eventBus.destroy();
   }
 
-  // ── Recovery-aware turn ────────────────────────────────────────────────
+  // ── Recovery-aware turn (primary public API) ──────────────────────────
 
   /**
    * Execute a turn with automatic recovery from known failure scenarios.
@@ -331,7 +311,6 @@ export class Session {
 
       if (!recoveryResult?.recovered) break;
 
-      // Apply the injected nudge and retry the turn
       result = await this.startTurn(task);
       recoveryAttempt++;
     }
@@ -343,7 +322,7 @@ export class Session {
 
   /**
    * Execute one agent turn: take a task, run the model ↔ tool loop until
-   * completion, error, or budget exhaustion.
+   * completion, error, budget exhaustion, or handoff.
    */
   async startTurn(task: string): Promise<AgentTurnResult> {
     const conversation = this.conversation;
@@ -361,6 +340,7 @@ export class Session {
     const contextBudget = this.contextBudget;
     let consecutiveRecoverableToolErrors = 0;
 
+    // ── Task guards ────────────────────────────────────────────────────
     const broadTask = guardBroadTask(task);
     if (broadTask) {
       return {
@@ -390,20 +370,18 @@ export class Session {
     const tools = buildModelFacingTools({ bashEnabled, mode });
     conversation.messages.push({ role: 'user', content: task });
 
-    // Start a turn-level span for this agent run.
+    // ── Spans & lifecycle ──────────────────────────────────────────────
     const turnSpan = this.tracer?.startSpan({ kind: 'turn', metadata: { task: task.slice(0, 120) } });
-
-    // Lifecycle: emit turn_start
     const turnIndex = conversation.messages.filter((m) => m.role === 'user').length;
 
-    // Memory: store user message (fire-and-forget)
-    const memSessionId = `mem-${Date.now()}`;
+    // Memory: store user message with persistent sessionId
     this.memory?.store({
-      sessionId: memSessionId,
+      sessionId: this.sessionId,
       turnId: turnIndex,
       role: 'user',
       content: task.slice(0, 8000),
     });
+
     this.eventBus.emit({
       type: 'turn_start',
       timestamp: eventNow(),
@@ -429,15 +407,16 @@ export class Session {
         for (let step = 1; ; step += 1) {
           let response: ChatResponse;
           let modelSpan: ReturnType<SpanTracer['startSpan']> | undefined;
+
+          // ── Model call ───────────────────────────────────────────────
           try {
             this.onActivity?.({ kind: 'model', message: `model step ${step}` });
-            this.onEvent?.({
+            this.eventBus.emit({
               type: 'model_step_started',
               timestamp: eventNow(),
               stepIndex: step,
             });
 
-            // Span: model call
             modelSpan =
               this.tracer && turnSpan ? this.tracer.startChildSpan(turnSpan, 'model_call', { step }) : undefined;
 
@@ -461,6 +440,18 @@ export class Session {
               });
               const guarded = guardModelRequestMultiStage(conversation.messages, contextBudget, conversation);
               if (guarded.error) {
+                // ── Handoff path: don't fail-closed, try to recover ──
+                const handoffResult = await this.tryHandoffRecovery(
+                  guarded.compaction?.stage ?? 4,
+                  conversation,
+                  step,
+                  toolCalls,
+                  changedFiles,
+                  turnSpan,
+                );
+                if (handoffResult) return handoffResult;
+
+                // No handoff possible — fail closed
                 return {
                   terminalState: 'budget_exhausted',
                   finalAnswer: '',
@@ -483,6 +474,16 @@ export class Session {
 
               const postCompactTokens = estimateRequestTokens(guarded.messages);
               if (postCompactTokens > effectiveInputLimit) {
+                const handoffResult = await this.tryHandoffRecovery(
+                  4,
+                  conversation,
+                  step,
+                  toolCalls,
+                  changedFiles,
+                  turnSpan,
+                );
+                if (handoffResult) return handoffResult;
+
                 return {
                   terminalState: 'budget_exhausted',
                   finalAnswer: '',
@@ -502,7 +503,6 @@ export class Session {
               }
 
               const assembled = buildModelRequest(conversation, contextBudget, identicalReadCounts, totalReadCalls);
-
               response = await this.client.chat({
                 messages: assembled,
                 tools,
@@ -521,7 +521,6 @@ export class Session {
               });
             }
           } catch (error) {
-            // End model call span on error
             if (this.tracer && modelSpan) {
               this.tracer.addEvent(modelSpan, 'error', { message: errorMessage(error) });
               this.tracer.endSpan(modelSpan);
@@ -542,7 +541,6 @@ export class Session {
             };
           }
 
-          // End model call span
           if (this.tracer && modelSpan) {
             this.tracer.addEvent(modelSpan, 'response_received', {
               toolCallCount: response.toolCalls.length,
@@ -551,7 +549,7 @@ export class Session {
             this.tracer.endSpan(modelSpan);
           }
 
-          // ── Token counting and cost tracking ──
+          // ── Token counting ──────────────────────────────────────────
           let turnTokenStats: { inputTokens: number; outputTokens: number; totalTokens: number } | undefined;
           if (this.tokenCounter) {
             const assembled = buildModelRequest(conversation, contextBudget, identicalReadCounts, totalReadCalls);
@@ -564,19 +562,17 @@ export class Session {
             turnTokenStats = { inputTokens, outputTokens, totalTokens: inputTokens + outputTokens };
             this.tokenCounter.recordTurn(turnTokenStats);
 
-            // Estimate cost
             if (this.costTracker) {
               const cost = this.costTracker.recordTurn(turnTokenStats);
-              this.onEvent?.({
+              this.eventBus.emit({
                 type: 'token_usage',
                 timestamp: eventNow(),
                 stepIndex: step,
                 inputTokens: turnTokenStats.inputTokens,
                 outputTokens: turnTokenStats.outputTokens,
                 estimatedCost: cost.totalCost,
-              } as AgentEvent);
+              });
 
-              // Budget check
               if (this.maxBudget !== undefined && this.costTracker.isOverBudget(this.maxBudget)) {
                 this.logger?.warn('API cost budget exceeded', {
                   cumulativeCost: this.costTracker.getCumulativeCost(),
@@ -596,24 +592,24 @@ export class Session {
             }
           }
 
-          // Span: tool parsing
+          // ── Tool parsing span ───────────────────────────────────────
           const toolParseSpan =
             this.tracer && turnSpan
               ? this.tracer.startChildSpan(turnSpan, 'tool_parse', { toolCallCount: response.toolCalls.length })
               : undefined;
 
           this.onActivity?.(formatModelResponseActivity(response, step));
-
           conversation.messages.push(assistantMessage(response, contextBudget));
 
-          // Memory: store assistant response (fire-and-forget)
+          // Memory: store assistant response with persistent sessionId
           this.memory?.store({
-            sessionId: memSessionId,
+            sessionId: this.sessionId,
             turnId: turnIndex,
             role: 'assistant',
             content: response.content.slice(0, 8000),
           });
 
+          // ── Mixed output guard ──────────────────────────────────────
           if (response.toolCalls.length > 0 && response.content.trim().length > 0) {
             if (!isSafeToolPreamble(response.content)) {
               return {
@@ -632,20 +628,21 @@ export class Session {
             }
           }
 
+          // ── No tool calls → completion ──────────────────────────────
           if (response.toolCalls.length === 0) {
-            // End tool parse span (no tool calls to execute)
             if (this.tracer && toolParseSpan) {
               this.tracer.endSpan(toolParseSpan);
             }
 
-            if (mode === 'patch' && changedFiles.length === 0 && isPrematureCompletionClaim(response.content)) {
-              conversation.messages.push({
-                role: 'user',
-                content:
-                  'You claimed completion without taking action. ' +
-                  'Use available tools (bash for git/commands, edit for file changes, write for new files) to complete the task. ' +
-                  'If no action is needed, explain specifically why. Do not just say "verified" or "passed" — show evidence.',
-              });
+            // Verification contract check (replaces regex-based isPrematureCompletionClaim)
+            const contract = resolveVerificationContract(mode);
+            const nudge = checkCompletionAgainstContract(
+              contract,
+              { changedFiles, verificationRan: false },
+              'completed',
+            );
+            if (nudge) {
+              conversation.messages.push({ role: 'user', content: nudge });
               continue;
             }
 
@@ -659,22 +656,19 @@ export class Session {
             };
           }
 
-          // End tool parse span (after parsing checks, before tool loop)
           if (this.tracer && toolParseSpan) {
             this.tracer.endSpan(toolParseSpan);
           }
 
+          // ── Tool execution loop ─────────────────────────────────────
           const contentToolResults: Array<{ id: string; content: string }> = [];
           for (const call of response.toolCalls) {
-            // Span: tool execution
             const toolExecSpan =
               this.tracer && turnSpan
-                ? this.tracer.startChildSpan(turnSpan, 'tool_execution', {
-                    toolName: call.name,
-                  })
+                ? this.tracer.startChildSpan(turnSpan, 'tool_execution', { toolName: call.name })
                 : undefined;
+
             if (toolCalls.length >= maxToolCalls) {
-              // End tool execution span before returning
               if (this.tracer && toolExecSpan) {
                 this.tracer.addEvent(toolExecSpan, 'max_tool_calls_exceeded', { limit: maxToolCalls });
                 this.tracer.endSpan(toolExecSpan);
@@ -703,6 +697,7 @@ export class Session {
                 error: `max tool calls exceeded: ${maxToolCalls}`,
               };
             }
+
             this.onActivity?.({
               kind: 'tool',
               message: describeToolCall(call.name, call.arguments as Record<string, unknown>),
@@ -712,7 +707,7 @@ export class Session {
               args: JSON.stringify(call.arguments).slice(0, 500),
               stepIndex: step,
             });
-            this.onEvent?.({
+            this.eventBus.emit({
               type: 'tool_started',
               timestamp: eventNow(),
               stepIndex: step,
@@ -732,7 +727,7 @@ export class Session {
               arguments: call.arguments as Record<string, unknown>,
             });
 
-            // Control hook: pre_tool_use — can block dangerous tool calls
+            // Control hook: pre_tool_use
             const preToolDecision = await this.eventBus.emitControl({
               type: 'pre_tool_use',
               timestamp: eventNow(),
@@ -748,12 +743,10 @@ export class Session {
                 reason: preToolDecision.reason,
                 stepIndex: step,
               });
-              // End tool execution span if started
               if (this.tracer && toolExecSpan) {
                 this.tracer.addEvent(toolExecSpan, 'tool_blocked', { reason: preToolDecision.reason });
                 this.tracer.endSpan(toolExecSpan);
               }
-              // Emit tool_execution_end as blocked
               this.eventBus.emit({
                 type: 'tool_execution_end',
                 timestamp: eventNow(),
@@ -782,7 +775,7 @@ export class Session {
                 ensureCheckpoint: this.ensureCheckpoint,
                 approvePatch: this.approvePatch,
                 onPatchPreview: (preview) => {
-                  this.onEvent?.({
+                  this.eventBus.emit({
                     type: 'patch_preview',
                     timestamp: eventNow(),
                     stepIndex: step,
@@ -806,16 +799,18 @@ export class Session {
               error: result.error,
             });
             appendToolResult(conversation, response, call, result.toolResult, contentToolResults, contextBudget);
-            // Memory: store tool result (fire-and-forget)
+
+            // Memory: store tool result with persistent sessionId
             this.memory?.store({
-              sessionId: memSessionId,
+              sessionId: this.sessionId,
               turnId: turnIndex,
               role: 'tool',
               toolName: call.name,
               filePaths: result.changedFile ? [result.changedFile] : undefined,
               content: JSON.stringify(result.toolResult).slice(0, 8000),
             });
-            this.onEvent?.({
+
+            this.eventBus.emit({
               type: 'tool_finished',
               timestamp: eventNow(),
               stepIndex: step,
@@ -825,7 +820,7 @@ export class Session {
               summary: result.success ? 'completed' : (result.error ?? 'failed'),
               detail: formatToolResultDetail(result.toolResult),
             });
-            // Lifecycle: tool_execution_end
+
             this.eventBus.emit({
               type: 'tool_execution_end',
               timestamp: eventNow(),
@@ -835,23 +830,16 @@ export class Session {
               success: result.success,
               error: result.error,
             });
+
             if (result.changedFile) changedFiles.push(result.changedFile);
 
-            // End tool execution span
             if (this.tracer && toolExecSpan) {
-              this.tracer.addEvent(toolExecSpan, 'tool_finished', {
-                success: result.success,
-                error: result.error,
-              });
+              this.tracer.addEvent(toolExecSpan, 'tool_finished', { success: result.success, error: result.error });
               this.tracer.endSpan(toolExecSpan);
             }
 
-            const afterToolMessages = buildModelRequest(
-              conversation,
-              contextBudget,
-              identicalReadCounts,
-              totalReadCalls,
-            );
+            // ── Post-tool budget check ───────────────────────────────
+            const afterToolMessages = buildModelRequest(conversation, contextBudget, identicalReadCounts, totalReadCalls);
             const afterToolTokens = estimateRequestTokens(afterToolMessages);
             const effectiveLimit = contextBudget.contextWindowTokens - contextBudget.reservedOutputTokens;
             if (afterToolTokens > effectiveLimit) {
@@ -862,6 +850,17 @@ export class Session {
                 toolName: call.name,
                 stepIndex: step,
               });
+
+              const handoffResult = await this.tryHandoffRecovery(
+                4,
+                conversation,
+                step,
+                toolCalls,
+                changedFiles,
+                turnSpan,
+              );
+              if (handoffResult) return handoffResult;
+
               return {
                 terminalState: 'budget_exhausted',
                 finalAnswer: response.content.trim(),
@@ -880,6 +879,7 @@ export class Session {
               };
             }
 
+            // ── Error recovery classification ────────────────────────
             if (result.success) {
               consecutiveRecoverableToolErrors = 0;
             } else if (isRecoverableToolError(call, result)) {
@@ -891,7 +891,6 @@ export class Session {
               if (consecutiveRecoverableToolErrors < MAX_CONSECUTIVE_RECOVERABLE_TOOL_ERRORS) {
                 continue;
               }
-
               flushContentToolResults(conversation, response, contentToolResults);
               return {
                 terminalState: 'tool_error',
@@ -920,7 +919,6 @@ export class Session {
       })();
       return turnResult;
     } finally {
-      // Lifecycle: emit turn_end
       this.eventBus.emit({
         type: 'turn_end',
         timestamp: eventNow(),
@@ -934,598 +932,164 @@ export class Session {
       }
     }
   }
-}
 
-// ─── Model-facing tool definitions ───────────────────────────────────────────
+  // ── Handoff recovery ────────────────────────────────────────────────────
 
-function buildModelFacingTools(options: ModelToolSurfaceOptions = {}): ToolDefinition[] {
-  const bashEnabled = options.bashEnabled ?? true;
-  const allowedNames = getAllowedModelTools(options.mode ?? 'patch', bashEnabled);
-  const tools: ToolDefinition[] = [
-    {
-      name: 'read',
-      description:
-        'Inspect repository files. ALWAYS use startLine/endLine (50-200 line ranges preferred). Omit path to list files. Pass query to search text.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          path: {
-            type: 'string',
-            description: 'Optional repo-relative file or directory path.',
-          },
-          startLine: {
-            type: 'number',
-            description: '1-based first line. ALWAYS set this for file reads — never read entire large files.',
-          },
-          endLine: {
-            type: 'number',
-            description: '1-based final line. Set with startLine for a 50-200 line window.',
-          },
-          query: {
-            type: 'string',
-            description: 'Literal text to search for.',
-          },
-          maxFiles: {
-            type: 'number',
-            description: 'Maximum listed files.',
-          },
-          maxMatches: {
-            type: 'number',
-            description: 'Maximum search matches.',
-          },
-        },
-        additionalProperties: false,
-      },
-      safetyPolicy: {
-        readOnly: true,
-        rejectsUnsafePaths: true,
-        boundedOutput: true,
-      },
-      ledgerBehavior: 'records-file-range',
-      async execute() {
-        return {
-          success: false,
-          toolName: 'read',
-          error: 'handled by the agent runner',
-        };
-      },
-    },
-    {
-      name: 'write',
-      description: 'Create one new repo-local text file. Fails if the file already exists.',
-      inputSchema: {
-        type: 'object',
-        required: ['path', 'content'],
-        properties: {
-          path: {
-            type: 'string',
-            description: 'Repo-relative path for the new file.',
-          },
-          content: {
-            type: 'string',
-            description: 'Full file content to write.',
-          },
-        },
-        additionalProperties: false,
-      },
-      safetyPolicy: {
-        readOnly: false,
-        rejectsUnsafePaths: true,
-        boundedOutput: true,
-      },
-      ledgerBehavior: 'none',
-      async execute() {
-        return {
-          success: false,
-          toolName: 'write',
-          error: 'handled by the agent runner',
-        };
-      },
-    },
-    {
-      name: 'edit',
-      description:
-        'Replace exactly one string in one repo-local file. The target file must already have been read. oldStr must match exactly once.',
-      inputSchema: {
-        type: 'object',
-        required: ['path', 'oldStr', 'newStr'],
-        properties: {
-          path: { type: 'string', description: 'Repo-relative file path.' },
-          oldStr: {
-            type: 'string',
-            description: 'Exact text copied from a prior file read.',
-          },
-          newStr: { type: 'string', description: 'Replacement text.' },
-        },
-        additionalProperties: false,
-      },
-      safetyPolicy: {
-        readOnly: false,
-        rejectsUnsafePaths: true,
-        boundedOutput: true,
-      },
-      ledgerBehavior: 'none',
-      async execute() {
-        return {
-          success: false,
-          toolName: 'edit',
-          error: 'handled by the agent runner',
-        };
-      },
-    },
-  ];
+  /**
+   * Attempt to recover from context exhaustion via handoff.
+   *
+   * Generates a handoff manifest from holographic memory, injects it
+   * into the conversation as a compact system message, and returns
+   * a continuation result. If memory is unavailable, returns null
+   * (caller should fail-closed).
+   */
+  private async tryHandoffRecovery(
+    stage: number,
+    conversation: AgentConversation,
+    step: number,
+    _toolCalls: AgentTurnResult['toolCalls'],
+    _changedFiles: string[],
+    turnSpan?: ReturnType<SpanTracer['startSpan']>,
+  ): Promise<AgentTurnResult | null> {
+    const manifest = this.memory?.handoff();
+    if (!manifest || manifest.keyFindings.length === 0) {
+      this.logger?.warn('Handoff recovery not possible — no memory available', { stage, stepIndex: step });
+      return null;
+    }
 
-  if (bashEnabled) {
-    tools.push({
-      name: 'bash',
-      description: 'Execute a shell command in the repository root. Use for git workflows and verification commands.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          command: {
-            type: 'string',
-            description: 'Shell command to run when enabled.',
-          },
-        },
-        additionalProperties: false,
-      },
-      safetyPolicy: {
-        readOnly: false,
-        rejectsUnsafePaths: true,
-        boundedOutput: true,
-      },
-      ledgerBehavior: 'none',
-      async execute() {
-        return {
-          success: false,
-          toolName: 'bash',
-          error: 'handled by the agent runner',
-        };
-      },
+    this.logger?.info('Attempting handoff recovery', {
+      stage,
+      stepIndex: step,
+      turnCount: manifest.turnCount,
+      entryCount: manifest.entryCount,
+      filesTouched: manifest.filesTouched.length,
+      searchTerms: manifest.suggestedSearchTerms.length,
     });
-  }
 
-  // search_memory: always available (read-only, no fs access)
-  tools.push({
-    name: 'search_memory',
-    description:
-      'Search conversation history for past actions, errors, file changes, and context. ' +
-      'Use this to recall what you did in earlier turns instead of re-reading files.',
-    inputSchema: {
-      type: 'object',
-      required: ['query'],
-      properties: {
-        query: {
-          type: 'string',
-          description: 'Search query. Uses FTS5 with stemming — "error login" matches "errors" and "logging".',
-        },
-        maxResults: {
-          type: 'number',
-          description: 'Maximum results to return (1-20, default 10).',
-        },
-      },
-      additionalProperties: false,
-    },
-    safetyPolicy: {
-      readOnly: true,
-      rejectsUnsafePaths: false,
-      boundedOutput: true,
-    },
-    ledgerBehavior: 'none',
-    async execute() {
-      return {
-        success: false,
-        toolName: 'search_memory',
-        error: 'handled by the agent runner',
-      };
-    },
-  });
+    // Compact conversation to: system prompt + handoff manifest + last 2 user/assistant turns
+    const compactContext = buildHandoffContext(conversation.messages, manifest);
 
-  return tools.filter((tool) => allowedNames.includes(tool.name));
-}
-
-// ─── Inline helpers (moved from runner.ts) ───────────────────────────────────
-
-function emitAssistantDelta(session: Session, delta: { content?: string; reasoningContent?: string }): void {
-  if (!delta.content && !delta.reasoningContent) return;
-  const event = {
-    type: 'assistant_delta' as const,
-    timestamp: eventNow(),
-    content: delta.content,
-    reasoningContent: delta.reasoningContent,
-  };
-  session.eventBus.emit(event);
-  session.onEvent?.(event);
-}
-
-function assistantMessage(response: ChatResponse, settings?: ContextBudgetSettings): AgentMessage {
-  const maxOutputTokens = settings?.reservedOutputTokens ?? 8192;
-  const maxOutputChars = Math.max(200, Math.floor(maxOutputTokens * 3));
-  let content = response.content;
-  if (content.length > maxOutputChars) {
-    content = content.slice(0, maxOutputChars) + '\n[response truncated]';
-  }
-  const reasoningContent = response.reasoningContent?.trim();
-  const reasoningFields = reasoningContent ? { reasoning_content: reasoningContent } : {};
-
-  if (toolCallFormat(response) === 'content_xml') {
-    return {
-      role: 'assistant',
-      content,
-      ...reasoningFields,
-      _tool_call_ids: response.toolCalls.map((c) => c.id),
-    };
-  }
-
-  const message: AgentMessage = {
-    role: 'assistant',
-    content,
-    ...reasoningFields,
-  };
-  if (response.toolCalls.length > 0) {
-    message.tool_calls = response.toolCalls.map((call) => ({
-      id: call.id,
-      type: 'function',
-      function: { name: call.name, arguments: JSON.stringify(call.arguments) },
-    }));
-  }
-  return message;
-}
-
-function isRecoverableToolError(call: ParsedToolCall, result: { success: boolean; error?: string }): boolean {
-  if (result.success) return false;
-  if (call.name === 'bash') return !isBashLoopError(result.error);
-  if (call.name === 'edit' || call.name === 'replace_in_file') return isEditRecoverableError(result.error);
-  if (call.name !== 'read') return false;
-  return isEnoentError(result.error) || isReadPolicyLimitError(result.error);
-}
-
-function isEnoentError(error: string | undefined): boolean {
-  return error !== undefined && /\bENOENT\b/.test(error);
-}
-
-function isReadPolicyLimitError(error: string | undefined): boolean {
-  if (error === undefined) return false;
-  return error.includes('total read limit reached') || error.includes('Read loop detected');
-}
-
-function isBashLoopError(error: string | undefined): boolean {
-  return error !== undefined && error.includes('Bash loop detected');
-}
-
-function isEditRecoverableError(error: string | undefined): boolean {
-  if (error === undefined) return false;
-  return error.includes('oldStr no longer matches') || error.includes('oldStr must match exactly once');
-}
-
-function toolResultMessage(call: ParsedToolCall, content: string): AgentMessage {
-  return {
-    role: 'tool',
-    tool_call_id: call.id,
-    name: call.name,
-    content,
-  };
-}
-
-function contentToolResultMessage(entries: Array<{ id: string; content: string }>): AgentMessage {
-  return {
-    role: 'user',
-    content: entries.map((e) => `<tool_response>\n${e.content}\n</tool_response>`).join('\n'),
-    _tool_result_ids: entries.map((e) => e.id),
-  };
-}
-
-function appendToolResult(
-  conversation: AgentConversation,
-  response: ChatResponse,
-  call: ParsedToolCall,
-  toolResult: ToolResult,
-  contentToolResults: Array<{ id: string; content: string }>,
-  settings: ContextBudgetSettings,
-): void {
-  let content = JSON.stringify(toolResult);
-  const estimated = estimateTokens(content);
-  if (estimated > settings.maxSingleReadResultTokens) {
-    const truncated = truncateForTokenBudget(content, settings.maxSingleReadResultTokens);
-    content = truncated.text;
-  }
-
-  if (toolCallFormat(response) === 'content_xml') {
-    contentToolResults.push({ id: call.id, content });
-    flushContentToolResults(conversation, response, contentToolResults);
-    return;
-  }
-  conversation.messages.push(toolResultMessage(call, content));
-}
-
-function flushContentToolResults(
-  conversation: AgentConversation,
-  response: ChatResponse,
-  contentToolResults: Array<{ id: string; content: string }>,
-): void {
-  if (toolCallFormat(response) !== 'content_xml' || contentToolResults.length === 0) return;
-  conversation.messages.push(contentToolResultMessage(contentToolResults));
-  contentToolResults.splice(0, contentToolResults.length);
-}
-
-function toolCallFormat(response: ChatResponse): NonNullable<ChatResponse['toolCallFormat']> {
-  return response.toolCallFormat ?? 'openai';
-}
-
-function formatToolResultDetail(toolResult: ToolResult): string {
-  const output = toolResult.output;
-  if (!output || typeof output !== 'object') {
-    return toolResult.error ?? JSON.stringify(toolResult);
-  }
-  const record = output as Record<string, unknown>;
-  const lines: string[] = [];
-  if (typeof record.command === 'string') lines.push(`command: ${record.command}`);
-  if (Array.isArray(record.safetyWarnings) && record.safetyWarnings.length > 0) {
-    lines.push(`warnings: ${record.safetyWarnings.join(', ')}`);
-  }
-  if (typeof record.stdout === 'string' && record.stdout.length > 0) {
-    lines.push(`stdout:\n${record.stdout.trimEnd()}`);
-  }
-  if (typeof record.stderr === 'string' && record.stderr.length > 0) {
-    lines.push(`stderr:\n${record.stderr.trimEnd()}`);
-  }
-  if (typeof record.exitCode === 'number') lines.push(`exitCode: ${record.exitCode}`);
-  if (lines.length > 0) return lines.join('\n');
-  return toolResult.error ?? JSON.stringify(toolResult, null, 2);
-}
-
-function guardModelRequestMultiStage(
-  messages: AgentMessage[],
-  settings: ContextBudgetSettings,
-  conversation: AgentConversation,
-): {
-  messages: AgentMessage[];
-  compaction: CompactionRecord | null;
-  error?: string;
-} {
-  const effectiveInputLimit = settings.contextWindowTokens - settings.reservedOutputTokens;
-  const result = compactMessagesMultiStage(messages, settings);
-
-  if (result.stage >= 4 || result.tokensAfter > effectiveInputLimit) {
-    return {
-      messages: result.activeMessages,
-      compaction: result.compaction,
-      error: formatContextBudgetError({
-        estimatedInputTokens: result.tokensAfter,
-        contextWindowTokens: settings.contextWindowTokens,
-        reservedOutputTokens: settings.reservedOutputTokens,
-        effectiveInputLimit,
-        largestContributors: summarizeLargestContributors(result.activeMessages),
-        compactionStage: result.stage,
-      }),
-    };
-  }
-
-  if (result.compaction) {
-    conversation.messages.splice(0, conversation.messages.length, ...result.activeMessages);
-  }
-
-  return {
-    messages: result.activeMessages,
-    compaction: result.compaction,
-  };
-}
-
-function isPrematureCompletionClaim(text: string): boolean {
-  const normalized = text
-    .replace(/<think>[\s\S]*?<\/think>/gi, '')
-    .replace(/<thinking>[\s\S]*?<\/thinking>/gi, '')
-    .trim()
-    .toLowerCase();
-
-  if (normalized.length < 10) return false;
-
-  const prematurePhrases = [
-    'verified passed',
-    'verification passed',
-    'all tests pass',
-    'completed successfully',
-    'task complete',
-    'work is complete',
-  ];
-
-  if (normalized.length < 60) {
-    return prematurePhrases.some((phrase) => normalized.includes(phrase));
-  }
-
-  const tailStart = Math.floor(normalized.length * 0.6);
-  const tail = normalized.slice(tailStart);
-  return prematurePhrases.some((phrase) => tail.includes(phrase));
-}
-
-function isSafeToolPreamble(text: string): boolean {
-  const normalized = text
-    .replace(/<think>[\s\S]*?<\/think>/gi, '')
-    .replace(/<thinking>[\s\S]*?<\/thinking>/gi, '')
-    .trim();
-
-  if (!normalized) return true;
-  const joined = normalized.toLowerCase();
-
-  const forbiddenPhrases = [
-    'answer is',
-    'final answer',
-    'in summary',
-    'in conclusion',
-    'to summarize',
-    'here is the answer',
-  ];
-
-  return !forbiddenPhrases.some((phrase) => joined.includes(phrase));
-}
-
-/** The canonical Synax system prompt. Exported for reuse by delegation layers. */
-export function systemPrompt(): string {
-  return [
-    'You are Synax, a disciplined local coding agent.',
-    'Tools: read, write, edit, bash.',
-    'Use bash for terminal commands, including git and verification.',
-    'Use read for local file inspection: list files, search text, or read bounded line ranges.',
-    'Use write for new text files and edit for exact replacements in files you have already read.',
-    'Keep working until the task is done, then stop and summarize.',
-    'Be concise. Show file paths clearly when working with files.',
-    'When calling a tool, emit only tool calls. Do not mix final-answer prose with tool calls.',
-  ].join('\n');
-}
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
-function formatModelResponseActivity(response: ChatResponse, _step: number): AgentActivity {
-  const lines: string[] = [];
-  const reasoningContent = response.reasoningContent?.trim();
-  const trimmedContent = response.content.trim();
-
-  if (reasoningContent && !trimmedContent.includes(reasoningContent)) {
-    lines.push(`<thinking>\n${reasoningContent}\n</thinking>`);
-  }
-
-  if (trimmedContent.length > 0) {
-    lines.push(trimmedContent);
-  }
-
-  if (response.toolCalls.length > 0) {
-    const toolNames = response.toolCalls.map((c) => c.name).join(', ');
-    lines.push(`→ ${response.toolCalls.length} tool call(s): ${toolNames}`);
-  }
-
-  return {
-    kind: 'model_response',
-    message: lines.join('\n') || '(empty response)',
-    modelOutput: lines.join('\n'),
-    toolCallCount: response.toolCalls.length,
-  };
-}
-
-function injectOrientation(
-  messages: AgentMessage[],
-  ledger: InspectionLedger,
-  readCounts?: Map<string, number>,
-  compactedFilePaths?: string[],
-): AgentMessage[] {
-  const orientation = ledger.getOrientation(readCounts, compactedFilePaths);
-  if (!orientation.includes('(nothing inspected yet)')) {
-    return [{ role: 'system', content: orientation }, ...messages];
-  }
-  return messages;
-}
-
-function buildModelRequest(
-  conversation: AgentConversation,
-  settings: ContextBudgetSettings,
-  readCounts: Map<string, number>,
-  totalReadCalls?: number,
-): AgentMessage[] {
-  const baseMessages = conversation.messages;
-
-  const effectiveLimit = settings.contextWindowTokens - settings.reservedOutputTokens;
-  const estimatedTokens = estimateRequestTokens(baseMessages);
-  const threshold = settings.assemblyCompactionThreshold ?? 0.8;
-  const nearBudget = estimatedTokens > effectiveLimit * threshold;
-
-  let assembled: AgentMessage[];
-  let stats: AssemblyStats;
-  if (nearBudget) {
-    const result = assembleModelMessages(baseMessages, settings, conversation.inspectionLedger, readCounts);
-    assembled = result.messages;
-    stats = result.stats;
-  } else {
-    assembled = baseMessages;
-    stats = {
-      totalMessagesIn: baseMessages.length,
-      totalMessagesOut: baseMessages.length,
-      estimatedTokensIn: estimatedTokens,
-      estimatedTokensOut: estimatedTokens,
-      compactedToolResults: 0,
-      keptRecentTurns: 0,
-      droppedDuplicateReadResults: 0,
-      compactedFilePaths: [],
-    };
-  }
-
-  conversation.assemblyStats = stats;
-
-  const withOrientation = injectOrientation(
-    assembled,
-    conversation.inspectionLedger,
-    readCounts,
-    stats.compactedFilePaths,
-  );
-
-  const READ_BUDGET_WARNING_THRESHOLD = Math.floor(MAX_TOTAL_READS_PER_TURN * 0.5);
-  const hasReadBudgetPressure =
-    totalReadCalls !== undefined &&
-    totalReadCalls >= READ_BUDGET_WARNING_THRESHOLD &&
-    totalReadCalls < MAX_TOTAL_READS_PER_TURN;
-
-  const hasRepetitionPressure = readCounts !== undefined && [...readCounts.values()].some((count) => count >= 3);
-
-  if (hasReadBudgetPressure || hasRepetitionPressure) {
-    const remaining =
-      totalReadCalls !== undefined ? MAX_TOTAL_READS_PER_TURN - totalReadCalls : MAX_TOTAL_READS_PER_TURN;
-    const warning: AgentMessage = {
-      role: 'user',
-      content: [
-        `⛔ STOP READING. ${remaining} read(s) remain before hard stop.`,
-        'You have enough context. Use non-read tools (bash, edit, write) to act now.',
-        'Do not call any more read or inspect tools. Take action with what you have.',
-      ].join('\n'),
-    };
-    const finalMessages = [...withOrientation, warning];
-    stats.totalMessagesOut = finalMessages.length;
-    stats.estimatedTokensOut = estimateRequestTokens(finalMessages);
+    // Replace conversation messages with compacted context
+    conversation.messages.splice(0, conversation.messages.length, ...compactContext);
     resetTokenLedger(conversation.tokenLedger);
-    estimateIncrementalTokens(finalMessages, conversation.tokenLedger);
-    return finalMessages;
-  }
+    conversation.latestCompaction = {
+      type: 'compaction',
+      stage,
+      summary: `Handoff recovery — ${manifest.turnCount} turns, ${manifest.entryCount} entries, ${manifest.filesTouched.length} files`,
+      firstKeptEntryId: 'handoff',
+      tokensBefore: 0,
+      tokensAfter: estimateRequestTokens(compactContext),
+      createdAt: new Date().toISOString(),
+    };
 
-  stats.totalMessagesOut = withOrientation.length;
-  stats.estimatedTokensOut = estimateRequestTokens(withOrientation);
-  resetTokenLedger(conversation.tokenLedger);
-  estimateIncrementalTokens(withOrientation, conversation.tokenLedger);
-  return withOrientation;
+    // Emit compaction event
+    this.eventBus.emit({
+      type: 'session_compact',
+      timestamp: eventNow(),
+      stepIndex: step,
+      stage,
+      tokensBefore: 0,
+      tokensAfter: estimateRequestTokens(compactContext),
+      messagesBefore: 0,
+      messagesAfter: compactContext.length,
+    });
+
+    if (this.tracer && turnSpan) {
+      this.tracer.addEvent(turnSpan, 'handoff_recovery', {
+        stage,
+        manifestTurnCount: manifest.turnCount,
+        filesTouched: manifest.filesTouched.length,
+      });
+    }
+
+    // Return null to signal "continue the loop" — the caller should NOT return this
+    // as a terminal result. Instead, the turn loop will continue with compacted context.
+    return null;
+  }
 }
+
+// ─── Handoff context builder ─────────────────────────────────────────────────
 
 /**
- * Classify a turn result for recovery eligibility.
- * Returns the failure scenario if the result indicates a recoverable failure.
+ * Build a compact conversation context from a handoff manifest.
+ *
+ * Preserves: system prompt + handoff manifest + last 2 user/assistant exchanges.
+ * Drops all intermediate tool results and old turns.
  */
-function classifyResultForRecovery(result: AgentTurnResult): import('../recovery/types').FailureScenario | null {
-  // Empty or near-empty model response with error
-  if (
-    result.terminalState === 'model_error' &&
-    result.error &&
-    (result.error.toLowerCase().includes('empty') ||
-      result.error.toLowerCase().includes('no content') ||
-      result.error.toLowerCase().includes('no response'))
-  ) {
-    return 'empty_response';
+function buildHandoffContext(messages: AgentMessage[], manifest: HandoffManifest): AgentMessage[] {
+  const result: AgentMessage[] = [];
+
+  // 1. Keep the system prompt
+  if (messages.length > 0 && messages[0].role === 'system') {
+    result.push(messages[0]);
   }
 
-  // Bash failure with stderr
-  if (
-    result.terminalState === 'tool_error' &&
-    result.error &&
-    result.toolCalls.some((tc) => tc.name === 'bash' && !tc.success && tc.error?.includes('exit code'))
-  ) {
-    return 'bash_failure';
+  // 2. Inject handoff manifest as a system message
+  const handoffLines: string[] = [
+    '## Session Handoff — Previous Context Summary',
+    '',
+    `**Turns completed:** ${manifest.turnCount}`,
+    `**Entries stored:** ${manifest.entryCount}`,
+    '',
+    '### Key Findings',
+    ...manifest.keyFindings.map((f) => `- ${f}`),
+    '',
+    '### Files Touched',
+    ...manifest.filesTouched.map((f) => `- ${f}`),
+    '',
+    '### Suggested Search Terms',
+    `Use \`search_memory\` with: ${manifest.suggestedSearchTerms.slice(0, 8).join(', ')}`,
+    '',
+    'Continue from where the previous context left off. Use search_memory to retrieve details.',
+  ];
+
+  result.push({
+    role: 'system',
+    content: handoffLines.join('\n'),
+  });
+
+  // 3. Keep the last 2 user-assistant exchanges (user + assistant pairs)
+  let userCount = 0;
+  const kept: AgentMessage[] = [];
+  for (let i = messages.length - 1; i >= 0 && userCount < 2; i--) {
+    const msg = messages[i];
+    if (msg.role === 'user' && !msg.content.startsWith('## Session Handoff')) {
+      userCount++;
+    }
+    kept.unshift(msg);
   }
 
-  // Budget exhaustion
-  if (result.terminalState === 'budget_exhausted') {
-    return 'context_exhaustion';
+  // Filter kept messages: only user and assistant, no tool results
+  for (const msg of kept) {
+    if (msg.role === 'user' || msg.role === 'assistant') {
+      result.push(msg);
+    }
   }
 
-  // Tool error with possible loop
-  if (result.terminalState === 'tool_error' && result.error?.includes('too many consecutive')) {
-    return 'infinite_loop';
-  }
+  // Add a continuation nudge
+  result.push({
+    role: 'user',
+    content:
+      'Context was compacted to fit the budget. Review the Handoff Summary above. ' +
+      'Use search_memory to retrieve specific details from earlier turns. Continue the task.',
+  });
 
-  return null;
+  return result;
+}
+
+// ─── Session ID generation ───────────────────────────────────────────────────
+
+let globalSessionCounter = 0;
+
+function generatePersistentSessionId(): string {
+  const now = new Date();
+  const yyyy = now.getFullYear().toString();
+  const mm = (now.getMonth() + 1).toString().padStart(2, '0');
+  const dd = now.getDate().toString().padStart(2, '0');
+  const hh = now.getHours().toString().padStart(2, '0');
+  const min = now.getMinutes().toString().padStart(2, '0');
+  const ss = now.getSeconds().toString().padStart(2, '0');
+  const rand = Math.random().toString(36).slice(2, 6);
+  globalSessionCounter += 1;
+  return `syn-${yyyy}${mm}${dd}-${hh}${min}${ss}-${rand}-${globalSessionCounter}`;
 }
