@@ -189,12 +189,164 @@ export class EventStore {
     }>;
   }
 
+  // ── Query methods for inspect --metrics ─────────────────────────────────
+
+  /** Get the most recent N sessions with summary data. */
+  getRecentSessions(limit = 20): SessionRecord[] {
+    if (!this.db) return [];
+    const rows = this.db
+      .prepare(
+        `SELECT id, repo_root, mode, model, created_at, terminal_state, steps, tool_calls, changed_files
+       FROM sessions ORDER BY created_at DESC LIMIT ?`,
+      )
+      .all(limit) as Array<{
+        id: string;
+        repo_root: string;
+        mode: string;
+        model: string;
+        created_at: string;
+        terminal_state: string | null;
+        steps: number;
+        tool_calls: number;
+        changed_files: string;
+      }>;
+    return rows.map((r) => ({
+      id: r.id,
+      repoRoot: r.repo_root,
+      mode: r.mode,
+      model: r.model,
+      createdAt: r.created_at,
+      terminalState: r.terminal_state ?? undefined,
+      steps: r.steps,
+      toolCalls: r.tool_calls,
+      changedFiles: safeJsonParse(r.changed_files),
+    }));
+  }
+
+  /** Get the full event timeline for a session. */
+  getSessionTimeline(sessionId: string): Array<{
+    sequence: number;
+    type: string;
+    timestamp: string;
+    stepIndex?: number;
+    toolName?: string;
+    payload: Record<string, unknown>;
+  }> {
+    if (!this.db) return [];
+    const rows = this.db
+      .prepare(
+        `SELECT sequence, type, timestamp, step_index, tool_name, payload
+       FROM events WHERE session_id = ? ORDER BY sequence ASC`,
+      )
+      .all(sessionId) as Array<{
+      sequence: number;
+      type: string;
+      timestamp: string;
+      step_index: number | null;
+      tool_name: string | null;
+      payload: string;
+    }>;
+    return rows.map((r) => ({
+      sequence: r.sequence,
+      type: r.type,
+      timestamp: r.timestamp,
+      stepIndex: r.step_index ?? undefined,
+      toolName: r.tool_name ?? undefined,
+      payload: safeJsonParse(r.payload),
+    }));
+  }
+
+  /** Get aggregated statistics for sessions within the given number of days. */
+  getAggregateStats(days = 30): {
+    totalSessions: number;
+    completedSessions: number;
+    failedSessions: number;
+    successRate: number;
+    avgSteps: number;
+    avgToolCalls: number;
+    totalToolCalls: number;
+    topModels: Array<{ model: string; count: number }>;
+    topFailureModes: Array<{ state: string; count: number }>;
+  } {
+    if (!this.db) {
+      return {
+        totalSessions: 0,
+        completedSessions: 0,
+        failedSessions: 0,
+        successRate: 0,
+        avgSteps: 0,
+        avgToolCalls: 0,
+        totalToolCalls: 0,
+        topModels: [],
+        topFailureModes: [],
+      };
+    }
+
+    const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
+
+    const countRow = this.db
+      .prepare('SELECT COUNT(*) as total FROM sessions WHERE created_at >= ?')
+      .get(since) as { total: number } | undefined;
+    const totalSessions = countRow?.total ?? 0;
+
+    const completedRow = this.db
+      .prepare("SELECT COUNT(*) as count FROM sessions WHERE created_at >= ? AND terminal_state = 'completed'")
+      .get(since) as { count: number } | undefined;
+    const completedSessions = completedRow?.count ?? 0;
+
+    const failedRow = this.db
+      .prepare(
+        "SELECT COUNT(*) as count FROM sessions WHERE created_at >= ? AND terminal_state IS NOT NULL AND terminal_state != 'completed'",
+      )
+      .get(since) as { count: number } | undefined;
+    const failedSessions = failedRow?.count ?? 0;
+
+    const avgRow = this.db
+      .prepare(
+        'SELECT AVG(steps) as avgSteps, AVG(tool_calls) as avgToolCalls, SUM(tool_calls) as totalToolCalls FROM sessions WHERE created_at >= ?',
+      )
+      .get(since) as { avgSteps: number | null; avgToolCalls: number | null; totalToolCalls: number | null } | undefined;
+
+    const topModels = this.db
+      .prepare(
+        'SELECT model, COUNT(*) as count FROM sessions WHERE created_at >= ? GROUP BY model ORDER BY count DESC LIMIT 5',
+      )
+      .all(since) as Array<{ model: string; count: number }>;
+
+    const topFailureModes = this.db
+      .prepare(
+        "SELECT terminal_state as state, COUNT(*) as count FROM sessions WHERE created_at >= ? AND terminal_state IS NOT NULL AND terminal_state != 'completed' GROUP BY terminal_state ORDER BY count DESC LIMIT 5",
+      )
+      .all(since) as Array<{ state: string; count: number }>;
+
+    return {
+      totalSessions,
+      completedSessions,
+      failedSessions,
+      successRate: totalSessions > 0 ? Math.round((completedSessions / totalSessions) * 100) : 0,
+      avgSteps: avgRow?.avgSteps ? Math.round(avgRow.avgSteps * 10) / 10 : 0,
+      avgToolCalls: avgRow?.avgToolCalls ? Math.round(avgRow.avgToolCalls * 10) / 10 : 0,
+      totalToolCalls: avgRow?.totalToolCalls ?? 0,
+      topModels,
+      topFailureModes,
+    };
+  }
+
   /** Close the database connection. */
   close(): void {
     if (this.db) {
       this.db.close();
       this.db = null;
     }
+  }
+}
+
+/** Safely parse a JSON string, returning a default on failure. */
+function safeJsonParse<T>(json: string, fallback?: T): T {
+  try {
+    return JSON.parse(json) as T;
+  } catch {
+    return (fallback ?? ([] as unknown)) as T;
   }
 }
 
