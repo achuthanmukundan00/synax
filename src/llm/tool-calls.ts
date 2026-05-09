@@ -102,7 +102,7 @@ export function parseToolCallsFromContent(content: string): ParsedToolCall[] {
  */
 export function parseModelOutput(content: string, parserId: string, reasoningContent?: string): ParsedModelOutput {
   const warnings: ParseWarning[] = [];
-  let reasoning = reasoningContent?.trim() || undefined;
+  const reasoning = reasoningContent?.trim() || undefined;
   let cleanedContent = content;
 
   // Extract reasoning from content if the provider embeds it inline
