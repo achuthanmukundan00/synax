@@ -36,6 +36,7 @@ import {
 } from './context-budget';
 import { atomicWriteFile, writeLastEditRecord } from './safety';
 import { eventNow, type AgentEvent, type TerminalState } from './events';
+import type { SpanTracer } from '../telemetry/SpanTracer';
 import {
   canMutatePath,
   describeToolCall,
@@ -91,6 +92,8 @@ export interface AgentRunnerOptions {
   contextBudget?: Partial<ContextBudgetSettings> & { contextBudgetTokens?: number };
   /** Optional structured logger for internal diagnostics. */
   logger?: Logger;
+  /** Optional span tracer for telemetry instrumentation. */
+  tracer?: SpanTracer;
 }
 
 export interface ModelToolSurfaceOptions {
@@ -228,320 +231,385 @@ export async function runAgentTurn(options: AgentRunnerOptions & { task: string 
 
   conversation.messages.push({ role: 'user', content: options.task });
 
-  for (let step = 1; ; step += 1) {
-    let response: ChatResponse;
-    try {
-      options.onActivity?.({ kind: 'model', message: `model step ${step}` });
-      options.onEvent?.({
-        type: 'model_step_started',
-        timestamp: eventNow(),
-        stepIndex: step,
-      });
+  // Start a turn-level span for this agent run.
+  const turnSpan = options.tracer?.startSpan({ kind: 'turn', metadata: { task: options.task.slice(0, 120) } });
 
-      // Preflight budget guard (item 7): runs before EVERY model call.
-      const effectiveInputLimit = contextBudget.contextWindowTokens - contextBudget.reservedOutputTokens;
-      const estimatedInputTokens = estimateIncrementalTokens(conversation.messages, conversation.tokenLedger);
-
-      options.onBudget?.({
-        estimatedInputTokens,
-        inputLimit: effectiveInputLimit,
-        contextWindowTokens: contextBudget.contextWindowTokens,
-        reservedOutputTokens: contextBudget.reservedOutputTokens,
-        step,
-      });
-
-      // Check if we're already over budget before attempting compaction
-      if (estimatedInputTokens > effectiveInputLimit) {
-        logger?.warn('Context budget near limit before model call', {
-          estimatedInputTokens,
-          effectiveInputLimit,
+  try {
+    for (let step = 1; ; step += 1) {
+      let response: ChatResponse;
+      let modelSpan: ReturnType<SpanTracer['startSpan']> | undefined;
+      try {
+        options.onActivity?.({ kind: 'model', message: `model step ${step}` });
+        options.onEvent?.({
+          type: 'model_step_started',
+          timestamp: eventNow(),
           stepIndex: step,
         });
-        const guarded = guardModelRequestMultiStage(conversation.messages, contextBudget, conversation);
-        if (guarded.error) {
+
+        // Span: model call
+        modelSpan =
+          options.tracer && turnSpan ? options.tracer.startChildSpan(turnSpan, 'model_call', { step }) : undefined;
+
+        // Preflight budget guard (item 7): runs before EVERY model call.
+        const effectiveInputLimit = contextBudget.contextWindowTokens - contextBudget.reservedOutputTokens;
+        const estimatedInputTokens = estimateIncrementalTokens(conversation.messages, conversation.tokenLedger);
+
+        options.onBudget?.({
+          estimatedInputTokens,
+          inputLimit: effectiveInputLimit,
+          contextWindowTokens: contextBudget.contextWindowTokens,
+          reservedOutputTokens: contextBudget.reservedOutputTokens,
+          step,
+        });
+
+        // Check if we're already over budget before attempting compaction
+        if (estimatedInputTokens > effectiveInputLimit) {
+          logger?.warn('Context budget near limit before model call', {
+            estimatedInputTokens,
+            effectiveInputLimit,
+            stepIndex: step,
+          });
+          const guarded = guardModelRequestMultiStage(conversation.messages, contextBudget, conversation);
+          if (guarded.error) {
+            return {
+              terminalState: 'budget_exhausted',
+              finalAnswer: '',
+              steps: step,
+              toolCalls,
+              changedFiles,
+              conversation,
+              error: guarded.error,
+            };
+          }
+          if (guarded.compaction) {
+            conversation.latestCompaction = guarded.compaction;
+            logger?.info('Compaction applied', {
+              stage: guarded.compaction.stage,
+              tokensBefore: guarded.compaction.tokensBefore,
+              tokensAfter: guarded.compaction.tokensAfter,
+              stepIndex: step,
+            });
+          }
+
+          // Post-compaction budget verification
+          const postCompactTokens = estimateRequestTokens(guarded.messages);
+          if (postCompactTokens > effectiveInputLimit) {
+            return {
+              terminalState: 'budget_exhausted',
+              finalAnswer: '',
+              steps: step,
+              toolCalls,
+              changedFiles,
+              conversation,
+              error: formatContextBudgetError({
+                estimatedInputTokens: postCompactTokens,
+                contextWindowTokens: contextBudget.contextWindowTokens,
+                reservedOutputTokens: contextBudget.reservedOutputTokens,
+                effectiveInputLimit,
+                largestContributors: summarizeLargestContributors(guarded.messages),
+                compactionStage: 4,
+              }),
+            };
+          }
+
+          // Build model request with assembly, orientation, and token ledger update
+          const assembled = buildModelRequest(conversation, contextBudget, identicalReadCounts, totalReadCalls);
+
+          response = await options.client.chat({
+            messages: assembled,
+            tools,
+            temperature: 0,
+            maxTokens: 2048,
+            onDelta: (delta) => emitAssistantDelta(options, delta),
+          });
+        } else {
+          // Within budget: build assembled model request proactively
+          const assembled = buildModelRequest(conversation, contextBudget, identicalReadCounts, totalReadCalls);
+          response = await options.client.chat({
+            messages: assembled,
+            tools,
+            temperature: 0,
+            maxTokens: 2048,
+            onDelta: (delta) => emitAssistantDelta(options, delta),
+          });
+        }
+      } catch (error) {
+        // End model call span on error
+        if (options.tracer && modelSpan) {
+          options.tracer.addEvent(modelSpan, 'error', { message: errorMessage(error) });
+          options.tracer.endSpan(modelSpan);
+        }
+        const message = errorMessage(error);
+        logger?.error('Model call failed', error instanceof Error ? error : new Error(message), {
+          stepIndex: step,
+          model: 'local',
+        });
+        return {
+          terminalState: message.toLowerCase().includes('context budget') ? 'budget_exhausted' : 'model_error',
+          finalAnswer: '',
+          steps: step,
+          toolCalls,
+          changedFiles,
+          conversation,
+          error: message,
+        };
+      }
+
+      // End model call span
+      if (options.tracer && modelSpan) {
+        options.tracer.addEvent(modelSpan, 'response_received', {
+          toolCallCount: response.toolCalls.length,
+          contentLength: response.content.length,
+        });
+        options.tracer.endSpan(modelSpan);
+      }
+
+      // Span: tool parsing
+      const toolParseSpan =
+        options.tracer && turnSpan
+          ? options.tracer.startChildSpan(turnSpan, 'tool_parse', { toolCallCount: response.toolCalls.length })
+          : undefined;
+
+      // Emit model response activity so the CLI can surface model thoughts/output.
+      options.onActivity?.(formatModelResponseActivity(response, step));
+
+      conversation.messages.push(assistantMessage(response, contextBudget));
+
+      if (response.toolCalls.length > 0 && response.content.trim().length > 0) {
+        if (!isSafeToolPreamble(response.content)) {
           return {
-            terminalState: 'budget_exhausted',
-            finalAnswer: '',
+            terminalState: 'model_error',
+            finalAnswer: response.content.trim(),
             steps: step,
             toolCalls,
             changedFiles,
             conversation,
-            error: guarded.error,
+            error: 'model emitted ambiguous mixed output (tool calls plus final text)',
           };
         }
-        if (guarded.compaction) {
-          conversation.latestCompaction = guarded.compaction;
-          logger?.info('Compaction applied', {
-            stage: guarded.compaction.stage,
-            tokensBefore: guarded.compaction.tokensBefore,
-            tokensAfter: guarded.compaction.tokensAfter,
-            stepIndex: step,
+
+        if (toolCallFormat(response) === 'openai') {
+          conversation.messages[conversation.messages.length - 1] = assistantMessage({
+            ...response,
+            content: '',
           });
         }
+      }
 
-        // Post-compaction budget verification
-        const postCompactTokens = estimateRequestTokens(guarded.messages);
-        if (postCompactTokens > effectiveInputLimit) {
+      if (response.toolCalls.length === 0) {
+        // Gate: prevent premature completion when the model claims success
+        // without making any changes in patch mode. Read-only and verify
+        // modes are exempt since they legitimately don't make changes.
+        // End tool parse span (no tool calls to execute)
+        if (options.tracer && toolParseSpan) {
+          options.tracer.endSpan(toolParseSpan);
+        }
+
+        if (mode === 'patch' && changedFiles.length === 0 && isPrematureCompletionClaim(response.content)) {
+          conversation.messages.push({
+            role: 'user',
+            content:
+              'You claimed completion without taking action. ' +
+              'Use available tools (bash for git/commands, edit for file changes, write for new files) to complete the task. ' +
+              'If no action is needed, explain specifically why. Do not just say "verified" or "passed" — show evidence.',
+          });
+          continue;
+        }
+
+        return {
+          terminalState: 'completed',
+          finalAnswer: response.content.trim(),
+          steps: step,
+          toolCalls,
+          changedFiles,
+          conversation,
+        };
+      }
+
+      // End tool parse span (after parsing checks, before tool loop)
+      if (options.tracer && toolParseSpan) {
+        options.tracer.endSpan(toolParseSpan);
+      }
+
+      const contentToolResults: Array<{ id: string; content: string }> = [];
+      for (const call of response.toolCalls) {
+        // Span: tool execution
+        const toolExecSpan =
+          options.tracer && turnSpan
+            ? options.tracer.startChildSpan(turnSpan, 'tool_execution', {
+                toolName: call.name,
+              })
+            : undefined;
+        if (toolCalls.length >= maxToolCalls) {
+          // End tool execution span before returning
+          if (options.tracer && toolExecSpan) {
+            options.tracer.addEvent(toolExecSpan, 'max_tool_calls_exceeded', { limit: maxToolCalls });
+            options.tracer.endSpan(toolExecSpan);
+          }
+          logger?.warn('Max tool calls exceeded', {
+            current: toolCalls.length,
+            limit: maxToolCalls,
+            stepIndex: step,
+          });
           return {
             terminalState: 'budget_exhausted',
-            finalAnswer: '',
+            finalAnswer: response.content.trim(),
+            steps: step,
+            toolCalls,
+            changedFiles,
+            conversation,
+            error: `max tool calls exceeded: ${maxToolCalls}`,
+          };
+        }
+        options.onActivity?.({
+          kind: 'tool',
+          message: describeToolCall(call.name, call.arguments as Record<string, unknown>),
+        });
+        logger?.debug('Executing tool', {
+          toolName: call.name,
+          args: JSON.stringify(call.arguments).slice(0, 500),
+          stepIndex: step,
+        });
+        options.onEvent?.({
+          type: 'tool_started',
+          timestamp: eventNow(),
+          stepIndex: step,
+          toolCallId: call.id,
+          toolName: call.name,
+          summary: JSON.stringify(call.arguments).slice(0, 180),
+          detail: JSON.stringify(call.arguments, null, 2),
+        });
+        const result =
+          detectRepeatedBashCommand(call, identicalBashCounts) ??
+          (await executeAgentTool(call, {
+            repoRoot: options.repoRoot,
+            registry,
+            ledger: conversation.inspectionLedger,
+            mode,
+            readCache,
+            identicalReadCounts,
+            totalReadCalls,
+            totalReadResultTokens,
+            readResultBudget: contextBudget,
+            ensureCheckpoint: options.ensureCheckpoint,
+            approvePatch: options.approvePatch,
+            onPatchPreview: (preview) => {
+              options.onEvent?.({
+                type: 'patch_preview',
+                timestamp: eventNow(),
+                stepIndex: step,
+                toolCallId: call.id,
+                toolName: call.name,
+                ...preview,
+              });
+            },
+          }));
+        if (call.name === 'read') {
+          totalReadCalls += 1;
+          totalReadResultTokens += estimateReadResultTokens(result.toolResult);
+        }
+        toolCalls.push({
+          name: call.name,
+          success: result.success,
+          error: result.error,
+        });
+        appendToolResult(conversation, response, call, result.toolResult, contentToolResults, contextBudget);
+        options.onEvent?.({
+          type: 'tool_finished',
+          timestamp: eventNow(),
+          stepIndex: step,
+          toolCallId: call.id,
+          toolName: call.name,
+          status: result.success ? 'ok' : 'error',
+          summary: result.success ? 'completed' : (result.error ?? 'failed'),
+          detail: formatToolResultDetail(result.toolResult),
+        });
+        if (result.changedFile) changedFiles.push(result.changedFile);
+
+        // End tool execution span
+        if (options.tracer && toolExecSpan) {
+          options.tracer.addEvent(toolExecSpan, 'tool_finished', {
+            success: result.success,
+            error: result.error,
+          });
+          options.tracer.endSpan(toolExecSpan);
+        }
+
+        // Item 7: Budget check after EVERY tool result is appended.
+        // Check the model-facing assembled request, not the unpruned
+        // canonical transcript. Large shell/read results may be safely
+        // compacted before the next model call.
+        const afterToolMessages = buildModelRequest(conversation, contextBudget, identicalReadCounts, totalReadCalls);
+        const afterToolTokens = estimateRequestTokens(afterToolMessages);
+        const effectiveLimit = contextBudget.contextWindowTokens - contextBudget.reservedOutputTokens;
+        if (afterToolTokens > effectiveLimit) {
+          flushContentToolResults(conversation, response, contentToolResults);
+          logger?.warn('Context budget exhausted after tool result', {
+            estimatedInputTokens: afterToolTokens,
+            effectiveInputLimit: effectiveLimit,
+            toolName: call.name,
+            stepIndex: step,
+          });
+          return {
+            terminalState: 'budget_exhausted',
+            finalAnswer: response.content.trim(),
             steps: step,
             toolCalls,
             changedFiles,
             conversation,
             error: formatContextBudgetError({
-              estimatedInputTokens: postCompactTokens,
+              estimatedInputTokens: afterToolTokens,
               contextWindowTokens: contextBudget.contextWindowTokens,
               reservedOutputTokens: contextBudget.reservedOutputTokens,
-              effectiveInputLimit,
-              largestContributors: summarizeLargestContributors(guarded.messages),
-              compactionStage: 4,
+              effectiveInputLimit: effectiveLimit,
+              largestContributors: summarizeLargestContributors(afterToolMessages),
+              compactionStage: 0, // overflow within a step, not compaction
             }),
           };
         }
 
-        // Build model request with assembly, orientation, and token ledger update
-        const assembled = buildModelRequest(conversation, contextBudget, identicalReadCounts, totalReadCalls);
+        if (result.success) {
+          consecutiveRecoverableToolErrors = 0;
+        } else if (isRecoverableToolError(call, result)) {
+          consecutiveRecoverableToolErrors += 1;
+          // Surface recoverable errors so users can debug local-model behavior.
+          options.onActivity?.({
+            kind: 'tool',
+            message: `recoverable error ${consecutiveRecoverableToolErrors}/${MAX_CONSECUTIVE_RECOVERABLE_TOOL_ERRORS}: ${call.name} ${describeToolCall(call.name, call.arguments as Record<string, unknown>)} — ${result.error ?? 'unknown'}`,
+          });
+          if (consecutiveRecoverableToolErrors < MAX_CONSECUTIVE_RECOVERABLE_TOOL_ERRORS) {
+            continue;
+          }
 
-        response = await options.client.chat({
-          messages: assembled,
-          tools,
-          temperature: 0,
-          maxTokens: 2048,
-          onDelta: (delta) => emitAssistantDelta(options, delta),
-        });
-      } else {
-        // Within budget: build assembled model request proactively
-        const assembled = buildModelRequest(conversation, contextBudget, identicalReadCounts, totalReadCalls);
-        response = await options.client.chat({
-          messages: assembled,
-          tools,
-          temperature: 0,
-          maxTokens: 2048,
-          onDelta: (delta) => emitAssistantDelta(options, delta),
-        });
-      }
-    } catch (error) {
-      const message = errorMessage(error);
-      logger?.error('Model call failed', error instanceof Error ? error : new Error(message), {
-        stepIndex: step,
-        model: 'local',
-      });
-      return {
-        terminalState: message.toLowerCase().includes('context budget') ? 'budget_exhausted' : 'model_error',
-        finalAnswer: '',
-        steps: step,
-        toolCalls,
-        changedFiles,
-        conversation,
-        error: message,
-      };
-    }
-
-    // Emit model response activity so the CLI can surface model thoughts/output.
-    options.onActivity?.(formatModelResponseActivity(response, step));
-
-    conversation.messages.push(assistantMessage(response, contextBudget));
-
-    if (response.toolCalls.length > 0 && response.content.trim().length > 0) {
-      if (!isSafeToolPreamble(response.content)) {
-        return {
-          terminalState: 'model_error',
-          finalAnswer: response.content.trim(),
-          steps: step,
-          toolCalls,
-          changedFiles,
-          conversation,
-          error: 'model emitted ambiguous mixed output (tool calls plus final text)',
-        };
-      }
-
-      if (toolCallFormat(response) === 'openai') {
-        conversation.messages[conversation.messages.length - 1] = assistantMessage({
-          ...response,
-          content: '',
-        });
-      }
-    }
-
-    if (response.toolCalls.length === 0) {
-      // Gate: prevent premature completion when the model claims success
-      // without making any changes in patch mode. Read-only and verify
-      // modes are exempt since they legitimately don't make changes.
-      if (mode === 'patch' && changedFiles.length === 0 && isPrematureCompletionClaim(response.content)) {
-        conversation.messages.push({
-          role: 'user',
-          content:
-            'You claimed completion without taking action. ' +
-            'Use available tools (bash for git/commands, edit for file changes, write for new files) to complete the task. ' +
-            'If no action is needed, explain specifically why. Do not just say "verified" or "passed" — show evidence.',
-        });
-        continue;
-      }
-
-      return {
-        terminalState: 'completed',
-        finalAnswer: response.content.trim(),
-        steps: step,
-        toolCalls,
-        changedFiles,
-        conversation,
-      };
-    }
-
-    const contentToolResults: Array<{ id: string; content: string }> = [];
-    for (const call of response.toolCalls) {
-      if (toolCalls.length >= maxToolCalls) {
-        logger?.warn('Max tool calls exceeded', {
-          current: toolCalls.length,
-          limit: maxToolCalls,
-          stepIndex: step,
-        });
-        return {
-          terminalState: 'budget_exhausted',
-          finalAnswer: response.content.trim(),
-          steps: step,
-          toolCalls,
-          changedFiles,
-          conversation,
-          error: `max tool calls exceeded: ${maxToolCalls}`,
-        };
-      }
-      options.onActivity?.({
-        kind: 'tool',
-        message: describeToolCall(call.name, call.arguments as Record<string, unknown>),
-      });
-      logger?.debug('Executing tool', {
-        toolName: call.name,
-        args: JSON.stringify(call.arguments).slice(0, 500),
-        stepIndex: step,
-      });
-      options.onEvent?.({
-        type: 'tool_started',
-        timestamp: eventNow(),
-        stepIndex: step,
-        toolCallId: call.id,
-        toolName: call.name,
-        summary: JSON.stringify(call.arguments).slice(0, 180),
-        detail: JSON.stringify(call.arguments, null, 2),
-      });
-      const result =
-        detectRepeatedBashCommand(call, identicalBashCounts) ??
-        (await executeAgentTool(call, {
-          repoRoot: options.repoRoot,
-          registry,
-          ledger: conversation.inspectionLedger,
-          mode,
-          readCache,
-          identicalReadCounts,
-          totalReadCalls,
-          totalReadResultTokens,
-          readResultBudget: contextBudget,
-          ensureCheckpoint: options.ensureCheckpoint,
-          approvePatch: options.approvePatch,
-          onPatchPreview: (preview) => {
-            options.onEvent?.({
-              type: 'patch_preview',
-              timestamp: eventNow(),
-              stepIndex: step,
-              toolCallId: call.id,
-              toolName: call.name,
-              ...preview,
-            });
-          },
-        }));
-      if (call.name === 'read') {
-        totalReadCalls += 1;
-        totalReadResultTokens += estimateReadResultTokens(result.toolResult);
-      }
-      toolCalls.push({
-        name: call.name,
-        success: result.success,
-        error: result.error,
-      });
-      appendToolResult(conversation, response, call, result.toolResult, contentToolResults, contextBudget);
-      options.onEvent?.({
-        type: 'tool_finished',
-        timestamp: eventNow(),
-        stepIndex: step,
-        toolCallId: call.id,
-        toolName: call.name,
-        status: result.success ? 'ok' : 'error',
-        summary: result.success ? 'completed' : (result.error ?? 'failed'),
-        detail: formatToolResultDetail(result.toolResult),
-      });
-      if (result.changedFile) changedFiles.push(result.changedFile);
-
-      // Item 7: Budget check after EVERY tool result is appended.
-      // Check the model-facing assembled request, not the unpruned
-      // canonical transcript. Large shell/read results may be safely
-      // compacted before the next model call.
-      const afterToolMessages = buildModelRequest(conversation, contextBudget, identicalReadCounts, totalReadCalls);
-      const afterToolTokens = estimateRequestTokens(afterToolMessages);
-      const effectiveLimit = contextBudget.contextWindowTokens - contextBudget.reservedOutputTokens;
-      if (afterToolTokens > effectiveLimit) {
-        flushContentToolResults(conversation, response, contentToolResults);
-        logger?.warn('Context budget exhausted after tool result', {
-          estimatedInputTokens: afterToolTokens,
-          effectiveInputLimit: effectiveLimit,
-          toolName: call.name,
-          stepIndex: step,
-        });
-        return {
-          terminalState: 'budget_exhausted',
-          finalAnswer: response.content.trim(),
-          steps: step,
-          toolCalls,
-          changedFiles,
-          conversation,
-          error: formatContextBudgetError({
-            estimatedInputTokens: afterToolTokens,
-            contextWindowTokens: contextBudget.contextWindowTokens,
-            reservedOutputTokens: contextBudget.reservedOutputTokens,
-            effectiveInputLimit: effectiveLimit,
-            largestContributors: summarizeLargestContributors(afterToolMessages),
-            compactionStage: 0, // overflow within a step, not compaction
-          }),
-        };
-      }
-
-      if (result.success) {
-        consecutiveRecoverableToolErrors = 0;
-      } else if (isRecoverableToolError(call, result)) {
-        consecutiveRecoverableToolErrors += 1;
-        // Surface recoverable errors so users can debug local-model behavior.
-        options.onActivity?.({
-          kind: 'tool',
-          message: `recoverable error ${consecutiveRecoverableToolErrors}/${MAX_CONSECUTIVE_RECOVERABLE_TOOL_ERRORS}: ${call.name} ${describeToolCall(call.name, call.arguments as Record<string, unknown>)} — ${result.error ?? 'unknown'}`,
-        });
-        if (consecutiveRecoverableToolErrors < MAX_CONSECUTIVE_RECOVERABLE_TOOL_ERRORS) {
-          continue;
+          flushContentToolResults(conversation, response, contentToolResults);
+          return {
+            terminalState: 'tool_error',
+            finalAnswer: response.content.trim(),
+            steps: step,
+            toolCalls,
+            changedFiles,
+            conversation,
+            error: `too many consecutive recoverable tool errors: ${MAX_CONSECUTIVE_RECOVERABLE_TOOL_ERRORS}`,
+          };
+        } else {
+          flushContentToolResults(conversation, response, contentToolResults);
+          return {
+            terminalState: result.terminalState ?? 'tool_error',
+            finalAnswer: response.content.trim(),
+            steps: step,
+            toolCalls,
+            changedFiles,
+            conversation,
+            error: result.error,
+          };
         }
-
-        flushContentToolResults(conversation, response, contentToolResults);
-        return {
-          terminalState: 'tool_error',
-          finalAnswer: response.content.trim(),
-          steps: step,
-          toolCalls,
-          changedFiles,
-          conversation,
-          error: `too many consecutive recoverable tool errors: ${MAX_CONSECUTIVE_RECOVERABLE_TOOL_ERRORS}`,
-        };
-      } else {
-        flushContentToolResults(conversation, response, contentToolResults);
-        return {
-          terminalState: result.terminalState ?? 'tool_error',
-          finalAnswer: response.content.trim(),
-          steps: step,
-          toolCalls,
-          changedFiles,
-          conversation,
-          error: result.error,
-        };
       }
+      flushContentToolResults(conversation, response, contentToolResults);
     }
-    flushContentToolResults(conversation, response, contentToolResults);
+  } finally {
+    if (options.tracer && turnSpan) {
+      options.tracer.endSpan(turnSpan);
+    }
   }
 }
 
