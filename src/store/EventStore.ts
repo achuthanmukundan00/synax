@@ -304,7 +304,7 @@ export class EventStore {
       return { totalInputTokens: 0, totalOutputTokens: 0, totalTokens: 0, totalEstimatedCost: 0, turnCount: 0 };
     }
 
-    const clause = sessionId ? 'WHERE session_id = ?' : '';
+    const clause = sessionId ? 'AND session_id = ?' : '';
     const params = sessionId ? [sessionId] : [];
 
     const rows = this.db
