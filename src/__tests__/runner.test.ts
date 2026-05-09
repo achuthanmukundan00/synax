@@ -1,5 +1,6 @@
 import { execSync } from 'child_process';
-import { existsSync, mkdirSync, rmSync, writeFileSync, readFileSync } from 'fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync, readFileSync } from 'fs';
+import { tmpdir } from 'os';
 import { join } from 'path';
 
 import { type AgentEvent } from '../agent/events';
@@ -273,9 +274,7 @@ describe('shared bounded agent runner', () => {
   });
 
   it('runs bash command bodies from repo root when a leading absolute cd points outside the repo', async () => {
-    const outsideWorkspace = join('/private/tmp', 'synax-runner-outside-existing-workspace');
-    rmSync(outsideWorkspace, { recursive: true, force: true });
-    mkdirSync(outsideWorkspace, { recursive: true });
+    const outsideWorkspace = mkdtempSync(join(tmpdir(), 'synax-runner-outside-existing-workspace-'));
     execSync('git init', { cwd: TMP, stdio: 'ignore' });
     const client = fakeClient([
       {
