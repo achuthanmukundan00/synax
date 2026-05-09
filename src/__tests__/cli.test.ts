@@ -333,7 +333,13 @@ describe('CLI', () => {
         };
         expect(parsed.messages[0].role).toBe('system');
         expect(parsed.messages[0].content).toContain('You are Synax');
-        expect(parsed.tools.map((tool) => tool.function.name)).toEqual(['read', 'write', 'edit', 'bash']);
+        expect(parsed.tools.map((tool) => tool.function.name)).toEqual([
+          'read',
+          'write',
+          'edit',
+          'bash',
+          'search_memory',
+        ]);
         expect(parsed.messages[0].content).not.toContain('sk-context-secret');
       } finally {
         srv.close();
@@ -413,7 +419,13 @@ describe('CLI', () => {
         const parsed = JSON.parse(requestBody) as {
           tools: Array<{ function: { name: string } }>;
         };
-        expect(parsed.tools.map((tool) => tool.function.name)).toEqual(['read', 'write', 'edit', 'bash']);
+        expect(parsed.tools.map((tool) => tool.function.name)).toEqual([
+          'read',
+          'write',
+          'edit',
+          'bash',
+          'search_memory',
+        ]);
       } finally {
         srv.close();
         rmSync(cwd, { recursive: true, force: true });
