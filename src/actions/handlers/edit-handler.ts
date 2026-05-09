@@ -61,12 +61,16 @@ export async function handleEdit(action: EditAction, context: ExecutionContext):
   if (!applied.ok) {
     return toolFailure(toolName, applied.message);
   }
-  await writeLastEditRecord(context.repoRoot, {
-    path: applied.path,
-    before: applied.before,
-    after: applied.after,
-    timestamp: new Date().toISOString(),
-  });
+  await writeLastEditRecord(
+    context.repoRoot,
+    {
+      path: applied.path,
+      before: applied.before,
+      after: applied.after,
+      timestamp: new Date().toISOString(),
+    },
+    context.env,
+  );
 
   return {
     success: true,

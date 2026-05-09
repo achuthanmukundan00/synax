@@ -34,6 +34,8 @@ import {
 } from '../agent/task-policy';
 import { ActionExecutor, createDefaultHandlerMap } from '../actions/ActionExecutor';
 import { estimateReadResultTokens } from '../actions/handlers/read-handler';
+import { NodeExecutionEnv } from '../env/NodeExecutionEnv';
+import type { ExecutionEnv } from '../env/ExecutionEnv';
 
 // Re-export types for backward compatibility with runner.ts consumers.
 export type AgentTerminalState = TerminalState;
@@ -160,6 +162,8 @@ export class Session {
   readonly eventBus: EventEmitter = new EventEmitter();
   /** Typed tool dispatch — extracted from the old executeAgentTool switch. */
   readonly executor: ActionExecutor;
+  /** Filesystem and process abstraction — swappable for testing/sandboxing. */
+  readonly env: ExecutionEnv;
   /** Holographic memory — null until M4 #12. */
   readonly memory: null = null;
 
@@ -180,12 +184,14 @@ export class Session {
     ensureCheckpoint?: () => Promise<unknown>;
     logger?: Logger;
     tracer?: SpanTracer;
+    env?: ExecutionEnv;
   }) {
     this.repoRoot = options.repoRoot;
     this.client = options.client;
     this.mode = options.mode ?? 'patch';
     this.maxToolCalls = options.maxToolCalls ?? DEFAULT_MAX_TOOL_CALLS;
     this.bashEnabled = options.bashEnabled ?? true;
+    this.env = options.env ?? new NodeExecutionEnv();
     this.onActivity = options.onActivity;
     this.onEvent = options.onEvent;
     this.onBudget = options.onBudget;
@@ -558,6 +564,7 @@ export class Session {
               registry,
               ledger: conversation.inspectionLedger,
               mode,
+              env: this.env,
               readCache,
               identicalReadCounts,
               totalReadCalls,
