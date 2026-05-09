@@ -19,7 +19,12 @@ import { createInputParser, MAX_INPUT_CHARS } from './input';
 import { createTerminalSession, type InputStreamLike, type TerminalSession } from './terminal';
 import type { Writable } from 'node:stream';
 import type { CoreMode } from './ai-core';
-import { filterCommands, getCommand, type SlashCommand, type SlashCommandResult } from '../settings/slash-command-registry';
+import {
+  filterCommands,
+  getCommand,
+  type SlashCommand,
+  type SlashCommandResult,
+} from '../settings/slash-command-registry';
 import { createSettingsState, settingsReducer, type SettingsState } from '../settings/settings-state';
 import { renderSettings } from '../settings/settings-renderer';
 import {
