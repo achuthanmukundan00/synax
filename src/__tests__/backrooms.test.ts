@@ -6,7 +6,8 @@ import { isSecretTrigger, SECRET_TRIGGER } from '../backrooms/trigger';
 import { generateLiminalLevel, generateRoomName, nextLiminalSeed } from '../backrooms/procedural';
 import { parseBackroomsInput } from '../backrooms/input';
 import { processMovement, tryMove } from '../backrooms/runBackrooms';
-import { MOVE_SPEED, type GameState, type LevelDef } from '../backrooms/types';
+import { MIN_TERMINAL_COLS, MIN_TERMINAL_ROWS, MOVE_SPEED, type GameState, type LevelDef } from '../backrooms/types';
+import { createBackroomsTerminal } from '../backrooms/terminal';
 
 describe('Synax Backrooms secret trigger', () => {
   describe('exact-match detection', () => {
@@ -58,12 +59,10 @@ describe('Synax Backrooms terminal safety', () => {
   // Test that the terminal cleanup function exists and calls stop
   it('terminal cleanup is exported and callable', () => {
     // We import and verify the module structure exists
-    const mod = require('../backrooms/terminal');
-    expect(typeof mod.createBackroomsTerminal).toBe('function');
+    expect(typeof createBackroomsTerminal).toBe('function');
   });
 
   it('createBackroomsTerminal returns start/stop/write functions', () => {
-    const mod = require('../backrooms/terminal');
     const mockStdout = {
       write: jest.fn(),
       isTTY: true,
@@ -79,7 +78,7 @@ describe('Synax Backrooms terminal safety', () => {
       off: jest.fn(),
     };
 
-    const term = mod.createBackroomsTerminal({ stdin: mockStdin, stdout: mockStdout });
+    const term = createBackroomsTerminal({ stdin: mockStdin, stdout: mockStdout });
     expect(typeof term.start).toBe('function');
     expect(typeof term.stop).toBe('function');
     expect(typeof term.write).toBe('function');
@@ -113,7 +112,6 @@ describe('Synax Backrooms input and movement', () => {
 describe('Synax Backrooms small terminal', () => {
   it('returns early when terminal is too small', () => {
     // We test that the validation constants exist
-    const { MIN_TERMINAL_COLS, MIN_TERMINAL_ROWS } = require('../backrooms/types');
     expect(MIN_TERMINAL_COLS).toBe(40);
     expect(MIN_TERMINAL_ROWS).toBe(12);
   });
