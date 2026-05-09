@@ -36,6 +36,7 @@ import {
 } from './context-budget';
 import { atomicWriteFile, writeLastEditRecord } from './safety';
 import { eventNow, type AgentEvent, type TerminalState } from './events';
+import type { SpanTracer } from '../telemetry/SpanTracer';
 import {
   canMutatePath,
   describeToolCall,
@@ -91,6 +92,8 @@ export interface AgentRunnerOptions {
   contextBudget?: Partial<ContextBudgetSettings> & { contextBudgetTokens?: number };
   /** Optional structured logger for internal diagnostics. */
   logger?: Logger;
+  /** Optional span tracer for telemetry instrumentation. */
+  tracer?: SpanTracer;
 }
 
 export interface ModelToolSurfaceOptions {
@@ -228,8 +231,12 @@ export async function runAgentTurn(options: AgentRunnerOptions & { task: string 
 
   conversation.messages.push({ role: 'user', content: options.task });
 
+  // Start a turn-level span for this agent run.
+  const turnSpan = options.tracer?.startSpan({ kind: 'turn', metadata: { task: options.task.slice(0, 120) } });
+
   for (let step = 1; ; step += 1) {
     let response: ChatResponse;
+    let modelSpan: ReturnType<SpanTracer['startSpan']> | undefined;
     try {
       options.onActivity?.({ kind: 'model', message: `model step ${step}` });
       options.onEvent?.({
@@ -237,6 +244,10 @@ export async function runAgentTurn(options: AgentRunnerOptions & { task: string 
         timestamp: eventNow(),
         stepIndex: step,
       });
+
+      // Span: model call
+      modelSpan =
+        options.tracer && turnSpan ? options.tracer.startChildSpan(turnSpan, 'model_call', { step }) : undefined;
 
       // Preflight budget guard (item 7): runs before EVERY model call.
       const effectiveInputLimit = contextBudget.contextWindowTokens - contextBudget.reservedOutputTokens;
@@ -322,6 +333,11 @@ export async function runAgentTurn(options: AgentRunnerOptions & { task: string 
         });
       }
     } catch (error) {
+      // End model call span on error
+      if (options.tracer && modelSpan) {
+        options.tracer.addEvent(modelSpan, 'error', { message: errorMessage(error) });
+        options.tracer.endSpan(modelSpan);
+      }
       const message = errorMessage(error);
       logger?.error('Model call failed', error instanceof Error ? error : new Error(message), {
         stepIndex: step,
@@ -337,6 +353,21 @@ export async function runAgentTurn(options: AgentRunnerOptions & { task: string 
         error: message,
       };
     }
+
+    // End model call span
+    if (options.tracer && modelSpan) {
+      options.tracer.addEvent(modelSpan, 'response_received', {
+        toolCallCount: response.toolCalls.length,
+        contentLength: response.content.length,
+      });
+      options.tracer.endSpan(modelSpan);
+    }
+
+    // Span: tool parsing
+    const toolParseSpan =
+      options.tracer && turnSpan
+        ? options.tracer.startChildSpan(turnSpan, 'tool_parse', { toolCallCount: response.toolCalls.length })
+        : undefined;
 
     // Emit model response activity so the CLI can surface model thoughts/output.
     options.onActivity?.(formatModelResponseActivity(response, step));
@@ -368,6 +399,11 @@ export async function runAgentTurn(options: AgentRunnerOptions & { task: string 
       // Gate: prevent premature completion when the model claims success
       // without making any changes in patch mode. Read-only and verify
       // modes are exempt since they legitimately don't make changes.
+      // End tool parse span (no tool calls to execute)
+      if (options.tracer && toolParseSpan) {
+        options.tracer.endSpan(toolParseSpan);
+      }
+
       if (mode === 'patch' && changedFiles.length === 0 && isPrematureCompletionClaim(response.content)) {
         conversation.messages.push({
           role: 'user',
@@ -389,8 +425,20 @@ export async function runAgentTurn(options: AgentRunnerOptions & { task: string 
       };
     }
 
+    // End tool parse span (after parsing checks, before tool loop)
+    if (options.tracer && toolParseSpan) {
+      options.tracer.endSpan(toolParseSpan);
+    }
+
     const contentToolResults: Array<{ id: string; content: string }> = [];
     for (const call of response.toolCalls) {
+      // Span: tool execution
+      const toolExecSpan =
+        options.tracer && turnSpan
+          ? options.tracer.startChildSpan(turnSpan, 'tool_execution', {
+              toolName: call.name,
+            })
+          : undefined;
       if (toolCalls.length >= maxToolCalls) {
         logger?.warn('Max tool calls exceeded', {
           current: toolCalls.length,
@@ -471,6 +519,15 @@ export async function runAgentTurn(options: AgentRunnerOptions & { task: string 
         detail: formatToolResultDetail(result.toolResult),
       });
       if (result.changedFile) changedFiles.push(result.changedFile);
+
+      // End tool execution span
+      if (options.tracer && toolExecSpan) {
+        options.tracer.addEvent(toolExecSpan, 'tool_finished', {
+          success: result.success,
+          error: result.error,
+        });
+        options.tracer.endSpan(toolExecSpan);
+      }
 
       // Item 7: Budget check after EVERY tool result is appended.
       // Check the model-facing assembled request, not the unpruned

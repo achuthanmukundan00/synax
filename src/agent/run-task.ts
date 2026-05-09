@@ -10,6 +10,8 @@ import { normalizeRunMode, type RunMode } from './task-policy';
 import { type Logger } from '../logging/index.js';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
+import { createEventStore } from '../store/EventStore';
+import { SpanTracer } from '../telemetry/SpanTracer';
 
 export interface RunTaskOptions {
   repoRoot: string;
@@ -103,13 +105,40 @@ export async function runAgentTask(options: RunTaskOptions): Promise<RunTaskRepo
   }
 
   const { client, metadata } = factoryResult;
+
+  // ─── Observability: event store + span tracer ───
+  const sessionId = generateSessionId();
+  const eventStore = createEventStore();
+  const tracer = new SpanTracer({ sessionId, eventStore });
+
+  if (eventStore) {
+    eventStore.startSession({
+      id: sessionId,
+      repoRoot: options.repoRoot,
+      mode,
+      model: metadata.modelId,
+      createdAt: new Date().toISOString(),
+    });
+  }
+
+  // Wrap user's onEvent to also write to the event store
+  const userOnEvent = options.onEvent;
+  let eventSequence = 0;
+  const wrappedOnEvent = (event: AgentEvent): void => {
+    userOnEvent?.(event);
+    if (eventStore) {
+      eventSequence += 1;
+      eventStore.appendEvent(sessionId, event, eventSequence);
+    }
+  };
+
   const dirtyTree = await detectDirtyTree(options.repoRoot);
   const beforeHead = await gitHead(options.repoRoot);
   let checkpoint: { id: string; statusPath: string; diffPath: string } | null = null;
   const tools = buildModelFacingTools({ bashEnabled: projectConfig.config.tools?.bash?.enabled, mode }).map(
     (tool) => tool.name,
   );
-  options.onEvent?.({
+  wrappedOnEvent({
     type: 'task_started',
     timestamp: eventNow(),
     mode,
@@ -152,9 +181,10 @@ export async function runAgentTask(options: RunTaskOptions): Promise<RunTaskRepo
       maxTotalReadResultTokensPerTurn: projectConfig.config.maxTotalReadResultTokensPerTurn,
     },
     onActivity: options.onActivity,
-    onEvent: options.onEvent,
+    onEvent: wrappedOnEvent,
+    tracer,
     onBudget(snapshot) {
-      options.onEvent?.({
+      wrappedOnEvent({
         type: 'context_budget_updated',
         timestamp: eventNow(),
         estimatedInputTokens: snapshot.estimatedInputTokens,
@@ -177,7 +207,7 @@ export async function runAgentTask(options: RunTaskOptions): Promise<RunTaskRepo
   const verificationCommand = projectConfig.config.verification?.defaultCommand;
   const verCheckId = 'run-verification';
   if (verificationCommand && turn.changedFiles.length > 0) {
-    options.onEvent?.({
+    wrappedOnEvent({
       type: 'verification_planned',
       timestamp: eventNow(),
       checkId: verCheckId,
@@ -190,7 +220,7 @@ export async function runAgentTask(options: RunTaskOptions): Promise<RunTaskRepo
   let verification: VerificationResult = { state: 'skipped', stdout: '', stderr: '' };
   if (turn.changedFiles.length > 0) {
     const vStarted = Date.now();
-    options.onEvent?.({
+    wrappedOnEvent({
       type: 'verification_started',
       timestamp: eventNow(),
       checkId: verCheckId,
@@ -205,7 +235,7 @@ export async function runAgentTask(options: RunTaskOptions): Promise<RunTaskRepo
     });
     const vDuration = Date.now() - vStarted;
     if (verification.state === 'passed') {
-      options.onEvent?.({
+      wrappedOnEvent({
         type: 'verification_passed',
         timestamp: eventNow(),
         checkId: verCheckId,
@@ -215,7 +245,7 @@ export async function runAgentTask(options: RunTaskOptions): Promise<RunTaskRepo
         durationMs: vDuration,
       });
     } else if (verification.state === 'failed') {
-      options.onEvent?.({
+      wrappedOnEvent({
         type: 'verification_failed',
         timestamp: eventNow(),
         checkId: verCheckId,
@@ -226,7 +256,7 @@ export async function runAgentTask(options: RunTaskOptions): Promise<RunTaskRepo
         durationMs: vDuration,
       });
     } else {
-      options.onEvent?.({
+      wrappedOnEvent({
         type: 'verification_skipped',
         timestamp: eventNow(),
         checkId: verCheckId,
@@ -240,7 +270,7 @@ export async function runAgentTask(options: RunTaskOptions): Promise<RunTaskRepo
   if (verification.state === 'failed' && maxRepairAttempts > 0) {
     for (let attempt = 1; attempt <= maxRepairAttempts; attempt += 1) {
       const repairCheckId = `repair-verification-${attempt}`;
-      options.onEvent?.({
+      wrappedOnEvent({
         type: 'verification_planned',
         timestamp: eventNow(),
         checkId: repairCheckId,
@@ -267,14 +297,14 @@ export async function runAgentTask(options: RunTaskOptions): Promise<RunTaskRepo
           maxTotalReadResultTokensPerTurn: projectConfig.config.maxTotalReadResultTokensPerTurn,
         },
         onActivity: options.onActivity,
-        onEvent: options.onEvent,
+        onEvent: wrappedOnEvent,
         approvePatch: () => (options.yes ? 'accept' : 'reject'),
         ensureCheckpoint: async () => checkpoint ?? (checkpoint = await createSafetyCheckpoint(options.repoRoot)),
       });
       repairedTurn = repair;
       if (repair.changedFiles.length > 0) {
         const rStarted = Date.now();
-        options.onEvent?.({
+        wrappedOnEvent({
           type: 'verification_started',
           timestamp: eventNow(),
           checkId: repairCheckId,
@@ -289,7 +319,7 @@ export async function runAgentTask(options: RunTaskOptions): Promise<RunTaskRepo
         });
         const rDuration = Date.now() - rStarted;
         if (verification.state === 'passed') {
-          options.onEvent?.({
+          wrappedOnEvent({
             type: 'verification_passed',
             timestamp: eventNow(),
             checkId: repairCheckId,
@@ -299,7 +329,7 @@ export async function runAgentTask(options: RunTaskOptions): Promise<RunTaskRepo
             durationMs: rDuration,
           });
         } else {
-          options.onEvent?.({
+          wrappedOnEvent({
             type: 'verification_failed',
             timestamp: eventNow(),
             checkId: repairCheckId,
@@ -327,12 +357,12 @@ export async function runAgentTask(options: RunTaskOptions): Promise<RunTaskRepo
       : [];
   const filesChanged = unique([...turn.changedFiles, ...repairedTurn.changedFiles, ...changedByCommit]);
   const finalDirtyTree = await detectDirtyTree(options.repoRoot);
-  options.onEvent?.({
+  wrappedOnEvent({
     type: 'assistant_message',
     timestamp: eventNow(),
     content: finalAnswer,
   });
-  options.onEvent?.({
+  wrappedOnEvent({
     type: 'task_finished',
     timestamp: eventNow(),
     status: terminalState,
@@ -350,6 +380,16 @@ export async function runAgentTask(options: RunTaskOptions): Promise<RunTaskRepo
           : 'not run',
     error: turn.error,
   });
+
+  // ─── Close observability session ───
+  if (eventStore) {
+    eventStore.closeSession(sessionId, terminalState, {
+      steps: turn.steps + (repairedTurn === turn ? 0 : repairedTurn.steps),
+      toolCalls: turn.toolCalls.length + (repairedTurn === turn ? 0 : repairedTurn.toolCalls.length),
+      changedFiles: filesChanged,
+    });
+  }
+
   if (options.recordRunArtifacts !== false) {
     await writeRunLog(options.repoRoot, {
       task: options.task,
@@ -393,6 +433,19 @@ export async function runAgentTask(options: RunTaskOptions): Promise<RunTaskRepo
 
 function unique(values: string[]): string[] {
   return [...new Set(values)];
+}
+
+function generateSessionId(): string {
+  const now = new Date();
+  const yyyy = now.getFullYear().toString();
+  const mm = (now.getMonth() + 1).toString().padStart(2, '0');
+  const dd = now.getDate().toString().padStart(2, '0');
+  const hh = now.getHours().toString().padStart(2, '0');
+  const min = now.getMinutes().toString().padStart(2, '0');
+  const ss = now.getSeconds().toString().padStart(2, '0');
+  const ms = now.getMilliseconds().toString().padStart(3, '0');
+  const rand = Math.random().toString(36).slice(2, 6);
+  return `${yyyy}${mm}${dd}${hh}${min}${ss}${ms}-${rand}`;
 }
 
 async function gitHead(repoRoot: string): Promise<string | null> {
