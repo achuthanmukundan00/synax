@@ -8,6 +8,7 @@ import { describeLLMProvider } from '../llm/provider-factory';
 import { createChatSession, compactHome, currentGitBranch, providerRuntimeBlockedMessage } from './chat';
 import { loadSkills, type SkillDiagnostic } from '../agent/skills';
 import { runInteractiveTui } from '../tui/interactive-tui';
+import { createLogger } from '../logging/index.js';
 
 const MAX_REPAIR_ATTEMPTS = 10;
 
@@ -50,6 +51,7 @@ export function runCommand(program: Command): void {
               yes: options.yes,
               verificationProfile: options.verificationProfile,
               repairAttempts: repairAttemptsResult.value,
+              logger: createLogger(),
               onActivity(activity) {
                 if (activity.kind === 'model_response') {
                   const fullContent = activity.modelOutput || activity.message;
@@ -85,6 +87,8 @@ export function runCommand(program: Command): void {
           } catch (error) {
             renderer?.finish?.();
             const message = error instanceof Error ? error.message : String(error);
+            const logger = createLogger();
+            logger.error('Provider or task failure', error instanceof Error ? error : new Error(message));
             console.error(`[synax] Provider or task failure: ${message}`);
             process.exitCode = 1;
           }
@@ -95,6 +99,11 @@ export function runCommand(program: Command): void {
           const repoRoot = process.cwd();
           const loaded = loadProjectConfig(repoRoot);
           if (loaded.errors.length > 0) {
+            const tuiLogger = createLogger();
+            tuiLogger.error(
+              'Config load error',
+              new Error(loaded.errors.map((e) => `${e.path}: ${e.message}`).join('\n')),
+            );
             console.error(`[synax] Config error:\n${loaded.errors.map((e) => `${e.path}: ${e.message}`).join('\n')}`);
             process.exitCode = 1;
             return;

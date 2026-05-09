@@ -9,6 +9,7 @@ import { type ParsedToolCall } from '../llm/tool-calls';
 import { createInspectionLedger, createToolRegistry, type InspectionLedger } from '../tools';
 import { normalizeRepoPath } from '../tools/policy';
 import { type ToolDefinition, type ToolRegistry, type ToolResult } from '../tools/types';
+import { type Logger } from '../logging/index.js';
 import {
   applyReplaceInFile,
   createPatchPreview,
@@ -88,6 +89,8 @@ export interface AgentRunnerOptions {
   /** Optional preloaded skill instructions injected as additional system messages. */
   skillMessages?: string[];
   contextBudget?: Partial<ContextBudgetSettings> & { contextBudgetTokens?: number };
+  /** Optional structured logger for internal diagnostics. */
+  logger?: Logger;
 }
 
 export interface ModelToolSurfaceOptions {
@@ -195,6 +198,7 @@ export async function runAgentTurn(options: AgentRunnerOptions & { task: string 
   let totalReadResultTokens = 0;
   const contextBudget = resolveContextBudgetSettings(options.contextBudget ?? {});
   let consecutiveRecoverableToolErrors = 0;
+  const logger = options.logger;
 
   const broadTask = guardBroadTask(options.task);
   if (broadTask) {
@@ -248,6 +252,11 @@ export async function runAgentTurn(options: AgentRunnerOptions & { task: string 
 
       // Check if we're already over budget before attempting compaction
       if (estimatedInputTokens > effectiveInputLimit) {
+        logger?.warn('Context budget near limit before model call', {
+          estimatedInputTokens,
+          effectiveInputLimit,
+          stepIndex: step,
+        });
         const guarded = guardModelRequestMultiStage(conversation.messages, contextBudget, conversation);
         if (guarded.error) {
           return {
@@ -262,6 +271,12 @@ export async function runAgentTurn(options: AgentRunnerOptions & { task: string 
         }
         if (guarded.compaction) {
           conversation.latestCompaction = guarded.compaction;
+          logger?.info('Compaction applied', {
+            stage: guarded.compaction.stage,
+            tokensBefore: guarded.compaction.tokensBefore,
+            tokensAfter: guarded.compaction.tokensAfter,
+            stepIndex: step,
+          });
         }
 
         // Post-compaction budget verification
@@ -308,6 +323,10 @@ export async function runAgentTurn(options: AgentRunnerOptions & { task: string 
       }
     } catch (error) {
       const message = errorMessage(error);
+      logger?.error('Model call failed', error instanceof Error ? error : new Error(message), {
+        stepIndex: step,
+        model: 'local',
+      });
       return {
         terminalState: message.toLowerCase().includes('context budget') ? 'budget_exhausted' : 'model_error',
         finalAnswer: '',
@@ -373,6 +392,11 @@ export async function runAgentTurn(options: AgentRunnerOptions & { task: string 
     const contentToolResults: Array<{ id: string; content: string }> = [];
     for (const call of response.toolCalls) {
       if (toolCalls.length >= maxToolCalls) {
+        logger?.warn('Max tool calls exceeded', {
+          current: toolCalls.length,
+          limit: maxToolCalls,
+          stepIndex: step,
+        });
         return {
           terminalState: 'budget_exhausted',
           finalAnswer: response.content.trim(),
@@ -386,6 +410,11 @@ export async function runAgentTurn(options: AgentRunnerOptions & { task: string 
       options.onActivity?.({
         kind: 'tool',
         message: describeToolCall(call.name, call.arguments as Record<string, unknown>),
+      });
+      logger?.debug('Executing tool', {
+        toolName: call.name,
+        args: JSON.stringify(call.arguments).slice(0, 500),
+        stepIndex: step,
       });
       options.onEvent?.({
         type: 'tool_started',
@@ -452,6 +481,12 @@ export async function runAgentTurn(options: AgentRunnerOptions & { task: string 
       const effectiveLimit = contextBudget.contextWindowTokens - contextBudget.reservedOutputTokens;
       if (afterToolTokens > effectiveLimit) {
         flushContentToolResults(conversation, response, contentToolResults);
+        logger?.warn('Context budget exhausted after tool result', {
+          estimatedInputTokens: afterToolTokens,
+          effectiveInputLimit: effectiveLimit,
+          toolName: call.name,
+          stepIndex: step,
+        });
         return {
           terminalState: 'budget_exhausted',
           finalAnswer: response.content.trim(),
