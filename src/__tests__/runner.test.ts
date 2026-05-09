@@ -55,6 +55,7 @@ describe('shared bounded agent runner', () => {
       'write',
       'edit',
       'bash',
+      'search_memory',
     ]);
   });
 
@@ -91,20 +92,28 @@ describe('shared bounded agent runner', () => {
     expect(buildModelFacingTools({ mode: 'read-only', bashEnabled: true }).map((tool) => tool.name)).toEqual([
       'read',
       'bash',
+      'search_memory',
     ]);
     expect(buildModelFacingTools({ mode: 'verify', bashEnabled: true }).map((tool) => tool.name)).toEqual([
       'read',
       'bash',
+      'search_memory',
     ]);
   });
 
   it('does not expose a legacy git surface when bash is disabled', async () => {
-    expect(buildModelFacingTools({ bashEnabled: false }).map((tool) => tool.name)).toEqual(['read', 'write', 'edit']);
+    expect(buildModelFacingTools({ bashEnabled: false }).map((tool) => tool.name)).toEqual([
+      'read',
+      'write',
+      'edit',
+      'search_memory',
+    ]);
     expect(buildModelFacingTools({ bashEnabled: true }).map((tool) => tool.name)).toEqual([
       'read',
       'write',
       'edit',
       'bash',
+      'search_memory',
     ]);
   });
 
@@ -118,6 +127,7 @@ describe('shared bounded agent runner', () => {
       'write',
       'edit',
       'bash',
+      'search_memory',
     ]);
   });
 

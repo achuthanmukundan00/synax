@@ -21,6 +21,7 @@ import { handleRead } from './handlers/read-handler';
 import { handleEdit } from './handlers/edit-handler';
 import { handleWrite } from './handlers/write-handler';
 import { handleBash } from './handlers/bash-handler';
+import { handleSearchMemory } from './handlers/search-memory-handler';
 
 // ─── Handler map type ─────────────────────────────────────
 
@@ -40,6 +41,7 @@ export function createDefaultHandlerMap(): HandlerMap {
   map.set('edit', handleEdit as ActionHandler);
   map.set('write', handleWrite as ActionHandler);
   map.set('bash', handleBash as ActionHandler);
+  map.set('search_memory', handleSearchMemory as ActionHandler);
   return map;
 }
 
