@@ -6,9 +6,10 @@ It is CLI-first, local-first, and built for constrained local models. Synax keep
 
 ## What Synax Is
 
-- A local CLI coding agent.
-- A Relay-compatible OpenAI-style chat client.
+- A local-first CLI coding agent with multi-provider routing.
+- A Relay-compatible OpenAI-style chat client with Anthropic Messages support.
 - A bounded file inspection, edit, and verification loop.
+- Native tool-call parsers for 26 model families — no vLLM normalization needed.
 - A small TypeScript project intended to stay understandable.
 
 ## What Synax Is Not
@@ -43,41 +44,46 @@ After package linking or publishing, the command name is:
 synax
 ```
 
-## Relay Quick Start
+## Provider Quick Start
 
-Start Relay with a model exposed through an OpenAI-compatible endpoint. Synax defaults to:
+Synax works with local Relay, cloud APIs, and any OpenAI-compatible endpoint. Pick your provider:
 
-```txt
-http://127.0.0.1:1234/v1
-```
-
-Create a project config:
+### Local Relay (default)
 
 ```sh
 cp .synax.toml.example .synax.toml
 ```
 
-Set the provider model to the exact model ID Relay lists from `/models`:
+```toml
+[provider]
+provider = "relay"
+base_url = "http://127.0.0.1:1234/v1"
+model = "Qwen3.6-35B-A3B-UD-IQ3_XXS.gguf"
+context_window = 131072
+```
+
+### Cloud Providers
 
 ```toml
 [provider]
-preset = "relay"
-kind = "openai-compatible"
-base_url = "http://127.0.0.1:1234/v1"
-model = "Qwen3.6-35B-A3B-UD-IQ3_XXS.gguf"
-api_key = "sk-no-key-required"
-timeout_seconds = 120
+provider = "deepseek"
+model = "deepseek-chat"
+api_key_env = "DEEPSEEK_API_KEY"
 ```
 
-Check local setup:
+```toml
+[provider]
+provider = "anthropic"
+model = "claude-sonnet-4-5-20250929"
+api_key_env = "ANTHROPIC_API_KEY"
+```
+
+Built-in presets: `relay`, `deepseek`, `anthropic`, `openrouter`, `groq`, `mistral`, `together`, and `custom` for any OpenAI-compatible endpoint. See `docs/guide/providers.md` for full configuration.
+
+Check setup:
 
 ```sh
 npm run synax -- doctor
-```
-
-Check Relay and the configured model:
-
-```sh
 npm run synax -- doctor --full
 ```
 
@@ -164,29 +170,34 @@ Useful project config:
 context_budget_tokens = 131072
 max_tool_calls = 96
 
-[subagents]
-enabled = false
-mode = "sequential"
-
 [verification]
 defaultCommand = "npm run typecheck"
 
-[provider]
-preset = "relay"
-kind = "openai-compatible"
-base_url = "http://127.0.0.1:1234/v1"
+[active]
+provider = "relay"
 model = "Qwen3.6-35B-A3B-UD-IQ3_XXS.gguf"
-api_key = "sk-no-key-required"
-timeout_seconds = 120
+thinking = "off"
+
+[providers.relay]
+enabled = true
+base_url = "http://127.0.0.1:1234/v1"
+tool_call_parser = "qwen3_xml"
+
+[providers.deepseek]
+enabled = true
+api_key_env = "DEEPSEEK_API_KEY"
+input_price_per_1m_tokens = 0.27
+output_price_per_1m_tokens = 1.10
 
 [tools]
 exposed = ["read", "write", "edit", "bash"]
 shell = "zsh"
-unsafe = false
 
 [tools.bash]
 enabled = true
 ```
+
+Thinking levels (`off`, `low`, `medium`, `high`, `xhigh`, `auto`) control extended reasoning for models that support it.
 
 Environment overrides:
 
@@ -194,6 +205,21 @@ Environment overrides:
 SYNAX_CONTEXT_BUDGET_TOKENS=65536
 SYNAX_MAX_TOOL_CALLS=64
 ```
+
+## Native Tool-Call Parsers
+
+Local models rarely emit clean OpenAI-format `tool_calls`. Synax ships native parsers for 26 model families — Qwen XML, Hermes, Llama 3 JSON, Llama 4 Pythonic, DeepSeek, Mistral, OLMo3, Granite, InternLM, and more.
+
+No vLLM runtime normalization required. Synax extracts tool calls from raw model output whether the format is XML tags, JSON blocks, Pythonic function syntax, or special-token-delimited markup.
+
+Configure per-provider:
+
+```toml
+[provider]
+tool_call_parser = "qwen3_xml"
+```
+
+Or let Synax auto-detect from your model name. See `docs/guide/tool-call-parsing.md`.
 
 ## Agent Loop
 
@@ -247,9 +273,19 @@ npm test
 npm run build
 ```
 
-## Smoke Tests
+## Provider Smoke Tests
 
-Use these bounded self-development smoke tests when changing Synax itself:
+Live smoke tests verify end-to-end connectivity. Requires API keys for cloud providers:
+
+```sh
+SYNAX_LIVE_PROVIDER=relay npm run smoke:provider
+SYNAX_LIVE_PROVIDER=deepseek npm run smoke:provider
+SYNAX_LIVE_PROVIDER=anthropic npm run smoke:provider
+SYNAX_LIVE_PROVIDER=openrouter npm run smoke:provider
+SYNAX_LIVE_PROVIDER=groq npm run smoke:provider
+```
+
+## Self-Development Smoke Tests
 
 ```sh
 npm run synax -- run --mode read-only --task "Inspect README.md and summarize Synax in 5 bullets. Do not modify files."
