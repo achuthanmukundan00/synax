@@ -344,8 +344,36 @@ export async function runAgentTurn(options: AgentRunnerOptions & { task: string 
           stepIndex: step,
           model: 'local',
         });
+        // Context budget exhaustion — fail immediately (no recovery possible)
+        if (message.toLowerCase().includes('context budget')) {
+          return {
+            terminalState: 'budget_exhausted',
+            finalAnswer: '',
+            steps: step,
+            toolCalls,
+            changedFiles,
+            conversation,
+            error: message,
+          };
+        }
+
+        // Tool-call parse failure — inject retry nudge instead of failing immediately.
+        // Local models frequently emit malformed tool calls; one retry often succeeds.
+        if (error instanceof Error && error.name === 'ModelToolCallParseError') {
+          conversation.messages.push({
+            role: 'user',
+            content:
+              'Your last response was malformed — it contained invalid tool call syntax. ' +
+              'Please retry with proper formatting:\n' +
+              '- JSON tool calls: use <tool_call>{"name":"...","arguments":{...}}</tool_call>\n' +
+              '- XML tool calls: use <tool_call><function=NAME><parameter=KEY>VALUE</parameter></function></tool_call>\n' +
+              '- Ensure JSON braces are balanced and strings are properly escaped.',
+          });
+          continue;
+        }
+
         return {
-          terminalState: message.toLowerCase().includes('context budget') ? 'budget_exhausted' : 'model_error',
+          terminalState: 'model_error',
           finalAnswer: '',
           steps: step,
           toolCalls,

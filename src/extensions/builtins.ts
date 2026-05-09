@@ -6,6 +6,9 @@ import { discoverLocalDocs, readLocalDoc } from '../context/local-docs';
 import { createOpenAICompatibleClient } from '../llm/client';
 import type { NormalizedProviderConfig } from '../llm/types';
 import { parseOpenAIToolCallsResult, parseToolCallsFromContentResult } from '../llm/tool-calls';
+import { repairJson } from '../llm/repair/json-repair';
+import { repairXml } from '../llm/repair/xml-repair';
+import { sanitizeReasoning } from '../llm/repair/reasoning-sanitizer';
 import type { ToolDefinition } from '../tools/types';
 import type {
   DocsProvider,
@@ -40,10 +43,17 @@ export function createBuiltinExtensions(): BuiltinExtensions {
       parseNative: parseOpenAIToolCallsResult,
     },
     toolCallRepairer: {
-      repairMalformedJson: () => null,
+      repairMalformedJson: (raw, _context) => {
+        const result = repairJson(raw);
+        return result?.repaired ?? null;
+      },
+      repairMalformedXml: (raw, _context) => {
+        const result = repairXml(raw);
+        return result?.repaired ?? null;
+      },
     },
     reasoningSanitizer: {
-      sanitize: (content) => ({ content, removedReasoning: false }),
+      sanitize: (content) => sanitizeReasoning(content),
     },
     docsProvider: {
       discover: ({ repoRoot, maxFiles }) => discoverLocalDocs(repoRoot, maxFiles),
