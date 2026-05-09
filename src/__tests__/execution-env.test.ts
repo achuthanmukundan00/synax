@@ -48,7 +48,7 @@ describe('NodeExecutionEnv', () => {
     } finally {
       // best-effort cleanup
       try {
-        const { unlink } = require('fs/promises');
+        const { unlink } = await import('fs/promises');
         await unlink(tmpPath);
       } catch {
         /* ignore */

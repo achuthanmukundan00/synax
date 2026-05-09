@@ -14,6 +14,7 @@
     "lint:fix": "eslint . --ext .ts --fix",
     "format": "prettier --write \"src/**/*.ts\"",
     "format:check": "prettier --check \"src/**/*.ts\"",
+    "verify": "npm run typecheck && npm run lint && npm run format:check && npm run build && npm test",
     "test": "jest",
     "test:verbose": "jest --verbose",
     "docs:dev": "vitepress dev docs",

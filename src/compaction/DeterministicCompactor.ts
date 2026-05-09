@@ -42,6 +42,7 @@ type Technique = (text: string) => { text: string; changed: boolean };
 /** Remove ANSI escape codes (terminal colors, cursor movement). */
 function stripAnsiCodes(text: string): { text: string; changed: boolean } {
   // Matches common ANSI sequences: SGR (colors), cursor movement, erase
+  // eslint-disable-next-line no-control-regex -- ANSI escape code matching is required here
   const ansiRegex = /\x1b\[[0-9;]*[a-zA-Z]/g;
   const cleaned = text.replace(ansiRegex, '');
   return { text: cleaned, changed: cleaned.length < text.length };
