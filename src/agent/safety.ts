@@ -5,6 +5,7 @@ import { dirname, join } from 'path';
 import { promisify } from 'util';
 
 import { normalizeRepoPath } from '../tools/policy';
+import type { ExecutionEnv } from '../env/ExecutionEnv';
 
 const execFileAsync = promisify(execFile);
 
@@ -84,10 +85,15 @@ export async function writeRunLog(repoRoot: string, record: RunLogRecord): Promi
   return path;
 }
 
-export async function writeLastEditRecord(repoRoot: string, record: LastEditRecord): Promise<void> {
+export async function writeLastEditRecord(repoRoot: string, record: LastEditRecord, env?: ExecutionEnv): Promise<void> {
   const dir = join(repoRoot, '.synax');
-  await mkdir(dir, { recursive: true });
-  await atomicWriteFile(join(dir, 'last-edit.json'), `${JSON.stringify(record, null, 2)}\n`);
+  if (env) {
+    await env.makeDir(dir);
+    await env.writeFile(join(dir, 'last-edit.json'), `${JSON.stringify(record, null, 2)}\n`);
+  } else {
+    await mkdir(dir, { recursive: true });
+    await atomicWriteFile(join(dir, 'last-edit.json'), `${JSON.stringify(record, null, 2)}\n`);
+  }
 }
 
 export async function undoLastEdit(repoRoot: string): Promise<{ ok: boolean; message: string; path?: string }> {
@@ -112,7 +118,15 @@ export async function undoLastEdit(repoRoot: string): Promise<{ ok: boolean; mes
   }
 }
 
-export async function atomicWriteFile(path: string, content: string): Promise<void> {
+export async function atomicWriteFile(path: string, content: string, env?: ExecutionEnv): Promise<void> {
+  if (env) {
+    await env.makeDir(dirname(path));
+    const tmpPath = `${path}.synax-tmp-${randomUUID()}`;
+    await env.writeFile(tmpPath, content);
+    // Use raw fs rename for atomicity — not available via ExecutionEnv yet
+    await rename(tmpPath, path);
+    return;
+  }
   await mkdir(dirname(path), { recursive: true });
   const tmpPath = `${path}.synax-tmp-${randomUUID()}`;
   await writeFile(tmpPath, content, 'utf-8');
