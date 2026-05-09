@@ -1,6 +1,5 @@
-import { EventEmitter } from 'events';
-
 import { type Logger } from '../logging/index.js';
+import { EventBus } from '../events/index';
 import type { SpanTracer } from '../telemetry/SpanTracer';
 import type { TokenCounter } from '../metrics/TokenCounter';
 import type { CostTracker } from '../metrics/CostTracker';
@@ -173,8 +172,8 @@ export class Session {
   costTracker?: CostTracker;
   /** Maximum API cost budget (stops agent when exceeded). */
   maxBudget?: number;
-  /** Simple event bus — will be swapped for typed EventBus in M1 #04. */
-  readonly eventBus: EventEmitter = new EventEmitter();
+  /** Typed EventBus with lifecycle and control hooks. */
+  readonly eventBus: EventBus = new EventBus();
   /** Typed tool dispatch — extracted from the old executeAgentTool switch. */
   readonly executor: ActionExecutor;
   /** Filesystem and process abstraction — swappable for testing/sandboxing. */
@@ -183,6 +182,8 @@ export class Session {
   readonly memory: null = null;
   /** Recovery manager — applies recovery recipes on failure scenarios. */
   readonly recovery: RecoveryManager = new RecoveryManager();
+  /** Track whether session_start has been emitted. */
+  private _sessionStarted = false;
 
   constructor(options: {
     repoRoot: string;
@@ -286,9 +287,14 @@ export class Session {
     return buildModelFacingTools({ bashEnabled: this.bashEnabled, mode: this.mode });
   }
 
-  /** No-op shutdown — placeholder for future lifecycle hooks. */
-  shutdown(): void {
-    this.eventBus.removeAllListeners();
+  /** Shutdown the session, emit session_shutdown, and clean up the bus. */
+  shutdown(terminalState: TerminalState = 'completed'): void {
+    this.eventBus.emit({
+      type: 'session_shutdown',
+      timestamp: eventNow(),
+      terminalState,
+    });
+    this.eventBus.destroy();
   }
 
   // ── Recovery-aware turn ────────────────────────────────────────────────
@@ -386,413 +392,515 @@ export class Session {
     // Start a turn-level span for this agent run.
     const turnSpan = this.tracer?.startSpan({ kind: 'turn', metadata: { task: task.slice(0, 120) } });
 
+    // Lifecycle: emit turn_start
+    const turnIndex = conversation.messages.filter((m) => m.role === 'user').length;
+    this.eventBus.emit({
+      type: 'turn_start',
+      timestamp: eventNow(),
+      stepIndex: turnIndex,
+      task: task.slice(0, 200),
+    });
+
+    // Session start on first turn
+    if (!this._sessionStarted) {
+      this._sessionStarted = true;
+      this.eventBus.emit({
+        type: 'session_start',
+        timestamp: eventNow(),
+        taskId: undefined,
+        mode: this.mode,
+        model: 'local',
+      });
+    }
+
+    let turnResult: AgentTurnResult | undefined;
     try {
-      for (let step = 1; ; step += 1) {
-        let response: ChatResponse;
-        let modelSpan: ReturnType<SpanTracer['startSpan']> | undefined;
-        try {
-          this.onActivity?.({ kind: 'model', message: `model step ${step}` });
-          this.onEvent?.({
-            type: 'model_step_started',
-            timestamp: eventNow(),
-            stepIndex: step,
-          });
-
-          // Span: model call
-          modelSpan =
-            this.tracer && turnSpan ? this.tracer.startChildSpan(turnSpan, 'model_call', { step }) : undefined;
-
-          // Preflight budget guard
-          const effectiveInputLimit = contextBudget.contextWindowTokens - contextBudget.reservedOutputTokens;
-          const estimatedInputTokens = estimateIncrementalTokens(conversation.messages, conversation.tokenLedger);
-
-          this.onBudget?.({
-            estimatedInputTokens,
-            inputLimit: effectiveInputLimit,
-            contextWindowTokens: contextBudget.contextWindowTokens,
-            reservedOutputTokens: contextBudget.reservedOutputTokens,
-            step,
-          });
-
-          if (estimatedInputTokens > effectiveInputLimit) {
-            this.logger?.warn('Context budget near limit before model call', {
-              estimatedInputTokens,
-              effectiveInputLimit,
+      turnResult = await (async (): Promise<AgentTurnResult> => {
+        for (let step = 1; ; step += 1) {
+          let response: ChatResponse;
+          let modelSpan: ReturnType<SpanTracer['startSpan']> | undefined;
+          try {
+            this.onActivity?.({ kind: 'model', message: `model step ${step}` });
+            this.onEvent?.({
+              type: 'model_step_started',
+              timestamp: eventNow(),
               stepIndex: step,
             });
-            const guarded = guardModelRequestMultiStage(conversation.messages, contextBudget, conversation);
-            if (guarded.error) {
+
+            // Span: model call
+            modelSpan =
+              this.tracer && turnSpan ? this.tracer.startChildSpan(turnSpan, 'model_call', { step }) : undefined;
+
+            // Preflight budget guard
+            const effectiveInputLimit = contextBudget.contextWindowTokens - contextBudget.reservedOutputTokens;
+            const estimatedInputTokens = estimateIncrementalTokens(conversation.messages, conversation.tokenLedger);
+
+            this.onBudget?.({
+              estimatedInputTokens,
+              inputLimit: effectiveInputLimit,
+              contextWindowTokens: contextBudget.contextWindowTokens,
+              reservedOutputTokens: contextBudget.reservedOutputTokens,
+              step,
+            });
+
+            if (estimatedInputTokens > effectiveInputLimit) {
+              this.logger?.warn('Context budget near limit before model call', {
+                estimatedInputTokens,
+                effectiveInputLimit,
+                stepIndex: step,
+              });
+              const guarded = guardModelRequestMultiStage(conversation.messages, contextBudget, conversation);
+              if (guarded.error) {
+                return {
+                  terminalState: 'budget_exhausted',
+                  finalAnswer: '',
+                  steps: step,
+                  toolCalls,
+                  changedFiles,
+                  conversation,
+                  error: guarded.error,
+                };
+              }
+              if (guarded.compaction) {
+                conversation.latestCompaction = guarded.compaction;
+                this.logger?.info('Compaction applied', {
+                  stage: guarded.compaction.stage,
+                  tokensBefore: guarded.compaction.tokensBefore,
+                  tokensAfter: guarded.compaction.tokensAfter,
+                  stepIndex: step,
+                });
+              }
+
+              const postCompactTokens = estimateRequestTokens(guarded.messages);
+              if (postCompactTokens > effectiveInputLimit) {
+                return {
+                  terminalState: 'budget_exhausted',
+                  finalAnswer: '',
+                  steps: step,
+                  toolCalls,
+                  changedFiles,
+                  conversation,
+                  error: formatContextBudgetError({
+                    estimatedInputTokens: postCompactTokens,
+                    contextWindowTokens: contextBudget.contextWindowTokens,
+                    reservedOutputTokens: contextBudget.reservedOutputTokens,
+                    effectiveInputLimit,
+                    largestContributors: summarizeLargestContributors(guarded.messages),
+                    compactionStage: 4,
+                  }),
+                };
+              }
+
+              const assembled = buildModelRequest(conversation, contextBudget, identicalReadCounts, totalReadCalls);
+
+              response = await this.client.chat({
+                messages: assembled,
+                tools,
+                temperature: 0,
+                maxTokens: 2048,
+                onDelta: (delta) => emitAssistantDelta(this, delta),
+              });
+            } else {
+              const assembled = buildModelRequest(conversation, contextBudget, identicalReadCounts, totalReadCalls);
+              response = await this.client.chat({
+                messages: assembled,
+                tools,
+                temperature: 0,
+                maxTokens: 2048,
+                onDelta: (delta) => emitAssistantDelta(this, delta),
+              });
+            }
+          } catch (error) {
+            // End model call span on error
+            if (this.tracer && modelSpan) {
+              this.tracer.addEvent(modelSpan, 'error', { message: errorMessage(error) });
+              this.tracer.endSpan(modelSpan);
+            }
+            const message = errorMessage(error);
+            this.logger?.error('Model call failed', error instanceof Error ? error : new Error(message), {
+              stepIndex: step,
+              model: 'local',
+            });
+            return {
+              terminalState: message.toLowerCase().includes('context budget') ? 'budget_exhausted' : 'model_error',
+              finalAnswer: '',
+              steps: step,
+              toolCalls,
+              changedFiles,
+              conversation,
+              error: message,
+            };
+          }
+
+          // End model call span
+          if (this.tracer && modelSpan) {
+            this.tracer.addEvent(modelSpan, 'response_received', {
+              toolCallCount: response.toolCalls.length,
+              contentLength: response.content.length,
+            });
+            this.tracer.endSpan(modelSpan);
+          }
+
+          // ── Token counting and cost tracking ──
+          let turnTokenStats: { inputTokens: number; outputTokens: number; totalTokens: number } | undefined;
+          if (this.tokenCounter) {
+            const assembled = buildModelRequest(conversation, contextBudget, identicalReadCounts, totalReadCalls);
+            const inputTokens = this.tokenCounter.countInput(assembled);
+            const outputTokens = this.tokenCounter.countOutput({
+              content: response.content,
+              reasoningContent: response.reasoningContent,
+              toolCalls: response.toolCalls.map((c) => ({ name: c.name, arguments: c.arguments })),
+            });
+            turnTokenStats = { inputTokens, outputTokens, totalTokens: inputTokens + outputTokens };
+            this.tokenCounter.recordTurn(turnTokenStats);
+
+            // Estimate cost
+            if (this.costTracker) {
+              const cost = this.costTracker.recordTurn(turnTokenStats);
+              this.onEvent?.({
+                type: 'token_usage',
+                timestamp: eventNow(),
+                stepIndex: step,
+                inputTokens: turnTokenStats.inputTokens,
+                outputTokens: turnTokenStats.outputTokens,
+                estimatedCost: cost.totalCost,
+              } as AgentEvent);
+
+              // Budget check
+              if (this.maxBudget !== undefined && this.costTracker.isOverBudget(this.maxBudget)) {
+                this.logger?.warn('API cost budget exceeded', {
+                  cumulativeCost: this.costTracker.getCumulativeCost(),
+                  maxBudget: this.maxBudget,
+                  stepIndex: step,
+                });
+                return {
+                  terminalState: 'budget_exhausted',
+                  finalAnswer: '',
+                  steps: step,
+                  toolCalls,
+                  changedFiles,
+                  conversation,
+                  error: `API cost budget exceeded: $${this.costTracker.getCumulativeCost().toFixed(4)} > $${this.maxBudget.toFixed(4)}`,
+                };
+              }
+            }
+          }
+
+          // Span: tool parsing
+          const toolParseSpan =
+            this.tracer && turnSpan
+              ? this.tracer.startChildSpan(turnSpan, 'tool_parse', { toolCallCount: response.toolCalls.length })
+              : undefined;
+
+          this.onActivity?.(formatModelResponseActivity(response, step));
+
+          conversation.messages.push(assistantMessage(response, contextBudget));
+
+          if (response.toolCalls.length > 0 && response.content.trim().length > 0) {
+            if (!isSafeToolPreamble(response.content)) {
               return {
-                terminalState: 'budget_exhausted',
-                finalAnswer: '',
+                terminalState: 'model_error',
+                finalAnswer: response.content.trim(),
                 steps: step,
                 toolCalls,
                 changedFiles,
                 conversation,
-                error: guarded.error,
+                error: 'model emitted ambiguous mixed output (tool calls plus final text)',
               };
             }
-            if (guarded.compaction) {
-              conversation.latestCompaction = guarded.compaction;
-              this.logger?.info('Compaction applied', {
-                stage: guarded.compaction.stage,
-                tokensBefore: guarded.compaction.tokensBefore,
-                tokensAfter: guarded.compaction.tokensAfter,
-                stepIndex: step,
-              });
+
+            if (toolCallFormat(response) === 'openai') {
+              conversation.messages[conversation.messages.length - 1] = assistantMessage({ ...response, content: '' });
+            }
+          }
+
+          if (response.toolCalls.length === 0) {
+            // End tool parse span (no tool calls to execute)
+            if (this.tracer && toolParseSpan) {
+              this.tracer.endSpan(toolParseSpan);
             }
 
-            const postCompactTokens = estimateRequestTokens(guarded.messages);
-            if (postCompactTokens > effectiveInputLimit) {
+            if (mode === 'patch' && changedFiles.length === 0 && isPrematureCompletionClaim(response.content)) {
+              conversation.messages.push({
+                role: 'user',
+                content:
+                  'You claimed completion without taking action. ' +
+                  'Use available tools (bash for git/commands, edit for file changes, write for new files) to complete the task. ' +
+                  'If no action is needed, explain specifically why. Do not just say "verified" or "passed" — show evidence.',
+              });
+              continue;
+            }
+
+            return {
+              terminalState: 'completed',
+              finalAnswer: response.content.trim(),
+              steps: step,
+              toolCalls,
+              changedFiles,
+              conversation,
+            };
+          }
+
+          // End tool parse span (after parsing checks, before tool loop)
+          if (this.tracer && toolParseSpan) {
+            this.tracer.endSpan(toolParseSpan);
+          }
+
+          const contentToolResults: Array<{ id: string; content: string }> = [];
+          for (const call of response.toolCalls) {
+            // Span: tool execution
+            const toolExecSpan =
+              this.tracer && turnSpan
+                ? this.tracer.startChildSpan(turnSpan, 'tool_execution', {
+                    toolName: call.name,
+                  })
+                : undefined;
+            if (toolCalls.length >= maxToolCalls) {
+              // End tool execution span before returning
+              if (this.tracer && toolExecSpan) {
+                this.tracer.addEvent(toolExecSpan, 'max_tool_calls_exceeded', { limit: maxToolCalls });
+                this.tracer.endSpan(toolExecSpan);
+              }
+              this.eventBus.emit({
+                type: 'tool_execution_end',
+                timestamp: eventNow(),
+                stepIndex: step,
+                toolCallId: call.id,
+                toolName: call.name,
+                success: false,
+                error: `max tool calls exceeded: ${maxToolCalls}`,
+              });
+              this.logger?.warn('Max tool calls exceeded', {
+                current: toolCalls.length,
+                limit: maxToolCalls,
+                stepIndex: step,
+              });
               return {
                 terminalState: 'budget_exhausted',
-                finalAnswer: '',
+                finalAnswer: response.content.trim(),
+                steps: step,
+                toolCalls,
+                changedFiles,
+                conversation,
+                error: `max tool calls exceeded: ${maxToolCalls}`,
+              };
+            }
+            this.onActivity?.({
+              kind: 'tool',
+              message: describeToolCall(call.name, call.arguments as Record<string, unknown>),
+            });
+            this.logger?.debug('Executing tool', {
+              toolName: call.name,
+              args: JSON.stringify(call.arguments).slice(0, 500),
+              stepIndex: step,
+            });
+            this.onEvent?.({
+              type: 'tool_started',
+              timestamp: eventNow(),
+              stepIndex: step,
+              toolCallId: call.id,
+              toolName: call.name,
+              summary: JSON.stringify(call.arguments).slice(0, 180),
+              detail: JSON.stringify(call.arguments, null, 2),
+            });
+
+            // Lifecycle: tool_execution_start
+            this.eventBus.emit({
+              type: 'tool_execution_start',
+              timestamp: eventNow(),
+              stepIndex: step,
+              toolCallId: call.id,
+              toolName: call.name,
+              arguments: call.arguments as Record<string, unknown>,
+            });
+
+            // Control hook: pre_tool_use — can block dangerous tool calls
+            const preToolDecision = await this.eventBus.emitControl({
+              type: 'pre_tool_use',
+              timestamp: eventNow(),
+              stepIndex: step,
+              toolCallId: call.id,
+              toolName: call.name,
+              arguments: call.arguments as Record<string, unknown>,
+            });
+
+            if (preToolDecision.allow === false) {
+              this.logger?.warn('Tool call blocked by pre_tool_use hook', {
+                toolName: call.name,
+                reason: preToolDecision.reason,
+                stepIndex: step,
+              });
+              // End tool execution span if started
+              if (this.tracer && toolExecSpan) {
+                this.tracer.addEvent(toolExecSpan, 'tool_blocked', { reason: preToolDecision.reason });
+                this.tracer.endSpan(toolExecSpan);
+              }
+              // Emit tool_execution_end as blocked
+              this.eventBus.emit({
+                type: 'tool_execution_end',
+                timestamp: eventNow(),
+                stepIndex: step,
+                toolCallId: call.id,
+                toolName: call.name,
+                success: false,
+                error: `Blocked by pre_tool_use hook: ${preToolDecision.reason}`,
+              });
+              continue;
+            }
+
+            const result = await this.executor.execute(
+              call,
+              {
+                repoRoot: this.repoRoot,
+                registry,
+                ledger: conversation.inspectionLedger,
+                mode,
+                env: this.env,
+                readCache,
+                identicalReadCounts,
+                totalReadCalls,
+                totalReadResultTokens,
+                readResultBudget: contextBudget,
+                ensureCheckpoint: this.ensureCheckpoint,
+                approvePatch: this.approvePatch,
+                onPatchPreview: (preview) => {
+                  this.onEvent?.({
+                    type: 'patch_preview',
+                    timestamp: eventNow(),
+                    stepIndex: step,
+                    toolCallId: call.id,
+                    toolName: call.name,
+                    ...preview,
+                  });
+                },
+              },
+              identicalBashCounts,
+            );
+
+            if (call.name === 'read') {
+              totalReadCalls += 1;
+              totalReadResultTokens += estimateReadResultTokens(result.toolResult);
+            }
+            toolCalls.push({
+              name: call.name,
+              success: result.success,
+              error: result.error,
+            });
+            appendToolResult(conversation, response, call, result.toolResult, contentToolResults, contextBudget);
+            this.onEvent?.({
+              type: 'tool_finished',
+              timestamp: eventNow(),
+              stepIndex: step,
+              toolCallId: call.id,
+              toolName: call.name,
+              status: result.success ? 'ok' : 'error',
+              summary: result.success ? 'completed' : (result.error ?? 'failed'),
+              detail: formatToolResultDetail(result.toolResult),
+            });
+            // Lifecycle: tool_execution_end
+            this.eventBus.emit({
+              type: 'tool_execution_end',
+              timestamp: eventNow(),
+              stepIndex: step,
+              toolCallId: call.id,
+              toolName: call.name,
+              success: result.success,
+              error: result.error,
+            });
+            if (result.changedFile) changedFiles.push(result.changedFile);
+
+            // End tool execution span
+            if (this.tracer && toolExecSpan) {
+              this.tracer.addEvent(toolExecSpan, 'tool_finished', {
+                success: result.success,
+                error: result.error,
+              });
+              this.tracer.endSpan(toolExecSpan);
+            }
+
+            const afterToolMessages = buildModelRequest(
+              conversation,
+              contextBudget,
+              identicalReadCounts,
+              totalReadCalls,
+            );
+            const afterToolTokens = estimateRequestTokens(afterToolMessages);
+            const effectiveLimit = contextBudget.contextWindowTokens - contextBudget.reservedOutputTokens;
+            if (afterToolTokens > effectiveLimit) {
+              flushContentToolResults(conversation, response, contentToolResults);
+              this.logger?.warn('Context budget exhausted after tool result', {
+                estimatedInputTokens: afterToolTokens,
+                effectiveInputLimit: effectiveLimit,
+                toolName: call.name,
+                stepIndex: step,
+              });
+              return {
+                terminalState: 'budget_exhausted',
+                finalAnswer: response.content.trim(),
                 steps: step,
                 toolCalls,
                 changedFiles,
                 conversation,
                 error: formatContextBudgetError({
-                  estimatedInputTokens: postCompactTokens,
+                  estimatedInputTokens: afterToolTokens,
                   contextWindowTokens: contextBudget.contextWindowTokens,
                   reservedOutputTokens: contextBudget.reservedOutputTokens,
-                  effectiveInputLimit,
-                  largestContributors: summarizeLargestContributors(guarded.messages),
-                  compactionStage: 4,
+                  effectiveInputLimit: effectiveLimit,
+                  largestContributors: summarizeLargestContributors(afterToolMessages),
+                  compactionStage: 0,
                 }),
               };
             }
 
-            const assembled = buildModelRequest(conversation, contextBudget, identicalReadCounts, totalReadCalls);
-
-            response = await this.client.chat({
-              messages: assembled,
-              tools,
-              temperature: 0,
-              maxTokens: 2048,
-              onDelta: (delta) => emitAssistantDelta(this, delta),
-            });
-          } else {
-            const assembled = buildModelRequest(conversation, contextBudget, identicalReadCounts, totalReadCalls);
-            response = await this.client.chat({
-              messages: assembled,
-              tools,
-              temperature: 0,
-              maxTokens: 2048,
-              onDelta: (delta) => emitAssistantDelta(this, delta),
-            });
-          }
-        } catch (error) {
-          // End model call span on error
-          if (this.tracer && modelSpan) {
-            this.tracer.addEvent(modelSpan, 'error', { message: errorMessage(error) });
-            this.tracer.endSpan(modelSpan);
-          }
-          const message = errorMessage(error);
-          this.logger?.error('Model call failed', error instanceof Error ? error : new Error(message), {
-            stepIndex: step,
-            model: 'local',
-          });
-          return {
-            terminalState: message.toLowerCase().includes('context budget') ? 'budget_exhausted' : 'model_error',
-            finalAnswer: '',
-            steps: step,
-            toolCalls,
-            changedFiles,
-            conversation,
-            error: message,
-          };
-        }
-
-        // End model call span
-        if (this.tracer && modelSpan) {
-          this.tracer.addEvent(modelSpan, 'response_received', {
-            toolCallCount: response.toolCalls.length,
-            contentLength: response.content.length,
-          });
-          this.tracer.endSpan(modelSpan);
-        }
-
-        // ── Token counting and cost tracking ──
-        let turnTokenStats: { inputTokens: number; outputTokens: number; totalTokens: number } | undefined;
-        if (this.tokenCounter) {
-          const assembled = buildModelRequest(conversation, contextBudget, identicalReadCounts, totalReadCalls);
-          const inputTokens = this.tokenCounter.countInput(assembled);
-          const outputTokens = this.tokenCounter.countOutput({
-            content: response.content,
-            reasoningContent: response.reasoningContent,
-            toolCalls: response.toolCalls.map((c) => ({ name: c.name, arguments: c.arguments })),
-          });
-          turnTokenStats = { inputTokens, outputTokens, totalTokens: inputTokens + outputTokens };
-          this.tokenCounter.recordTurn(turnTokenStats);
-
-          // Estimate cost
-          if (this.costTracker) {
-            const cost = this.costTracker.recordTurn(turnTokenStats);
-            this.onEvent?.({
-              type: 'token_usage',
-              timestamp: eventNow(),
-              stepIndex: step,
-              inputTokens: turnTokenStats.inputTokens,
-              outputTokens: turnTokenStats.outputTokens,
-              estimatedCost: cost.totalCost,
-            } as AgentEvent);
-
-            // Budget check
-            if (this.maxBudget !== undefined && this.costTracker.isOverBudget(this.maxBudget)) {
-              this.logger?.warn('API cost budget exceeded', {
-                cumulativeCost: this.costTracker.getCumulativeCost(),
-                maxBudget: this.maxBudget,
-                stepIndex: step,
+            if (result.success) {
+              consecutiveRecoverableToolErrors = 0;
+            } else if (isRecoverableToolError(call, result)) {
+              consecutiveRecoverableToolErrors += 1;
+              this.onActivity?.({
+                kind: 'tool',
+                message: `recoverable error ${consecutiveRecoverableToolErrors}/${MAX_CONSECUTIVE_RECOVERABLE_TOOL_ERRORS}: ${call.name} ${describeToolCall(call.name, call.arguments as Record<string, unknown>)} — ${result.error ?? 'unknown'}`,
               });
+              if (consecutiveRecoverableToolErrors < MAX_CONSECUTIVE_RECOVERABLE_TOOL_ERRORS) {
+                continue;
+              }
+
+              flushContentToolResults(conversation, response, contentToolResults);
               return {
-                terminalState: 'budget_exhausted',
-                finalAnswer: '',
+                terminalState: 'tool_error',
+                finalAnswer: response.content.trim(),
                 steps: step,
                 toolCalls,
                 changedFiles,
                 conversation,
-                error: `API cost budget exceeded: $${this.costTracker.getCumulativeCost().toFixed(4)} > $${this.maxBudget.toFixed(4)}`,
+                error: `too many consecutive recoverable tool errors: ${MAX_CONSECUTIVE_RECOVERABLE_TOOL_ERRORS}`,
+              };
+            } else {
+              flushContentToolResults(conversation, response, contentToolResults);
+              return {
+                terminalState: result.terminalState ?? 'tool_error',
+                finalAnswer: response.content.trim(),
+                steps: step,
+                toolCalls,
+                changedFiles,
+                conversation,
+                error: result.error,
               };
             }
           }
+          flushContentToolResults(conversation, response, contentToolResults);
         }
-
-        // Span: tool parsing
-        const toolParseSpan =
-          this.tracer && turnSpan
-            ? this.tracer.startChildSpan(turnSpan, 'tool_parse', { toolCallCount: response.toolCalls.length })
-            : undefined;
-
-        this.onActivity?.(formatModelResponseActivity(response, step));
-
-        conversation.messages.push(assistantMessage(response, contextBudget));
-
-        if (response.toolCalls.length > 0 && response.content.trim().length > 0) {
-          if (!isSafeToolPreamble(response.content)) {
-            return {
-              terminalState: 'model_error',
-              finalAnswer: response.content.trim(),
-              steps: step,
-              toolCalls,
-              changedFiles,
-              conversation,
-              error: 'model emitted ambiguous mixed output (tool calls plus final text)',
-            };
-          }
-
-          if (toolCallFormat(response) === 'openai') {
-            conversation.messages[conversation.messages.length - 1] = assistantMessage({ ...response, content: '' });
-          }
-        }
-
-        if (response.toolCalls.length === 0) {
-          // End tool parse span (no tool calls to execute)
-          if (this.tracer && toolParseSpan) {
-            this.tracer.endSpan(toolParseSpan);
-          }
-
-          if (mode === 'patch' && changedFiles.length === 0 && isPrematureCompletionClaim(response.content)) {
-            conversation.messages.push({
-              role: 'user',
-              content:
-                'You claimed completion without taking action. ' +
-                'Use available tools (bash for git/commands, edit for file changes, write for new files) to complete the task. ' +
-                'If no action is needed, explain specifically why. Do not just say "verified" or "passed" — show evidence.',
-            });
-            continue;
-          }
-
-          return {
-            terminalState: 'completed',
-            finalAnswer: response.content.trim(),
-            steps: step,
-            toolCalls,
-            changedFiles,
-            conversation,
-          };
-        }
-
-        // End tool parse span (after parsing checks, before tool loop)
-        if (this.tracer && toolParseSpan) {
-          this.tracer.endSpan(toolParseSpan);
-        }
-
-        const contentToolResults: Array<{ id: string; content: string }> = [];
-        for (const call of response.toolCalls) {
-          // Span: tool execution
-          const toolExecSpan =
-            this.tracer && turnSpan
-              ? this.tracer.startChildSpan(turnSpan, 'tool_execution', {
-                  toolName: call.name,
-                })
-              : undefined;
-          if (toolCalls.length >= maxToolCalls) {
-            // End tool execution span before returning
-            if (this.tracer && toolExecSpan) {
-              this.tracer.addEvent(toolExecSpan, 'max_tool_calls_exceeded', { limit: maxToolCalls });
-              this.tracer.endSpan(toolExecSpan);
-            }
-            this.logger?.warn('Max tool calls exceeded', {
-              current: toolCalls.length,
-              limit: maxToolCalls,
-              stepIndex: step,
-            });
-            return {
-              terminalState: 'budget_exhausted',
-              finalAnswer: response.content.trim(),
-              steps: step,
-              toolCalls,
-              changedFiles,
-              conversation,
-              error: `max tool calls exceeded: ${maxToolCalls}`,
-            };
-          }
-          this.onActivity?.({
-            kind: 'tool',
-            message: describeToolCall(call.name, call.arguments as Record<string, unknown>),
-          });
-          this.logger?.debug('Executing tool', {
-            toolName: call.name,
-            args: JSON.stringify(call.arguments).slice(0, 500),
-            stepIndex: step,
-          });
-          this.onEvent?.({
-            type: 'tool_started',
-            timestamp: eventNow(),
-            stepIndex: step,
-            toolCallId: call.id,
-            toolName: call.name,
-            summary: JSON.stringify(call.arguments).slice(0, 180),
-            detail: JSON.stringify(call.arguments, null, 2),
-          });
-
-          const result = await this.executor.execute(
-            call,
-            {
-              repoRoot: this.repoRoot,
-              registry,
-              ledger: conversation.inspectionLedger,
-              mode,
-              env: this.env,
-              readCache,
-              identicalReadCounts,
-              totalReadCalls,
-              totalReadResultTokens,
-              readResultBudget: contextBudget,
-              ensureCheckpoint: this.ensureCheckpoint,
-              approvePatch: this.approvePatch,
-              onPatchPreview: (preview) => {
-                this.onEvent?.({
-                  type: 'patch_preview',
-                  timestamp: eventNow(),
-                  stepIndex: step,
-                  toolCallId: call.id,
-                  toolName: call.name,
-                  ...preview,
-                });
-              },
-            },
-            identicalBashCounts,
-          );
-
-          if (call.name === 'read') {
-            totalReadCalls += 1;
-            totalReadResultTokens += estimateReadResultTokens(result.toolResult);
-          }
-          toolCalls.push({
-            name: call.name,
-            success: result.success,
-            error: result.error,
-          });
-          appendToolResult(conversation, response, call, result.toolResult, contentToolResults, contextBudget);
-          this.onEvent?.({
-            type: 'tool_finished',
-            timestamp: eventNow(),
-            stepIndex: step,
-            toolCallId: call.id,
-            toolName: call.name,
-            status: result.success ? 'ok' : 'error',
-            summary: result.success ? 'completed' : (result.error ?? 'failed'),
-            detail: formatToolResultDetail(result.toolResult),
-          });
-          if (result.changedFile) changedFiles.push(result.changedFile);
-
-          // End tool execution span
-          if (this.tracer && toolExecSpan) {
-            this.tracer.addEvent(toolExecSpan, 'tool_finished', {
-              success: result.success,
-              error: result.error,
-            });
-            this.tracer.endSpan(toolExecSpan);
-          }
-
-          const afterToolMessages = buildModelRequest(conversation, contextBudget, identicalReadCounts, totalReadCalls);
-          const afterToolTokens = estimateRequestTokens(afterToolMessages);
-          const effectiveLimit = contextBudget.contextWindowTokens - contextBudget.reservedOutputTokens;
-          if (afterToolTokens > effectiveLimit) {
-            flushContentToolResults(conversation, response, contentToolResults);
-            this.logger?.warn('Context budget exhausted after tool result', {
-              estimatedInputTokens: afterToolTokens,
-              effectiveInputLimit: effectiveLimit,
-              toolName: call.name,
-              stepIndex: step,
-            });
-            return {
-              terminalState: 'budget_exhausted',
-              finalAnswer: response.content.trim(),
-              steps: step,
-              toolCalls,
-              changedFiles,
-              conversation,
-              error: formatContextBudgetError({
-                estimatedInputTokens: afterToolTokens,
-                contextWindowTokens: contextBudget.contextWindowTokens,
-                reservedOutputTokens: contextBudget.reservedOutputTokens,
-                effectiveInputLimit: effectiveLimit,
-                largestContributors: summarizeLargestContributors(afterToolMessages),
-                compactionStage: 0,
-              }),
-            };
-          }
-
-          if (result.success) {
-            consecutiveRecoverableToolErrors = 0;
-          } else if (isRecoverableToolError(call, result)) {
-            consecutiveRecoverableToolErrors += 1;
-            this.onActivity?.({
-              kind: 'tool',
-              message: `recoverable error ${consecutiveRecoverableToolErrors}/${MAX_CONSECUTIVE_RECOVERABLE_TOOL_ERRORS}: ${call.name} ${describeToolCall(call.name, call.arguments as Record<string, unknown>)} — ${result.error ?? 'unknown'}`,
-            });
-            if (consecutiveRecoverableToolErrors < MAX_CONSECUTIVE_RECOVERABLE_TOOL_ERRORS) {
-              continue;
-            }
-
-            flushContentToolResults(conversation, response, contentToolResults);
-            return {
-              terminalState: 'tool_error',
-              finalAnswer: response.content.trim(),
-              steps: step,
-              toolCalls,
-              changedFiles,
-              conversation,
-              error: `too many consecutive recoverable tool errors: ${MAX_CONSECUTIVE_RECOVERABLE_TOOL_ERRORS}`,
-            };
-          } else {
-            flushContentToolResults(conversation, response, contentToolResults);
-            return {
-              terminalState: result.terminalState ?? 'tool_error',
-              finalAnswer: response.content.trim(),
-              steps: step,
-              toolCalls,
-              changedFiles,
-              conversation,
-              error: result.error,
-            };
-          }
-        }
-        flushContentToolResults(conversation, response, contentToolResults);
-      }
+      })();
+      return turnResult;
     } finally {
+      // Lifecycle: emit turn_end
+      this.eventBus.emit({
+        type: 'turn_end',
+        timestamp: eventNow(),
+        stepIndex: turnIndex,
+        terminalState: turnResult?.terminalState ?? 'model_error',
+        toolCalls: turnResult?.toolCalls?.length ?? 0,
+        steps: turnResult?.steps ?? 0,
+      });
       if (this.tracer && turnSpan) {
         this.tracer.endSpan(turnSpan);
       }
@@ -956,18 +1064,14 @@ function buildModelFacingTools(options: ModelToolSurfaceOptions = {}): ToolDefin
 
 function emitAssistantDelta(session: Session, delta: { content?: string; reasoningContent?: string }): void {
   if (!delta.content && !delta.reasoningContent) return;
-  session.eventBus.emit('assistant_delta', {
-    type: 'assistant_delta',
+  const event = {
+    type: 'assistant_delta' as const,
     timestamp: eventNow(),
     content: delta.content,
     reasoningContent: delta.reasoningContent,
-  });
-  session.onEvent?.({
-    type: 'assistant_delta',
-    timestamp: eventNow(),
-    content: delta.content,
-    reasoningContent: delta.reasoningContent,
-  });
+  };
+  session.eventBus.emit(event);
+  session.onEvent?.(event);
 }
 
 function assistantMessage(response: ChatResponse, settings?: ContextBudgetSettings): AgentMessage {
