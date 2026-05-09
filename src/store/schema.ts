@@ -7,7 +7,7 @@
  *   spans    — telemetry span records
  */
 
-export const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 2;
 
 export const CREATE_SESSIONS_TABLE = `
 CREATE TABLE IF NOT EXISTS sessions (
@@ -70,6 +70,30 @@ export const CREATE_SPANS_KIND_INDEX = `
 CREATE INDEX IF NOT EXISTS idx_spans_kind ON spans(kind);
 `;
 
+export const CREATE_LOG_EVENTS_TABLE = `
+CREATE TABLE IF NOT EXISTS log_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  level TEXT NOT NULL,
+  message TEXT NOT NULL,
+  timestamp TEXT NOT NULL,
+  context TEXT DEFAULT '{}',
+  session_id TEXT,
+  error TEXT
+);
+`;
+
+export const CREATE_LOG_EVENTS_LEVEL_INDEX = `
+CREATE INDEX IF NOT EXISTS idx_log_events_level ON log_events(level);
+`;
+
+export const CREATE_LOG_EVENTS_SESSION_INDEX = `
+CREATE INDEX IF NOT EXISTS idx_log_events_session ON log_events(session_id);
+`;
+
+export const CREATE_LOG_EVENTS_TIMESTAMP_INDEX = `
+CREATE INDEX IF NOT EXISTS idx_log_events_timestamp ON log_events(timestamp);
+`;
+
 /** All DDL statements in order for a fresh database. */
 export const ALL_DDL = [
   CREATE_SESSIONS_TABLE,
@@ -80,6 +104,10 @@ export const ALL_DDL = [
   CREATE_SPANS_SESSION_INDEX,
   CREATE_SPANS_PARENT_INDEX,
   CREATE_SPANS_KIND_INDEX,
+  CREATE_LOG_EVENTS_TABLE,
+  CREATE_LOG_EVENTS_LEVEL_INDEX,
+  CREATE_LOG_EVENTS_SESSION_INDEX,
+  CREATE_LOG_EVENTS_TIMESTAMP_INDEX,
 ];
 
 /** Schema version pragma for migration tracking. */
