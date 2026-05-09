@@ -81,6 +81,7 @@ export class SpanTracer {
     // Track completed summary for in-memory access
     this.completedSummaries.push({
       id: span.id,
+      parentId: span.parentId,
       kind: span.kind,
       durationMs: span.durationMs,
       metadata: span.metadata,
@@ -123,14 +124,12 @@ export class SpanTracer {
   }
 
   private hasParent(all: SpanSummary[], span: SpanSummary): boolean {
-    return all.some((s) => span.id !== s.id && s.childSpans.some((c) => c.id === span.id));
+    return all.some((s) => span.id !== s.id && s.parentId !== undefined);
   }
 
   private buildTree(root: SpanSummary, all: SpanSummary[]): SpanSummary {
     const children = all.filter((s) => {
-      // Find spans whose metadata.parentSpanId matches root.id
-      const pid = s.metadata.parentSpanId as string | undefined;
-      return pid === root.id;
+      return s.parentId === root.id;
     });
     return {
       ...root,

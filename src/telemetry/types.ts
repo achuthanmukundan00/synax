@@ -44,6 +44,7 @@ export interface StartSpanOptions {
 /** Summary of span timing for logging / dashboard use. */
 export interface SpanSummary {
   id: string;
+  parentId?: string;
   kind: SpanKind;
   durationMs: number;
   metadata: Record<string, unknown>;
