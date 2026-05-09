@@ -53,9 +53,7 @@ export function renderTranscript(state: TranscriptRenderState, width: number): s
         continue;
       }
       if (completed && isLastModel) {
-        blocks.push(
-          renderReviewOutput(prose || item.detail || item.summary, width),
-        );
+        blocks.push(renderReviewOutput(prose || item.detail || item.summary, width));
         lastRenderedProse = prose;
       } else if (prose) {
         blocks.push(renderModelProse(prose, width, !wasPreviousNote));

@@ -79,7 +79,10 @@ describe('Synax Backrooms terminal safety', () => {
       off: jest.fn(),
     };
 
-    const term = createBackroomsTerminal({ stdin: mockStdin, stdout: mockStdout as unknown as Writable & { isTTY?: boolean; columns?: number; rows?: number } });
+    const term = createBackroomsTerminal({
+      stdin: mockStdin,
+      stdout: mockStdout as unknown as Writable & { isTTY?: boolean; columns?: number; rows?: number },
+    });
     expect(typeof term.start).toBe('function');
     expect(typeof term.stop).toBe('function');
     expect(typeof term.write).toBe('function');

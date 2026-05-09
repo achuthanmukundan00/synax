@@ -56,12 +56,14 @@ program.hook('preAction', (thisCommand) => {
 
 // Hidden liminal command — intercepted before commander to avoid help exposure
 if (process.argv[2] === '__liminal__') {
-  import('./backrooms/index.js').then(({ runSynaxBackrooms }) => {
-    return runSynaxBackrooms();
-  }).catch((err: unknown) => {
-    process.stderr.write(`liminal layer error: ${err instanceof Error ? err.message : String(err)}\n`);
-    process.exit(1);
-  });
+  import('./backrooms/index.js')
+    .then(({ runSynaxBackrooms }) => {
+      return runSynaxBackrooms();
+    })
+    .catch((err: unknown) => {
+      process.stderr.write(`liminal layer error: ${err instanceof Error ? err.message : String(err)}\n`);
+      process.exit(1);
+    });
   // don't let commander parse this
 } else {
   if (process.argv.length === 2) {
