@@ -8,6 +8,7 @@ import { parseBackroomsInput } from '../backrooms/input';
 import { processMovement, tryMove } from '../backrooms/runBackrooms';
 import { MIN_TERMINAL_COLS, MIN_TERMINAL_ROWS, MOVE_SPEED, type GameState, type LevelDef } from '../backrooms/types';
 import { createBackroomsTerminal } from '../backrooms/terminal';
+import type { Writable } from 'node:stream';
 
 describe('Synax Backrooms secret trigger', () => {
   describe('exact-match detection', () => {
@@ -78,7 +79,7 @@ describe('Synax Backrooms terminal safety', () => {
       off: jest.fn(),
     };
 
-    const term = createBackroomsTerminal({ stdin: mockStdin, stdout: mockStdout });
+    const term = createBackroomsTerminal({ stdin: mockStdin, stdout: mockStdout as unknown as Writable & { isTTY?: boolean; columns?: number; rows?: number } });
     expect(typeof term.start).toBe('function');
     expect(typeof term.stop).toBe('function');
     expect(typeof term.write).toBe('function');
