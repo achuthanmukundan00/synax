@@ -24,6 +24,7 @@ export function runCommand(program: Command): void {
     .option('--repair-attempts <count>', 'Bounded verification repair attempts')
     .option('--tui', 'Render run control surface TUI')
     .option('--budget <amount>', 'Maximum API cost budget in USD (e.g. 0.50)')
+    .option('--strategy <mode>', 'Context strategy override: aggressive, moderate, light, none, or off')
     .action(
       async (options: {
         task?: string;
@@ -34,6 +35,7 @@ export function runCommand(program: Command): void {
         repairAttempts?: string;
         tui?: boolean;
         budget?: string;
+        strategy?: string;
       }) => {
         if (options.task) {
           const activities: string[] = [];
@@ -55,6 +57,7 @@ export function runCommand(program: Command): void {
               repairAttempts: repairAttemptsResult.value,
               logger: createLogger(),
               maxBudget: parseBudgetOption(options.budget),
+              strategy: options.strategy,
               onActivity(activity) {
                 if (activity.kind === 'model_response') {
                   const fullContent = activity.modelOutput || activity.message;

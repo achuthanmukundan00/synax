@@ -14,6 +14,7 @@ import { createEventStore } from '../store/EventStore';
 import { SpanTracer } from '../telemetry/SpanTracer';
 import { TokenCounter } from '../metrics/TokenCounter';
 import { CostTracker } from '../metrics/CostTracker';
+import { resolveStrategy, getStrategy } from '../context/ContextStrategy';
 
 export interface RunTaskOptions {
   repoRoot: string;
@@ -29,6 +30,8 @@ export interface RunTaskOptions {
   logger?: Logger;
   /** Maximum API cost budget in USD (stops agent when exceeded). */
   maxBudget?: number;
+  /** Context strategy override. Takes precedence over auto-detection. */
+  strategy?: string;
 }
 
 export interface RunTaskReport {
@@ -166,6 +169,16 @@ export async function runAgentTask(options: RunTaskOptions): Promise<RunTaskRepo
     skillMessages = result.systemMessages;
   }
 
+  // Resolve context strategy from model's context window (or explicit override)
+  const modelContextWindow =
+    metadata.contextWindow ??
+    projectConfig.config.contextWindowTokens ??
+    projectConfig.config.contextBudgetTokens ??
+    131072;
+  const strategy = options.strategy
+    ? (getStrategy(options.strategy) ?? resolveStrategy(modelContextWindow))
+    : resolveStrategy(modelContextWindow);
+
   const session = new Session({
     repoRoot: options.repoRoot,
     client,
@@ -179,11 +192,16 @@ export async function runAgentTask(options: RunTaskOptions): Promise<RunTaskRepo
     maxBudget: options.maxBudget,
     contextBudget: {
       contextBudgetTokens: projectConfig.config.contextBudgetTokens,
-      contextWindowTokens: projectConfig.config.contextWindowTokens,
-      reservedOutputTokens: projectConfig.config.reservedOutputTokens,
+      contextWindowTokens:
+        strategy.contextWindowOverride ??
+        projectConfig.config.contextWindowTokens ??
+        projectConfig.config.contextBudgetTokens,
+      reservedOutputTokens: projectConfig.config.reservedOutputTokens ?? strategy.reserveTokens,
       keepRecentTokens: projectConfig.config.keepRecentTokens,
       maxSingleReadResultTokens: projectConfig.config.maxSingleReadResultTokens,
       maxTotalReadResultTokensPerTurn: projectConfig.config.maxTotalReadResultTokensPerTurn,
+      strategyReserveTokens: strategy.reserveTokens,
+      strategyWindowOverride: strategy.contextWindowOverride,
     },
     onActivity: options.onActivity,
     onEvent: wrappedOnEvent,
