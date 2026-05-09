@@ -20,9 +20,11 @@ export interface ToolCallRepairContext {
 
 /**
  * Attempts bounded repair of malformed structured tool-call text.
+ * Supports JSON (most common) and XML (Qwen-family) formats.
  */
 export interface ToolCallRepairer {
   repairMalformedJson(raw: string, context?: ToolCallRepairContext): string | null;
+  repairMalformedXml?(raw: string, context?: ToolCallRepairContext): string | null;
 }
 
 export interface ReasoningSanitizerResult {
