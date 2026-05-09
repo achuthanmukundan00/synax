@@ -7,6 +7,7 @@ import { runVerification, type VerificationResult } from './verification';
 import { eventNow, type AgentEvent } from './events';
 import { createSafetyCheckpoint, detectDirtyTree, writeRunLog } from './safety';
 import { normalizeRunMode, type RunMode } from './task-policy';
+import { type Logger } from '../logging/index.js';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 
@@ -20,6 +21,8 @@ export interface RunTaskOptions {
   recordRunArtifacts?: boolean;
   onActivity?: (activity: AgentActivity) => void;
   onEvent?: (event: AgentEvent) => void;
+  /** Optional structured logger for internal diagnostics. */
+  logger?: Logger;
 }
 
 export interface RunTaskReport {
@@ -139,6 +142,7 @@ export async function runAgentTask(options: RunTaskOptions): Promise<RunTaskRepo
     maxToolCalls: projectConfig.config.maxToolCalls,
     tools: { bashEnabled: projectConfig.config.tools?.bash?.enabled, mode },
     skillMessages,
+    logger: options.logger,
     contextBudget: {
       contextBudgetTokens: projectConfig.config.contextBudgetTokens,
       contextWindowTokens: projectConfig.config.contextWindowTokens,
@@ -253,6 +257,7 @@ export async function runAgentTask(options: RunTaskOptions): Promise<RunTaskRepo
         maxToolCalls: Math.max(8, Math.floor((projectConfig.config.maxToolCalls ?? 192) / 2)),
         tools: { bashEnabled: projectConfig.config.tools?.bash?.enabled, mode },
         skillMessages,
+        logger: options.logger,
         contextBudget: {
           contextBudgetTokens: projectConfig.config.contextBudgetTokens,
           contextWindowTokens: projectConfig.config.contextWindowTokens,
