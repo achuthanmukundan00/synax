@@ -2,6 +2,8 @@ import { EventEmitter } from 'events';
 
 import { type Logger } from '../logging/index.js';
 import type { SpanTracer } from '../telemetry/SpanTracer';
+import type { TokenCounter } from '../metrics/TokenCounter';
+import type { CostTracker } from '../metrics/CostTracker';
 import { type ChatOptions, type ChatResponse } from '../llm/types';
 import { type ParsedToolCall } from '../llm/tool-calls';
 import { createInspectionLedger, createToolRegistry, type InspectionLedger } from '../tools';
@@ -87,6 +89,12 @@ export interface AgentRunnerOptions {
   logger?: Logger;
   /** Optional span tracer for telemetry instrumentation. */
   tracer?: SpanTracer;
+  /** Optional token counter for per-turn usage metrics. */
+  tokenCounter?: TokenCounter;
+  /** Optional cost tracker for API cost estimation. */
+  costTracker?: CostTracker;
+  /** Maximum API cost budget (stops agent when exceeded). */
+  maxBudget?: number;
 }
 
 export interface ModelToolSurfaceOptions {
@@ -159,6 +167,12 @@ export class Session {
   logger?: Logger;
   /** Optional span tracer for telemetry instrumentation. */
   tracer?: SpanTracer;
+  /** Optional token counter for per-turn usage metrics. */
+  tokenCounter?: TokenCounter;
+  /** Optional cost tracker for API cost estimation. */
+  costTracker?: CostTracker;
+  /** Maximum API cost budget (stops agent when exceeded). */
+  maxBudget?: number;
   /** Simple event bus — will be swapped for typed EventBus in M1 #04. */
   readonly eventBus: EventEmitter = new EventEmitter();
   /** Typed tool dispatch — extracted from the old executeAgentTool switch. */
@@ -188,6 +202,9 @@ export class Session {
     logger?: Logger;
     tracer?: SpanTracer;
     env?: ExecutionEnv;
+    tokenCounter?: TokenCounter;
+    costTracker?: CostTracker;
+    maxBudget?: number;
   }) {
     this.repoRoot = options.repoRoot;
     this.client = options.client;
@@ -202,6 +219,9 @@ export class Session {
     this.ensureCheckpoint = options.ensureCheckpoint;
     this.logger = options.logger;
     this.tracer = options.tracer;
+    this.tokenCounter = options.tokenCounter;
+    this.costTracker = options.costTracker;
+    this.maxBudget = options.maxBudget;
 
     this.conversation = options.conversation ?? Session.createConversation({ skillMessages: options.skillMessages });
     this.registry =
@@ -490,6 +510,51 @@ export class Session {
             contentLength: response.content.length,
           });
           this.tracer.endSpan(modelSpan);
+        }
+
+        // ── Token counting and cost tracking ──
+        let turnTokenStats: { inputTokens: number; outputTokens: number; totalTokens: number } | undefined;
+        if (this.tokenCounter) {
+          const assembled = buildModelRequest(conversation, contextBudget, identicalReadCounts, totalReadCalls);
+          const inputTokens = this.tokenCounter.countInput(assembled);
+          const outputTokens = this.tokenCounter.countOutput({
+            content: response.content,
+            reasoningContent: response.reasoningContent,
+            toolCalls: response.toolCalls.map((c) => ({ name: c.name, arguments: c.arguments })),
+          });
+          turnTokenStats = { inputTokens, outputTokens, totalTokens: inputTokens + outputTokens };
+          this.tokenCounter.recordTurn(turnTokenStats);
+
+          // Estimate cost
+          if (this.costTracker) {
+            const cost = this.costTracker.recordTurn(turnTokenStats);
+            this.onEvent?.({
+              type: 'token_usage',
+              timestamp: eventNow(),
+              stepIndex: step,
+              inputTokens: turnTokenStats.inputTokens,
+              outputTokens: turnTokenStats.outputTokens,
+              estimatedCost: cost.totalCost,
+            } as AgentEvent);
+
+            // Budget check
+            if (this.maxBudget !== undefined && this.costTracker.isOverBudget(this.maxBudget)) {
+              this.logger?.warn('API cost budget exceeded', {
+                cumulativeCost: this.costTracker.getCumulativeCost(),
+                maxBudget: this.maxBudget,
+                stepIndex: step,
+              });
+              return {
+                terminalState: 'budget_exhausted',
+                finalAnswer: '',
+                steps: step,
+                toolCalls,
+                changedFiles,
+                conversation,
+                error: `API cost budget exceeded: $${this.costTracker.getCumulativeCost().toFixed(4)} > $${this.maxBudget.toFixed(4)}`,
+              };
+            }
+          }
         }
 
         // Span: tool parsing

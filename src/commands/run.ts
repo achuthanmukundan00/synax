@@ -23,6 +23,7 @@ export function runCommand(program: Command): void {
     .option('--verification-profile <profile>', 'Verification profile: quick or full')
     .option('--repair-attempts <count>', 'Bounded verification repair attempts')
     .option('--tui', 'Render run control surface TUI')
+    .option('--budget <amount>', 'Maximum API cost budget in USD (e.g. 0.50)')
     .action(
       async (options: {
         task?: string;
@@ -32,6 +33,7 @@ export function runCommand(program: Command): void {
         verificationProfile?: 'quick' | 'full';
         repairAttempts?: string;
         tui?: boolean;
+        budget?: string;
       }) => {
         if (options.task) {
           const activities: string[] = [];
@@ -52,6 +54,7 @@ export function runCommand(program: Command): void {
               verificationProfile: options.verificationProfile,
               repairAttempts: repairAttemptsResult.value,
               logger: createLogger(),
+              maxBudget: parseBudgetOption(options.budget),
               onActivity(activity) {
                 if (activity.kind === 'model_response') {
                   const fullContent = activity.modelOutput || activity.message;
@@ -174,6 +177,13 @@ export function runCommand(program: Command): void {
       },
     );
   program.addCommand(run);
+}
+
+function parseBudgetOption(value: string | undefined): number | undefined {
+  if (value === undefined) return undefined;
+  const parsed = Number.parseFloat(value);
+  if (!Number.isFinite(parsed) || parsed < 0) return undefined;
+  return parsed;
 }
 
 function parseRepairAttempts(

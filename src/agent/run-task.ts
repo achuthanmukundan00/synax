@@ -12,6 +12,8 @@ import { execFile } from 'child_process';
 import { promisify } from 'util';
 import { createEventStore } from '../store/EventStore';
 import { SpanTracer } from '../telemetry/SpanTracer';
+import { TokenCounter } from '../metrics/TokenCounter';
+import { CostTracker } from '../metrics/CostTracker';
 
 export interface RunTaskOptions {
   repoRoot: string;
@@ -25,6 +27,8 @@ export interface RunTaskOptions {
   onEvent?: (event: AgentEvent) => void;
   /** Optional structured logger for internal diagnostics. */
   logger?: Logger;
+  /** Maximum API cost budget in USD (stops agent when exceeded). */
+  maxBudget?: number;
 }
 
 export interface RunTaskReport {
@@ -170,6 +174,9 @@ export async function runAgentTask(options: RunTaskOptions): Promise<RunTaskRepo
     bashEnabled: projectConfig.config.tools?.bash?.enabled,
     skillMessages,
     logger: eventStore ? createLogger({ sessionId, eventStore }) : options.logger,
+    tokenCounter: new TokenCounter(),
+    costTracker: new CostTracker(new TokenCounter(), metadata.modelId),
+    maxBudget: options.maxBudget,
     contextBudget: {
       contextBudgetTokens: projectConfig.config.contextBudgetTokens,
       contextWindowTokens: projectConfig.config.contextWindowTokens,
