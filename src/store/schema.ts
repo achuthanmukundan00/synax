@@ -2,12 +2,13 @@
  * SQLite schema for Synax event store.
  *
  * Tables:
- *   sessions — run metadata
- *   events   — append-only agent events
- *   spans    — telemetry span records
+ *   sessions   — run metadata
+ *   events     — append-only agent events
+ *   spans      — telemetry span records
+ *   memory_fts — FTS5 holographic memory for semantic retrieval
  */
 
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 3;
 
 export const CREATE_SESSIONS_TABLE = `
 CREATE TABLE IF NOT EXISTS sessions (
@@ -94,6 +95,19 @@ export const CREATE_LOG_EVENTS_TIMESTAMP_INDEX = `
 CREATE INDEX IF NOT EXISTS idx_log_events_timestamp ON log_events(timestamp);
 `;
 
+export const CREATE_MEMORY_FTS_TABLE = `
+CREATE VIRTUAL TABLE IF NOT EXISTS memory_fts USING fts5(
+  turn_id,
+  session_id,
+  role,
+  tool_name,
+  file_paths,
+  content,
+  prefix='2 3',
+  tokenize='porter unicode61'
+);
+`;
+
 /** All DDL statements in order for a fresh database. */
 export const ALL_DDL = [
   CREATE_SESSIONS_TABLE,
@@ -108,6 +122,7 @@ export const ALL_DDL = [
   CREATE_LOG_EVENTS_LEVEL_INDEX,
   CREATE_LOG_EVENTS_SESSION_INDEX,
   CREATE_LOG_EVENTS_TIMESTAMP_INDEX,
+  CREATE_MEMORY_FTS_TABLE,
 ];
 
 /** Schema version pragma for migration tracking. */

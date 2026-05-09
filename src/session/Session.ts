@@ -1,5 +1,6 @@
 import { type Logger } from '../logging/index.js';
 import { EventBus } from '../events/index';
+import type { HolographicMemory } from '../memory/HolographicMemory';
 import type { SpanTracer } from '../telemetry/SpanTracer';
 import type { TokenCounter } from '../metrics/TokenCounter';
 import type { CostTracker } from '../metrics/CostTracker';
@@ -178,8 +179,8 @@ export class Session {
   readonly executor: ActionExecutor;
   /** Filesystem and process abstraction — swappable for testing/sandboxing. */
   readonly env: ExecutionEnv;
-  /** Holographic memory — null until M4 #12. */
-  readonly memory: null = null;
+  /** Holographic memory — FTS5 semantic store, set externally. */
+  memory: HolographicMemory | null = null;
   /** Recovery manager — applies recovery recipes on failure scenarios. */
   readonly recovery: RecoveryManager = new RecoveryManager();
   /** Track whether session_start has been emitted. */
@@ -394,6 +395,15 @@ export class Session {
 
     // Lifecycle: emit turn_start
     const turnIndex = conversation.messages.filter((m) => m.role === 'user').length;
+
+    // Memory: store user message (fire-and-forget)
+    const memSessionId = `mem-${Date.now()}`;
+    this.memory?.store({
+      sessionId: memSessionId,
+      turnId: turnIndex,
+      role: 'user',
+      content: task.slice(0, 8000),
+    });
     this.eventBus.emit({
       type: 'turn_start',
       timestamp: eventNow(),
@@ -596,6 +606,14 @@ export class Session {
 
           conversation.messages.push(assistantMessage(response, contextBudget));
 
+          // Memory: store assistant response (fire-and-forget)
+          this.memory?.store({
+            sessionId: memSessionId,
+            turnId: turnIndex,
+            role: 'assistant',
+            content: response.content.slice(0, 8000),
+          });
+
           if (response.toolCalls.length > 0 && response.content.trim().length > 0) {
             if (!isSafeToolPreamble(response.content)) {
               return {
@@ -787,6 +805,15 @@ export class Session {
               error: result.error,
             });
             appendToolResult(conversation, response, call, result.toolResult, contentToolResults, contextBudget);
+            // Memory: store tool result (fire-and-forget)
+            this.memory?.store({
+              sessionId: memSessionId,
+              turnId: turnIndex,
+              role: 'tool',
+              toolName: call.name,
+              filePaths: result.changedFile ? [result.changedFile] : undefined,
+              content: JSON.stringify(result.toolResult).slice(0, 8000),
+            });
             this.onEvent?.({
               type: 'tool_finished',
               timestamp: eventNow(),
