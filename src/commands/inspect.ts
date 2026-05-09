@@ -24,6 +24,8 @@ import {
 import { Session } from '../session/Session';
 import { resolveContextBudgetSettings } from '../agent/context-budget';
 import { createContextLedger, type ContextLedger, type ModelCallEntry } from '../tools';
+import { EventStore } from '../store/EventStore';
+import { runMetricsCommand, type MetricsOptions } from './inspect-metrics';
 
 export const PROJECT_CONTEXT_PATH = join('.synax', 'context.json');
 
@@ -44,6 +46,9 @@ export interface InspectCommandOptions {
   context?: boolean;
   expanded?: boolean;
   budget?: boolean;
+  metrics?: boolean;
+  session?: string;
+  stats?: boolean;
   docs?: boolean;
   doc?: string;
   searchDocs?: string;
@@ -72,6 +77,9 @@ export function runInspectCommand(program: any): void {
     .option('--doc <path>', 'Read a bounded local docs/spec file')
     .option('--search-docs <query>', 'Search bounded local docs/spec files')
     .option('--docs-impact', 'Check whether current source changes likely require docs updates')
+    .option('--metrics', 'Show run metrics dashboard from event store')
+    .option('--session <id>', 'Show event timeline for a specific session')
+    .option('--stats', 'Show aggregate statistics (use with --metrics)')
     .action(async (options: any) => {
       const targetPath = options.path ? resolve(options.path) : cwd;
       const projectProfile = buildProjectProfile(targetPath);
@@ -93,11 +101,29 @@ export function runInspectCommand(program: any): void {
         context: options.context,
         expanded: options.expanded,
         budget: options.budget,
+        metrics: options.metrics,
+        session: options.session,
+        stats: options.stats,
         docs: options.docs,
         doc: options.doc,
         searchDocs: options.searchDocs,
         docsImpact: options.docsImpact,
       };
+
+      // --metrics: show run dashboard from event store
+      if (opts.metrics || opts.session || opts.stats) {
+        const store = new EventStore();
+        try {
+          runMetricsCommand(store, {
+            json: opts.json,
+            session: opts.session,
+            stats: opts.stats,
+          } satisfies MetricsOptions);
+        } finally {
+          store.close();
+        }
+        return;
+      }
 
       if (opts.docsImpact) {
         await printDocsImpact(targetPath, opts);
