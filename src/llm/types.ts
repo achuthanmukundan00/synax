@@ -171,3 +171,35 @@ export interface ChatOptions {
   signal?: AbortSignal;
   onDelta?: (delta: { content?: string; reasoningContent?: string }) => void;
 }
+
+// ─── Parsed model output ─────────────────────────────────
+
+/** Warning produced during model output parsing. */
+export interface ParseWarning {
+  message: string;
+  /** Where in the pipeline the warning was raised. */
+  source: 'reasoning' | 'parser' | 'repair' | 'validation';
+}
+
+/**
+ * Typed model output after parsing.
+ *
+ * Replaces the ad-hoc split between sanitized text, tool calls, and
+ * reasoning that was previously done via global regex in tool-calls.ts.
+ *
+ * Each field is independently usable:
+ * - assistantText: for display/transcript
+ * - toolCalls: for the agent turn loop
+ * - reasoning: extracted from provider-specific markers (<think>, reasoning_content)
+ * - warnings: recoverable issues found during parsing
+ */
+export interface ParsedModelOutput {
+  /** Assistant-visible prose (may include code blocks, explanations, etc.). */
+  assistantText: string;
+  /** Parsed tool calls ready for execution. */
+  toolCalls: import('./tool-calls').ParsedToolCall[];
+  /** Reasoning / thinking content extracted from model output. */
+  reasoning?: string;
+  /** Warnings raised during parsing (recoverable issues). */
+  warnings: ParseWarning[];
+}

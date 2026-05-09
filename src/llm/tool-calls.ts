@@ -13,6 +13,8 @@ export { ensureParsersRegistered, detectParserId, toolCallParserRegistry } from 
 // The import below is only for internal use (avoiding import loops).
 import type { ParsedToolCall } from './parsers/types';
 import { sanitizeReasoningTags as sanitizeReasoning, safeJsonParse } from './parsers/utils';
+import type { ParsedModelOutput, ParseWarning } from './types';
+import { sanitizeReasoning as repairSanitize } from './repair/reasoning-sanitizer';
 // Re-export sanitizeReasoningTags for external consumers
 // (handled by the `export { sanitizeReasoningTags }` above)
 
@@ -81,16 +83,74 @@ export interface AnthropicToolDefinition {
 }
 
 export function parseToolCallsFromContent(content: string): ParsedToolCall[] {
-  const result = parseToolCallsFromContentResult(sanitizeReasoning(content));
+  // Reasoning is already extracted by the caller (client.ts / parseModelOutput).
+  // We parse tool calls from cleaned content.
+  const result = parseToolCallsFromContentResult(content);
   return result.ok ? result.calls : [];
+}
+
+/**
+ * Parse raw model output into a typed ParsedModelOutput.
+ *
+ * This is the canonical entry point: it extracts reasoning, parses tool calls,
+ * and returns separated fields. Replaces the ad-hoc global sanitize-then-parse
+ * pattern previously scattered across tool-calls.ts and client.ts.
+ *
+ * @param content Raw model output text.
+ * @param parserId The parser to use (e.g., 'generic', 'qwen3_xml').
+ * @param reasoningContent Optional pre-extracted reasoning from the API response.
+ */
+export function parseModelOutput(content: string, parserId: string, reasoningContent?: string): ParsedModelOutput {
+  const warnings: ParseWarning[] = [];
+  let reasoning = reasoningContent?.trim() || undefined;
+  let cleanedContent = content;
+
+  // Extract reasoning from content if the provider embeds it inline
+  // (Qwen models emit <think> blocks, some models leak thinking in various forms).
+  // Use the dedicated reasoning sanitizer for provider-aware extraction.
+  if (!reasoning) {
+    const sanitizeResult = repairSanitize(content);
+    if (sanitizeResult.removedReasoning) {
+      warnings.push({ message: 'Extracted reasoning tags from model output', source: 'reasoning' });
+    }
+    cleanedContent = sanitizeResult.content;
+  } else {
+    // If reasoning was provided via API field, also strip any inline tags
+    // from the content so they don't interfere with parsing.
+    const stripped = sanitizeReasoning(cleanedContent);
+    if (stripped !== cleanedContent) {
+      warnings.push({ message: 'Stripped inline reasoning tags from content', source: 'reasoning' });
+      cleanedContent = stripped;
+    }
+  }
+
+  // Parse tool calls from the cleaned content
+  const parserResult = toolCallParserRegistry.parse(parserId, cleanedContent);
+  const toolCalls: ParsedToolCall[] = [];
+  if (parserResult.ok) {
+    toolCalls.push(...parserResult.calls);
+  } else {
+    warnings.push({ message: parserResult.error ?? 'parser error', source: 'parser' });
+  }
+
+  // Extract assistant-visible text (content without tool-call blocks)
+  const assistantText = parserResult.content || cleanedContent;
+
+  return {
+    assistantText,
+    toolCalls,
+    reasoning,
+    warnings,
+  };
 }
 
 export function parseToolCallsFromContentResult(content: string): ToolCallParseResult {
   ensureReg();
-  const sanitized = sanitizeReasoning(content);
+  // Content should already have reasoning extracted by the caller.
+  // We only do a light pass to strip any remaining tag artifacts.
+  const cleaned = sanitizeReasoning(content);
 
-  // Use the generic parser via registry for comprehensive parsing
-  const parserResult = toolCallParserRegistry.parse('generic', sanitized);
+  const parserResult = toolCallParserRegistry.parse('generic', cleaned);
   if (!parserResult.ok) {
     return { ok: false, reason: 'malformed-json', message: parserResult.error ?? 'parse error' };
   }
@@ -104,9 +164,10 @@ export function parseToolCallsFromContentResult(content: string): ToolCallParseR
 
 export function parseQwenToolCallsFromContentResult(content: string): ToolCallParseResult {
   ensureReg();
-  const sanitized = sanitizeReasoning(content);
+  // Content should already have reasoning extracted by the caller.
+  const cleaned = sanitizeReasoning(content);
 
-  const parserResult = toolCallParserRegistry.parse('qwen3_xml', sanitized);
+  const parserResult = toolCallParserRegistry.parse('qwen3_xml', cleaned);
   if (!parserResult.ok) {
     return { ok: false, reason: 'malformed-json', message: parserResult.error ?? 'parse error' };
   }
