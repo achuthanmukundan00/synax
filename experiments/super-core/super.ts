@@ -23,6 +23,26 @@ import * as readline from 'readline';
 import { execSync } from 'child_process';
 import Database from 'better-sqlite3';
 
+// ─── Shoggoth Observer bridge (best-effort, silently ignored if unavailable) ──
+let observerPush: ((event: Record<string, unknown>) => void) | null = null;
+let observerShutdown: (() => void) | null = null;
+try {
+  // eslint-disable-next-line @typescript-eslint/no-var-requires, @typescript-eslint/no-require-imports
+  const bridge = require('../web-shoggoth-observer/server/telemetry-bridge');
+  bridge.initTelemetryBridge({
+    enabled: true,
+    modelId: process.env.SUPER_MODEL || 'deepseek-chat',
+    providerName: (() => {
+      const u = process.env.SUPER_BASE_URL || 'https://api.deepseek.com/v1';
+      try { return new URL(u).hostname; } catch { return u; }
+    })(),
+  });
+  observerPush = bridge.pushObserverEvent;
+  observerShutdown = bridge.shutdownTelemetryBridge;
+} catch (e) {
+  console.warn('[super] observer bridge unavailable:', (e as Error).message);
+}
+
 // ─── Config ─────────────────────────────────────────────────────────────────
 const SANDBOX = path.join(__dirname, 'sandbox');
 const DB_PATH = path.join(__dirname, 'memory.db');
@@ -73,6 +93,34 @@ let sessionId = `s${Date.now()}`;
 let turnCounter = 0;
 function nextTurn() { return ++turnCounter; }
 
+// ─── Observer event emitter ─────────────────────────────────────────────────
+function emit(type: string, opts?: {
+  phase?: string;
+  text?: string;
+  toolName?: string;
+  toolSummary?: string;
+  toolStatus?: string;
+  toolArgs?: Record<string, unknown>;
+}): void {
+  if (!observerPush) return;
+  try {
+    observerPush({
+      type,
+      time: new Date().toISOString(),
+      phase: opts?.phase ?? 'thinking',
+      text: opts?.text,
+      toolName: opts?.toolName,
+      summary: opts?.toolSummary,
+      tool: opts?.toolName ? {
+        name: opts.toolName,
+        summary: opts.toolSummary ?? opts.toolName,
+        status: opts.toolStatus ?? 'running',
+        arguments: opts.toolArgs ?? {},
+      } : undefined,
+    });
+  } catch { /* quiet */ }
+}
+
 // ─── Memory operations ──────────────────────────────────────────────────────
 function remember(role: string, content: string, opts?: { toolName?: string; tags?: string }): void {
   try {
@@ -85,7 +133,7 @@ function remember(role: string, content: string, opts?: { toolName?: string; tag
 
 function searchMemory(query: string, limit = 8): string {
   const safe = query.replace(/[^\w\s*"\-]/g, ' ').trim();
-  if (!safe) return '(no query)';
+  if (!safe || safe.length < 2) return '(query too short)';
   try {
     const rows = db
       .prepare(
@@ -237,17 +285,27 @@ async function chat(msgs: any[], tools?: any[]): Promise<{
   const body: any = { model: MODEL, messages: msgs, temperature: 0.7, max_tokens: 4096 };
   if (tools?.length) { body.tools = tools; body.tool_choice = 'auto'; }
 
+  emit('model_note', { phase: 'thinking', text: '…thinking…' });
+
   const res = await fetch(`${BASE_URL}/chat/completions`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${API_KEY}` },
     body: JSON.stringify(body),
     signal: AbortSignal.timeout(120_000),
   });
-  if (!res.ok) { const t = await res.text().catch(() => ''); throw new Error(`API ${res.status}: ${t.slice(0, 200)}`); }
+  if (!res.ok) {
+    const t = await res.text().catch(() => '');
+    const err = `API ${res.status}: ${t.slice(0, 200)}`;
+    emit('error', { phase: 'error', text: err });
+    throw new Error(err);
+  }
 
   const data = await res.json() as any;
   const msg = data.choices?.[0]?.message;
-  if (!msg) throw new Error('Empty response');
+  if (!msg) {
+    emit('error', { phase: 'error', text: 'Empty response' });
+    throw new Error('Empty response');
+  }
 
   const tcs: Array<{ id: string; name: string; args: Record<string, unknown> }> = [];
   if (msg.tool_calls) {
@@ -279,7 +337,16 @@ async function runLoop(
     }
     for (const tc of toolCalls) {
       if (!q) console.log(`  ${DIM}⚡ ${tc.name}${RESET}`);
+      emit('tool_call_started', { phase: 'tool_running', toolName: tc.name, toolSummary: tc.name, toolArgs: tc.args });
       const result = executeTool(tc.name, tc.args, 0);
+      const ok = !result.startsWith('Error:');
+      emit(ok ? 'tool_call_finished' : 'tool_call_failed', {
+        phase: 'thinking',
+        toolName: tc.name,
+        toolSummary: result.slice(0, 100),
+        toolStatus: ok ? 'completed' : 'failed',
+        toolArgs: tc.args,
+      });
       remember('tool', result, { toolName: tc.name });
       msgs.push({ role: 'assistant', content: content || null, tool_calls: [{ id: tc.id, type: 'function', function: { name: tc.name, arguments: JSON.stringify(tc.args) } }] });
       msgs.push({ role: 'tool', tool_call_id: tc.id, content: result });
@@ -311,9 +378,13 @@ Respond in 1-3 sentences. If nothing notable, say "nothing to record."`;
     { role: 'user', content: prompt },
   ];
   try {
+    emit('model_note', { phase: 'thinking', text: '…reflecting…' });
     const { content } = await chat(msgs, []);
     const reflection = content || 'nothing to record.';
     remember('reflection', reflection, { tags: 'reflection' });
+    if (reflection !== 'nothing to record.') {
+      emit('model_note', { phase: 'thinking', text: `[reflection] ${reflection}` });
+    }
     return reflection;
   } catch { return '(reflection skipped)'; }
 }
@@ -340,9 +411,11 @@ If you have nothing to do, respond with "WAIT". Otherwise, take initiative — c
     { role: 'user', content: prompt },
   ];
   try {
+    emit('model_note', { phase: 'thinking', text: '[autonomous tick] checking in…' });
     const result = await runLoop(msgs, 'auto', { quiet: true });
     if (result.trim().toUpperCase() === 'WAIT' || result === '(silence)') return null;
     remember('autonomous', result, { tags: 'autonomous' });
+    emit('model_note', { phase: 'thinking', text: `[autonomous] ${result.slice(0, 250)}` });
     return result;
   } catch { return null; }
 }
@@ -353,6 +426,8 @@ async function handleUserInput(input: string): Promise<string> {
   remember('user', input);
   const memCtx = buildMemoryContext();
 
+  emit('model_note', { phase: 'thinking', text: `User: ${input.slice(0, 250)}` });
+
   const msgs: any[] = [
     { role: 'system', content: SYSTEM + memCtx },
     { role: 'user', content: input },
@@ -360,6 +435,8 @@ async function handleUserInput(input: string): Promise<string> {
 
   const result = await runLoop(msgs);
   remember('assistant', result);
+
+  emit('model_note', { phase: 'thinking', text: `Super: ${result.slice(0, 250)}` });
 
   // Reflection
   const ref = await reflect(input, result);
@@ -392,11 +469,20 @@ async function main(): Promise<void> {
   const ti = args.indexOf('--task');
   if (ti >= 0 && args[ti + 1]) {
     logo();
+    emit('session_started', { phase: 'idle', text: `Task: ${args[ti + 1].slice(0, 200)}` });
     const task = args[ti + 1];
     console.log(`${YELLOW}► ${task}${RESET}\n`);
-    const r = await handleUserInput(task);
-    console.log(`\n${GREEN}${r}${RESET}`);
-    db.close();
+    try {
+      const r = await handleUserInput(task);
+      console.log(`\n${GREEN}${r}${RESET}`);
+      emit('session_finished', { phase: 'completed', text: 'Task completed.' });
+    } catch (e: any) {
+      emit('error', { phase: 'error', text: `Fatal: ${e.message}` });
+      throw e;
+    } finally {
+      observerShutdown?.();
+      db.close();
+    }
     return;
   }
 
@@ -421,6 +507,8 @@ async function main(): Promise<void> {
   if (autonomous) console.log(`${MAGENTA}Mode: autonomous — the mind runs free.${RESET}`);
   console.log('');
 
+  emit('session_started', { phase: 'idle', text: `Session ${sessionId} started${autonomous ? ' in autonomous mode' : ''}.` });
+
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout, prompt: `${CYAN}▸ ${RESET}` });
   rl.prompt();
 
@@ -435,7 +523,10 @@ async function main(): Promise<void> {
         const result = await autonomousTick();
         if (result) {
           process.stdout.write(`\n${MAGENTA}[autonomous]${RESET}\n${GREEN}${result}${RESET}\n\n`);
+          emit('model_note', { phase: 'idle', text: 'ready.' });
           rl.prompt();
+        } else {
+          emit('model_note', { phase: 'idle', text: 'ready.' });
         }
       } catch { /* quiet */ }
       ticking = false;
@@ -449,6 +540,8 @@ async function main(): Promise<void> {
     if (input === '/quit' || input === '/exit') {
       console.log(`${DIM}Archiving session ${sessionId}…${RESET}`);
       if (autoTimer) clearInterval(autoTimer);
+      emit('session_finished', { phase: 'completed', text: `Session ${sessionId} ended by user.` });
+      observerShutdown?.();
       db.close();
       rl.close();
       return;
@@ -492,7 +585,9 @@ ${CYAN}Commands:${RESET}
     if (input === '/reflect') {
       console.log(`${DIM}…reflecting…${RESET}`);
       const ref = await reflect('(manual reflection trigger)', '(manual reflection)');
-      console.log(`${DIM}${ref}${RESET}`); rl.prompt(); return;
+      console.log(`${DIM}${ref}${RESET}`);
+      emit('model_note', { phase: 'idle', text: 'ready.' });
+      rl.prompt(); return;
     }
 
     // User message
@@ -500,17 +595,28 @@ ${CYAN}Commands:${RESET}
     try {
       const r = await handleUserInput(input);
       console.log(`\n${GREEN}${r}${RESET}\n`);
+      emit('model_note', { phase: 'idle', text: 'ready.' });
     } catch (e: any) {
+      emit('error', { phase: 'error', text: e.message });
       console.log(`\n${YELLOW}Error: ${e.message}${RESET}\n`);
+      emit('model_note', { phase: 'idle', text: 'ready.' });
     }
     rl.prompt();
   });
 
   rl.on('close', () => {
     if (autoTimer) clearInterval(autoTimer);
+    emit('session_finished', { phase: 'completed', text: `Session ${sessionId} preserved.` });
+    observerShutdown?.();
     console.log(`\n${DIM}Session ${sessionId} preserved.${RESET}`);
     process.exit(0);
   });
 }
 
-main().catch((e) => { console.error('Fatal:', e.message); db.close(); process.exit(1); });
+main().catch((e) => {
+  emit('error', { phase: 'error', text: `Fatal: ${e.message}` });
+  observerShutdown?.();
+  console.error('Fatal:', e.message);
+  db.close();
+  process.exit(1);
+});
