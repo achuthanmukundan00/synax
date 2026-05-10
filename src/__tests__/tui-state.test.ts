@@ -225,6 +225,40 @@ describe('tui-state', () => {
     expect(state.debugHistory[0].detail).toBe('checking files\nI will read package.json.');
   });
 
+  it('does not duplicate token fragments from streaming delta events (regression)', () => {
+    // Simulates the real-world streaming chunks from a model producing
+    // "Here's the markdown table". Each chunk should appear exactly once
+    // in the accumulated transcript detail.
+    let state = createInitialRunStateSnapshot(0);
+    const chunks = ['Here', "'s", ' the', ' markdown', ' table'];
+    let now = 0;
+
+    for (const chunk of chunks) {
+      now += 1;
+      state = applyEventToRunState(
+        state,
+        {
+          type: 'assistant_delta',
+          timestamp: new Date(now).toISOString(),
+          content: chunk,
+        },
+        now,
+      );
+    }
+
+    // After processing all chunks, there should be exactly one model entry
+    // with the accumulated detail — not duplicated fragments.
+    expect(state.debugHistory).toHaveLength(1);
+    expect(state.debugHistory[0].kind).toBe('model');
+    expect(state.debugHistory[0].detail).toBe("Here's the markdown table");
+
+    // The detail should NOT contain duplicated fragments
+    expect(state.debugHistory[0].detail).not.toMatch(/HereHere/);
+    expect(state.debugHistory[0].detail).not.toMatch(/the the/);
+    expect(state.debugHistory[0].detail).not.toMatch(/markdown markdown/);
+    expect(state.debugHistory[0].detail).not.toMatch(/table table/);
+  });
+
   it('deduplicates repeated assistant notes across intervening tool events', () => {
     let state = createInitialRunStateSnapshot(0);
 

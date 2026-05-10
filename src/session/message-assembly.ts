@@ -165,9 +165,7 @@ export function guardModelRequestMultiStage(
  * Classify a turn result for recovery eligibility.
  * Returns the failure scenario if the result indicates a recoverable failure.
  */
-export function classifyResultForRecovery(
-  result: AgentTurnResult,
-): import('../recovery/types').FailureScenario | null {
+export function classifyResultForRecovery(result: AgentTurnResult): import('../recovery/types').FailureScenario | null {
   // Empty or near-empty model response with error
   if (
     result.terminalState === 'model_error' &&
