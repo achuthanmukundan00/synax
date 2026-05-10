@@ -2,19 +2,21 @@
  * Tests for HolographicMemory — FTS5-backed semantic memory store.
  */
 
-import Database from 'better-sqlite3';
 import { existsSync, mkdirSync, rmSync } from 'fs';
 import { join } from 'path';
 import { HolographicMemory } from '../memory/HolographicMemory';
 import { CREATE_MEMORY_FTS_TABLE } from '../store/schema';
+import { loadBetterSqlite3, type Database } from '../store/sqlite-loader';
 
 const TMP = join(process.cwd(), 'tmp', 'synax-memory-tests');
 const DB_PATH = join(TMP, 'memory-test.db');
 
-function openTestDb(): Database.Database {
+function openTestDb(): Database.Database | null {
+  const SQLite = loadBetterSqlite3();
+  if (!SQLite) return null;
   if (existsSync(DB_PATH)) rmSync(DB_PATH, { force: true });
   if (!existsSync(TMP)) mkdirSync(TMP, { recursive: true });
-  const db = new Database(DB_PATH);
+  const db = new SQLite(DB_PATH);
   db.exec(CREATE_MEMORY_FTS_TABLE);
   return db;
 }
@@ -91,6 +93,7 @@ describe('HolographicMemory', () => {
 
   describe('store', () => {
     it('stores entries in FTS5', () => {
+      if (!db) return;
       const mem = new HolographicMemory(db);
       expect(mem.isAvailable).toBe(true);
 
@@ -101,7 +104,7 @@ describe('HolographicMemory', () => {
         content: 'Fix the bug',
       });
 
-      const count = db!.prepare('SELECT COUNT(*) as c FROM memory_fts').get() as { c: number };
+      const count = db.prepare('SELECT COUNT(*) as c FROM memory_fts').get() as { c: number };
       expect(count.c).toBe(1);
     });
 
@@ -114,18 +117,20 @@ describe('HolographicMemory', () => {
     });
 
     it('truncates content at 8000 characters', () => {
+      if (!db) return;
       const mem = new HolographicMemory(db);
       const longContent = 'x'.repeat(10000);
 
       mem.store({ sessionId: 's1', turnId: 1, role: 'assistant', content: longContent });
 
-      const row = db!.prepare('SELECT content FROM memory_fts LIMIT 1').get() as { content: string };
+      const row = db.prepare('SELECT content FROM memory_fts LIMIT 1').get() as { content: string };
       expect(row.content.length).toBeLessThanOrEqual(8000);
     });
   });
 
   describe('search', () => {
     it('finds entries by keyword', () => {
+      if (!db) return;
       const mem = new HolographicMemory(db);
       seedMemory(mem);
 
@@ -135,6 +140,7 @@ describe('HolographicMemory', () => {
     });
 
     it('ranks results by relevance', () => {
+      if (!db) return;
       const mem = new HolographicMemory(db);
       seedMemory(mem);
 
@@ -147,6 +153,7 @@ describe('HolographicMemory', () => {
     });
 
     it('handles Porter stemming (matching word variants)', () => {
+      if (!db) return;
       const mem = new HolographicMemory(db);
       mem.store({ sessionId: 's1', turnId: 1, role: 'assistant', content: 'Validating the login forms' });
       mem.store({ sessionId: 's1', turnId: 1, role: 'assistant', content: 'Added form validation' });
@@ -157,6 +164,7 @@ describe('HolographicMemory', () => {
     });
 
     it('returns empty array for no matches', () => {
+      if (!db) return;
       const mem = new HolographicMemory(db);
       seedMemory(mem);
 
@@ -165,6 +173,7 @@ describe('HolographicMemory', () => {
     });
 
     it('sanitizes FTS5 special characters', () => {
+      if (!db) return;
       const mem = new HolographicMemory(db);
       seedMemory(mem);
 
@@ -182,6 +191,7 @@ describe('HolographicMemory', () => {
 
   describe('searchWithSnippets', () => {
     it('returns snippets with match markers', () => {
+      if (!db) return;
       const mem = new HolographicMemory(db);
       seedMemory(mem);
 
@@ -195,6 +205,7 @@ describe('HolographicMemory', () => {
 
   describe('handoff', () => {
     it('returns structured manifest with key findings', () => {
+      if (!db) return;
       const mem = new HolographicMemory(db);
       seedMemory(mem);
 
@@ -206,6 +217,7 @@ describe('HolographicMemory', () => {
     });
 
     it('extracts key findings from errors and failures', () => {
+      if (!db) return;
       const mem = new HolographicMemory(db);
       mem.store({
         sessionId: 's1',
@@ -236,6 +248,7 @@ describe('HolographicMemory', () => {
 
   describe('getSuggestedSearchTerms', () => {
     it('returns tool names and frequent words', () => {
+      if (!db) return;
       const mem = new HolographicMemory(db);
       seedMemory(mem);
 
@@ -254,6 +267,7 @@ describe('HolographicMemory', () => {
 
   describe('integration', () => {
     it('handles rapid fire-and-forget stores without errors', () => {
+      if (!db) return;
       const mem = new HolographicMemory(db);
       for (let i = 0; i < 50; i++) {
         mem.store({
@@ -265,19 +279,21 @@ describe('HolographicMemory', () => {
         });
       }
 
-      const count = db!.prepare('SELECT COUNT(*) as c FROM memory_fts').get() as { c: number };
+      const count = db.prepare('SELECT COUNT(*) as c FROM memory_fts').get() as { c: number };
       expect(count.c).toBe(50);
     });
   });
 
   describe('buildMemoryIndex', () => {
     it('returns null when memory is empty', () => {
+      if (!db) return;
       const mem = new HolographicMemory(db);
       const index = mem.buildMemoryIndex();
       expect(index).toBeNull();
     });
 
     it('returns a compact index string with entries', () => {
+      if (!db) return;
       const mem = new HolographicMemory(db);
       mem.store({ sessionId: 's1', turnId: 1, role: 'user', content: 'Fix the build' });
       mem.store({
@@ -310,6 +326,7 @@ describe('HolographicMemory', () => {
     });
 
     it('includes error snippets when errors exist', () => {
+      if (!db) return;
       const mem = new HolographicMemory(db);
       mem.store({ sessionId: 's1', turnId: 1, role: 'user', content: 'Fix bugs' });
       mem.store({

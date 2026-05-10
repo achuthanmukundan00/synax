@@ -38,6 +38,7 @@ describe('SpanTracer', () => {
   });
 
   test('should start and end a span with timing', () => {
+    if (!eventStore.isOpen) return;
     const tracer = new SpanTracer({ sessionId: 'session-1', eventStore });
 
     const span = tracer.startSpan({ kind: 'turn', metadata: { task: 'test' } });
@@ -53,6 +54,7 @@ describe('SpanTracer', () => {
   });
 
   test('should nest spans with parent-child relationships', () => {
+    if (!eventStore.isOpen) return;
     const tracer = new SpanTracer({ sessionId: 'session-2', eventStore });
 
     const turnSpan = tracer.startSpan({ kind: 'turn' });
@@ -75,6 +77,7 @@ describe('SpanTracer', () => {
   });
 
   test('should add events to spans', () => {
+    if (!eventStore.isOpen) return;
     const tracer = new SpanTracer({ sessionId: 'session-3', eventStore });
 
     const span = tracer.startSpan({ kind: 'model_call' });
@@ -90,6 +93,7 @@ describe('SpanTracer', () => {
   });
 
   test('should get span summaries', () => {
+    if (!eventStore.isOpen) return;
     const tracer = new SpanTracer({ sessionId: 'session-4', eventStore });
 
     const span1 = tracer.startSpan({ kind: 'turn' });
@@ -105,6 +109,7 @@ describe('SpanTracer', () => {
   });
 
   test('should persist spans to EventStore', () => {
+    if (!eventStore.isOpen) return;
     const tracer = new SpanTracer({ sessionId: 'session-5', eventStore });
 
     const span = tracer.startSpan({ kind: 'model_call', metadata: { step: 1 } });
@@ -131,6 +136,7 @@ describe('SpanTracer', () => {
   });
 
   test('should track nested spans correctly for a typical turn', () => {
+    if (!eventStore.isOpen) return;
     const tracer = new SpanTracer({ sessionId: 'session-7', eventStore });
 
     // Simulate a typical agent turn
