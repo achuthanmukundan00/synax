@@ -7,12 +7,7 @@ import type { ChatOptions, ChatResponse } from '../llm/types';
 import type { InspectionLedger } from '../tools';
 import type { ToolRegistry } from '../tools/types';
 import type { PatchPreview } from '../agent/patch';
-import type {
-  AssemblyStats,
-  CompactionRecord,
-  ContextBudgetSettings,
-  TokenLedger,
-} from '../agent/context-budget';
+import type { AssemblyStats, CompactionRecord, ContextBudgetSettings, TokenLedger } from '../agent/context-budget';
 import type { AgentEvent, TerminalState } from '../agent/events';
 import type { RunMode } from '../agent/task-policy';
 import type { Logger } from '../logging/index.js';

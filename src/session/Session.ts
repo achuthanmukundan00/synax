@@ -29,12 +29,7 @@ import {
   type ContextBudgetSettings,
 } from '../agent/context-budget';
 import { eventNow, type AgentEvent, type TerminalState } from '../agent/events';
-import {
-  describeToolCall,
-  guardBroadTask,
-  guardUnsupportedTask,
-  type RunMode,
-} from '../agent/task-policy';
+import { describeToolCall, guardBroadTask, guardUnsupportedTask, type RunMode } from '../agent/task-policy';
 import { ActionExecutor, createDefaultHandlerMap } from '../actions/ActionExecutor';
 import { estimateReadResultTokens } from '../actions/handlers/read-handler';
 import { NodeExecutionEnv } from '../env/NodeExecutionEnv';
@@ -83,16 +78,9 @@ import {
   errorMessage,
 } from './formatting';
 
-import {
-  buildModelRequest,
-  guardModelRequestMultiStage,
-  classifyResultForRecovery,
-} from './message-assembly';
+import { buildModelRequest, guardModelRequestMultiStage, classifyResultForRecovery } from './message-assembly';
 
-import {
-  resolveVerificationContract,
-  checkCompletionAgainstContract,
-} from './verification-contracts';
+import { resolveVerificationContract, checkCompletionAgainstContract } from './verification-contracts';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -673,9 +661,7 @@ export class Session {
             // attempted mutation tool calls (write, edit). Read-only investigations
             // and pure-content first-step completions are accepted as-is.
             // Inject the nudge at most once per turn.
-            const hasMutationAttempts = toolCalls.some(
-              (tc) => tc.name === 'write' || tc.name === 'edit',
-            );
+            const hasMutationAttempts = toolCalls.some((tc) => tc.name === 'write' || tc.name === 'edit');
             if (hasMutationAttempts && !verificationNudgeInjected) {
               const contract = resolveVerificationContract(mode);
               const nudge = checkCompletionAgainstContract(
@@ -883,7 +869,12 @@ export class Session {
             }
 
             // ── Post-tool budget check ───────────────────────────────
-            const afterToolMessages = buildModelRequest(conversation, contextBudget, identicalReadCounts, totalReadCalls);
+            const afterToolMessages = buildModelRequest(
+              conversation,
+              contextBudget,
+              identicalReadCounts,
+              totalReadCalls,
+            );
             const afterToolTokens = estimateRequestTokens(afterToolMessages);
             const effectiveLimit = contextBudget.contextWindowTokens - contextBudget.reservedOutputTokens;
             if (afterToolTokens > effectiveLimit) {

@@ -184,9 +184,7 @@ describe('Memory → Handoff → Continue Pipeline', () => {
       expect(manifest.filesTouched).toContain('src/auth/login.ts');
 
       // Should find key findings from error/success lines
-      const hasErrorLine = manifest.keyFindings.some(
-        (f) => f.includes('error') || f.includes('TS2322'),
-      );
+      const hasErrorLine = manifest.keyFindings.some((f) => f.includes('error') || f.includes('TS2322'));
       expect(hasErrorLine).toBe(true);
 
       // Should generate search terms
@@ -299,11 +297,7 @@ describe('Memory → Handoff → Continue Pipeline', () => {
       const contract = resolveVerificationContract('patch');
       expect(contract.level).toBe('files_changed');
 
-      const nudge = checkCompletionAgainstContract(
-        contract,
-        { changedFiles: [], verificationRan: false },
-        'completed',
-      );
+      const nudge = checkCompletionAgainstContract(contract, { changedFiles: [], verificationRan: false }, 'completed');
       expect(nudge).not.toBeNull();
       expect(nudge).toContain('no files were changed');
     });
@@ -322,11 +316,7 @@ describe('Memory → Handoff → Continue Pipeline', () => {
       const contract = resolveVerificationContract('read-only');
       expect(contract.level).toBe('none');
 
-      const nudge = checkCompletionAgainstContract(
-        contract,
-        { changedFiles: [], verificationRan: false },
-        'completed',
-      );
+      const nudge = checkCompletionAgainstContract(contract, { changedFiles: [], verificationRan: false }, 'completed');
       expect(nudge).toBeNull();
     });
 
@@ -522,11 +512,7 @@ describe('Full Pipeline: Store → Exhaust → Handoff → Continue', () => {
     expect(manifest.suggestedSearchTerms.length).toBeGreaterThan(0);
     const hasRelevantTerm = manifest.suggestedSearchTerms.some(
       (t) =>
-        t.includes('edit') ||
-        t.includes('bash') ||
-        t.includes('login') ||
-        t.includes('auth') ||
-        t.includes('error'),
+        t.includes('edit') || t.includes('bash') || t.includes('login') || t.includes('auth') || t.includes('error'),
     );
     expect(hasRelevantTerm).toBe(true);
 

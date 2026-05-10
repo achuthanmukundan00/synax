@@ -11,11 +11,7 @@ import type { ToolResult } from '../tools/types';
 import type { ContextBudgetSettings } from '../agent/context-budget';
 import { estimateTokens, truncateForTokenBudget } from '../agent/context-budget';
 import { eventNow, type AgentEvent } from '../agent/events';
-import type {
-  AgentMessage,
-  AgentConversation,
-  AgentActivity,
-} from './types';
+import type { AgentMessage, AgentConversation, AgentActivity } from './types';
 
 // ─── Response formatting ─────────────────────────────────────────────────────
 
@@ -226,10 +222,7 @@ export function isSafeToolPreamble(text: string): boolean {
 
 // ─── Tool error classification ───────────────────────────────────────────────
 
-export function isRecoverableToolError(
-  call: ParsedToolCall,
-  result: { success: boolean; error?: string },
-): boolean {
+export function isRecoverableToolError(call: ParsedToolCall, result: { success: boolean; error?: string }): boolean {
   if (result.success) return false;
   if (call.name === 'bash') return !isBashLoopError(result.error);
   if (call.name === 'edit' || call.name === 'replace_in_file') return isEditRecoverableError(result.error);
@@ -274,7 +267,6 @@ export function emitAssistantDelta(
     reasoningContent: delta.reasoningContent,
   };
   emitter.eventBus.emit(event);
-  emitter.onEvent?.(event);
 }
 
 // ─── Utility ─────────────────────────────────────────────────────────────────

@@ -107,9 +107,7 @@ export function evaluateVerificationContract(check: VerificationCheck): Verifica
       const passed = evidence.changedFiles.length > 0;
       return {
         passed,
-        message: passed
-          ? `${evidence.changedFiles.length} file(s) changed.`
-          : 'No files were changed.',
+        message: passed ? `${evidence.changedFiles.length} file(s) changed.` : 'No files were changed.',
         contract,
         nudge: passed
           ? undefined
