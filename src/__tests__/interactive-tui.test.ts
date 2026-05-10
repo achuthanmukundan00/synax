@@ -605,7 +605,7 @@ describe('interactive layout visual agreements', () => {
       .map(stripAnsi)
       .join('\n');
 
-    expect(plain).toContain('Synax v0.0.22-alpha  Ready  0:25');
+    expect(plain).toContain('Synax v0.1.0-alpha.0  Ready  0:25');
   });
 
   it('renders terminal-state status bars in the header without redundant final summary blocks', () => {
