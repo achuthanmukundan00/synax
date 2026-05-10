@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Shoggoth Observer — Synax</title>
+  <style>
+    *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { width: 100%; height: 100%; overflow: hidden; background: #000; }
+    body {
+      font-family: 'SF Mono', 'Cascadia Code', 'Fira Code', 'JetBrains Mono', 'Menlo', monospace;
+      color: #c0c0c0;
+      display: flex;
+      flex-direction: column;
+    }
+    #canvas-container {
+      position: fixed;
+      inset: 0;
+      z-index: 0;
+    }
+    #canvas-container canvas { display: block; }
+
+    /* Transcript overlay */
+    #transcript-overlay {
+      position: fixed;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      z-index: 10;
+      max-height: 35vh;
+      overflow-y: auto;
+      padding: 20px 24px 32px;
+      background: linear-gradient(transparent, rgba(0,0,0,0.85) 30%);
+      pointer-events: none;
+    }
+    #transcript-overlay::-webkit-scrollbar { display: none; }
+
+    .note-line {
+      font-size: 13px;
+      line-height: 1.5;
+      color: rgba(180, 200, 220, 0.7);
+      margin-bottom: 4px;
+      max-width: 700px;
+      word-break: break-word;
+    }
+    .note-line .glyph { color: #6a8fb3; margin-right: 6px; }
+    .note-line.session { color: rgba(130, 160, 190, 0.9); font-weight: 500; }
+
+    /* Tool notifications */
+    #tool-notifications {
+      position: fixed;
+      top: 20px;
+      right: 20px;
+      z-index: 20;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      max-width: 340px;
+      pointer-events: none;
+    }
+    .tool-toast {
+      background: rgba(8, 12, 20, 0.92);
+      border: 1px solid rgba(80, 120, 160, 0.3);
+      border-radius: 6px;
+      padding: 10px 14px;
+      font-size: 12px;
+      line-height: 1.4;
+      animation: toast-in 0.3s ease-out;
+      transition: opacity 0.4s ease, transform 0.4s ease;
+    }
+    .tool-toast.removing { opacity: 0; transform: translateX(20px); }
+    .tool-toast .tool-name { font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; }
+    .tool-toast .tool-summary { color: rgba(160, 180, 200, 0.8); margin-top: 2px; }
+    .tool-toast .tool-meta { font-size: 10px; color: rgba(120, 140, 160, 0.6); margin-top: 3px; display: flex; gap: 10px; }
+
+    .tool-toast.severity-normal { border-color: rgba(58, 109, 176, 0.3); }
+    .tool-toast.severity-normal .tool-name { color: #3a6db0; }
+    .tool-toast.severity-attention { border-color: rgba(190, 133, 54, 0.5); background: rgba(20, 14, 6, 0.94); }
+    .tool-toast.severity-attention .tool-name { color: #be8536; }
+    .tool-toast.severity-suspicious { border-color: rgba(183, 65, 52, 0.6); background: rgba(20, 8, 6, 0.94); }
+    .tool-toast.severity-suspicious .tool-name { color: #b74134; }
+
+    /* Status indicator */
+    #status-indicator {
+      position: fixed;
+      top: 20px;
+      left: 20px;
+      z-index: 20;
+      font-size: 11px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      color: rgba(120, 140, 160, 0.7);
+      pointer-events: none;
+    }
+    #status-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: #3a6db0;
+      transition: background 0.3s;
+    }
+    #status-dot.thinking { background: #3a6db0; box-shadow: 0 0 6px #3a6db0; }
+    #status-dot.streaming { background: #539c6c; box-shadow: 0 0 8px #539c6c; }
+    #status-dot.tool_running { background: #be8536; box-shadow: 0 0 8px #be8536; }
+    #status-dot.error { background: #b74134; box-shadow: 0 0 8px #b74134; }
+    #status-dot.completed { background: #539c6c; box-shadow: 0 0 4px #539c6c; }
+    #status-dot.idle { background: #4a5058; }
+    #status-dot.blocked { background: #be8536; }
+
+    /* Phase label */
+    #phase-label {
+      text-transform: uppercase;
+      letter-spacing: 0.12em;
+      font-size: 10px;
+    }
+
+    /* Token budget bar */
+    #budget-bar-container {
+      position: fixed;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      height: 2px;
+      z-index: 15;
+      background: rgba(255,255,255,0.03);
+    }
+    #budget-bar {
+      height: 100%;
+      background: rgba(58, 109, 176, 0.5);
+      transition: width 0.5s ease;
+    }
+
+    /* Clear button */
+    #clear-btn {
+      position: fixed;
+      bottom: 24px;
+      right: 24px;
+      z-index: 25;
+      font-family: inherit;
+      font-size: 10px;
+      color: rgba(120, 140, 160, 0.5);
+      background: none;
+      border: 1px solid rgba(120, 140, 160, 0.2);
+      border-radius: 4px;
+      padding: 4px 10px;
+      cursor: pointer;
+      pointer-events: all;
+      transition: color 0.2s, border-color 0.2s;
+    }
+    #clear-btn:hover { color: rgba(180, 200, 220, 0.8); border-color: rgba(180, 200, 220, 0.4); }
+
+    @keyframes toast-in {
+      from { opacity: 0; transform: translateX(30px); }
+      to { opacity: 1; transform: translateX(0); }
+    }
+  </style>
+</head>
+<body>
+  <div id="canvas-container"></div>
+
+  <div id="status-indicator">
+    <div id="status-dot" class="idle"></div>
+    <span id="phase-label">IDLE</span>
+  </div>
+
+  <div id="tool-notifications"></div>
+
+  <div id="transcript-overlay"></div>
+
+  <div id="budget-bar-container">
+    <div id="budget-bar" style="width: 0%"></div>
+  </div>
+
+  <button id="clear-btn">clear view</button>
+
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://esm.sh/three@0.170.0/build/three.module.js"
+    }
+  }
+  </script>
+  <script type="module" src="./core-morphology.js"></script>
+</body>
+</html>

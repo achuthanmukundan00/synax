@@ -22,6 +22,8 @@
     "docs:preview": "vitepress preview docs",
     "synax": "node dist/cli.js",
     "smoke:provider": "node scripts/smoke-provider.mjs",
+    "observer": "node experiments/web-shoggoth-observer/run-observer.mjs",
+    "dev:observer": "node experiments/web-shoggoth-observer/run-observer.mjs",
     "deploy": "npm run docs:build && wrangler deploy",
     "preview": "npm run docs:build && wrangler dev"
   },

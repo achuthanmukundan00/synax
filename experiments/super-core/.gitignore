@@ -1,0 +1,5 @@
+node_modules/
+dist/
+*.db
+sandbox/*
+!sandbox/.gitkeep

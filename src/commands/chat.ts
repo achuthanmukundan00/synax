@@ -124,6 +124,21 @@ export function createChatSession(options: {
   });
   let eventSink: ((event: import('../agent/events').AgentEvent) => void) | null = null;
 
+  // ── Shoggoth Observer bridge (experimental, best-effort) ───────────────
+  let observerPush: ((event: import('../agent/events').AgentEvent) => void) | null = null;
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const bridge = require('../../experiments/web-shoggoth-observer/server/telemetry-bridge');
+    bridge.initTelemetryBridge({
+      enabled: true,
+      modelId: options.config.provider?.model,
+      providerName: options.config.provider?.preset,
+    });
+    observerPush = bridge.createObserverEventSink();
+  } catch {
+    // Observer experiment not present or server not running — silently ignore
+  }
+
   /** Config wrapper: the TUI updates this reference when settings change. */
   const configRef: { current: ProjectConfig } = { current: options.config };
   /** Thinking level ref: the TUI updates this when settings change. */
@@ -134,7 +149,13 @@ export function createChatSession(options: {
   return {
     conversation,
     setEventSink: (sink) => {
-      eventSink = sink;
+      // Compound sink: push to both TUI and observer
+      eventSink = sink
+        ? (event) => {
+            sink(event);
+            observerPush?.(event);
+          }
+        : null;
     },
     refreshConfig: (config: ProjectConfig, thinkingLevel?: import('../config/schema').ThinkingLevel) => {
       configRef.current = config;
