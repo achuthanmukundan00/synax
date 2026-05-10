@@ -1,9 +1,4 @@
-import {
-  applyEventToRunState,
-  createBlockedRunStateSnapshot,
-  createInitialRunStateSnapshot,
-  type RunStateSnapshot,
-} from '../agent/tui-state';
+import { applyEventToRunState, createInitialRunStateSnapshot, type RunStateSnapshot } from '../agent/tui-state';
 import {
   classifyInlineSubmission,
   createInlinePasteInputSession,
@@ -70,6 +65,8 @@ export async function runInteractiveTui(
     blockedMessage?: string;
     /** Returns the last model output text for real-time observability. */
     lastModelOutput?: () => string;
+    /** Called when a /new or /clear session reset happens so stale preview text clears. */
+    resetLastModelOutput?: () => void;
     /** Active model ID for input panel label. */
     modelLabel?: string;
     /** Whether provider-level thinking is enabled in the active model profile. */
@@ -108,6 +105,7 @@ export async function runInteractiveTui(
       contextWindowTokens?: number;
       coreVisualProfile?: string;
       coreLoaded?: boolean;
+      providerWarning?: string;
       inputPricePer1MTokens?: number;
       outputPricePer1MTokens?: number;
     };
@@ -124,13 +122,7 @@ export async function runInteractiveTui(
   if (!terminal.isTTY) return;
 
   let inputDraft = createInlinePasteInputSession();
-  let state: RunStateSnapshot = options?.blockedMessage
-    ? createBlockedRunStateSnapshot(
-        Date.now(),
-        'Configuration required',
-        'configure .synax.toml or ~/.config/synax/config.toml',
-      )
-    : createInitialRunStateSnapshot(Date.now());
+  let state: RunStateSnapshot = createInitialRunStateSnapshot(Date.now());
   // Autocomplete state
   let autocomplete: { active: boolean; selection: number; filtered: SlashCommand[]; visible: boolean } = {
     active: false,
@@ -146,6 +138,11 @@ export async function runInteractiveTui(
   let busy = false;
   let externalRendererActive = false;
   let historyScrollOffset = 0;
+  // Ctrl+C double-press tracking: first press clears input, second within 800ms exits.
+  let lastCtrlCTime = 0;
+  let ctrlCClearedInput = false;
+  // Active provider warning — only surfaced when user tries to submit.
+  let providerWarning = options?.blockedMessage;
   const diff = new DiffRenderer();
 
   // Adaptive render loop — 60 FPS when active, 0 when idle.
@@ -167,7 +164,7 @@ export async function runInteractiveTui(
     providerName: options?.providerName,
     contextWindowTokens: options?.contextWindowTokens,
     coreVisualProfile: options?.coreVisualProfile,
-    coreLoaded: options?.coreLoaded,
+    coreLoaded: true,
     inputPricePer1MTokens: options?.inputPricePer1MTokens,
     outputPricePer1MTokens: options?.outputPricePer1MTokens,
   };
@@ -179,7 +176,7 @@ export async function runInteractiveTui(
       contextWindowTokens: runtimeLabels.contextWindowTokens,
       thinkingEnabled: runtimeLabels.thinkingEnabled,
       activeSkills: options?.activeSkills ?? [],
-      coreLoaded: runtimeLabels.coreLoaded ?? true,
+      coreLoaded: true,
       inputPricePer1MTokens: runtimeLabels.inputPricePer1MTokens,
       outputPricePer1MTokens: runtimeLabels.outputPricePer1MTokens,
       sessionSpendLabel: isLocalEndpoint(runtimeLabels.endpointLabel ?? '') ? 'local' : undefined,
@@ -367,9 +364,11 @@ export async function runInteractiveTui(
       const slash = await session.handleSlashCommand(text);
       if (slash.newSession) {
         session.resetConversation?.();
+        options?.resetLastModelOutput?.();
         state = createInitialRunStateSnapshot(Date.now());
         applyOptionsToState();
         historyScrollOffset = 0;
+        diff.reset();
       }
       if (slash.output) {
         state = applyEventToRunState(
@@ -429,14 +428,14 @@ export async function runInteractiveTui(
       return;
     }
 
-    if (runtimeLabels.coreLoaded === false) {
+    if (providerWarning) {
       state = applyEventToRunState(
         state,
         {
           type: 'command_output',
           timestamp: new Date().toISOString(),
           command: 'submit',
-          content: options?.blockedMessage ?? '[synax] No queryable model is configured.',
+          content: `[synax] ${providerWarning}`,
         },
         Date.now(),
       );
@@ -549,11 +548,13 @@ export async function runInteractiveTui(
 
     if (result.openSettings) {
       openSettingsModal();
+      paint(true);
       return;
     }
 
     if (result.openResume) {
       openResumePicker();
+      paint(true);
       return;
     }
 
@@ -571,9 +572,11 @@ export async function runInteractiveTui(
       }
       if (slashReport.newSession) {
         session.resetConversation?.();
+        options?.resetLastModelOutput?.();
         state = createInitialRunStateSnapshot(Date.now());
         applyOptionsToState();
         historyScrollOffset = 0;
+        diff.reset();
       }
       if (slashReport.output) {
         state = applyEventToRunState(
@@ -591,9 +594,11 @@ export async function runInteractiveTui(
     }
 
     if (result.newSession) {
+      options?.resetLastModelOutput?.();
       state = createInitialRunStateSnapshot(Date.now());
       applyOptionsToState();
       historyScrollOffset = 0;
+      diff.reset();
     }
 
     if (result.output) {
@@ -620,6 +625,7 @@ export async function runInteractiveTui(
 
   const closeSettingsModal = (): void => {
     if (!settingsState) return;
+    diff.reset();
     settingsState = settingsReducer(settingsState, { type: 'close' });
     if (settingsState?.dirty) {
       persistSettingsConfig(settingsState.config);
@@ -629,6 +635,9 @@ export async function runInteractiveTui(
           ...runtimeLabels,
           ...updates,
         };
+        if (updates.providerWarning !== undefined) {
+          providerWarning = updates.providerWarning;
+        }
         applyOptionsToState();
       }
     }
@@ -691,6 +700,7 @@ export async function runInteractiveTui(
 
   const closeResumePicker = (): void => {
     if (!resumeState) return;
+    diff.reset();
     resumeState = resumePickerReducer(resumeState, { type: 'close' });
     resumeState = null;
   };
@@ -787,6 +797,34 @@ export async function runInteractiveTui(
         break;
       }
 
+      // Ctrl+C: first press clears input, second press within 800ms exits.
+      if (event.type === 'ctrl_c') {
+        if (settingsState?.active) {
+          closeSettingsModal();
+          paint(true);
+          continue;
+        }
+        if (resumeState?.active) {
+          closeResumePicker();
+          paint(true);
+          continue;
+        }
+        const now = Date.now();
+        if (inputDraft.getVisibleBody().length > 0 || ctrlCClearedInput) {
+          if (ctrlCClearedInput && now - lastCtrlCTime < 800) {
+            finish();
+            break;
+          }
+          inputDraft = createInlinePasteInputSession();
+          autocomplete = { active: false, visible: false, selection: 0, filtered: [] };
+          lastCtrlCTime = now;
+          ctrlCClearedInput = true;
+        } else {
+          ctrlCClearedInput = false;
+        }
+        continue;
+      }
+
       // Modal input routing
       if (settingsState?.active) {
         handleSettingsInput(event);
@@ -849,6 +887,11 @@ export async function runInteractiveTui(
           continue;
         }
         void submit();
+        continue;
+      }
+      if (event.type === 'newline') {
+        if (inputDraft.getVisibleBody().length < MAX_INPUT_CHARS) inputDraft.handleText('\n');
+        updateAutocomplete();
         continue;
       }
       if (event.type === 'paste' && event.value) {

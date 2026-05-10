@@ -9,7 +9,16 @@ export interface ChatMessage {
 
 export type ProviderProtocol = 'openai-compatible' | 'anthropic-messages';
 
-export type ProviderId = 'relay' | 'custom' | 'deepseek' | 'openrouter' | 'groq' | 'anthropic' | 'mistral' | 'together';
+export type ProviderId =
+  | 'relay'
+  | 'custom'
+  | 'openai'
+  | 'deepseek'
+  | 'openrouter'
+  | 'groq'
+  | 'anthropic'
+  | 'mistral'
+  | 'together';
 
 export interface ProviderPreset {
   id: ProviderId;

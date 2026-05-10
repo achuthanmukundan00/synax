@@ -175,7 +175,7 @@ export function renderResumePicker(state: ResumePickerState, width: number, heig
   }
 
   // Footer
-  const footer = ' enter to resume    esc to start new    ctrl+c to quit    tab to toggle sort    ↑/↓ to browse ';
+  const footer = ' enter to resume    esc to start new    ctrl+d to quit    tab to toggle sort    ↑/↓ to browse ';
   const footerPad = Math.max(0, innerW - stripAnsi(footer).length);
   lines.push(dim(`└${footer}${'─'.repeat(footerPad)}┘`));
 

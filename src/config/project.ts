@@ -77,7 +77,7 @@ function providerPresetDefaults(preset: string): ProviderConfig {
     case 'anthropic':
       return {
         preset,
-        kind: 'openai-compatible',
+        kind: 'anthropic-messages',
         base_url: 'https://api.anthropic.com',
         model: 'claude-sonnet-4-5',
         api_key_env: 'ANTHROPIC_API_KEY',
@@ -222,7 +222,7 @@ export function toProviderFactoryInput(config: ProjectConfig): ProviderFactoryIn
   const providerMap: Record<string, string> = {
     'relay-local': 'relay',
     'custom-openai-compatible': 'custom',
-    openai: 'custom', // OpenAI uses custom base URL
+    openai: 'openai',
     openrouter: 'openrouter',
     anthropic: 'anthropic',
     deepseek: 'deepseek',

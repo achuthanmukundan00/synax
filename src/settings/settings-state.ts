@@ -128,6 +128,11 @@ export function settingsReducer(state: SettingsState, action: SettingsAction): S
 
     case 'move_down': {
       if (state.textInput) return state;
+      if (state.focus === 'tab') {
+        const rows = getTabRows(state.tab, state.config);
+        const max = Math.max(0, rows.length - 1);
+        return { ...state, focus: 'rows', selectedRow: Math.min(max, 1) };
+      }
       const rows = getTabRows(state.tab, state.config);
       const max = Math.max(0, rows.length - 1);
       return { ...state, selectedRow: Math.min(max, state.selectedRow + 1) };
