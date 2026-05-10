@@ -22,7 +22,13 @@ import {
   formatContextBudgetError,
   resolveContextBudgetSettings,
 } from '../agent/context-budget';
-import { createAgentConversation, runAgentTurn, type AgentClient, type AgentMessage } from '../agent/runner';
+import { Session, type AgentClient, type AgentMessage, type AgentRunnerOptions } from '../session/Session';
+
+/** Local shim — Session.startTurn with the old options+task signature. */
+async function runTurn(opts: AgentRunnerOptions & { task: string }): Promise<ReturnType<Session['startTurn']>> {
+  const { task, tools, ...rest } = opts;
+  return new Session({ ...rest, bashEnabled: tools?.bashEnabled }).startTurn(task);
+}
 import { createInspectionLedger, type InspectionLedger } from '../tools';
 import { existsSync, mkdirSync, rmSync, writeFileSync } from 'fs';
 import { join } from 'path';
@@ -356,7 +362,7 @@ describe('hard read omission', () => {
       { content: 'done' },
     ]);
 
-    const result = await runAgentTurn({
+    const result = await runTurn({
       repoRoot: TMP,
       task: 'read',
       client,
@@ -387,7 +393,7 @@ describe('hard read omission', () => {
       { content: 'done' },
     ]);
 
-    const result = await runAgentTurn({
+    const result = await runTurn({
       repoRoot: TMP,
       task: 'read',
       client,
@@ -505,7 +511,7 @@ describe('incremental token estimation', () => {
 
 describe('large synthetic sessions', () => {
   it('survives a session that grows beyond 100k estimated tokens', () => {
-    const conversation = createAgentConversation();
+    const conversation = Session.createConversation();
     // Add many large filler messages to simulate a very long session
     for (let i = 0; i < 200; i += 1) {
       conversation.messages.push(makeMsg('user', `context building message ${i} `.padEnd(800, 'z')));
@@ -614,7 +620,7 @@ describe('no provider call when over budget', () => {
 
   it('blocks provider call when context budget is exceeded after all compaction stages', async () => {
     const client = fakeClient([{ content: 'should not be reached' }]);
-    const conversation = createAgentConversation();
+    const conversation = Session.createConversation();
 
     // Fill with interleaved tool pairs that prevent compaction cascade.
     // Adjacent tool-call/tool-result pairs compress easily, so we
@@ -636,7 +642,7 @@ describe('no provider call when over budget', () => {
       conversation.messages.push(makeMsg('assistant', `reply ${i} `.padEnd(300, 'j')));
     }
 
-    const result = await runAgentTurn({
+    const result = await runTurn({
       repoRoot: TMP,
       task: 'final request',
       client,
@@ -657,7 +663,7 @@ describe('no provider call when over budget', () => {
     const client = fakeClient([{ content: 'should not be reached' }]);
     const hugeTask = 'x'.repeat(20000);
 
-    const result = await runAgentTurn({
+    const result = await runTurn({
       repoRoot: TMP,
       task: hugeTask,
       client,
@@ -692,7 +698,7 @@ describe('preflight enforcement within tool loop', () => {
       { content: 'should not be reached' },
     ]);
 
-    const result = await runAgentTurn({
+    const result = await runTurn({
       repoRoot: TMP,
       task: 'read many large files',
       client,
@@ -722,7 +728,7 @@ describe('preflight enforcement within tool loop', () => {
       })),
     );
 
-    const result = await runAgentTurn({
+    const result = await runTurn({
       repoRoot: TMP,
       task: 'reread same file',
       client,
@@ -841,7 +847,7 @@ describe('progressive loop resistance', () => {
       { content: 'ok' },
     ]);
 
-    const result = await runAgentTurn({
+    const result = await runTurn({
       repoRoot: TMP,
       task: 'read same file twice',
       client,
@@ -867,7 +873,7 @@ describe('progressive loop resistance', () => {
       { content: 'ok' },
     ]);
 
-    const result = await runAgentTurn({
+    const result = await runTurn({
       repoRoot: TMP,
       task: 'read same file three times',
       client,
@@ -894,7 +900,7 @@ describe('progressive loop resistance', () => {
       { content: 'ok' },
     ]);
 
-    const result = await runAgentTurn({
+    const result = await runTurn({
       repoRoot: TMP,
       task: 'read same file four times',
       client,
@@ -921,7 +927,7 @@ describe('progressive loop resistance', () => {
       { content: 'ok' },
     ]);
 
-    const result = await runAgentTurn({
+    const result = await runTurn({
       repoRoot: TMP,
       task: 'read different ranges',
       client,
@@ -949,7 +955,7 @@ describe('working context injection', () => {
       { content: 'done' },
     ]);
 
-    const result = await runAgentTurn({
+    const result = await runTurn({
       repoRoot: TMP,
       task: 'read a file',
       client,
@@ -972,7 +978,7 @@ describe('working context injection', () => {
 
     const client = fakeClient([{ content: 'done' }]);
 
-    await runAgentTurn({
+    await runTurn({
       repoRoot: TMP,
       task: 'just answer',
       client,
@@ -995,7 +1001,7 @@ describe('working context injection', () => {
       { content: 'done' },
     ]);
 
-    const result = await runAgentTurn({
+    const result = await runTurn({
       repoRoot: TMP,
       task: 'read some files',
       client,
@@ -1054,7 +1060,7 @@ describe('model message assembly', () => {
       { content: 'done' },
     ]);
 
-    const result = await runAgentTurn({
+    const result = await runTurn({
       repoRoot: TMP,
       task: 'read many different files',
       client,
@@ -1098,7 +1104,7 @@ describe('model message assembly', () => {
       { content: 'done' },
     ]);
 
-    const result = await runAgentTurn({
+    const result = await runTurn({
       repoRoot: TMP,
       task: 'read many large files',
       client,
@@ -1131,7 +1137,7 @@ describe('model message assembly', () => {
       { content: 'done' },
     ]);
 
-    const result = await runAgentTurn({
+    const result = await runTurn({
       repoRoot: TMP,
       task: 'read and git',
       client,
@@ -1164,7 +1170,7 @@ describe('model message assembly', () => {
       { content: 'done' },
     ]);
 
-    const result = await runAgentTurn({
+    const result = await runTurn({
       repoRoot: TMP,
       task: 'read same file',
       client,
@@ -1195,7 +1201,7 @@ describe('model message assembly', () => {
       { content: 'final answer' },
     ]);
 
-    const result = await runAgentTurn({
+    const result = await runTurn({
       repoRoot: TMP,
       task: 'inspect and answer',
       client,
@@ -1218,7 +1224,7 @@ describe('model message assembly', () => {
     const files = ['x.txt', 'y.txt', 'z.txt'];
     for (const f of files) writeFileSync(join(TMP, f), 'x'.repeat(3000), 'utf-8');
 
-    const conversation = createAgentConversation();
+    const conversation = Session.createConversation();
     const client = fakeClient([
       { toolCalls: [{ id: '1', name: 'read', arguments: { path: 'x.txt' } }] },
       { toolCalls: [{ id: '2', name: 'read', arguments: { path: 'y.txt' } }] },
@@ -1226,7 +1232,7 @@ describe('model message assembly', () => {
       { content: 'done' },
     ]);
 
-    const result = await runAgentTurn({
+    const result = await runTurn({
       repoRoot: TMP,
       task: 'read file',
       client,
@@ -1251,7 +1257,7 @@ describe('model message assembly', () => {
   it('assembly stats include read-budget warning messages sent to the model', async () => {
     writeFileSync(join(TMP, 'repeat.txt'), 'same content\n', 'utf-8');
 
-    const conversation = createAgentConversation();
+    const conversation = Session.createConversation();
     const client = fakeClient([
       { toolCalls: [{ id: '1', name: 'read', arguments: { path: 'repeat.txt' } }] },
       { toolCalls: [{ id: '2', name: 'read', arguments: { path: 'repeat.txt' } }] },
@@ -1259,7 +1265,7 @@ describe('model message assembly', () => {
       { content: 'done' },
     ]);
 
-    const result = await runAgentTurn({
+    const result = await runTurn({
       repoRoot: TMP,
       task: 'read repeat file',
       client,
@@ -1291,7 +1297,7 @@ describe('model message assembly', () => {
       { content: 'done' },
     ]);
 
-    const result = await runAgentTurn({
+    const result = await runTurn({
       repoRoot: TMP,
       task: 'list files',
       client,
@@ -1325,7 +1331,7 @@ describe('model message assembly', () => {
       { content: 'done' },
     ]);
 
-    const result = await runAgentTurn({
+    const result = await runTurn({
       repoRoot: TMP,
       task: 'read many files',
       client,
@@ -1358,7 +1364,7 @@ describe('model message assembly', () => {
     const files = ['a.txt', 'b.txt', 'c.txt'];
     for (const f of files) writeFileSync(join(TMP, f), 'x'.repeat(2000), 'utf-8');
 
-    const conversation = createAgentConversation();
+    const conversation = Session.createConversation();
     const client = fakeClient([
       { toolCalls: [{ id: '1', name: 'read', arguments: { path: 'a.txt' } }] },
       { toolCalls: [{ id: '2', name: 'read', arguments: { path: 'b.txt' } }] },
@@ -1366,7 +1372,7 @@ describe('model message assembly', () => {
       { content: 'done' },
     ]);
 
-    const result = await runAgentTurn({
+    const result = await runTurn({
       repoRoot: TMP,
       task: 'read files',
       client,

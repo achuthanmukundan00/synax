@@ -99,6 +99,33 @@ import {
 const DEFAULT_MAX_TOOL_CALLS = 192;
 const MAX_CONSECUTIVE_RECOVERABLE_TOOL_ERRORS = 3;
 
+// ─── Agent event type guard ──────────────────────────────────────────────────
+
+/**
+ * Set of event type strings that belong to the public AgentEvent discriminated
+ * union (src/agent/events.ts). Internal EventBus lifecycle events are excluded.
+ */
+const AGENT_EVENT_TYPES: Set<string> = new Set([
+  'task_started',
+  'model_step_started',
+  'context_budget_updated',
+  'tool_started',
+  'tool_finished',
+  'verification_planned',
+  'verification_started',
+  'verification_passed',
+  'verification_failed',
+  'verification_skipped',
+  'patch_preview',
+  'command_output',
+  'local_shell_command',
+  'assistant_message',
+  'assistant_delta',
+  'task_finished',
+  'error',
+  'token_usage',
+]);
+
 // ─── Session Class ───────────────────────────────────────────────────────────
 
 /**
@@ -121,6 +148,7 @@ export class Session {
   private repoRoot: string;
   private client: AgentClient;
   private maxToolCalls: number;
+  private maxModelSteps: number;
   private mode: RunMode;
   private bashEnabled: boolean;
   private contextBudget: ContextBudgetSettings;
@@ -153,6 +181,7 @@ export class Session {
     sessionId?: string;
     mode?: RunMode;
     maxToolCalls?: number;
+    maxModelSteps?: number;
     bashEnabled?: boolean;
     skillMessages?: string[];
     conversation?: AgentConversation;
@@ -175,6 +204,7 @@ export class Session {
     this.client = options.client;
     this.mode = options.mode ?? 'patch';
     this.maxToolCalls = options.maxToolCalls ?? DEFAULT_MAX_TOOL_CALLS;
+    this.maxModelSteps = options.maxModelSteps ?? 64;
     this.bashEnabled = options.bashEnabled ?? true;
     this.env = options.env ?? new NodeExecutionEnv();
     this.sessionId = options.sessionId ?? generatePersistentSessionId();
@@ -199,9 +229,13 @@ export class Session {
     this.maxBudget = options.maxBudget;
 
     // ── Wire EventBus: legacy callbacks as subscribers ──────────────────
-    // This proves the bus works end-to-end. Extensions can subscribe the same way.
+    // Only forward events that belong to the AgentEvent discriminated union.
+    // Internal lifecycle events (turn_start, tool_execution_start, etc.) are
+    // not part of the public AgentEvent surface and are filtered out here.
     this.eventBus.onAny((event) => {
-      this.onEvent?.(event as AgentEvent);
+      if (AGENT_EVENT_TYPES.has(event.type)) {
+        this.onEvent?.(event as AgentEvent);
+      }
     });
 
     // ── Conversation ────────────────────────────────────────────────────
@@ -332,6 +366,7 @@ export class Session {
     const maxToolCalls = this.maxToolCalls;
     const changedFiles: string[] = [];
     const toolCalls: AgentTurnResult['toolCalls'] = [];
+    let verificationNudgeInjected = false;
     const readCache = new Map<string, ToolResult>();
     const identicalReadCounts = new Map<string, number>();
     const identicalBashCounts = new Map<string, number>();
@@ -404,7 +439,7 @@ export class Session {
     let turnResult: AgentTurnResult | undefined;
     try {
       turnResult = await (async (): Promise<AgentTurnResult> => {
-        for (let step = 1; ; step += 1) {
+        for (let step = 1; step <= this.maxModelSteps; step += 1) {
           let response: ChatResponse;
           let modelSpan: ReturnType<SpanTracer['startSpan']> | undefined;
 
@@ -634,16 +669,25 @@ export class Session {
               this.tracer.endSpan(toolParseSpan);
             }
 
-            // Verification contract check (replaces regex-based isPrematureCompletionClaim)
-            const contract = resolveVerificationContract(mode);
-            const nudge = checkCompletionAgainstContract(
-              contract,
-              { changedFiles, verificationRan: false },
-              'completed',
+            // Verification contract check — only enforce when the model has already
+            // attempted mutation tool calls (write, edit). Read-only investigations
+            // and pure-content first-step completions are accepted as-is.
+            // Inject the nudge at most once per turn.
+            const hasMutationAttempts = toolCalls.some(
+              (tc) => tc.name === 'write' || tc.name === 'edit',
             );
-            if (nudge) {
-              conversation.messages.push({ role: 'user', content: nudge });
-              continue;
+            if (hasMutationAttempts && !verificationNudgeInjected) {
+              const contract = resolveVerificationContract(mode);
+              const nudge = checkCompletionAgainstContract(
+                contract,
+                { changedFiles, verificationRan: false },
+                'completed',
+              );
+              if (nudge) {
+                verificationNudgeInjected = true;
+                conversation.messages.push({ role: 'user', content: nudge });
+                continue;
+              }
             }
 
             return {
@@ -916,6 +960,16 @@ export class Session {
           }
           flushContentToolResults(conversation, response, contentToolResults);
         }
+        // Loop exhausted without returning — max steps hit
+        return {
+          terminalState: 'budget_exhausted',
+          finalAnswer: '',
+          steps: this.maxModelSteps,
+          toolCalls,
+          changedFiles,
+          conversation,
+          error: `max model steps exceeded: ${this.maxModelSteps}`,
+        };
       })();
       return turnResult;
     } finally {

@@ -87,6 +87,12 @@ function createMockServer(handler: (req: MockRequest, res: ServerResponse<Incomi
   });
 }
 
+function closeServer(srv: Server): Promise<void> {
+  return new Promise((resolve) => {
+    srv.close(() => resolve());
+  });
+}
+
 function getServerUrl(srv: Server): string {
   const addr = srv.address();
   if (addr && typeof addr === 'object' && 'port' in addr) return `http://127.0.0.1:${addr.port}`;
@@ -203,7 +209,7 @@ describe('CLI', () => {
         expect(result.stdout).toContain('synax-ok');
         expect(result.stderr).toBe('');
       } finally {
-        srv.close();
+        await closeServer(srv);
         rmSync(cwd, { recursive: true, force: true });
       }
     });
@@ -240,7 +246,7 @@ describe('CLI', () => {
         expect(result.stderr).toBe('');
         expect(requestCount).toBe(1);
       } finally {
-        srv.close();
+        await closeServer(srv);
         rmSync(cwd, { recursive: true, force: true });
       }
     });
@@ -280,7 +286,7 @@ describe('CLI', () => {
         expect(result.stderr).toBe('');
         expect(requestCount).toBe(1);
       } finally {
-        srv.close();
+        await closeServer(srv);
         rmSync(cwd, { recursive: true, force: true });
       }
     });
@@ -342,7 +348,7 @@ describe('CLI', () => {
         ]);
         expect(parsed.messages[0].content).not.toContain('sk-context-secret');
       } finally {
-        srv.close();
+        await closeServer(srv);
         rmSync(cwd, { recursive: true, force: true });
       }
     });
@@ -373,7 +379,7 @@ describe('CLI', () => {
         expect(combined).toContain('access denied');
         expect(combined).not.toContain('secret-api-key');
       } finally {
-        srv.close();
+        await closeServer(srv);
         rmSync(cwd, { recursive: true, force: true });
       }
     });
@@ -427,7 +433,7 @@ describe('CLI', () => {
           'search_memory',
         ]);
       } finally {
-        srv.close();
+        await closeServer(srv);
         rmSync(cwd, { recursive: true, force: true });
       }
     });
