@@ -14,6 +14,7 @@ import type { HolographicMemory, HandoffManifest } from '../memory/HolographicMe
 import type { SpanTracer } from '../telemetry/SpanTracer';
 import type { TokenCounter } from '../metrics/TokenCounter';
 import type { CostTracker } from '../metrics/CostTracker';
+import { HandoffManager } from '../handoff/HandoffManager';
 import { type ChatResponse } from '../llm/types';
 import { createInspectionLedger, createToolRegistry } from '../tools';
 import { type ToolDefinition, type ToolRegistry, type ToolResult } from '../tools/types';
@@ -161,6 +162,14 @@ export class Session {
   /** Persistent session identity for cross-turn memory retrieval. */
   readonly sessionId: string;
 
+  // ── Handoff ──────────────────────────────────────────────────────────
+  /** Handoff manager for spawning child sessions. Set via setHandoffManager(). */
+  private _handoffManager: HandoffManager | null = null;
+
+  // ── Verification contract override ──────────────────────────────────
+  /** Explicit verification contract (overrides mode-based default). */
+  private _verificationContract: import('./verification-contracts').VerificationContract | null = null;
+
   private _sessionStarted = false;
 
   constructor(options: {
@@ -288,6 +297,16 @@ export class Session {
   /** Build model-facing tools for this session's active configuration. */
   getModelTools(): ToolDefinition[] {
     return buildModelFacingTools({ bashEnabled: this.bashEnabled, mode: this.mode });
+  }
+
+  /** Set the handoff manager for spawning child sessions on context exhaustion. */
+  setHandoffManager(manager: HandoffManager): void {
+    this._handoffManager = manager;
+  }
+
+  /** Override the verification contract (normally derived from mode). */
+  setVerificationContract(contract: import('./verification-contracts').VerificationContract | null): void {
+    this._verificationContract = contract;
   }
 
   /** Shutdown the session, emit session_shutdown, and clean up the bus. */
@@ -663,7 +682,7 @@ export class Session {
             // Inject the nudge at most once per turn.
             const hasMutationAttempts = toolCalls.some((tc) => tc.name === 'write' || tc.name === 'edit');
             if (hasMutationAttempts && !verificationNudgeInjected) {
-              const contract = resolveVerificationContract(mode);
+              const contract = this._verificationContract ?? resolveVerificationContract(mode);
               const nudge = checkCompletionAgainstContract(
                 contract,
                 { changedFiles, verificationRan: false },
@@ -983,10 +1002,12 @@ export class Session {
   /**
    * Attempt to recover from context exhaustion via handoff.
    *
-   * Generates a handoff manifest from holographic memory, injects it
-   * into the conversation as a compact system message, and returns
-   * a continuation result. If memory is unavailable, returns null
-   * (caller should fail-closed).
+   * Two strategies (tried in order):
+   * 1. Child session spawning via HandoffManager — fresh context + FTS5 inheritance.
+   * 2. Context compaction — inject handoff manifest, continue loop.
+   *
+   * Returns a terminal result if child spawning succeeds (child IS the final answer),
+   * null to continue the loop with compacted context, or fails-closed.
    */
   private async tryHandoffRecovery(
     stage: number,
@@ -996,13 +1017,85 @@ export class Session {
     _changedFiles: string[],
     turnSpan?: ReturnType<SpanTracer['startSpan']>,
   ): Promise<AgentTurnResult | null> {
+    // ── Strategy 1: Child session spawning via HandoffManager ──────────
+    if (this._handoffManager?.canHandoff()) {
+      this.logger?.info('Attempting handoff via child session spawning', {
+        stage,
+        stepIndex: step,
+        depth: this._handoffManager ? 'available' : 'unavailable',
+      });
+
+      try {
+        const handoffResult = await this._handoffManager.tryHandoff({
+          parentSession: this,
+          reason: 'context_exhaustion',
+          task: this.conversation.messages.find((m) => m.role === 'user')?.content ?? 'Complete the task',
+          filesChanged: _changedFiles,
+          filesRead: conversation.inspectionLedger.getInspectedRanges().map((r) => r.path),
+          contextWindowUsed: estimateIncrementalTokens(conversation.messages, conversation.tokenLedger),
+          repoRoot: this.repoRoot,
+          client: this.client,
+          mode: this.mode,
+          bashEnabled: this.bashEnabled,
+          contextBudget: this.contextBudget,
+          onEvent: (event) => {
+            if (this.onEvent) {
+              this.onEvent(event as import('../agent/events').AgentEvent);
+            }
+          },
+        });
+
+        if (handoffResult && handoffResult.success) {
+          this.logger?.info('Handoff child session completed successfully', {
+            childSteps: handoffResult.turnResult.steps,
+            childToolCalls: handoffResult.turnResult.toolCalls.length,
+            childFilesChanged: handoffResult.turnResult.changedFiles.length,
+          });
+
+          // Merge child's changed files and tool calls into the result
+          const mergedChangedFiles = [..._changedFiles, ...handoffResult.turnResult.changedFiles];
+          const mergedToolCalls = [..._toolCalls, ...handoffResult.turnResult.toolCalls];
+
+          if (this.tracer && turnSpan) {
+            this.tracer.addEvent(turnSpan, 'handoff_child_completed', {
+              childSteps: handoffResult.turnResult.steps,
+              childFilesChanged: handoffResult.turnResult.changedFiles.length,
+            });
+          }
+
+          return {
+            terminalState: handoffResult.turnResult.terminalState,
+            finalAnswer: handoffResult.turnResult.finalAnswer,
+            steps: step + handoffResult.turnResult.steps,
+            toolCalls: mergedToolCalls,
+            changedFiles: mergedChangedFiles,
+            conversation: handoffResult.turnResult.conversation,
+            error: handoffResult.turnResult.error,
+          };
+        }
+
+        if (handoffResult && !handoffResult.success) {
+          this.logger?.warn('Handoff child session failed, falling back to compaction', {
+            error: handoffResult.error,
+            childTerminalState: handoffResult.turnResult.terminalState,
+          });
+        }
+      } catch (error) {
+        this.logger?.error(
+          'Handoff child session error, falling back to compaction',
+          error instanceof Error ? error : new Error(String(error)),
+        );
+      }
+    }
+
+    // ── Strategy 2: Context compaction (existing behavior) ────────────
     const manifest = this.memory?.handoff();
     if (!manifest || manifest.keyFindings.length === 0) {
       this.logger?.warn('Handoff recovery not possible — no memory available', { stage, stepIndex: step });
       return null;
     }
 
-    this.logger?.info('Attempting handoff recovery', {
+    this.logger?.info('Attempting handoff recovery via context compaction', {
       stage,
       stepIndex: step,
       turnCount: manifest.turnCount,

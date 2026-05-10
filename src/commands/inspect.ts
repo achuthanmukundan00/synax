@@ -26,6 +26,7 @@ import { resolveContextBudgetSettings } from '../agent/context-budget';
 import { createContextLedger, type ContextLedger, type ModelCallEntry } from '../tools';
 import { EventStore } from '../store/EventStore';
 import { runMetricsCommand, type MetricsOptions } from './inspect-metrics';
+import { discoverSkills } from '../skills/SkillLoader';
 
 export const PROJECT_CONTEXT_PATH = join('.synax', 'context.json');
 
@@ -53,6 +54,8 @@ export interface InspectCommandOptions {
   doc?: string;
   searchDocs?: string;
   docsImpact?: boolean;
+  skills?: boolean;
+  skill?: string;
 }
 
 /**
@@ -80,6 +83,8 @@ export function runInspectCommand(program: any): void {
     .option('--metrics', 'Show run metrics dashboard from event store')
     .option('--session <id>', 'Show event timeline for a specific session')
     .option('--stats', 'Show aggregate statistics (use with --metrics)')
+    .option('--skills', 'List auto-discovered skills from ~/.synax/skills/ and .synax/skills/')
+    .option('--skill <name>', 'Show full instructions for a specific skill')
     .action(async (options: any) => {
       const targetPath = options.path ? resolve(options.path) : cwd;
       const projectProfile = buildProjectProfile(targetPath);
@@ -108,7 +113,15 @@ export function runInspectCommand(program: any): void {
         doc: options.doc,
         searchDocs: options.searchDocs,
         docsImpact: options.docsImpact,
+        skills: options.skills,
+        skill: options.skill,
       };
+
+      // --skills or --skill: show auto-discovered skills
+      if (opts.skills || opts.skill) {
+        await printSkills(targetPath, opts);
+        return;
+      }
 
       // --metrics: show run dashboard from event store
       if (opts.metrics || opts.session || opts.stats) {
@@ -494,5 +507,94 @@ export function saveLedgerToDisk(ledger: ContextLedger, path: string): void {
     writeFileSync(path, JSON.stringify(entry, null, 2), 'utf-8');
   } catch {
     // Silently ignore write failures — ledger is best-effort.
+  }
+}
+
+// ─── Skills display ──────────────────────────────────────────────────────────
+
+async function printSkills(targetPath: string, opts: InspectCommandOptions): Promise<void> {
+  try {
+    const discovery = discoverSkills(targetPath);
+
+    if (opts.skill) {
+      // Show a specific skill's full instructions
+      const skill = discovery.skills.find((s) => s.name === opts.skill || s.path.endsWith(`/${opts.skill}/SKILL.md`));
+      if (!skill) {
+        console.log(`[synax] Skill not found: ${opts.skill}`);
+        process.exitCode = 1;
+        return;
+      }
+      if (opts.json) {
+        console.log(JSON.stringify(skill, null, 2));
+      } else {
+        console.log(`Skill: ${skill.name}`);
+        console.log(`Source: ${skill.source}`);
+        console.log(`Enabled: ${skill.enabled}`);
+        console.log(`Path: ${skill.path}`);
+        console.log(`Description: ${skill.description}`);
+        console.log('');
+        console.log('--- Instructions ---');
+        console.log(skill.instructions);
+      }
+      return;
+    }
+
+    // List all skills
+    if (opts.json) {
+      console.log(
+        JSON.stringify(
+          {
+            total: discovery.skills.length,
+            loaded: discovery.loaded.length,
+            disabled: discovery.disabled.length,
+            skills: discovery.skills.map((s) => ({
+              name: s.name,
+              source: s.source,
+              enabled: s.enabled,
+              description: s.description,
+              path: s.path,
+            })),
+            errors: discovery.errors,
+          },
+          null,
+          2,
+        ),
+      );
+    } else {
+      const lines = ['Synax Skills'];
+      lines.push(
+        `Total: ${discovery.skills.length} (${discovery.loaded.length} loaded, ${discovery.disabled.length} disabled)`,
+      );
+      lines.push('');
+
+      if (discovery.skills.length === 0) {
+        lines.push('  (no skills discovered)');
+        lines.push('');
+        lines.push('  Add skills by creating directories with SKILL.md files:');
+        lines.push(`    Global: ~/.synax/skills/<skill-name>/SKILL.md`);
+        lines.push(`    Project: .synax/skills/<skill-name>/SKILL.md`);
+      }
+
+      for (const skill of discovery.skills) {
+        const status = skill.enabled ? '✓' : '✗';
+        lines.push(`  ${status} ${skill.name} (${skill.source})`);
+        lines.push(`    ${skill.description}`);
+        lines.push(`    ${skill.path}`);
+      }
+
+      if (discovery.errors.length > 0) {
+        lines.push('');
+        lines.push('Errors:');
+        for (const err of discovery.errors) {
+          lines.push(`  ! ${err}`);
+        }
+      }
+
+      console.log(lines.join('\n'));
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(`[synax] Skills error: ${message}`);
+    process.exitCode = 1;
   }
 }
