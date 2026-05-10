@@ -392,4 +392,117 @@ export class HolographicMemory {
       return [];
     }
   }
+
+  // ── Memory index (for context injection) ──────────────────────────────
+
+  /**
+   * Build a compact, token-efficient index of what's in memory.
+   *
+   * Injected into every model request so the agent knows what's searchable
+   * without burning context on the full content. Target: ~30-50 tokens.
+   *
+   * Returns null if memory is empty or unavailable.
+   */
+  buildMemoryIndex(): string | null {
+    if (!this.db) return null;
+
+    try {
+      // Count entries and turns
+      const stats = this.db
+        .prepare(
+          `SELECT COUNT(*) as entries, COUNT(DISTINCT turn_id) as turns
+         FROM memory_fts`,
+        )
+        .get() as { entries: number; turns: number } | undefined;
+
+      if (!stats || stats.entries === 0) return null;
+
+      // Recent file paths (last 20 entries)
+      const files = this.db
+        .prepare(
+          `SELECT DISTINCT file_paths FROM memory_fts
+         WHERE file_paths IS NOT NULL AND file_paths != ''
+         ORDER BY rowid DESC
+         LIMIT 10`,
+        )
+        .all() as Array<{ file_paths: string }>;
+
+      const allFiles = new Set<string>();
+      for (const row of files) {
+        for (const fp of row.file_paths.split(',')) {
+          const trimmed = fp.trim();
+          if (trimmed) allFiles.add(trimmed);
+        }
+      }
+
+      // Recent tool names
+      const tools = this.db
+        .prepare(
+          `SELECT DISTINCT tool_name FROM memory_fts
+         WHERE tool_name IS NOT NULL
+         ORDER BY rowid DESC
+         LIMIT 10`,
+        )
+        .all() as Array<{ tool_name: string }>;
+
+      // Recent error/failure snippets (last 15 entries containing error/fail)
+      const errors = this.db
+        .prepare(
+          `SELECT content FROM memory_fts
+         WHERE (content LIKE '%error%' OR content LIKE '%fail%' OR content LIKE '%Error%' OR content LIKE '%FAIL%')
+           AND role != 'user'
+         ORDER BY rowid DESC
+         LIMIT 5`,
+        )
+        .all() as Array<{ content: string }>;
+
+      const errorLines: string[] = [];
+      for (const row of errors) {
+        // Extract the first meaningful error-like line
+        const lines = row.content.split('\n');
+        for (const line of lines) {
+          const lower = line.toLowerCase();
+          if ((lower.includes('error') || lower.includes('fail')) && line.length > 15 && line.length < 200) {
+            errorLines.push(line.trim());
+            break;
+          }
+        }
+        if (errorLines.length >= 3) break;
+      }
+
+      // Build the index
+      const lines: string[] = [];
+      lines.push(`[Memory: ${stats.entries} entries across ${stats.turns} turns`);
+
+      if (allFiles.size > 0) {
+        const fileList = Array.from(allFiles).slice(0, 5);
+        lines.push(`Files: ${fileList.join(', ')}`);
+      }
+
+      if (tools.length > 0) {
+        const toolList = tools.map((t) => t.tool_name).slice(0, 5);
+        lines.push(`Tools: ${toolList.join(', ')}`);
+      }
+
+      if (errorLines.length > 0) {
+        // Very compact error hints
+        const hints = errorLines.map((e) => {
+          // Truncate long error lines to ~60 chars
+          return e.length > 60 ? e.slice(0, 57) + '...' : e;
+        });
+        lines.push(`Recent: ${hints.join(' | ')}`);
+      }
+
+      // Suggested search terms (compact)
+      const terms = this.getSuggestedSearchTerms().slice(0, 5);
+      if (terms.length > 0) {
+        lines.push(`Search: ${terms.join(' ')}`);
+      }
+
+      lines.push(']');
+      return lines.join('\n');
+    } catch {
+      return null;
+    }
+  }
 }

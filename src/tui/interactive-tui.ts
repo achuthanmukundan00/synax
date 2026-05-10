@@ -366,6 +366,7 @@ export async function runInteractiveTui(
 
       const slash = await session.handleSlashCommand(text);
       if (slash.newSession) {
+        session.resetConversation?.();
         state = createInitialRunStateSnapshot(Date.now());
         applyOptionsToState();
         historyScrollOffset = 0;
@@ -569,6 +570,7 @@ export async function runInteractiveTui(
         return;
       }
       if (slashReport.newSession) {
+        session.resetConversation?.();
         state = createInitialRunStateSnapshot(Date.now());
         applyOptionsToState();
         historyScrollOffset = 0;

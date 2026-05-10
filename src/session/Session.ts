@@ -382,6 +382,9 @@ export class Session {
     const contextBudget = this.contextBudget;
     let consecutiveRecoverableToolErrors = 0;
 
+    // ── Build memory index once per turn (tells model what's searchable) ─
+    const memoryIndex = this.memory?.buildMemoryIndex() ?? null;
+
     // ── Task guards ────────────────────────────────────────────────────
     const broadTask = guardBroadTask(task);
     if (broadTask) {
@@ -544,7 +547,13 @@ export class Session {
                 };
               }
 
-              const assembled = buildModelRequest(conversation, contextBudget, identicalReadCounts, totalReadCalls);
+              const assembled = buildModelRequest(
+                conversation,
+                contextBudget,
+                identicalReadCounts,
+                totalReadCalls,
+                memoryIndex,
+              );
               response = await this.client.chat({
                 messages: assembled,
                 tools,
@@ -553,7 +562,13 @@ export class Session {
                 onDelta: (delta) => emitAssistantDelta(this, delta),
               });
             } else {
-              const assembled = buildModelRequest(conversation, contextBudget, identicalReadCounts, totalReadCalls);
+              const assembled = buildModelRequest(
+                conversation,
+                contextBudget,
+                identicalReadCounts,
+                totalReadCalls,
+                memoryIndex,
+              );
               response = await this.client.chat({
                 messages: assembled,
                 tools,
@@ -594,7 +609,13 @@ export class Session {
           // ── Token counting ──────────────────────────────────────────
           let turnTokenStats: { inputTokens: number; outputTokens: number; totalTokens: number } | undefined;
           if (this.tokenCounter) {
-            const assembled = buildModelRequest(conversation, contextBudget, identicalReadCounts, totalReadCalls);
+            const assembled = buildModelRequest(
+              conversation,
+              contextBudget,
+              identicalReadCounts,
+              totalReadCalls,
+              memoryIndex,
+            );
             const inputTokens = this.tokenCounter.countInput(assembled);
             const outputTokens = this.tokenCounter.countOutput({
               content: response.content,
@@ -893,6 +914,7 @@ export class Session {
               contextBudget,
               identicalReadCounts,
               totalReadCalls,
+              memoryIndex,
             );
             const afterToolTokens = estimateRequestTokens(afterToolMessages);
             const effectiveLimit = contextBudget.contextWindowTokens - contextBudget.reservedOutputTokens;
