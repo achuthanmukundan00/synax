@@ -1,5 +1,6 @@
 import { execFile } from 'child_process';
 import { readdir, readFile, stat } from 'fs/promises';
+import { homedir } from 'os';
 import { isAbsolute, normalize, resolve } from 'path';
 import { promisify } from 'util';
 
@@ -342,8 +343,26 @@ function repoRootPath(value: string | undefined): string {
   return value === undefined || value.trim().length === 0 ? '.' : value;
 }
 
+/**
+ * Expand ~ and $HOME to the user's home directory.
+ * Mirrors Pi's expandPath for agent-to-tool-path compatibility.
+ */
+function expandHome(filePath: string): string {
+  if (filePath === '~' || filePath === '$HOME') {
+    return homedir();
+  }
+  if (filePath.startsWith('~/')) {
+    return homedir() + filePath.slice(1);
+  }
+  if (filePath.startsWith('$HOME/')) {
+    return homedir() + filePath.slice(5);
+  }
+  return filePath;
+}
+
 function resolveReadTarget(repoRoot: string, inputPath: string): ReadTargetResult {
-  const trimmed = inputPath.trim();
+  const expanded = expandHome(inputPath);
+  const trimmed = expanded.trim();
   if (trimmed.length === 0) {
     return { ok: false, reason: 'path is required' };
   }
