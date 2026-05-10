@@ -25,6 +25,8 @@ export function runCommand(program: Command): void {
     .option('--tui', 'Render run control surface TUI')
     .option('--budget <amount>', 'Maximum API cost budget in USD (e.g. 0.50)')
     .option('--strategy <mode>', 'Context strategy override: aggressive, moderate, light, none, or off')
+    .option('--verify <level>', 'Verification contract level: none, files-changed, verification-ran, tests-passing')
+    .option('--no-skills', 'Disable all skill injection for this run')
     .action(
       async (options: {
         task?: string;
@@ -36,6 +38,8 @@ export function runCommand(program: Command): void {
         tui?: boolean;
         budget?: string;
         strategy?: string;
+        verify?: string;
+        skills?: boolean;
       }) => {
         if (options.task) {
           const activities: string[] = [];
@@ -58,6 +62,8 @@ export function runCommand(program: Command): void {
               logger: createLogger(),
               maxBudget: parseBudgetOption(options.budget),
               strategy: options.strategy,
+              verify: options.verify,
+              noSkills: options.skills === false,
               onActivity(activity) {
                 if (activity.kind === 'model_response') {
                   const fullContent = activity.modelOutput || activity.message;

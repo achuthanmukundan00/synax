@@ -1,6 +1,7 @@
 import { loadProjectConfig, toProviderFactoryInput } from '../config/project';
 import { loadSynaxConfig } from '../config/load-config';
 import { loadSkills } from './skills';
+import { discoverSkills, buildSkillMessages } from '../skills/SkillLoader';
 import { createLLMClient } from '../llm/provider-factory';
 import { Session, type AgentActivity, type AgentTerminalState } from '../session/Session';
 import { runVerification, type VerificationResult } from './verification';
@@ -15,6 +16,7 @@ import { SpanTracer } from '../telemetry/SpanTracer';
 import { TokenCounter } from '../metrics/TokenCounter';
 import { CostTracker } from '../metrics/CostTracker';
 import { resolveStrategy, getStrategy } from '../context/ContextStrategy';
+import { VERIFICATION_CONTRACTS, type VerificationContract } from '../session/verification-contracts';
 
 export interface RunTaskOptions {
   repoRoot: string;
@@ -32,6 +34,10 @@ export interface RunTaskOptions {
   maxBudget?: number;
   /** Context strategy override. Takes precedence over auto-detection. */
   strategy?: string;
+  /** Verification contract level override. */
+  verify?: string;
+  /** Disable all skill injection. */
+  noSkills?: boolean;
 }
 
 export interface RunTaskReport {
@@ -162,11 +168,38 @@ export async function runAgentTask(options: RunTaskOptions): Promise<RunTaskRepo
     inputPricePer1MTokens: metadata.inputPricePer1MTokens,
     outputPricePer1MTokens: metadata.outputPricePer1MTokens,
   });
-  // Load configured skills for injection into agent context.
+  // Load skills: auto-discovered + config-based
   let skillMessages: string[] | undefined;
-  if (effectiveConfig?.skills.enabled.length) {
-    const result = loadSkills(effectiveConfig.skills, options.repoRoot);
-    skillMessages = result.systemMessages;
+  if (!options.noSkills) {
+    const autoMessages: string[] = [];
+    try {
+      const discovery = discoverSkills(options.repoRoot);
+      if (discovery.loaded.length > 0) {
+        autoMessages.push(...buildSkillMessages(discovery.loaded));
+      }
+      if (discovery.errors.length > 0) {
+        for (const err of discovery.errors) {
+          wrappedOnEvent({
+            type: 'task_started', // reuse as info channel
+            timestamp: eventNow(),
+            mode,
+            profile: `skill-discovery: ${err}`,
+          } as never);
+        }
+      }
+    } catch {
+      // Auto-discovery is best-effort
+    }
+
+    const configMessages: string[] = [];
+    if (effectiveConfig?.skills.enabled.length) {
+      const result = loadSkills(effectiveConfig.skills, options.repoRoot);
+      configMessages.push(...result.systemMessages);
+    }
+
+    // Merge: auto-discovered first, then config-based (config-based override by convention)
+    skillMessages = [...autoMessages, ...configMessages];
+    if (skillMessages.length === 0) skillMessages = undefined;
   }
 
   // Resolve context strategy from model's context window (or explicit override)
@@ -227,6 +260,14 @@ export async function runAgentTask(options: RunTaskOptions): Promise<RunTaskRepo
       return checkpoint;
     },
   });
+
+  // Apply --verify override if specified
+  if (options.verify) {
+    const verifyContract = resolveVerifyOverride(options.verify);
+    if (verifyContract) {
+      session.setVerificationContract(verifyContract);
+    }
+  }
 
   const turn = await session.startTurnWithRecovery(options.task);
   const checkpointRecord = checkpoint as { id: string; statusPath: string; diffPath: string } | null;
@@ -499,5 +540,26 @@ async function changedFilesBetween(repoRoot: string, before: string, after: stri
       .filter(Boolean);
   } catch {
     return [];
+  }
+}
+
+/**
+ * Resolve a --verify CLI value to a VerificationContract.
+ *
+ * Maps: none → none, files-changed → files_changed,
+ *       verification-ran → verification_ran, tests-passing → verification_passed
+ */
+function resolveVerifyOverride(level: string): VerificationContract | null {
+  switch (level) {
+    case 'none':
+      return { level: 'none', label: 'No verification required (explicit)' };
+    case 'files-changed':
+      return VERIFICATION_CONTRACTS.files_changed;
+    case 'verification-ran':
+      return VERIFICATION_CONTRACTS.verification_ran;
+    case 'tests-passing':
+      return VERIFICATION_CONTRACTS.verification_passed;
+    default:
+      return null;
   }
 }
