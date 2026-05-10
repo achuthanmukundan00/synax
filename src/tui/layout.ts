@@ -213,7 +213,11 @@ function sliceVisible(line: string, start: number, end: number): string {
       // eslint-disable-next-line no-control-regex
       const match = /\u001b\[[0-9;]*m/.exec(line.slice(i));
       if (match) {
-        if (writing) out += match[0];
+        // Include ANSI codes that start at or after the slice targetStart, not only
+        // after writing has begun.  Without this, leading ANSI codes and codes at
+        // slice boundaries are dropped, causing color bleed and visual displacement
+        // when put() overlays the AI core next to the transcript.
+        if (writing || visibleIndex >= targetStart) out += match[0];
         i += match[0].length - 1;
         continue;
       }

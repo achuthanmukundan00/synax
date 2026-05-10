@@ -603,13 +603,22 @@ function sliceAnsi(input: string, start: number, end: number): string {
   let visibleIndex = 0;
   let out = '';
   let writing = false;
+  // Track the last non-reset ANSI sequence seen before the slice start.
+  // When the slice starts mid-string (e.g. wrapped continuation lines),
+  // we re-emit it so colors carry forward correctly.
+  let pendingAnsi = '';
 
   for (let i = 0; i < input.length; i += 1) {
     if (input[i] === '\u001b') {
       // eslint-disable-next-line no-control-regex
       const match = /\u001b\[[0-9;]*m/.exec(input.slice(i));
       if (match) {
-        if (writing || visibleIndex >= targetStart) out += match[0];
+        if (writing || visibleIndex >= targetStart) {
+          out += match[0];
+        } else if (visibleIndex < targetStart) {
+          // Remember the last non-reset ANSI code seen before the slice.
+          pendingAnsi = match[0] === '\u001b[0m' ? '' : match[0];
+        }
         i += match[0].length - 1;
         continue;
       }
@@ -618,6 +627,10 @@ function sliceAnsi(input: string, start: number, end: number): string {
     if (visibleIndex >= targetEnd) break;
     if (visibleIndex >= targetStart) {
       writing = true;
+      if (pendingAnsi) {
+        out += pendingAnsi;
+        pendingAnsi = '';
+      }
       out += input[i];
     }
     visibleIndex += 1;
