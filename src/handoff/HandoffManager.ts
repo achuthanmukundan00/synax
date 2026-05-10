@@ -201,9 +201,9 @@ export class HandoffManager {
           changedFiles: [],
           conversation: {
             messages: [],
-            inspectionLedger: null as never,
+            inspectionLedger: createInspectionLedger(),
             latestCompaction: null,
-            tokenLedger: null as never,
+            tokenLedger: createTokenLedger(),
             assemblyStats: null,
           },
         } as AgentTurnResult,
@@ -267,9 +267,9 @@ export class HandoffManager {
           changedFiles: [],
           conversation: {
             messages: [],
-            inspectionLedger: null as never,
+            inspectionLedger: createInspectionLedger(),
             latestCompaction: null,
-            tokenLedger: null as never,
+            tokenLedger: createTokenLedger(),
             assemblyStats: null,
           },
         } as AgentTurnResult,
