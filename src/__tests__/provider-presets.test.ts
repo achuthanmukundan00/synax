@@ -111,12 +111,13 @@ describe('Provider presets registry', () => {
   });
 
   describe('getAllProviderPresets', () => {
-    it('returns all 8 presets', () => {
+    it('returns all 9 presets', () => {
       const all = getAllProviderPresets();
-      expect(all).toHaveLength(8);
+      expect(all).toHaveLength(9);
       const ids = all.map((p) => p.id);
       expect(ids).toContain('relay');
       expect(ids).toContain('custom');
+      expect(ids).toContain('openai');
       expect(ids).toContain('deepseek');
       expect(ids).toContain('openrouter');
       expect(ids).toContain('groq');
