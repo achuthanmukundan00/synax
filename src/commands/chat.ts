@@ -127,7 +127,7 @@ export function createChatSession(options: {
   // ── Shoggoth Observer bridge (experimental, best-effort) ───────────────
   let observerPush: ((event: import('../agent/events').AgentEvent) => void) | null = null;
   try {
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    // eslint-disable-next-line @typescript-eslint/no-var-requires, @typescript-eslint/no-require-imports
     const bridge = require('../../experiments/web-shoggoth-observer/server/telemetry-bridge');
     bridge.initTelemetryBridge({
       enabled: true,
