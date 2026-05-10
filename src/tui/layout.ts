@@ -352,7 +352,7 @@ function renderDirectivePanel(
     ...displayBody.map(
       (line) => `${promptColor}│${RESET} ${pad(clip(line, inner - 2), inner - 2)} ${promptColor}│${RESET}`,
     ),
-    `${promptColor}└${RESET} ${dim(helpText)} ${dim('─'.repeat(bottomFill))}${promptColor}┘${RESET}`,
+    `${promptColor}└${RESET} ${dim(helpText)} ${promptColor}${'─'.repeat(bottomFill)}┘${RESET}`,
   ];
 }
 

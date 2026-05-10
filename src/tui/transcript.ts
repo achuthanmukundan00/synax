@@ -191,7 +191,7 @@ function renderUserPrompt(body: string, width: number): string[] {
   }
 
   // Bottom border
-  lines.push(` ${dim('╰')}${dim('─'.repeat(innerWidth))}${dim('╯')}`);
+  lines.push(` ${dim('╰─')}${dim('─'.repeat(innerWidth))}${dim('╯')}`);
 
   return lines;
 }
