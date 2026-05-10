@@ -528,3 +528,243 @@ describe('Full Pipeline: Store → Exhaust → Handoff → Continue', () => {
     db.close();
   });
 });
+
+// ─── HandoffManager tests ────────────────────────────────────────────────────
+
+import { HandoffManager } from '../handoff/HandoffManager';
+import type { HandoffManifest } from '../handoff/types';
+
+describe('HandoffManager', () => {
+  let db: Database.Database;
+  let memory: HolographicMemory;
+
+  beforeEach(() => {
+    db = createInMemoryDb();
+    memory = new HolographicMemory(db);
+  });
+
+  afterEach(() => {
+    db.close();
+  });
+
+  describe('canHandoff', () => {
+    it('returns true when depth is below max', () => {
+      const manager = new HandoffManager({ maxDepth: 3, currentDepth: 0 });
+      expect(manager.canHandoff()).toBe(true);
+    });
+
+    it('returns false when depth equals max', () => {
+      const manager = new HandoffManager({ maxDepth: 3, currentDepth: 3 });
+      expect(manager.canHandoff()).toBe(false);
+    });
+
+    it('returns false when depth exceeds max', () => {
+      const manager = new HandoffManager({ maxDepth: 3, currentDepth: 5 });
+      expect(manager.canHandoff()).toBe(false);
+    });
+
+    it('default max depth is 3', () => {
+      const manager = new HandoffManager();
+      expect(manager.canHandoff()).toBe(true);
+      // Can't easily test 3+ levels without executing handoffs
+    });
+  });
+
+  describe('generateManifest', () => {
+    it('generates a manifest from conversation state', () => {
+      memory.store({
+        sessionId: 'syn-test',
+        turnId: 1,
+        role: 'tool',
+        toolName: 'edit',
+        filePaths: ['src/a.ts'],
+        content: 'successfully edited',
+      });
+
+      const manager = new HandoffManager();
+      const manifest = manager.generateManifest({
+        parentSessionId: 'syn-test',
+        reason: 'context_exhaustion',
+        task: 'Fix TypeScript errors',
+        filesChanged: ['src/a.ts'],
+        filesRead: ['src/b.ts'],
+        memory,
+        contextWindowUsed: 120000,
+      });
+
+      expect(manifest.parentSessionId).toBe('syn-test');
+      expect(manifest.reason).toBe('context_exhaustion');
+      expect(manifest.task).toBe('Fix TypeScript errors');
+      expect(manifest.filesChanged).toContain('src/a.ts');
+      expect(manifest.filesRead.length).toBeGreaterThanOrEqual(1);
+      expect(manifest.depth).toBe(0);
+      expect(manifest.handoffId).toContain('handoff-');
+      expect(manifest.createdAt).toBeDefined();
+      expect(manifest.pendingWork.length).toBeGreaterThan(0);
+    });
+
+    it('includes "context_exhaustion" as reason', () => {
+      const manager = new HandoffManager();
+      const manifest = manager.generateManifest({
+        parentSessionId: 'syn-test',
+        reason: 'context_exhaustion',
+        task: 'Fix bugs',
+        filesChanged: [],
+        filesRead: [],
+        memory,
+        contextWindowUsed: 80000,
+      });
+
+      expect(manifest.reason).toBe('context_exhaustion');
+    });
+
+    it('extracts key findings from conversation messages when memory has none', () => {
+      const emptyMemory = new HolographicMemory(db); // empty
+
+      const manager = new HandoffManager();
+      const manifest = manager.generateManifest({
+        parentSessionId: 'syn-test',
+        reason: 'task_delegation',
+        task: 'Fix the auth login bug',
+        filesChanged: [],
+        filesRead: [],
+        memory: emptyMemory,
+        contextWindowUsed: 1000,
+        conversationMessages: [
+          {
+            role: 'assistant',
+            content: 'I found the issue: the login handler was missing type coercion for the user ID field.',
+          },
+        ],
+      });
+
+      expect(manifest.keyFindings.length).toBeGreaterThanOrEqual(1);
+    });
+
+    it('handles null memory gracefully', () => {
+      const manager = new HandoffManager();
+      const manifest = manager.generateManifest({
+        parentSessionId: 'syn-test',
+        reason: 'context_exhaustion',
+        task: 'Complete the work',
+        filesChanged: [],
+        filesRead: [],
+        memory: null,
+        contextWindowUsed: 50000,
+      });
+
+      expect(manifest.keyFindings).toHaveLength(0);
+      expect(manifest.status).toBe('Initial exploration');
+      expect(manifest.pendingWork.length).toBeGreaterThan(0);
+    });
+  });
+
+  describe('buildChildContext', () => {
+    it('builds clean context for child session', () => {
+      const manager = new HandoffManager();
+      const manifest: HandoffManifest = {
+        handoffId: 'test-handoff-1',
+        parentSessionId: 'syn-parent',
+        reason: 'context_exhaustion',
+        task: 'Fix TypeScript build errors',
+        status: '2 files changed; 3 turns completed',
+        keyFindings: ['TS2322 at auth/login.ts:42', 'Type coercion needed'],
+        filesChanged: ['src/auth/login.ts'],
+        filesRead: ['src/auth/types.ts'],
+        pendingWork: ['Run verification', 'Verify the fix'],
+        suggestedSearchTerms: ['login', 'typescript', 'TS2322', 'auth'],
+        contextWindowUsed: 120000,
+        depth: 0,
+        createdAt: new Date().toISOString(),
+      };
+
+      const context = manager.buildChildContext(manifest, [
+        '--- BEGIN SKILL: test ---\nTest instructions\n--- END SKILL: test ---',
+      ]);
+
+      expect(context.length).toBeGreaterThanOrEqual(1);
+      expect(context[0].role).toBe('system');
+      expect(context[0].content).toContain('Session Handoff');
+      expect(context[0].content).toContain('Fix TypeScript build errors');
+      expect(context[0].content).toContain('TS2322');
+      expect(context[0].content).toContain('search_memory');
+    });
+
+    it('includes skill messages when provided', () => {
+      const manager = new HandoffManager();
+      const manifest: HandoffManifest = {
+        handoffId: 'test-handoff-2',
+        parentSessionId: 'syn-parent',
+        reason: 'context_exhaustion',
+        task: 'Task',
+        status: '',
+        keyFindings: [],
+        filesChanged: [],
+        filesRead: [],
+        pendingWork: ['Continue'],
+        suggestedSearchTerms: [],
+        contextWindowUsed: 0,
+        depth: 0,
+        createdAt: new Date().toISOString(),
+      };
+
+      const context = manager.buildChildContext(manifest, ['Skill message']);
+      expect(context.some((m) => m.content === 'Skill message')).toBe(true);
+    });
+
+    it('does not include empty skill messages', () => {
+      const manager = new HandoffManager();
+      const manifest: HandoffManifest = {
+        handoffId: 'test-handoff-3',
+        parentSessionId: 'syn-parent',
+        reason: 'context_exhaustion',
+        task: 'Task',
+        status: '',
+        keyFindings: [],
+        filesChanged: [],
+        filesRead: [],
+        pendingWork: ['Continue'],
+        suggestedSearchTerms: [],
+        contextWindowUsed: 0,
+        depth: 0,
+        createdAt: new Date().toISOString(),
+      };
+
+      const context = manager.buildChildContext(manifest, ['', '  ']);
+      // Should only have the system message, no empty skill messages
+      expect(context.length).toBe(1);
+    });
+  });
+
+  describe('max depth enforcement', () => {
+    it('executeHandoff returns error when max depth exceeded', async () => {
+      const manager = new HandoffManager({ maxDepth: 3, currentDepth: 3 });
+      const manifest: HandoffManifest = {
+        handoffId: 'test-max-depth',
+        parentSessionId: 'syn-deep',
+        reason: 'context_exhaustion',
+        task: 'Task',
+        status: '',
+        keyFindings: [],
+        filesChanged: [],
+        filesRead: [],
+        pendingWork: [],
+        suggestedSearchTerms: [],
+        contextWindowUsed: 0,
+        depth: 3,
+        createdAt: new Date().toISOString(),
+      };
+
+      const result = await manager.executeHandoff({
+        manifest,
+        repoRoot: '/tmp/test',
+        client: mockClient(),
+        mode: 'read-only',
+        memory,
+      });
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('Max handoff depth');
+    });
+  });
+});

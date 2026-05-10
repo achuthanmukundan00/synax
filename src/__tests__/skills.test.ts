@@ -270,3 +270,166 @@ describe('formatSkillDiagnostics', () => {
     expect(result).toContain('Path        /bad/SKILL.md');
   });
 });
+
+// ─── Auto-discovery tests (SkillLoader) ──────────────────────────────────────
+
+import { discoverSkills, buildSkillMessages, parseFrontmatter } from '../skills/SkillLoader';
+
+describe('SkillLoader — auto-discovery', () => {
+  const testDir = join(TEST_ROOT, 'auto-discover-test');
+  const globalSkillsDir = join(homedir(), '.synax', 'skills');
+  const testProjectDir = join(testDir, 'project');
+
+  beforeEach(() => {
+    rmSync(testDir, { recursive: true, force: true });
+    mkdirSync(testProjectDir, { recursive: true });
+
+    // Create project .synax/skills directory
+    const projectSkillsDir = join(testProjectDir, '.synax', 'skills');
+    mkdirSync(projectSkillsDir, { recursive: true });
+
+    // Create a project skill
+    const skillDir = join(projectSkillsDir, 'typescript-style');
+    mkdirSync(skillDir, { recursive: true });
+    writeFileSync(
+      join(skillDir, 'SKILL.md'),
+      `---
+name: "TypeScript Style Guide"
+description: "Project-specific TypeScript conventions"
+enabled: true
+---
+# TypeScript Conventions
+- Use strict mode
+- Prefer interfaces over type aliases`,
+    );
+  });
+
+  afterAll(() => {
+    rmSync(testDir, { recursive: true, force: true });
+    // Clean up any test global skills
+    try {
+      const testGlobalDir = join(globalSkillsDir, 'synax-test-global-skill');
+      rmSync(testGlobalDir, { recursive: true, force: true });
+    } catch {
+      // ok
+    }
+  });
+
+  it('discovers project skills', () => {
+    const discovery = discoverSkills(testProjectDir);
+    expect(discovery.skills.length).toBeGreaterThanOrEqual(1);
+    const tsSkill = discovery.skills.find((s) => s.name === 'TypeScript Style Guide');
+    expect(tsSkill).toBeDefined();
+    expect(tsSkill!.source).toBe('project');
+    expect(tsSkill!.enabled).toBe(true);
+    expect(tsSkill!.instructions).toContain('Use strict mode');
+  });
+
+  it('returns empty discovery for directory with no skills', () => {
+    const emptyDir = join(testDir, 'empty-project');
+    mkdirSync(emptyDir, { recursive: true });
+    const discovery = discoverSkills(emptyDir);
+    expect(discovery.skills).toHaveLength(0);
+    expect(discovery.loaded).toHaveLength(0);
+    expect(discovery.errors.length).toBeGreaterThanOrEqual(0);
+  });
+
+  it('handles disabled skills', () => {
+    const projectSkillsDir = join(testProjectDir, '.synax', 'skills');
+    const disabledDir = join(projectSkillsDir, 'disabled-skill');
+    mkdirSync(disabledDir, { recursive: true });
+    writeFileSync(
+      join(disabledDir, 'SKILL.md'),
+      `---
+name: "Disabled Skill"
+enabled: false
+---
+# Should not load`,
+    );
+
+    const discovery = discoverSkills(testProjectDir);
+    const disabled = discovery.disabled.find((s) => s.name === 'Disabled Skill');
+    expect(disabled).toBeDefined();
+    expect(disabled!.enabled).toBe(false);
+  });
+
+  it('builds skill messages from loaded skills', () => {
+    const discovery = discoverSkills(testProjectDir);
+    const messages = buildSkillMessages(discovery.loaded);
+
+    expect(messages.length).toBeGreaterThanOrEqual(1);
+    const msg = messages[0];
+    expect(msg).toContain('BEGIN SKILL:');
+    expect(msg).toContain('TypeScript Style Guide');
+    expect(msg).toContain('END SKILL:');
+    expect(msg).toContain('Use strict mode');
+  });
+});
+
+describe('parseFrontmatter', () => {
+  it('parses YAML frontmatter from markdown', () => {
+    const content = [
+      '---',
+      'name: "Test Skill"',
+      'description: "A test skill"',
+      'enabled: true',
+      '---',
+      '# Instructions',
+      'Do this and that.',
+    ].join('\n');
+
+    const { frontmatter, body } = parseFrontmatter(content);
+    expect(frontmatter.name).toBe('Test Skill');
+    expect(frontmatter.description).toBe('A test skill');
+    expect(frontmatter.enabled).toBe(true);
+    expect(body).toContain('# Instructions');
+    expect(body).toContain('Do this and that.');
+  });
+
+  it('handles single-quoted strings', () => {
+    const content = ['---', "name: 'Single Quoted'", '---', 'Body here.'].join('\n');
+
+    const { frontmatter } = parseFrontmatter(content);
+    expect(frontmatter.name).toBe('Single Quoted');
+  });
+
+  it('returns empty frontmatter when no delimiter', () => {
+    const content = '# Just a markdown file\n\nNo frontmatter here.';
+    const { frontmatter, body } = parseFrontmatter(content);
+    expect(frontmatter).toEqual({});
+    expect(body).toBe(content);
+  });
+
+  it('handles missing closing delimiter gracefully', () => {
+    const content = ['---', 'name: "Incomplete"', '# No closing delimiter'].join('\n');
+
+    const { body } = parseFrontmatter(content);
+    // Without closing delimiter, no frontmatter is parsed
+    expect(body).toBe(content);
+  });
+
+  it('parses boolean values correctly', () => {
+    const content = ['---', 'enabled: true', 'other: false', '---', 'Body.'].join('\n');
+
+    const { frontmatter } = parseFrontmatter(content);
+    expect(frontmatter.enabled).toBe(true);
+    expect(frontmatter.other).toBe(false);
+  });
+
+  it('handles empty frontmatter between delimiters', () => {
+    const content = ['---', '---', 'Body only.'].join('\n');
+
+    const { frontmatter, body } = parseFrontmatter(content);
+    expect(frontmatter).toEqual({});
+    expect(body.trim()).toBe('Body only.');
+  });
+
+  it('handles missing name in frontmatter (uses dir name)', () => {
+    const content = ['---', 'description: "No name skill"', '---', 'Instructions here.'].join('\n');
+
+    const { frontmatter } = parseFrontmatter(content);
+    expect(frontmatter.name).toBeUndefined();
+    expect(frontmatter.description).toBe('No name skill');
+    expect(frontmatter.enabled).toBeUndefined();
+  });
+});
