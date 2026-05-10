@@ -425,7 +425,7 @@ export function chatCommand(program: Command): void {
           gitBranch,
           contextWindowTokens: loaded.config.contextWindowTokens ?? loaded.config.contextBudgetTokens,
           coreVisualProfile: loaded.config.coreVisualProfile,
-          coreLoaded: blockedMessage === undefined,
+          coreLoaded: true,
           activeSkills: skillDiagnostics?.filter((d) => d.loaded).map((d) => d.id),
           inputPricePer1MTokens: metadata.inputPricePer1MTokens,
           outputPricePer1MTokens: metadata.outputPricePer1MTokens,
@@ -452,7 +452,8 @@ export function chatCommand(program: Command): void {
                 activeModel?.contextWindow ?? loaded.config.contextWindowTokens ?? loaded.config.contextBudgetTokens,
               coreVisualProfile: loaded.config.coreVisualProfile,
               thinkingEnabled: nextThinkingLevel !== 'off',
-              coreLoaded: nextBlockedMessage === undefined,
+              coreLoaded: true,
+              providerWarning: nextBlockedMessage,
               inputPricePer1MTokens: nextDescription.metadata.inputPricePer1MTokens,
               outputPricePer1MTokens: nextDescription.metadata.outputPricePer1MTokens,
             };

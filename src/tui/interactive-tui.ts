@@ -1,9 +1,4 @@
-import {
-  applyEventToRunState,
-  createBlockedRunStateSnapshot,
-  createInitialRunStateSnapshot,
-  type RunStateSnapshot,
-} from '../agent/tui-state';
+import { applyEventToRunState, createInitialRunStateSnapshot, type RunStateSnapshot } from '../agent/tui-state';
 import {
   classifyInlineSubmission,
   createInlinePasteInputSession,
@@ -108,6 +103,7 @@ export async function runInteractiveTui(
       contextWindowTokens?: number;
       coreVisualProfile?: string;
       coreLoaded?: boolean;
+      providerWarning?: string;
       inputPricePer1MTokens?: number;
       outputPricePer1MTokens?: number;
     };
@@ -124,13 +120,7 @@ export async function runInteractiveTui(
   if (!terminal.isTTY) return;
 
   let inputDraft = createInlinePasteInputSession();
-  let state: RunStateSnapshot = options?.blockedMessage
-    ? createBlockedRunStateSnapshot(
-        Date.now(),
-        'Configuration required',
-        'configure .synax.toml or ~/.config/synax/config.toml',
-      )
-    : createInitialRunStateSnapshot(Date.now());
+  let state: RunStateSnapshot = createInitialRunStateSnapshot(Date.now());
   // Autocomplete state
   let autocomplete: { active: boolean; selection: number; filtered: SlashCommand[]; visible: boolean } = {
     active: false,
@@ -146,6 +136,11 @@ export async function runInteractiveTui(
   let busy = false;
   let externalRendererActive = false;
   let historyScrollOffset = 0;
+  // Ctrl+C double-press tracking: first press clears input, second within 800ms exits.
+  let lastCtrlCTime = 0;
+  let ctrlCClearedInput = false;
+  // Active provider warning — only surfaced when user tries to submit.
+  let providerWarning = options?.blockedMessage;
   const diff = new DiffRenderer();
 
   // Adaptive render loop — 60 FPS when active, 0 when idle.
@@ -167,13 +162,11 @@ export async function runInteractiveTui(
     providerName: options?.providerName,
     contextWindowTokens: options?.contextWindowTokens,
     coreVisualProfile: options?.coreVisualProfile,
-    coreLoaded: options?.coreLoaded,
+    coreLoaded: true,
     inputPricePer1MTokens: options?.inputPricePer1MTokens,
     outputPricePer1MTokens: options?.outputPricePer1MTokens,
   };
   const applyOptionsToState = (): void => {
-    const wasBlocked = state.phase === 'blocked' && !state.coreLoaded;
-    const nowLoaded = runtimeLabels.coreLoaded ?? true;
     state = {
       ...state,
       modelId: runtimeLabels.modelLabel ?? '',
@@ -181,27 +174,11 @@ export async function runInteractiveTui(
       contextWindowTokens: runtimeLabels.contextWindowTokens,
       thinkingEnabled: runtimeLabels.thinkingEnabled,
       activeSkills: options?.activeSkills ?? [],
-      coreLoaded: nowLoaded,
+      coreLoaded: true,
       inputPricePer1MTokens: runtimeLabels.inputPricePer1MTokens,
       outputPricePer1MTokens: runtimeLabels.outputPricePer1MTokens,
       sessionSpendLabel: isLocalEndpoint(runtimeLabels.endpointLabel ?? '') ? 'local' : undefined,
     };
-    // When recovering from a blocked/unloaded state after config fix, reset the
-    // phase to idle so the caution/warning clears immediately.
-    if (wasBlocked && nowLoaded) {
-      state = {
-        ...state,
-        phase: 'idle',
-        objective: {
-          label: 'Waiting for run start',
-          currentPhase: 'idle',
-          nextCheckpoint: 'awaiting task',
-        },
-        riskLine: 'risk: nominal',
-        terminal: 'running',
-        severity: 'S0',
-      };
-    }
   };
   applyOptionsToState();
 
@@ -447,14 +424,14 @@ export async function runInteractiveTui(
       return;
     }
 
-    if (runtimeLabels.coreLoaded === false) {
+    if (providerWarning) {
       state = applyEventToRunState(
         state,
         {
           type: 'command_output',
           timestamp: new Date().toISOString(),
           command: 'submit',
-          content: options?.blockedMessage ?? '[synax] No queryable model is configured.',
+          content: `[synax] ${providerWarning}`,
         },
         Date.now(),
       );
@@ -649,6 +626,9 @@ export async function runInteractiveTui(
           ...runtimeLabels,
           ...updates,
         };
+        if (updates.providerWarning !== undefined) {
+          providerWarning = updates.providerWarning;
+        }
         applyOptionsToState();
       }
     }
@@ -807,6 +787,34 @@ export async function runInteractiveTui(
         break;
       }
 
+      // Ctrl+C: first press clears input, second press within 800ms exits.
+      if (event.type === 'ctrl_c') {
+        if (settingsState?.active) {
+          closeSettingsModal();
+          paint(true);
+          continue;
+        }
+        if (resumeState?.active) {
+          closeResumePicker();
+          paint(true);
+          continue;
+        }
+        const now = Date.now();
+        if (inputDraft.getVisibleBody().length > 0 || ctrlCClearedInput) {
+          if (ctrlCClearedInput && now - lastCtrlCTime < 800) {
+            finish();
+            break;
+          }
+          inputDraft = createInlinePasteInputSession();
+          autocomplete = { active: false, visible: false, selection: 0, filtered: [] };
+          lastCtrlCTime = now;
+          ctrlCClearedInput = true;
+        } else {
+          ctrlCClearedInput = false;
+        }
+        continue;
+      }
+
       // Modal input routing
       if (settingsState?.active) {
         handleSettingsInput(event);
@@ -869,6 +877,11 @@ export async function runInteractiveTui(
           continue;
         }
         void submit();
+        continue;
+      }
+      if (event.type === 'newline') {
+        if (inputDraft.getVisibleBody().length < MAX_INPUT_CHARS) inputDraft.handleText('\n');
+        updateAutocomplete();
         continue;
       }
       if (event.type === 'paste' && event.value) {

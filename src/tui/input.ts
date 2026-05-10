@@ -4,6 +4,8 @@ export interface ParsedInput {
     | 'submit'
     | 'backspace'
     | 'exit'
+    | 'ctrl_c'
+    | 'newline'
     | 'scroll_history_up'
     | 'scroll_history_down'
     | 'paste'
@@ -46,7 +48,7 @@ export function createInputParser(): InputParser {
           }
           if (chunk[index] === '\u0003') {
             pasteMode = false;
-            events.push({ type: 'exit' });
+            events.push({ type: 'ctrl_c' });
             pasteText = '';
             continue;
           }
@@ -136,6 +138,12 @@ function parseSingleInputEvent(
     setIndex(index + 3);
     return;
   }
+  // Shift+Enter (kitty keyboard protocol CSI u)
+  if (chunk.startsWith('\x1b[13;2u', index)) {
+    events.push({ type: 'newline' });
+    setIndex(index + 6);
+    return;
+  }
   const escapeLength = parseUnsupportedEscapeLength(chunk, index);
   if (escapeLength > 0) {
     setIndex(index + escapeLength - 1);
@@ -146,6 +154,10 @@ function parseSingleInputEvent(
     return;
   }
   if (char === '\u0003') {
+    events.push({ type: 'ctrl_c' });
+    return;
+  }
+  if (char === '\u0004') {
     events.push({ type: 'exit' });
     return;
   }

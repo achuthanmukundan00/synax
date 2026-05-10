@@ -62,9 +62,14 @@ describe('interactive tui wiring', () => {
 });
 
 describe('tui input parser', () => {
-  it('parses submit/backspace/exit', () => {
-    const events = parseInputChunk('a\x7f\n\u0003');
+  it('parses submit/backspace/exit via Ctrl+D', () => {
+    const events = parseInputChunk('a\x7f\n\u0004');
     expect(events.map((e) => e.type)).toEqual(['text', 'backspace', 'submit', 'exit']);
+  });
+
+  it('emits ctrl_c on Ctrl+C and newline on Shift+Enter', () => {
+    expect(parseInputChunk('\u0003').map((e) => e.type)).toEqual(['ctrl_c']);
+    expect(parseInputChunk('\x1b[13;2u').map((e) => e.type)).toEqual(['newline']);
   });
 
   it('ignores Ctrl+L instead of inserting a form-feed glyph', () => {
@@ -1151,7 +1156,7 @@ describe('interactive layout visual agreements', () => {
     expect(dock[0]).toMatch(/^┌─+ ~\/workspace\/git\/\.worktrees\/synax-tui {2}dev\/tui ┐\s*$/);
     expect(dock[1]).toMatch(/^│ Implement fixed-footprint reactor core rendering\s+│\s*$/);
     expect(dock[2]).toMatch(/^│\s+│\s*$/);
-    expect(dock[3]).toMatch(/^└ Enter submit \| Ctrl\+C exit \| \/help \| !cmd shell ─+┘\s*$/);
+    expect(dock[3]).toMatch(/Enter submit.*Ctrl\+D exit.*Shift.*newline.*Ctrl\+C clear.*\/help.*!cmd/);
   });
 
   it('keeps the input dock inside the terminal write-safe column', () => {
@@ -1881,7 +1886,7 @@ describe('interactive tui runtime', () => {
     const runPromise = runInteractiveTui(session, { stdin, stdout });
     stdin.write(Buffer.from(`${'x'.repeat(EXPECTED_MAX_INPUT_CHARS + 20)}\n`, 'utf8'));
     await submitted;
-    stdin.write(Buffer.from('\u0003', 'utf8'));
+    stdin.write(Buffer.from('\u0004', 'utf8'));
     await runPromise;
 
     expect(session.handleUserMessage).toHaveBeenCalledWith('x'.repeat(EXPECTED_MAX_INPUT_CHARS));
@@ -1925,7 +1930,7 @@ describe('interactive tui runtime', () => {
 
     stdin.write(Buffer.from('\n', 'utf8'));
     await submitted;
-    stdin.write(Buffer.from('\u0003', 'utf8'));
+    stdin.write(Buffer.from('\u0004', 'utf8'));
     await runPromise;
 
     const plain = stripAnsi(stdout.text());
@@ -1970,7 +1975,7 @@ describe('interactive tui runtime', () => {
     await new Promise((resolve) => setTimeout(resolve, 20));
     stdin.write(Buffer.from('/help\n', 'utf8'));
     await slashHandled;
-    stdin.write(Buffer.from('\u0003', 'utf8'));
+    stdin.write(Buffer.from('\u0004', 'utf8'));
     await runPromise;
 
     expect(session.handleUserMessage).toHaveBeenCalledTimes(1);
@@ -2009,7 +2014,7 @@ describe('interactive tui runtime', () => {
     const runPromise = runInteractiveTui(session, { stdin, stdout });
     stdin.write(Buffer.from('!echo hello\n', 'utf8'));
     await shellHandled;
-    stdin.write(Buffer.from('\u0003', 'utf8'));
+    stdin.write(Buffer.from('\u0004', 'utf8'));
     await runPromise;
 
     const plain = stripAnsi(stdout.text());
@@ -2065,7 +2070,7 @@ describe('interactive tui runtime', () => {
 
     resolveExit?.();
     await new Promise((resolve) => setTimeout(resolve, 20));
-    stdin.write(Buffer.from('\u0003', 'utf8'));
+    stdin.write(Buffer.from('\u0004', 'utf8'));
     await runPromise;
 
     expect(stripAnsi(stdout.text())).toContain('liminal layer closed');
@@ -2119,7 +2124,7 @@ describe('interactive tui runtime', () => {
     await new Promise((resolve) => setTimeout(resolve, 20));
     stdin.write(Buffer.from('run after settings\n', 'utf8'));
     await submitted;
-    stdin.write(Buffer.from('\u0003', 'utf8'));
+    stdin.write(Buffer.from('\u0004', 'utf8'));
     await runPromise;
 
     const plain = stripAnsi(stdout.text());
@@ -2172,7 +2177,7 @@ describe('interactive tui runtime', () => {
 
     const runPromise = runInteractiveTui(session, { stdout });
     await new Promise((resolve) => setTimeout(resolve, 10));
-    stdin.emit('data', Buffer.from('\u0003', 'utf8'));
+    stdin.emit('data', Buffer.from('\u0004', 'utf8'));
 
     await expect(
       Promise.race([
