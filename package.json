@@ -31,9 +31,11 @@
   "type": "commonjs",
   "dependencies": {
     "@commander-js/extra-typings": "^14.0.0",
-    "better-sqlite3": "^12.9.0",
     "commander": "^14.0.0",
     "toml": "^3.0.0"
+  },
+  "optionalDependencies": {
+    "better-sqlite3": "^12.9.0"
   },
   "devDependencies": {
     "@chenglou/pretext": "^0.0.6",

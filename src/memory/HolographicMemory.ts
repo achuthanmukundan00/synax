@@ -13,7 +13,7 @@
  * all operations are safe no-ops.
  */
 
-import Database from 'better-sqlite3';
+import type { Database } from '../store/sqlite-loader';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 

@@ -8,7 +8,7 @@
 import { existsSync, mkdirSync } from 'fs';
 import { dirname, join } from 'path';
 
-import Database from 'better-sqlite3';
+import { loadBetterSqlite3, type Database } from './sqlite-loader';
 import type { AgentEvent } from '../agent/events';
 import { ALL_DDL, SCHEMA_VERSION_PRAGMA, type SessionRecord } from './schema';
 import { HolographicMemory } from '../memory/HolographicMemory';
@@ -59,7 +59,13 @@ export class EventStore {
       mkdirSync(dir, { recursive: true });
     }
 
-    const db = new Database(this.dbPath);
+    const SQLite = loadBetterSqlite3();
+    if (!SQLite) {
+      // better-sqlite3 unavailable — Synax runs without persistence
+      return;
+    }
+
+    const db = new SQLite(this.dbPath);
     db.pragma('journal_mode = WAL');
     db.pragma('synchronous = NORMAL');
     db.pragma('foreign_keys = ON');
