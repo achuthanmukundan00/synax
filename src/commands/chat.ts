@@ -15,6 +15,7 @@ import {
 } from '../config/project';
 import { loadSynaxConfig } from '../config/load-config';
 import { loadSkills, type SkillDiagnostic } from '../agent/skills';
+import { resetTokenLedger } from '../agent/context-budget';
 import pkg from '../../package.json';
 import { createLLMClient, describeLLMProvider } from '../llm/provider-factory';
 import {
@@ -45,6 +46,8 @@ export interface ChatSession {
   setEventSink?: (sink: ((event: import('../agent/events').AgentEvent) => void) | null) => void;
   /** Refresh the session's config reference (called after settings changes). */
   refreshConfig?: (config: ProjectConfig, thinkingLevel?: import('../config/schema').ThinkingLevel) => void;
+  /** Reset the conversation to a fresh state (for /new). Preserves skill messages. */
+  resetConversation?: () => void;
 }
 
 export interface ChatTurnReport {
@@ -136,6 +139,17 @@ export function createChatSession(options: {
     refreshConfig: (config: ProjectConfig, thinkingLevel?: import('../config/schema').ThinkingLevel) => {
       configRef.current = config;
       if (thinkingLevel !== undefined) thinkingLevelRef = thinkingLevel;
+    },
+    resetConversation: () => {
+      // Reset the shared conversation in-place to a clean slate
+      const fresh = Session.createConversation({
+        skillMessages: options.skillMessages,
+      });
+      conversation.messages.splice(0, conversation.messages.length, ...fresh.messages);
+      conversation.inspectionLedger = fresh.inspectionLedger;
+      conversation.latestCompaction = null;
+      conversation.assemblyStats = null;
+      resetTokenLedger(conversation.tokenLedger);
     },
     async handleUserMessage(message: string): Promise<ChatTurnReport> {
       const config = getConfig();
@@ -466,6 +480,9 @@ export function chatCommand(program: Command): void {
             if (trimmed.startsWith('/')) {
               const report = await session.handleSlashCommand(trimmed);
               if (report.output) console.log(report.output);
+              if (report.newSession) {
+                session.resetConversation?.();
+              }
               if (report.exit) break;
               continue;
             }

@@ -42,6 +42,23 @@ export function injectOrientation(
   return messages;
 }
 
+// ─── Memory index injection ──────────────────────────────────────────────────
+
+/**
+ * Inject a compact FTS5 memory index as a system message.
+ * Tells the model what's searchable in memory without burning context on content.
+ * Returns the messages unchanged if the index is null/empty.
+ */
+export function injectMemoryIndex(messages: AgentMessage[], index: string | null): AgentMessage[] {
+  if (!index) return messages;
+  // Inject after the first system message (main prompt), before rest
+  const result = [...messages];
+  const sysIdx = result.findIndex((m) => m.role === 'system');
+  const insertAt = sysIdx >= 0 ? sysIdx + 1 : 0;
+  result.splice(insertAt, 0, { role: 'system', content: index });
+  return result;
+}
+
 // ─── Model request builder ───────────────────────────────────────────────────
 
 export function buildModelRequest(
@@ -49,6 +66,7 @@ export function buildModelRequest(
   settings: ContextBudgetSettings,
   readCounts: Map<string, number>,
   totalReadCalls?: number,
+  memoryIndex?: string | null,
 ): AgentMessage[] {
   const baseMessages = conversation.messages;
 
@@ -86,6 +104,8 @@ export function buildModelRequest(
     stats.compactedFilePaths,
   );
 
+  const withMemory = injectMemoryIndex(withOrientation, memoryIndex ?? null);
+
   const READ_BUDGET_WARNING_THRESHOLD = Math.floor(MAX_TOTAL_READS_PER_TURN * 0.5);
   const hasReadBudgetPressure =
     totalReadCalls !== undefined &&
@@ -105,7 +125,7 @@ export function buildModelRequest(
         'Do not call any more read or inspect tools. Take action with what you have.',
       ].join('\n'),
     };
-    const finalMessages = [...withOrientation, warning];
+    const finalMessages = [...withMemory, warning];
     stats.totalMessagesOut = finalMessages.length;
     stats.estimatedTokensOut = estimateRequestTokens(finalMessages);
     resetTokenLedger(conversation.tokenLedger);
@@ -113,11 +133,11 @@ export function buildModelRequest(
     return finalMessages;
   }
 
-  stats.totalMessagesOut = withOrientation.length;
-  stats.estimatedTokensOut = estimateRequestTokens(withOrientation);
+  stats.totalMessagesOut = withMemory.length;
+  stats.estimatedTokensOut = estimateRequestTokens(withMemory);
   resetTokenLedger(conversation.tokenLedger);
-  estimateIncrementalTokens(withOrientation, conversation.tokenLedger);
-  return withOrientation;
+  estimateIncrementalTokens(withMemory, conversation.tokenLedger);
+  return withMemory;
 }
 
 // ─── Budget guard ────────────────────────────────────────────────────────────

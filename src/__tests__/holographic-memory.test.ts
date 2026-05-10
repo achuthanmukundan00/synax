@@ -269,4 +269,74 @@ describe('HolographicMemory', () => {
       expect(count.c).toBe(50);
     });
   });
+
+  describe('buildMemoryIndex', () => {
+    it('returns null when memory is empty', () => {
+      const mem = new HolographicMemory(db);
+      const index = mem.buildMemoryIndex();
+      expect(index).toBeNull();
+    });
+
+    it('returns a compact index string with entries', () => {
+      const mem = new HolographicMemory(db);
+      mem.store({ sessionId: 's1', turnId: 1, role: 'user', content: 'Fix the build' });
+      mem.store({
+        sessionId: 's1',
+        turnId: 1,
+        role: 'tool',
+        toolName: 'bash',
+        filePaths: ['src/auth/login.ts'],
+        content: 'error TS2322 at login.ts:42',
+      });
+      mem.store({
+        sessionId: 's1',
+        turnId: 2,
+        role: 'tool',
+        toolName: 'edit',
+        filePaths: ['src/auth/login.ts'],
+        content: 'successfully changed login.ts',
+      });
+
+      const index = mem.buildMemoryIndex();
+      expect(index).not.toBeNull();
+      expect(index!).toContain('[Memory:');
+      expect(index!).toContain('entries across');
+      expect(index!).toContain('turns');
+      expect(index!).toContain('src/auth/login.ts');
+      expect(index!).toContain(']');
+
+      // Should be compact (~under 500 chars for this small dataset)
+      expect(index!.length).toBeLessThan(500);
+    });
+
+    it('includes error snippets when errors exist', () => {
+      const mem = new HolographicMemory(db);
+      mem.store({ sessionId: 's1', turnId: 1, role: 'user', content: 'Fix bugs' });
+      mem.store({
+        sessionId: 's1',
+        turnId: 1,
+        role: 'tool',
+        toolName: 'bash',
+        content: 'Error: something went wrong with the build process',
+      });
+      mem.store({
+        sessionId: 's1',
+        turnId: 1,
+        role: 'tool',
+        toolName: 'bash',
+        content: 'Failure: test suite failed with 3 errors',
+      });
+
+      const index = mem.buildMemoryIndex();
+      expect(index).not.toBeNull();
+      // Should contain error/failure hints
+      expect(index!).toMatch(/error|fail|Error|FAIL/i);
+    });
+
+    it('returns null for null database', () => {
+      const nullMemory = new HolographicMemory(null);
+      const index = nullMemory.buildMemoryIndex();
+      expect(index).toBeNull();
+    });
+  });
 });
