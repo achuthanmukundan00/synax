@@ -205,7 +205,7 @@ describe('CLI', () => {
         const result = await runSynaxDetailed(['ask', '--question', 'Reply with exactly: synax-ok'], { cwd });
         expect(result.status).toBe(0);
         expect(result.stdout).toContain('Synax Task');
-        expect(result.stdout).toContain('Tools:       read, write, edit, bash');
+        expect(result.stdout).toContain('Tools:       read, write, edit, bash, search_memory');
         expect(result.stdout).toContain('synax-ok');
         expect(result.stderr).toBe('');
       } finally {

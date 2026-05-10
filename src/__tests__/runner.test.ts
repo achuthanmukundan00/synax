@@ -89,7 +89,7 @@ describe('shared bounded agent runner', () => {
     await runTurn({ repoRoot: TMP, task: 'hello', client });
 
     const system = client.requests[0].messages[0].content as string;
-    expect(system).toContain('Tools: read, write, edit, bash.');
+    expect(system).toContain('Tools: read, write, edit, bash, search_memory.');
     expect(system).not.toContain('GIT WORKFLOWS');
     expect(system).not.toContain('git tool');
   });
