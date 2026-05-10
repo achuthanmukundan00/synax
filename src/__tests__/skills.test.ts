@@ -12,7 +12,7 @@ import {
   formatSkillDiagnostics,
   type SkillDiagnostic,
 } from '../agent/skills';
-import { createAgentConversation } from '../agent/runner';
+import { Session } from '../session/Session';
 import type { ResolvedSkillsConfig } from '../config/schema';
 
 const TEST_ROOT = join(tmpdir(), 'synax-skill-tests');
@@ -209,7 +209,7 @@ describe('skill injection into agent context', () => {
       '--- BEGIN SKILL: my-skill ---\nPath: /some/path\n\n# Skill instructions\n\n--- END SKILL: my-skill ---',
     ];
 
-    const conv = createAgentConversation({ skillMessages });
+    const conv = Session.createConversation({ skillMessages });
 
     // Should have: system prompt + skill message
     expect(conv.messages.length).toBeGreaterThanOrEqual(2);
@@ -224,7 +224,7 @@ describe('skill injection into agent context', () => {
   });
 
   it('creates conversation without skills when none provided', () => {
-    const conv = createAgentConversation();
+    const conv = Session.createConversation();
     // Should only have the system prompt
     expect(conv.messages).toHaveLength(1);
     expect(conv.messages[0].role).toBe('system');
@@ -237,7 +237,7 @@ describe('skill injection into agent context', () => {
       '--- BEGIN SKILL: skill-b ---\n\nContent B\n\n--- END SKILL: skill-b ---',
     ];
 
-    const conv = createAgentConversation({ skillMessages });
+    const conv = Session.createConversation({ skillMessages });
 
     expect(conv.messages).toHaveLength(3); // system + 2 skills
     expect(conv.messages[1].content).toContain('skill-a');
@@ -245,7 +245,7 @@ describe('skill injection into agent context', () => {
   });
 
   it('empty skillMessages array produces no extra messages', () => {
-    const conv = createAgentConversation({ skillMessages: [] });
+    const conv = Session.createConversation({ skillMessages: [] });
     expect(conv.messages).toHaveLength(1);
   });
 });
