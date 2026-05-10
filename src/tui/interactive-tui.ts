@@ -172,6 +172,8 @@ export async function runInteractiveTui(
     outputPricePer1MTokens: options?.outputPricePer1MTokens,
   };
   const applyOptionsToState = (): void => {
+    const wasBlocked = state.phase === 'blocked' && !state.coreLoaded;
+    const nowLoaded = runtimeLabels.coreLoaded ?? true;
     state = {
       ...state,
       modelId: runtimeLabels.modelLabel ?? '',
@@ -179,11 +181,27 @@ export async function runInteractiveTui(
       contextWindowTokens: runtimeLabels.contextWindowTokens,
       thinkingEnabled: runtimeLabels.thinkingEnabled,
       activeSkills: options?.activeSkills ?? [],
-      coreLoaded: runtimeLabels.coreLoaded ?? true,
+      coreLoaded: nowLoaded,
       inputPricePer1MTokens: runtimeLabels.inputPricePer1MTokens,
       outputPricePer1MTokens: runtimeLabels.outputPricePer1MTokens,
       sessionSpendLabel: isLocalEndpoint(runtimeLabels.endpointLabel ?? '') ? 'local' : undefined,
     };
+    // When recovering from a blocked/unloaded state after config fix, reset the
+    // phase to idle so the caution/warning clears immediately.
+    if (wasBlocked && nowLoaded) {
+      state = {
+        ...state,
+        phase: 'idle',
+        objective: {
+          label: 'Waiting for run start',
+          currentPhase: 'idle',
+          nextCheckpoint: 'awaiting task',
+        },
+        riskLine: 'risk: nominal',
+        terminal: 'running',
+        severity: 'S0',
+      };
+    }
   };
   applyOptionsToState();
 
@@ -549,11 +567,13 @@ export async function runInteractiveTui(
 
     if (result.openSettings) {
       openSettingsModal();
+      paint(true);
       return;
     }
 
     if (result.openResume) {
       openResumePicker();
+      paint(true);
       return;
     }
 
