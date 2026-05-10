@@ -417,6 +417,9 @@ export function chatCommand(program: Command): void {
           alternateScreen,
           blockedMessage,
           lastModelOutput: () => lastModelOutput,
+          resetLastModelOutput: () => {
+            lastModelOutput = '';
+          },
           modelLabel,
           thinkingEnabled: thinkingLevel !== 'off',
           endpointLabel: metadata.baseUrl !== '(not set)' ? metadata.baseUrl : undefined,

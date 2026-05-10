@@ -65,6 +65,8 @@ export async function runInteractiveTui(
     blockedMessage?: string;
     /** Returns the last model output text for real-time observability. */
     lastModelOutput?: () => string;
+    /** Called when a /new or /clear session reset happens so stale preview text clears. */
+    resetLastModelOutput?: () => void;
     /** Active model ID for input panel label. */
     modelLabel?: string;
     /** Whether provider-level thinking is enabled in the active model profile. */
@@ -362,9 +364,11 @@ export async function runInteractiveTui(
       const slash = await session.handleSlashCommand(text);
       if (slash.newSession) {
         session.resetConversation?.();
+        options?.resetLastModelOutput?.();
         state = createInitialRunStateSnapshot(Date.now());
         applyOptionsToState();
         historyScrollOffset = 0;
+        diff.reset();
       }
       if (slash.output) {
         state = applyEventToRunState(
@@ -568,9 +572,11 @@ export async function runInteractiveTui(
       }
       if (slashReport.newSession) {
         session.resetConversation?.();
+        options?.resetLastModelOutput?.();
         state = createInitialRunStateSnapshot(Date.now());
         applyOptionsToState();
         historyScrollOffset = 0;
+        diff.reset();
       }
       if (slashReport.output) {
         state = applyEventToRunState(
@@ -588,9 +594,11 @@ export async function runInteractiveTui(
     }
 
     if (result.newSession) {
+      options?.resetLastModelOutput?.();
       state = createInitialRunStateSnapshot(Date.now());
       applyOptionsToState();
       historyScrollOffset = 0;
+      diff.reset();
     }
 
     if (result.output) {
