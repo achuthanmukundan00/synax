@@ -13,10 +13,14 @@
 import * as http from "node:http";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { fileURLToPath } from "node:url";
 
 type ShellRisk = "low" | "medium" | "high";
 
 // ─── Configuration ───────────────────────────────────────────────────────────
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 const PORT = parseInt(process.env.SYNTH_OBSERVER_PORT ?? "8559", 10);
 const HOST = "127.0.0.1";

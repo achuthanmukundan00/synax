@@ -8,116 +8,107 @@ interface Props {
   params: ResolvedVisualParams;
   stackLength: number;
   contextPressure: number;
-  knownTokens?: number;
-  maxTokens?: number;
 }
 
 /**
- * External rails showing prompt/context growth.
- * Always present if context telemetry is available.
- *
- * Visual mapping:
- *   0.00–0.50: calm blue-gray rails
- *   0.50–0.75: rails thicken
- *   0.75–0.90: amber outer pressure ring
- *   0.90–1.00: red compression signal
+ * Two vertical side rails showing context pressure.
+ * Left and right of the transformer stack.
+ * Color shifts: blue → amber → red with pressure.
  */
 const ContextRails: React.FC<Props> = ({ params, stackLength, contextPressure }) => {
   const groupRef = useRef<THREE.Group>(null);
-  const railRefs = useRef<THREE.LineSegments[]>([]);
+  const leftRef = useRef<THREE.Line>(null);
+  const rightRef = useRef<THREE.Line>(null);
 
-  const railCount = 4;
-  const railRadius = 1.4 * params.scaleMultiplier;
+  const railOffsetX = 1.25 * params.scaleMultiplier;
+  const halfLen = stackLength / 2;
 
-  // Color shifts with pressure
-  const getRailColor = (pressure: number): string => {
-    if (pressure > 0.9) return RUNTIME_COLORS.suspicious;
-    if (pressure > 0.75) return RUNTIME_COLORS.shellCommand;
-    return RUNTIME_COLORS.kvCache;
-  };
-
-  const getRailOpacity = (pressure: number): number => {
-    if (pressure > 0.75) return 0.25 + (pressure - 0.75) * 2;
-    return 0.12 + pressure * 0.15;
-  };
-
-  // Build rail geometries — vertical lines around the core
+  // Build rail geometries
   const railData = useMemo(() => {
-    return Array.from({ length: railCount }, (_, i) => {
-      const angle = (i / railCount) * Math.PI * 2;
-      const x = Math.cos(angle) * railRadius;
-      const z = Math.sin(angle) * railRadius;
-      const yStart = -stackLength / 2;
-      const yEnd = stackLength / 2;
-
-      const verts = new Float32Array([x, yStart, z, x, yEnd, z]);
-      const geo = new THREE.BufferGeometry();
-      geo.setAttribute("position", new THREE.BufferAttribute(verts, 3));
-      const mat = new THREE.LineBasicMaterial({
-        color: getRailColor(contextPressure),
-        transparent: true,
-        opacity: getRailOpacity(contextPressure),
-        depthWrite: true,
-        blending: contextPressure > 0.75 ? THREE.AdditiveBlending : THREE.NormalBlending,
-      });
-      return { geo, mat, angle };
+    const verts = new Float32Array([
+      -railOffsetX, -halfLen, 0,  -railOffsetX, halfLen, 0,
+      railOffsetX, -halfLen, 0,   railOffsetX, halfLen, 0,
+    ]);
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute("position", new THREE.BufferAttribute(verts, 3));
+    const mat = new THREE.LineBasicMaterial({
+      color: RUNTIME_COLORS.kvCache,
+      transparent: true,
+      opacity: 0.15,
+      depthWrite: true,
     });
-  }, [railRadius, stackLength, contextPressure]);
+    return { geo, mat };
+  }, [railOffsetX, halfLen]);
 
-  // Pressure rings
-  const pressureRings = useMemo(() => {
-    if (contextPressure <= 0.5) return null;
-    const ringCount = contextPressure > 0.85 ? 3 : contextPressure > 0.65 ? 2 : 1;
-    return Array.from({ length: ringCount }, (_, i) => {
-      const y = -stackLength * 0.4 + i * (stackLength * 0.8) / (ringCount - 1 || 1);
-      const geo = new THREE.TorusGeometry(railRadius + 0.05, 0.003 + contextPressure * 0.01, 8, 64);
-      const color = contextPressure > 0.85 ? RUNTIME_COLORS.suspicious : RUNTIME_COLORS.shellCommand;
-      const mat = new THREE.MeshBasicMaterial({
-        color,
-        transparent: true,
-        opacity: contextPressure * 0.4,
-        depthWrite: false,
-        blending: THREE.AdditiveBlending,
+  // Ticks along rails
+  const tickCount = 12;
+  const tickData = useMemo(() => {
+    const ticks: { y: number; mat: THREE.LineBasicMaterial }[] = [];
+    for (let i = 0; i < tickCount; i++) {
+      const y = -halfLen + (i / (tickCount - 1)) * stackLength;
+      ticks.push({
+        y,
+        mat: new THREE.LineBasicMaterial({
+          color: RUNTIME_COLORS.kvCache,
+          transparent: true,
+          opacity: 0.08,
+          depthWrite: true,
+        }),
       });
-      return { geo, mat, y };
-    });
-  }, [contextPressure, railRadius, stackLength]);
+    }
+    return ticks;
+  }, [tickCount, halfLen, stackLength]);
+
+  const tickGeo = useMemo(
+    () => new THREE.BufferGeometry().setFromPoints([
+      new THREE.Vector3(-0.08, 0, 0),
+      new THREE.Vector3(0.08, 0, 0),
+    ]),
+    []
+  );
 
   useFrame((state) => {
     const t = state.clock.elapsedTime;
 
-    // Update rail colors/opacity reactively
-    const color = getRailColor(contextPressure);
-    const opacity = getRailOpacity(contextPressure);
-    railRefs.current.forEach((rail) => {
-      if (rail && rail.material instanceof THREE.LineBasicMaterial) {
-        rail.material.color.set(color);
-        rail.material.opacity = opacity;
-      }
-    });
+    // Rail color based on pressure
+    const pressure = contextPressure;
+    let railColor: string;
+    let railOpacity: number;
+    if (pressure > 0.9) { railColor = RUNTIME_COLORS.suspicious; railOpacity = 0.35; }
+    else if (pressure > 0.75) { railColor = RUNTIME_COLORS.shellCommand; railOpacity = 0.25; }
+    else if (pressure > 0.5) { railColor = "#f59e0b"; railOpacity = 0.18; }
+    else { railColor = RUNTIME_COLORS.kvCache; railOpacity = 0.12; }
 
-    // Rotate rails slowly
+    railData.mat.color.set(railColor);
+    railData.mat.opacity = railOpacity;
+
+    // Rotate slowly
     if (groupRef.current) {
-      groupRef.current.rotation.y += 0.002;
-      // Speed up with pressure
-      if (contextPressure > 0.75) {
-        groupRef.current.rotation.y += contextPressure * 0.005;
-      }
+      groupRef.current.rotation.y += 0.001;
     }
   });
 
   return (
     <group ref={groupRef}>
-      {railData.map((data, i) => (
+      {/* Vertical side rails */}
+      <lineSegments geometry={railData.geo} material={railData.mat} />
+
+      {/* Tick marks */}
+      {tickData.map((tick, i) => (
         <lineSegments
-          key={`rail-${i}`}
-          ref={(el) => { railRefs.current[i] = el!; }}
-          geometry={data.geo}
-          material={data.mat}
+          key={`tick-${i}`}
+          geometry={tickGeo}
+          material={tick.mat}
+          position={[-railOffsetX, tick.y, 0]}
         />
       ))}
-      {pressureRings?.map((ring, i) => (
-        <mesh key={`pring-${i}`} geometry={ring.geo} material={ring.mat} position={[0, ring.y, 0]} />
+      {tickData.map((tick, i) => (
+        <lineSegments
+          key={`tick-r-${i}`}
+          geometry={tickGeo}
+          material={tick.mat}
+          position={[railOffsetX, tick.y, 0]}
+        />
       ))}
     </group>
   );

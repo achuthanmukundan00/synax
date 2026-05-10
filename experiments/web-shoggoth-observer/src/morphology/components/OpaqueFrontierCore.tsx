@@ -44,7 +44,7 @@ const OpaqueFrontierCore: React.FC<Props> = ({
 
   // Dark glass core material
   const coreMat = useMemo(
-    () => createHologramMaterial(params.baseColor, params.accentColor, 0.12),
+    () => createHologramMaterial(params.baseColor, params.accentColor, 0.28),
     [params.baseColor, params.accentColor]
   );
 
@@ -54,14 +54,14 @@ const OpaqueFrontierCore: React.FC<Props> = ({
     () =>
       Array.from({ length: innerBandCount }, () =>
         new THREE.MeshBasicMaterial({
-          color: params.baseColor,
+          color: params.accentColor,
           transparent: true,
-          opacity: 0.04,
+          opacity: 0.08,
           depthWrite: false,
           blending: THREE.AdditiveBlending,
         })
       ),
-    [params.baseColor, innerBandCount]
+    [params.accentColor, innerBandCount]
   );
 
   // Nested reasoning shells — rotating rings
@@ -74,7 +74,7 @@ const OpaqueFrontierCore: React.FC<Props> = ({
         const mat = new THREE.MeshBasicMaterial({
           color: params.accentColor,
           transparent: true,
-          opacity: 0.15 + i * 0.05,
+          opacity: 0.2 + i * 0.06,
           depthWrite: false,
           blending: THREE.AdditiveBlending,
         });
@@ -110,7 +110,9 @@ const OpaqueFrontierCore: React.FC<Props> = ({
       shell.rotation.z += 0.003 * sd.speed * thinkBoost * (1 + instability * 0.5);
       shell.rotation.x += 0.001 * sd.speed * thinkBoost;
       // Shell opacity pulses
-      sd.mat.opacity = (0.15 + i * 0.05) + (streaming ? 0.08 : 0) + instability * 0.05;
+      if (sd.mat) {
+        sd.mat.opacity = (0.2 + i * 0.06) + (streaming ? 0.08 : 0) + instability * 0.05;
+      }
     });
 
     // Breathing

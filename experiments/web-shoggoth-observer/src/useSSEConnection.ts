@@ -1,193 +1,140 @@
 import { useEffect, useRef } from "react";
 import { useRuntimeStore } from "./runtimeStore";
 import { resolveModelSpec } from "./morphology/modelRegistry";
-import type { ObserverEvent, ShellRisk } from "./eventTypes";
+import type { ObserverEvent, ShellRisk, AgentPhase } from "./eventTypes";
 
-/**
- * SSE hook that connects to the observer server's /events stream
- * and pushes events into the Zustand runtime store.
- *
- * Normalizes legacy event formats into the spec's ObserverEvent types.
- */
 export function useSSEConnection() {
   const pushEvent = useRuntimeStore((s) => s.pushEvent);
   const setModelSpec = useRuntimeStore((s) => s.setModelSpec);
   const setModelId = useRuntimeStore((s) => s.setModelId);
+
   const eventSourceRef = useRef<EventSource | null>(null);
+  const lastModelId = useRef<string>("");
 
   useEffect(() => {
     const es = new EventSource("/events");
     eventSourceRef.current = es;
 
+    es.onopen = () => {
+      console.log("[shoggoth] SSE connection opened");
+    };
+
     es.onmessage = (e) => {
       try {
         const data = JSON.parse(e.data);
-        if (data.type === "connected") return;
+        if (data.type === "connected") {
+          console.log("[shoggoth] SSE connected, history:", data.count, "events");
+          return;
+        }
+        // Use console.log so it always shows (not hidden by log levels)
+        console.log(
+          `[shoggoth] ← ${data.type}${data.phase ? " phase=" + data.phase : ""}${data.modelId ? " model=" + data.modelId : ""}${data.providerName ? " prov=" + data.providerName : ""}`
+        );
         processEvent(data);
       } catch {
         // ignore malformed events
       }
     };
 
-    // Custom event handlers for named SSE events
-    es.addEventListener("token", (e: any) => {
-      try { processEvent(JSON.parse(e.data)); } catch {}
-    });
-    es.addEventListener("phase", (e: any) => {
-      try { processEvent(JSON.parse(e.data)); } catch {}
-    });
-    es.addEventListener("tool_call", (e: any) => {
-      try { processEvent(JSON.parse(e.data)); } catch {}
-    });
-
-    function processEvent(raw: any): void {
-      // Detect model from event
-      if (raw.modelId && raw.modelId !== "default") {
-        setModelId(raw.modelId);
-        const spec = resolveModelSpec(raw.modelId, raw.providerName);
-        setModelSpec(spec);
-      }
-
-      // Try to map to spec event types
-      const event = normalizeToSpecEvent(raw);
-      if (event) {
-        pushEvent(event);
-      }
-
-      // Also push legacy events as best-effort
-      pushLegacyEvent(raw);
-    }
-
     es.onerror = () => {
-      // Connection lost — will auto-reconnect
+      console.log("[shoggoth] SSE connection error (will auto-reconnect)");
     };
+
+    function processEvent(raw: Record<string, unknown>): void {
+      const rawType = raw.type as string | undefined;
+
+      // ── Model detection ────────────────────────────────────────────────
+      const modelId = (raw.modelId as string) ?? "";
+      const providerName = (raw.providerName as string) ?? (raw.provider as string) ?? "";
+
+      if (modelId && modelId !== lastModelId.current) {
+        lastModelId.current = modelId;
+        const spec = resolveModelSpec(modelId, providerName);
+        console.log(
+          `[shoggoth] model detected: id=${modelId} prov=${providerName} → ${spec.displayName} (${spec.architectureClass}, ${spec.visual.morphologyPreset})`
+        );
+        setModelId(modelId);
+        setModelSpec(spec);
+        pushEvent({
+          type: "model_switch",
+          modelId,
+          displayName: spec.displayName,
+          provider: providerName,
+        });
+      }
+
+      // ── Phase handling: directly for every event with a phase field ────
+      if (raw.phase) {
+        const phase = mapPhase(raw.phase as string);
+        pushEvent({ type: "phase", phase });
+      }
+
+      // ── Normalize to spec events ───────────────────────────────────────
+      const specEvent = normalizeToSpecEvent(rawType ?? "", raw);
+      if (specEvent) pushEvent(specEvent);
+
+      // ── Legacy passthrough for unmatched types ─────────────────────────
+      handleLegacy(rawType ?? "", raw);
+    }
 
     return () => {
       es.close();
+      console.log("[shoggoth] SSE connection closed");
     };
   }, [pushEvent, setModelSpec, setModelId]);
 }
 
-/**
- * Normalize raw server events into spec-compliant ObserverEvent types.
- */
-function normalizeToSpecEvent(raw: any): ObserverEvent | null {
-  const rawType = raw.type as string;
+// ─── Normalize to spec ObserverEvent ────────────────────────────────────
 
+function normalizeToSpecEvent(rawType: string, raw: Record<string, unknown>): ObserverEvent | null {
   switch (rawType) {
-    case "token":
     case "assistant_delta": {
-      const text = raw.text ?? raw.content ?? "";
+      const text = (raw.text as string) ?? (raw.content as string) ?? "";
+      if (!text.trim()) return null;
       return {
         type: "token",
         text,
-        index: raw.index ?? 0,
-        tps: raw.tps ?? raw.tokensPerSecond,
-        cumulativeTokens: raw.cumulativeTokens ?? raw.completionTokens,
+        index: (raw.index as number) ?? 0,
+        tps: raw.tps as number | undefined,
+        cumulativeTokens: raw.cumulativeTokens as number | undefined,
         truth: "telemetry",
       };
     }
 
-    case "phase": {
-      return {
-        type: "phase",
-        phase: mapPhase(raw.phase),
-      };
-    }
-
-    case "tool_call":
     case "tool_call_started": {
-      const tool = raw.tool?.name ?? raw.toolName ?? "unknown";
+      const tool = raw.tool as Record<string, unknown> | undefined;
       return {
         type: "tool_call",
-        tool,
-        argsPreview: raw.tool?.summary ?? raw.summary ?? raw.argsPreview ?? "",
-        risk: mapRisk(raw.tool?.severity ?? raw.severity ?? raw.risk),
+        tool: ((tool?.name ?? raw.toolName ?? "unknown") as string),
+        argsPreview: ((tool?.summary ?? tool?.argsPreview ?? raw.summary ?? "") as string),
+        risk: mapRisk((tool?.severity ?? raw.severity ?? raw.risk) as string | undefined),
         timestamp: Date.now(),
       };
     }
 
-    case "tool_result":
     case "tool_call_finished":
     case "tool_call_failed": {
-      const tool = raw.tool?.name ?? raw.toolName ?? "unknown";
+      const tool = raw.tool as Record<string, unknown> | undefined;
       return {
         type: "tool_result",
-        tool,
-        success: rawType !== "tool_call_failed" && raw.tool?.status !== "failed",
-        summary: raw.tool?.summary ?? raw.summary ?? "",
+        tool: ((tool?.name ?? raw.toolName ?? "unknown") as string),
+        success: rawType !== "tool_call_failed" && tool?.status !== "failed",
+        summary: ((tool?.summary ?? raw.summary ?? "") as string),
       };
     }
 
-    case "memory_search": {
-      return {
-        type: "memory_search",
-        query: raw.query ?? "",
-        hitCount: raw.hitCount,
-      };
-    }
-
-    case "file_read": {
-      return { type: "file_read", path: raw.path ?? "" };
-    }
-
-    case "file_write": {
-      return { type: "file_write", path: raw.path ?? "" };
-    }
-
-    case "shell_command": {
-      return {
-        type: "shell_command",
-        command: raw.command ?? raw.text ?? "",
-        risk: mapRisk(raw.risk),
-        exitCode: raw.exitCode,
-      };
-    }
-
-    case "verification": {
-      return {
-        type: "verification",
-        status: mapVerificationStatus(raw.status),
-        command: raw.command,
-      };
-    }
-
-    case "context_pressure":
     case "budget_update": {
       return {
         type: "context_pressure",
-        pressure: raw.pressure ?? computePressure(raw),
-        promptTokens: raw.contextUsedTokens ?? raw.promptTokens,
-        maxContext: raw.contextWindowTokens ?? raw.maxContext,
+        pressure: computePressure(raw),
+        promptTokens: raw.contextUsedTokens as number | undefined,
+        maxContext: raw.contextWindowTokens as number | undefined,
       };
     }
 
-    case "error":
-    case "error_event": {
-      const text = raw.text ?? raw.message ?? raw.error ?? "";
-      // Filter out the error if it's just a phase transition label
-      if (text === "Agent phase: ERROR") return null;
-      return {
-        type: "error_event",
-        message: text,
-      };
-    }
-
-    case "subroutine": {
-      return {
-        type: "subroutine",
-        action: raw.action ?? "spawn",
-        id: raw.id ?? "",
-      };
-    }
-
-    case "model_switch": {
-      return {
-        type: "model_switch",
-        modelId: raw.modelId ?? "",
-        displayName: raw.displayName,
-        provider: raw.providerName ?? raw.provider,
-      };
+    case "error": {
+      const text = (raw.text as string) ?? (raw.message as string) ?? "";
+      return { type: "error_event", message: text };
     }
 
     default:
@@ -195,61 +142,45 @@ function normalizeToSpecEvent(raw: any): ObserverEvent | null {
   }
 }
 
-/**
- * Push legacy-format events into the store (best-effort compatibility).
- */
-function pushLegacyEvent(raw: any): void {
-  const rawType = raw.type as string;
-  const phase = mapPhase(raw.phase);
+function handleLegacy(rawType: string, raw: Record<string, unknown>): void {
+  const store = useRuntimeStore.getState();
 
-  // Always push phase if present
-  if (raw.phase) {
-    useRuntimeStore.getState().pushEvent({ type: "phase", phase });
-  }
+  switch (rawType) {
+    case "model_note":
+      if (raw.text) {
+        store.pushEvent({ type: "token", text: raw.text as string, index: 0, truth: "telemetry" });
+      }
+      break;
 
-  // Tool events from legacy format
-  if (rawType === "tool_call_started" || rawType === "tool_call_finished" || rawType === "tool_call_failed") {
-    // Handled by normalizeToSpecEvent above
-  }
+    case "session_started":
+      store.pushEvent({ type: "phase", phase: "perceive" });
+      break;
 
-  // Model notes as output
-  if (rawType === "model_note" && raw.text) {
-    useRuntimeStore.getState().pushEvent({
-      type: "token",
-      text: raw.text,
-      index: 0,
-      truth: "telemetry",
-    });
-  }
+    case "session_finished":
+      store.pushEvent({ type: "phase", phase: "idle" });
+      break;
 
-  // Session lifecycle as phases
-  if (rawType === "session_started") {
-    useRuntimeStore.getState().pushEvent({ type: "phase", phase: "perceive" });
-  }
-  if (rawType === "session_finished") {
-    useRuntimeStore.getState().pushEvent({ type: "phase", phase: "idle" });
-  }
-
-  // Budget updates
-  if (rawType === "budget_update") {
-    const pressure = computePressure(raw);
-    useRuntimeStore.getState().pushEvent({
-      type: "context_pressure",
-      pressure,
-      promptTokens: raw.contextUsedTokens,
-      maxContext: raw.contextWindowTokens,
-    });
+    case "budget_update": {
+      const pressure = computePressure(raw);
+      store.pushEvent({
+        type: "context_pressure",
+        pressure,
+        promptTokens: raw.contextUsedTokens as number | undefined,
+        maxContext: raw.contextWindowTokens as number | undefined,
+      });
+      break;
+    }
   }
 }
 
 // ─── Helpers ────────────────────────────────────────────────────────────
 
-function mapPhase(phase: string): import("./eventTypes").AgentPhase {
-  const mapping: Record<string, import("./eventTypes").AgentPhase> = {
+function mapPhase(raw: string): AgentPhase {
+  const m: Record<string, AgentPhase> = {
     idle: "idle",
     thinking: "think",
     think: "think",
-    streaming: "think",
+    streaming: "act",     // streaming = actively producing = act phase
     tool_running: "act",
     tool_pending: "decide",
     act: "act",
@@ -262,31 +193,19 @@ function mapPhase(phase: string): import("./eventTypes").AgentPhase {
     error: "error",
     blocked: "error",
   };
-  return mapping[phase] ?? "idle";
+  return m[raw] ?? "idle";
 }
 
-function mapRisk(severity: string | undefined): ShellRisk {
-  if (!severity) return "low";
-  const s = severity.toLowerCase();
-  if (s === "high" || s === "suspicious") return "high";
-  if (s === "medium" || s === "attention") return "medium";
+function mapRisk(s: string | undefined): ShellRisk {
+  if (!s) return "low";
+  const lower = s.toLowerCase();
+  if (lower === "high" || lower === "suspicious") return "high";
+  if (lower === "medium" || lower === "attention") return "medium";
   return "low";
 }
 
-function mapVerificationStatus(status: string): import("./eventTypes").VerificationState {
-  const mapping: Record<string, import("./eventTypes").VerificationState> = {
-    running: "running",
-    pass: "pass",
-    passed: "pass",
-    fail: "fail",
-    failed: "fail",
-    idle: "idle",
-  };
-  return mapping[status] ?? "idle";
-}
-
-function computePressure(raw: any): number {
-  const used = raw.contextUsedTokens ?? raw.promptTokens ?? 0;
-  const max = raw.contextWindowTokens ?? raw.maxContext ?? 1;
+function computePressure(raw: Record<string, unknown>): number {
+  const used = (raw.contextUsedTokens ?? raw.promptTokens ?? 0) as number;
+  const max = (raw.contextWindowTokens ?? raw.maxContext ?? 1) as number;
   return max > 0 ? Math.min(1, used / max) : 0;
 }

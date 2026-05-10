@@ -232,7 +232,7 @@ export interface OutputHeadSpec { type?: string }
 export interface ModelMorphologySpec {
   id: string;
   displayName: string;
-  provider?: "local" | "openai" | "anthropic" | "google" | "other";
+  provider?: "local" | "openai" | "anthropic" | "google" | "deepseek" | "relay" | "unknown" | "other";
   family?: string;
   architectureConfidence: "known" | "partial" | "opaque";
   architectureClass: ArchitectureClass;

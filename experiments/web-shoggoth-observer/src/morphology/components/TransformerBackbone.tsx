@@ -19,46 +19,43 @@ interface Props {
 }
 
 /**
- * Vertical black-metal reactor core for known dense transformer models.
+ * Vertical reactor core for dense transformer models.
  *
- * Layout:
- *   - Central residual spine (brightest)
- *   - Stacked translucent layer bands
- *   - Attention rings wrapping layer groups
- *   - Token particles flowing through the stack
- *   - Output head at the bottom
+ * Layout (vertical, along Y axis):
+ *   - Central residual spine (bright vertical cylinder)
+ *   - Stacked rectangular layer slabs (wide, thin, deep)
+ *   - 4 thin attention rings at key positions
+ *   - MLP micro-blocks beside each slab
+ *   - Context rails on either side
+ *   - Token particles flowing down the spine
+ *   - Output aperture at the bottom
  */
 const TransformerBackbone: React.FC<Props> = ({
-  params,
-  layerCount,
-  attentionHeads,
-  streaming,
-  phase,
-  instability,
-  cascadeProgress,
+  params, layerCount, attentionHeads,
+  streaming, phase, instability, cascadeProgress,
 }) => {
   const groupRef = useRef<THREE.Group>(null);
-  const stackLength = 7.2 * params.scaleMultiplier;
+  const stackLength = 4.0 * params.scaleMultiplier;  // compact, not 7.2
 
-  // MLP slabs offset from attention fibers
+  // MLP micro-blocks — small boxes beside each layer slab
   const mlpSlabCount = layerCount;
-  const mlpOffsetZ = 0.45 * params.scaleMultiplier;
+  const mlpOffsetZ = 0.55 * params.scaleMultiplier;
   const slabDummy = useMemo(() => new THREE.Object3D(), []);
 
   const slabGeo = useMemo(
-    () => new THREE.BoxGeometry(0.08, 0.55 * params.scaleMultiplier, 0.22),
-    [params.scaleMultiplier]
+    () => new THREE.BoxGeometry(0.06, 0.04, 0.15),
+    []
   );
   const slabMat = useMemo(
     () =>
       new THREE.MeshStandardMaterial({
-        color: new THREE.Color(params.baseColor).multiplyScalar(0.7),
-        emissive: new THREE.Color(params.baseColor).multiplyScalar(0.7),
-        emissiveIntensity: 0.15,
+        color: new THREE.Color(params.baseColor).multiplyScalar(0.6),
+        emissive: new THREE.Color(params.baseColor).multiplyScalar(0.6),
+        emissiveIntensity: 0.12,
         roughness: 0.5,
         metalness: 0.3,
         transparent: true,
-        opacity: 0.7,
+        opacity: 0.6,
       }),
     [params.baseColor]
   );
@@ -66,13 +63,12 @@ const TransformerBackbone: React.FC<Props> = ({
   const layerSpacing = stackLength / (layerCount - 1);
   const stackStart = -stackLength / 2;
 
-  // Set initial MLP slab positions
   useMemo(() => {
     if (!slabMeshRef.current) return;
     for (let l = 0; l < mlpSlabCount; l++) {
-      slabDummy.position.set(stackStart + l * layerSpacing, 0, mlpOffsetZ);
+      slabDummy.position.set(0, stackStart + l * layerSpacing, mlpOffsetZ);
       slabDummy.rotation.set(0, 0, 0);
-      slabDummy.scale.setScalar(0.9 + (l % 3) * 0.05);
+      slabDummy.scale.setScalar(0.8 + (l % 3) * 0.08);
       slabDummy.updateMatrix();
       slabMeshRef.current.setMatrixAt(l, slabDummy.matrix);
     }
@@ -83,24 +79,23 @@ const TransformerBackbone: React.FC<Props> = ({
     if (!slabMeshRef.current) return;
     const t = state.clock.elapsedTime;
     for (let l = 0; l < mlpSlabCount; l++) {
-      const x = stackStart + l * layerSpacing;
-      const pulse = 1 + Math.sin(t * 1.1 + l * 0.3) * 0.04;
-      slabDummy.position.set(x, 0, mlpOffsetZ);
-      slabDummy.scale.set(1, pulse, 1);
-      slabDummy.rotation.set(0, 0, Math.sin(t * 0.5 + l * 0.1) * 0.02);
+      const y = stackStart + l * layerSpacing;
+      slabDummy.position.set(0, y, mlpOffsetZ);
+      slabDummy.scale.set(1, 1 + Math.sin(t * 0.8 + l * 0.2) * 0.1, 1);
+      slabDummy.rotation.set(0, 0, Math.sin(t * 0.3 + l * 0.1) * 0.03);
       slabDummy.updateMatrix();
       slabMeshRef.current.setMatrixAt(l, slabDummy.matrix);
     }
     slabMeshRef.current.instanceMatrix.needsUpdate = true;
-    slabMat.emissiveIntensity = 0.15 + (streaming ? 0.1 : 0) + instability * 0.08;
+    slabMat.emissiveIntensity = 0.12 + (streaming ? 0.08 : 0);
   });
 
   return (
     <group ref={groupRef}>
-      {/* Central spine */}
+      {/* Central vertical spine */}
       <ResidualHighway params={params} streaming={streaming} instability={instability} />
 
-      {/* Layer bands (torus stack) */}
+      {/* Stacked rectangular layer slabs */}
       <LayerBands
         params={params}
         layerCount={layerCount}
@@ -110,14 +105,12 @@ const TransformerBackbone: React.FC<Props> = ({
         cascadeProgress={cascadeProgress}
       />
 
-      {/* MLP slabs */}
+      {/* MLP micro-blocks */}
       <instancedMesh ref={slabMeshRef} args={[slabGeo, slabMat, mlpSlabCount]} />
 
-      {/* Attention rings + head dots */}
+      {/* 4 attention rings */}
       <AttentionRings
         params={params}
-        layerCount={layerCount}
-        attentionHeads={attentionHeads}
         stackLength={stackLength}
         streaming={streaming}
         phase={phase}
@@ -125,7 +118,7 @@ const TransformerBackbone: React.FC<Props> = ({
         truth="simulated"
       />
 
-      {/* Token particles */}
+      {/* Token particles flowing along spine */}
       <TokenParticles
         params={params}
         stackLength={stackLength}
@@ -133,7 +126,7 @@ const TransformerBackbone: React.FC<Props> = ({
         instability={instability}
       />
 
-      {/* Output head */}
+      {/* Output aperture at bottom */}
       <OutputHead params={params} stackLength={stackLength} streaming={streaming} />
     </group>
   );

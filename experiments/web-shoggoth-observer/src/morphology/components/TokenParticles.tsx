@@ -12,71 +12,149 @@ interface Props {
   maxParticles?: number;
 }
 
+const MAX_PARTICLES = 600;
+const MAX_PARTICLE_AGE = 3.5; // seconds
+const MAX_PARTICLE_DISTANCE = 12;
+const SCENE_BOUNDS = 30;
+const MAX_SPEED = 3.0;
+
+function randBetween(a: number, b: number): number {
+  return a + Math.random() * (b - a);
+}
+
+interface ParticleState {
+  age: number;
+  maxAge: number;
+  originY: number;
+}
+
 /**
- * Small white-blue packets flowing along the residual spine.
- * Each streamed token spawns a pulse that travels top-to-bottom.
+ * Bounded token particles flowing along the residual spine.
+ * Each particle has age, maxAge, origin, and bounded velocity.
+ * Dead particles are recycled to origin with fresh parameters.
  */
 const TokenParticles: React.FC<Props> = ({
   params,
   stackLength,
   streaming,
   instability,
-  maxParticles = 512,
+  maxParticles = 200,
 }) => {
   const pointsRef = useRef<THREE.Points>(null);
 
-  const particleCount = Math.min(maxParticles, 512);
+  const particleCount = Math.min(maxParticles, MAX_PARTICLES);
 
-  const particleData = useMemo(() => {
-    const progress = new Float32Array(particleCount);
-    const positions = new Float32Array(particleCount * 3);
+  // Particle state: age, maxAge, origin
+  const particleStates = useMemo((): ParticleState[] => {
+    const states: ParticleState[] = [];
     for (let i = 0; i < particleCount; i++) {
-      progress[i] = Math.random();
-      positions[i * 3] = -stackLength / 2 + progress[i] * stackLength;
-      positions[i * 3 + 1] = (Math.random() - 0.5) * 0.1;
-      positions[i * 3 + 2] = (Math.random() - 0.5) * 0.1;
+      states.push({
+        age: randBetween(0, MAX_PARTICLE_AGE),
+        maxAge: randBetween(1.5, MAX_PARTICLE_AGE),
+        originY: -stackLength / 2 + Math.random() * stackLength,
+      });
     }
-    return { progress, positions };
+    return states;
   }, [particleCount, stackLength]);
+
+  // Position buffer
+  const positions = useMemo(() => {
+    const arr = new Float32Array(particleCount * 3);
+    for (let i = 0; i < particleCount; i++) {
+      arr[i * 3] = (Math.random() - 0.5) * 0.1;
+      arr[i * 3 + 1] = particleStates[i].originY;
+      arr[i * 3 + 2] = (Math.random() - 0.5) * 0.1;
+    }
+    return arr;
+  }, [particleCount, particleStates]);
+
+  // Per-particle velocity buffer (stored outside geometry, in a ref)
+  const velocities = useMemo(() => {
+    const arr = new Float32Array(particleCount * 3);
+    for (let i = 0; i < particleCount; i++) {
+      // Normalized direction with bounded speed
+      const vx = randBetween(-1, 1);
+      const vy = randBetween(-0.15, 1.0); // mostly downward
+      const vz = randBetween(-1, 1);
+      const len = Math.sqrt(vx * vx + vy * vy + vz * vz) || 1;
+      const speed = randBetween(0.2, MAX_SPEED);
+      arr[i * 3] = (vx / len) * speed * 0.3;
+      arr[i * 3 + 1] = (vy / len) * speed;
+      arr[i * 3 + 2] = (vz / len) * speed * 0.3;
+    }
+    return arr;
+  }, [particleCount]);
 
   const geo = useMemo(() => {
     const g = new THREE.BufferGeometry();
-    g.setAttribute("position", new THREE.BufferAttribute(particleData.positions, 3));
+    g.setAttribute("position", new THREE.BufferAttribute(positions, 3));
     return g;
-  }, [particleData.positions]);
+  }, [positions]);
 
   const mat = useMemo(
     () =>
       new THREE.PointsMaterial({
-        size: 0.05,
+        size: 0.04,
         color: RUNTIME_COLORS.tokenFlow,
         transparent: true,
-        opacity: 0.8,
+        opacity: 0.65,
         blending: THREE.AdditiveBlending,
         depthWrite: false,
       }),
     []
   );
 
-  useFrame((_state, delta) => {
+  function recycleParticle(i: number): void {
+    const s = particleStates[i];
+    s.age = 0;
+    s.maxAge = randBetween(1.5, MAX_PARTICLE_AGE);
+    s.originY = -stackLength / 2 + Math.random() * stackLength;
+    positions[i * 3] = (Math.random() - 0.5) * 0.1;
+    positions[i * 3 + 1] = s.originY;
+    positions[i * 3 + 2] = (Math.random() - 0.5) * 0.1;
+  }
+
+  useFrame((_state, rawDelta) => {
     if (!pointsRef.current) return;
-    const posArr = geo.attributes.position.array as Float32Array;
-    const speed =
-      (streaming ? 0.15 : 0.04) * (1 + instability * 0.5);
+
+    // Clamp delta time to prevent physics explosion after tab switch
+    const dt = Math.min(rawDelta, 1 / 20);
+    const speedMult = (streaming ? 1.6 : 0.35) * (1 + instability * 0.5);
 
     for (let i = 0; i < particleCount; i++) {
-      let p = particleData.progress[i] + delta * speed * (0.6 + (i % 5) * 0.15);
-      if (p > 1.0) p -= 1.0;
-      particleData.progress[i] = p;
-      const x = -stackLength / 2 + p * stackLength;
-      posArr[i * 3] = x;
-      posArr[i * 3 + 1] = (particleData.positions[i * 3 + 1] || 0) + Math.sin(p * 20) * 0.015;
-      posArr[i * 3 + 2] = (particleData.positions[i * 3 + 2] || 0) + Math.cos(p * 17) * 0.015;
+      const state = particleStates[i];
+      state.age += dt;
+
+      // Move particle
+      const idx = i * 3;
+      positions[idx] += velocities[idx] * dt * speedMult;
+      positions[idx + 1] += velocities[idx + 1] * dt * speedMult;
+      positions[idx + 2] += velocities[idx + 2] * dt * speedMult;
+
+      const px = positions[idx];
+      const py = positions[idx + 1];
+      const pz = positions[idx + 2];
+
+      // Kill conditions
+      const distFromOrigin = Math.abs(py - state.originY);
+      const fromCenter = Math.sqrt(py * py + pz * pz);
+
+      if (
+        state.age > state.maxAge ||
+        distFromOrigin > MAX_PARTICLE_DISTANCE ||
+        fromCenter > MAX_PARTICLE_DISTANCE ||
+        Math.abs(px) > SCENE_BOUNDS ||
+        Math.abs(py) > SCENE_BOUNDS ||
+        Math.abs(pz) > SCENE_BOUNDS
+      ) {
+        recycleParticle(i);
+      }
     }
+
     geo.attributes.position.needsUpdate = true;
 
     // Opacity follows streaming state
-    mat.opacity += ((streaming ? 0.85 : 0.3) - mat.opacity) * 0.1;
+    mat.opacity += ((streaming ? 0.75 : 0.25) - mat.opacity) * 0.1;
   });
 
   return <points ref={pointsRef} geometry={geo} material={mat} />;
