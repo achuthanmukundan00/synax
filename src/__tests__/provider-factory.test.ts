@@ -281,7 +281,7 @@ describe('Provider factory — error cases', () => {
 
   it('throws with helpful message listing known providers', () => {
     expect(() => createLLMClient(makeInput({ provider: 'nonexistent' }))).toThrow(
-      /Known providers: relay, custom, deepseek/,
+      /Known providers: relay, custom, openai, deepseek/,
     );
   });
 

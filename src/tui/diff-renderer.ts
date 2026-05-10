@@ -48,7 +48,7 @@ function renderLine(index: number, line: string): string {
 
 function clip(line: string, width: number): string {
   const visible = stripAnsi(line);
-  if (visible.length <= width) return line;
+  if (visible.length <= width) return closeAnsi(line);
 
   let visibleCount = 0;
   let out = '';
@@ -68,7 +68,18 @@ function clip(line: string, width: number): string {
     visibleCount += 1;
   }
 
-  return out;
+  // Ensure truncated lines don't leave ANSI codes open — open colours can
+  // bleed past the written content and shift or stain adjacent screen regions.
+  return closeAnsi(out);
+}
+
+function closeAnsi(input: string): string {
+  return hasAnsi(input) && !input.endsWith('\u001b[0m') ? `${input}\u001b[0m` : input;
+}
+
+function hasAnsi(input: string): boolean {
+  // eslint-disable-next-line no-control-regex
+  return /\u001b\[[0-9;]*m/.test(input);
 }
 
 function stripAnsi(line: string): string {

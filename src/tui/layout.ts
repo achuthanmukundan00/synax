@@ -1,6 +1,6 @@
 import type { RunStateSnapshot } from '../agent/tui-state';
 import type { CoreMode } from './ai-core';
-import { CORE_HEIGHT, CORE_WIDTH, modeColor, renderAiCore, renderDottedCore } from './ai-core';
+import { CORE_HEIGHT, CORE_WIDTH, modeColor, modePromptColor, renderAiCore, renderDottedCore } from './ai-core';
 import {
   resolveCoreVisualProfile,
   type CoreVisualResolverOptions,
@@ -8,6 +8,8 @@ import {
 } from './core-visual-profile';
 import { renderTranscript, toolsUsed } from './transcript';
 import pkg from '../../package.json';
+
+const RESET = '\u001b[0m';
 
 const INPUT_DOCK_MAX_BODY_LINES = 12;
 const INPUT_DOCK_MIN_NONEMPTY_BODY_LINES = 2;
@@ -42,6 +44,8 @@ export function renderLayout(state: InteractiveViewState, cols: number, rows: nu
   const panel = renderInputDock(
     state.objectiveInput,
     renderWidth,
+    state.coreMode,
+    state.nowMs,
     locationLabel(state.cwdLabel, state.gitBranch),
     maxInputDockBodyLines(height),
   );
@@ -209,7 +213,11 @@ function sliceVisible(line: string, start: number, end: number): string {
       // eslint-disable-next-line no-control-regex
       const match = /\u001b\[[0-9;]*m/.exec(line.slice(i));
       if (match) {
-        if (writing) out += match[0];
+        // Include ANSI codes that start at or after the slice targetStart, not only
+        // after writing has begun.  Without this, leading ANSI codes and codes at
+        // slice boundaries are dropped, causing color bleed and visual displacement
+        // when put() overlays the AI core next to the transcript.
+        if (writing || visibleIndex >= targetStart) out += match[0];
         i += match[0].length - 1;
         continue;
       }
@@ -268,10 +276,12 @@ function wrapInputText(text: string, maxWidth: number): string[] {
 function renderInputDock(
   objectiveInput: string,
   width: number,
+  coreMode: CoreMode = 'idle',
+  nowMs: number = 0,
   metadataLabel?: string,
   maxBodyLines?: number,
 ): string[] {
-  return ['', '', ...renderDirectivePanel(objectiveInput, width, metadataLabel, maxBodyLines)];
+  return ['', '', ...renderDirectivePanel(objectiveInput, width, coreMode, nowMs, metadataLabel, maxBodyLines)];
 }
 
 export interface InputCursorPosition {
@@ -314,6 +324,8 @@ export function inputCursorPosition(
 function renderDirectivePanel(
   objectiveInput: string,
   width: number,
+  coreMode: CoreMode,
+  nowMs: number,
   metadataLabel?: string,
   maxBodyLines = INPUT_DOCK_MAX_BODY_LINES,
 ): string[] {
@@ -330,18 +342,21 @@ function renderDirectivePanel(
         .concat(Array.from({ length: Math.max(0, bodyLineCount - wrapped.length) }, () => ''))
     : [''];
 
+  const promptColor = modePromptColor(coreMode, nowMs);
   const label = metadataLabel ? ` ${truncateMiddle(metadataLabel, Math.max(4, inner - 6))} ` : '';
   const topFill = Math.max(0, inner - label.length);
-  const helpText = 'Enter submit | Ctrl+C exit | /help | !cmd shell';
+  const helpText = 'Enter submit · Ctrl+D exit · Shift+↵ newline · Ctrl+C clear · /help · !cmd';
   const bottomFill = Math.max(0, inner - helpText.length - 2);
 
   const placeholder = hasInput ? '' : dimI('Ask Synax to inspect, edit, test, or commit…');
   const displayBody = hasInput ? body : [placeholder || ''];
 
   return [
-    `${dim('┌')}${dim('─'.repeat(topFill))}${label ? dim(label) : ''}${dim('┐')}`,
-    ...displayBody.map((line) => `${dim('│')} ${pad(clip(line, inner - 2), inner - 2)} ${dim('│')}`),
-    `${dim('└')} ${dim(helpText)} ${dim('─'.repeat(bottomFill))}${dim('┘')}`,
+    `${promptColor}┌${'─'.repeat(topFill)}${label ? dim(label) : ''}${promptColor}┐${RESET}`,
+    ...displayBody.map(
+      (line) => `${promptColor}│${RESET} ${pad(clip(line, inner - 2), inner - 2)} ${promptColor}│${RESET}`,
+    ),
+    `${promptColor}└${RESET} ${dim(helpText)} ${promptColor}${'─'.repeat(bottomFill)}┘${RESET}`,
   ];
 }
 

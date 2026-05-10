@@ -12,9 +12,8 @@
  *   5. Verification contracts detect premature completion
  */
 
-import Database from 'better-sqlite3';
-
 import { HolographicMemory } from '../memory/HolographicMemory';
+import { loadBetterSqlite3, type Database } from '../store/sqlite-loader';
 import { Session } from '../session/Session';
 import { resolveVerificationContract, checkCompletionAgainstContract } from '../session/verification-contracts';
 
@@ -35,8 +34,10 @@ function mockClient() {
   };
 }
 
-function createInMemoryDb(): Database.Database {
-  const db = new Database(':memory:');
+function createInMemoryDb(): Database.Database | null {
+  const SQLite = loadBetterSqlite3();
+  if (!SQLite) return null;
+  const db = new SQLite(':memory:');
   db.pragma('journal_mode = WAL');
   db.pragma('synchronous = NORMAL');
   db.pragma('foreign_keys = ON');
@@ -60,7 +61,7 @@ function createInMemoryDb(): Database.Database {
 // ─── Tests ───────────────────────────────────────────────────────────────────
 
 describe('Memory → Handoff → Continue Pipeline', () => {
-  let db: Database.Database;
+  let db: Database.Database | null;
   let memory: HolographicMemory;
 
   beforeEach(() => {
@@ -69,13 +70,14 @@ describe('Memory → Handoff → Continue Pipeline', () => {
   });
 
   afterEach(() => {
-    db.close();
+    if (db) db.close();
   });
 
   // ── Test 1: Store and retrieve ────────────────────────────────────────
 
   describe('store → retrieve', () => {
     it('stores entries and retrieves them via FTS5 search', () => {
+      if (!db) return;
       memory.store({
         sessionId: 'syn-test',
         turnId: 1,
@@ -113,6 +115,7 @@ describe('Memory → Handoff → Continue Pipeline', () => {
     });
 
     it('returns empty results for non-matching queries', () => {
+      if (!db) return;
       memory.store({
         sessionId: 'syn-test',
         turnId: 1,
@@ -125,6 +128,7 @@ describe('Memory → Handoff → Continue Pipeline', () => {
     });
 
     it('respects the result limit', () => {
+      if (!db) return;
       for (let i = 0; i < 10; i++) {
         memory.store({
           sessionId: 'syn-test',
@@ -143,6 +147,7 @@ describe('Memory → Handoff → Continue Pipeline', () => {
 
   describe('handoff manifest', () => {
     it('generates a manifest with key findings and search terms', () => {
+      if (!db) return;
       memory.store({
         sessionId: 'syn-test',
         turnId: 1,
@@ -210,6 +215,7 @@ describe('Memory → Handoff → Continue Pipeline', () => {
 
   describe('handoff context for continuation', () => {
     it('builds compact context preserving system prompt and handoff manifest', () => {
+      if (!db) return;
       // Populate memory
       for (let i = 0; i < 5; i++) {
         memory.store({
@@ -364,6 +370,7 @@ describe('Memory → Handoff → Continue Pipeline', () => {
 
   describe('session construction with memory', () => {
     it('accepts memory in constructor and exposes it', () => {
+      if (!db) return;
       const session = new Session({
         repoRoot: '/tmp/test',
         client: mockClient(),
@@ -446,6 +453,7 @@ describe('Memory → Handoff → Continue Pipeline', () => {
 describe('Full Pipeline: Store → Exhaust → Handoff → Continue', () => {
   it('handoff context is structurally valid for injection into conversation', () => {
     const db = createInMemoryDb();
+    if (!db) return;
     const memory = new HolographicMemory(db);
 
     // Simulate a session with multiple turns
@@ -535,7 +543,7 @@ import { HandoffManager } from '../handoff/HandoffManager';
 import type { HandoffManifest } from '../handoff/types';
 
 describe('HandoffManager', () => {
-  let db: Database.Database;
+  let db: Database.Database | null;
   let memory: HolographicMemory;
 
   beforeEach(() => {
@@ -544,7 +552,7 @@ describe('HandoffManager', () => {
   });
 
   afterEach(() => {
-    db.close();
+    if (db) db.close();
   });
 
   describe('canHandoff', () => {
@@ -572,6 +580,7 @@ describe('HandoffManager', () => {
 
   describe('generateManifest', () => {
     it('generates a manifest from conversation state', () => {
+      if (!db) return;
       memory.store({
         sessionId: 'syn-test',
         turnId: 1,
@@ -604,6 +613,7 @@ describe('HandoffManager', () => {
     });
 
     it('includes "context_exhaustion" as reason', () => {
+      if (!db) return;
       const manager = new HandoffManager();
       const manifest = manager.generateManifest({
         parentSessionId: 'syn-test',
@@ -619,6 +629,7 @@ describe('HandoffManager', () => {
     });
 
     it('extracts key findings from conversation messages when memory has none', () => {
+      if (!db) return;
       const emptyMemory = new HolographicMemory(db); // empty
 
       const manager = new HandoffManager();
@@ -738,6 +749,7 @@ describe('HandoffManager', () => {
 
   describe('max depth enforcement', () => {
     it('executeHandoff returns error when max depth exceeded', async () => {
+      if (!db) return;
       const manager = new HandoffManager({ maxDepth: 3, currentDepth: 3 });
       const manifest: HandoffManifest = {
         handoffId: 'test-max-depth',

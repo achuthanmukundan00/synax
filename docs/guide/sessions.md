@@ -51,7 +51,7 @@ Type to search
   31 min ago     28 min ago     dev/tui     Please look at specs/synax-ai-core...
   2 hours ago    2 hours ago    main        Implement provider settings runtime...
 
-enter to resume    esc to start new    ctrl+c to quit    tab to toggle sort    ↑/↓ to browse
+enter to resume    esc to start new    ctrl+d to quit    tab to toggle sort    ↑/↓ to browse
 ```
 
 ## Picker Controls
@@ -61,7 +61,7 @@ enter to resume    esc to start new    ctrl+c to quit    tab to toggle sort    �
 | ↑ / ↓ | Browse sessions |
 | Enter | Resume selected session |
 | Escape | Close picker, start new |
-| Ctrl+C | Quit Synax |
+| Ctrl+D | Quit Synax |
 | Tab | Toggle sort (updated/created) |
 | Type | Filter sessions by text |
 
