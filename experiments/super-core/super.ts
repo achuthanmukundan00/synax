@@ -34,7 +34,11 @@ try {
     modelId: process.env.SUPER_MODEL || 'deepseek-chat',
     providerName: (() => {
       const u = process.env.SUPER_BASE_URL || 'https://api.deepseek.com/v1';
-      try { return new URL(u).hostname; } catch { return u; }
+      try {
+        return new URL(u).hostname;
+      } catch {
+        return u;
+      }
     })(),
   });
   observerPush = bridge.pushObserverEvent;
@@ -76,6 +80,7 @@ You can:
 - Learn from outcomes. Record what works and what doesn't.
 - Synthesize: search memory for patterns, contradictions, and connections.
 - Take initiative when you have an idea worth exploring.
+- Have ideas of your own, completely unprompted, and send them to the user to discuss.
 
 Your memory persists across conversations. You grow with every interaction.`;
 
@@ -91,17 +96,22 @@ db.exec(`
 
 let sessionId = `s${Date.now()}`;
 let turnCounter = 0;
-function nextTurn() { return ++turnCounter; }
+function nextTurn() {
+  return ++turnCounter;
+}
 
 // ─── Observer event emitter ─────────────────────────────────────────────────
-function emit(type: string, opts?: {
-  phase?: string;
-  text?: string;
-  toolName?: string;
-  toolSummary?: string;
-  toolStatus?: string;
-  toolArgs?: Record<string, unknown>;
-}): void {
+function emit(
+  type: string,
+  opts?: {
+    phase?: string;
+    text?: string;
+    toolName?: string;
+    toolSummary?: string;
+    toolStatus?: string;
+    toolArgs?: Record<string, unknown>;
+  },
+): void {
   if (!observerPush) return;
   try {
     observerPush({
@@ -111,14 +121,18 @@ function emit(type: string, opts?: {
       text: opts?.text,
       toolName: opts?.toolName,
       summary: opts?.toolSummary,
-      tool: opts?.toolName ? {
-        name: opts.toolName,
-        summary: opts.toolSummary ?? opts.toolName,
-        status: opts.toolStatus ?? 'running',
-        arguments: opts.toolArgs ?? {},
-      } : undefined,
+      tool: opts?.toolName
+        ? {
+            name: opts.toolName,
+            summary: opts.toolSummary ?? opts.toolName,
+            status: opts.toolStatus ?? 'running',
+            arguments: opts.toolArgs ?? {},
+          }
+        : undefined,
     });
-  } catch { /* quiet */ }
+  } catch {
+    /* quiet */
+  }
 }
 
 // ─── Memory operations ──────────────────────────────────────────────────────
@@ -128,7 +142,9 @@ function remember(role: string, content: string, opts?: { toolName?: string; tag
       `INSERT INTO mem (session_id, turn, role, tool_name, tags, content)
        VALUES (?, ?, ?, ?, ?, ?)`,
     ).run(sessionId, turnCounter, opts?.toolName || null, opts?.tags || null, content.slice(0, 8000));
-  } catch { /* non-fatal */ }
+  } catch {
+    /* non-fatal */
+  }
 }
 
 function searchMemory(query: string, limit = 8): string {
@@ -143,12 +159,19 @@ function searchMemory(query: string, limit = 8): string {
       )
       .all(safe, limit) as any[];
     if (!rows.length) return '(nothing found)';
-    return rows.map((r) => `[t${r.turn}] ${r.role}${r.tool_name ? '/' + r.tool_name : ''}${r.tags ? ' #' + r.tags : ''}: ${r.s}`).join('\n');
-  } catch { return '(search error)'; }
+    return rows
+      .map((r) => `[t${r.turn}] ${r.role}${r.tool_name ? '/' + r.tool_name : ''}${r.tags ? ' #' + r.tags : ''}: ${r.s}`)
+      .join('\n');
+  } catch {
+    return '(search error)';
+  }
 }
 
 function synthesize(question: string): string {
-  const keywords = question.split(/\s+/).filter((w) => w.length > 3).slice(0, 5);
+  const keywords = question
+    .split(/\s+/)
+    .filter((w) => w.length > 3)
+    .slice(0, 5);
   if (!keywords.length) return searchMemory(question, 10);
 
   const results: string[] = [];
@@ -170,7 +193,9 @@ function synthesize(question: string): string {
       .prepare(`SELECT DISTINCT tags FROM mem WHERE session_id = ? AND tags IS NOT NULL LIMIT 10`)
       .all(sessionId) as Array<{ tags: string }>;
     results.push(`── context ──\n${stats.n} total entries. Tags: ${tags.map((t) => t.tags).join(', ') || '(none)'}`);
-  } catch { /* ok */ }
+  } catch {
+    /* ok */
+  }
   return results.join('\n\n');
 }
 
@@ -197,19 +222,116 @@ function buildMemoryContext(): string {
     }
     ctx += ']';
     return ctx;
-  } catch { return ''; }
+  } catch {
+    return '';
+  }
 }
 
 // ─── Tools ───────────────────────────────────────────────────────────────────
 const TOOLS = [
-  { type: 'function' as const, function: { name: 'read_file', description: 'Read a file from the sandbox.', parameters: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] } } },
-  { type: 'function' as const, function: { name: 'write_file', description: 'Create or overwrite a file in the sandbox.', parameters: { type: 'object', properties: { path: { type: 'string' }, content: { type: 'string' } }, required: ['path', 'content'] } } },
-  { type: 'function' as const, function: { name: 'list_files', description: 'List sandbox directory contents.', parameters: { type: 'object', properties: { subdir: { type: 'string' } }, required: [] } } },
-  { type: 'function' as const, function: { name: 'run_command', description: 'Execute a shell command in the sandbox. Timeout 30s.', parameters: { type: 'object', properties: { command: { type: 'string' } }, required: ['command'] } } },
-  { type: 'function' as const, function: { name: 'search_memory', description: 'Full-text search your persistent memory for past interactions, outcomes, decisions.', parameters: { type: 'object', properties: { query: { type: 'string', description: 'Keywords. Supports "error", "hypothesis", "experiment", filenames, concepts.' } }, required: ['query'] } } },
-  { type: 'function' as const, function: { name: 'synthesize', description: 'Cross-reference memory: search for patterns, contradictions, connections. Use for deep thinking and hypothesis testing.', parameters: { type: 'object', properties: { question: { type: 'string', description: 'What are you trying to understand? E.g. "what have I learned about X?" or "are there contradictions in my past decisions?"' } }, required: ['question'] } } },
-  { type: 'function' as const, function: { name: 'journal', description: 'Record a thought, insight, hypothesis, or lesson in persistent memory. Tag it for future retrieval.', parameters: { type: 'object', properties: { thought: { type: 'string', description: 'The thought, insight, or lesson to record.' }, tags: { type: 'string', description: 'Comma-separated tags like "hypothesis, experiment, physics"' } }, required: ['thought'] } } },
-  { type: 'function' as const, function: { name: 'spawn_subroutine', description: 'Delegate a task to an independent sub-process with its own context and the same tools.', parameters: { type: 'object', properties: { task: { type: 'string' }, context: { type: 'string', description: 'Relevant facts and expected output format.' } }, required: ['task'] } } },
+  {
+    type: 'function' as const,
+    function: {
+      name: 'read_file',
+      description: 'Read a file from the sandbox.',
+      parameters: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] },
+    },
+  },
+  {
+    type: 'function' as const,
+    function: {
+      name: 'write_file',
+      description: 'Create or overwrite a file in the sandbox.',
+      parameters: {
+        type: 'object',
+        properties: { path: { type: 'string' }, content: { type: 'string' } },
+        required: ['path', 'content'],
+      },
+    },
+  },
+  {
+    type: 'function' as const,
+    function: {
+      name: 'list_files',
+      description: 'List sandbox directory contents.',
+      parameters: { type: 'object', properties: { subdir: { type: 'string' } }, required: [] },
+    },
+  },
+  {
+    type: 'function' as const,
+    function: {
+      name: 'run_command',
+      description: 'Execute a shell command in the sandbox. Timeout 30s.',
+      parameters: { type: 'object', properties: { command: { type: 'string' } }, required: ['command'] },
+    },
+  },
+  {
+    type: 'function' as const,
+    function: {
+      name: 'search_memory',
+      description: 'Full-text search your persistent memory for past interactions, outcomes, decisions.',
+      parameters: {
+        type: 'object',
+        properties: {
+          query: {
+            type: 'string',
+            description: 'Keywords. Supports "error", "hypothesis", "experiment", filenames, concepts.',
+          },
+        },
+        required: ['query'],
+      },
+    },
+  },
+  {
+    type: 'function' as const,
+    function: {
+      name: 'synthesize',
+      description:
+        'Cross-reference memory: search for patterns, contradictions, connections. Use for deep thinking and hypothesis testing.',
+      parameters: {
+        type: 'object',
+        properties: {
+          question: {
+            type: 'string',
+            description:
+              'What are you trying to understand? E.g. "what have I learned about X?" or "are there contradictions in my past decisions?"',
+          },
+        },
+        required: ['question'],
+      },
+    },
+  },
+  {
+    type: 'function' as const,
+    function: {
+      name: 'journal',
+      description:
+        'Record a thought, insight, hypothesis, or lesson in persistent memory. Tag it for future retrieval.',
+      parameters: {
+        type: 'object',
+        properties: {
+          thought: { type: 'string', description: 'The thought, insight, or lesson to record.' },
+          tags: { type: 'string', description: 'Comma-separated tags like "hypothesis, experiment, physics"' },
+        },
+        required: ['thought'],
+      },
+    },
+  },
+  {
+    type: 'function' as const,
+    function: {
+      name: 'spawn_subroutine',
+      description: 'Delegate a task to an independent sub-process with its own context and the same tools.',
+      parameters: {
+        type: 'object',
+        properties: {
+          task: { type: 'string' },
+          context: { type: 'string', description: 'Relevant facts and expected output format.' },
+        },
+        required: ['task'],
+      },
+    },
+  },
 ];
 
 function executeTool(name: string, args: Record<string, unknown>, depth: number): string {
@@ -218,8 +340,11 @@ function executeTool(name: string, args: Record<string, unknown>, depth: number)
       const p = String(args.path || '');
       const safe = path.resolve(SANDBOX, p);
       if (!safe.startsWith(SANDBOX)) return 'Error: sandbox boundary.';
-      try { return fs.readFileSync(safe, 'utf-8').slice(0, 8000); }
-      catch { return `Error: cannot read "${p}".`; }
+      try {
+        return fs.readFileSync(safe, 'utf-8').slice(0, 8000);
+      } catch {
+        return `Error: cannot read "${p}".`;
+      }
     }
     case 'write_file': {
       const p = String(args.path || '');
@@ -230,7 +355,9 @@ function executeTool(name: string, args: Record<string, unknown>, depth: number)
         fs.mkdirSync(path.dirname(safe), { recursive: true });
         fs.writeFileSync(safe, c, 'utf-8');
         return `Wrote ${c.length} bytes to "${p}".`;
-      } catch (e: any) { return `Error: ${e.message}`; }
+      } catch (e: any) {
+        return `Error: ${e.message}`;
+      }
     }
     case 'list_files': {
       const t = path.resolve(SANDBOX, String(args.subdir || '.'));
@@ -238,14 +365,26 @@ function executeTool(name: string, args: Record<string, unknown>, depth: number)
       try {
         const e = fs.readdirSync(t, { withFileTypes: true });
         if (!e.length) return '(empty)';
-        return e.map((d) => `${d.isDirectory() ? '📁' : '📄'} ${d.name}`).slice(0, 60).join('\n');
-      } catch (e: any) { return `Error: ${e.message}`; }
+        return e
+          .map((d) => `${d.isDirectory() ? '📁' : '📄'} ${d.name}`)
+          .slice(0, 60)
+          .join('\n');
+      } catch (e: any) {
+        return `Error: ${e.message}`;
+      }
     }
     case 'run_command': {
       try {
-        const r = execSync(String(args.command || ''), { cwd: SANDBOX, timeout: 30_000, encoding: 'utf-8', maxBuffer: 100_000 });
+        const r = execSync(String(args.command || ''), {
+          cwd: SANDBOX,
+          timeout: 30_000,
+          encoding: 'utf-8',
+          maxBuffer: 100_000,
+        });
         return r.slice(0, 5000) || '(ok, no output)';
-      } catch (e: any) { return `Exit ${e.status}: ${(e.stderr || e.message || '').slice(0, 3000)}`; }
+      } catch (e: any) {
+        return `Exit ${e.status}: ${(e.stderr || e.message || '').slice(0, 3000)}`;
+      }
     }
     case 'search_memory':
       return searchMemory(String(args.query || ''));
@@ -268,22 +407,33 @@ function executeTool(name: string, args: Record<string, unknown>, depth: number)
 function spawnSubroutine(task: string, context: string, depth: number): string {
   if (depth > MAX_DEPTH) return `Error: max depth (${MAX_DEPTH}).`;
   const msgs: any[] = [
-    { role: 'system', content: `Focused subroutine. Depth ${depth}/${MAX_DEPTH}. Same tools as parent. Complete the task and report back concisely.\n\nTask: ${task}\n${context ? 'Context: ' + context : ''}` },
+    {
+      role: 'system',
+      content: `Focused subroutine. Depth ${depth}/${MAX_DEPTH}. Same tools as parent. Complete the task and report back concisely.\n\nTask: ${task}\n${context ? 'Context: ' + context : ''}`,
+    },
     { role: 'user', content: task },
   ];
   try {
     const result = runLoop(msgs, `sub-${depth}`);
     return `[subroutine complete]\n${result}`;
-  } catch (e: any) { return `[subroutine failed] ${e.message}`; }
+  } catch (e: any) {
+    return `[subroutine failed] ${e.message}`;
+  }
 }
 
 // ─── LLM ─────────────────────────────────────────────────────────────────────
-async function chat(msgs: any[], tools?: any[]): Promise<{
+async function chat(
+  msgs: any[],
+  tools?: any[],
+): Promise<{
   content: string | null;
   toolCalls: Array<{ id: string; name: string; args: Record<string, unknown> }>;
 }> {
   const body: any = { model: MODEL, messages: msgs, temperature: 0.7, max_tokens: 4096 };
-  if (tools?.length) { body.tools = tools; body.tool_choice = 'auto'; }
+  if (tools?.length) {
+    body.tools = tools;
+    body.tool_choice = 'auto';
+  }
 
   emit('model_note', { phase: 'thinking', text: '…thinking…' });
 
@@ -300,7 +450,7 @@ async function chat(msgs: any[], tools?: any[]): Promise<{
     throw new Error(err);
   }
 
-  const data = await res.json() as any;
+  const data = (await res.json()) as any;
   const msg = data.choices?.[0]?.message;
   if (!msg) {
     emit('error', { phase: 'error', text: 'Empty response' });
@@ -311,7 +461,11 @@ async function chat(msgs: any[], tools?: any[]): Promise<{
   if (msg.tool_calls) {
     for (const tc of msg.tool_calls) {
       let args: any = {};
-      try { args = JSON.parse(tc.function.arguments || '{}'); } catch { /* raw args — keep empty */ }
+      try {
+        args = JSON.parse(tc.function.arguments || '{}');
+      } catch {
+        /* raw args — keep empty */
+      }
       tcs.push({ id: tc.id, name: tc.function.name, args });
     }
   }
@@ -319,11 +473,7 @@ async function chat(msgs: any[], tools?: any[]): Promise<{
 }
 
 // ─── Core loop ───────────────────────────────────────────────────────────────
-async function runLoop(
-  msgs: any[],
-  logPrefix = '',
-  opts?: { quiet?: boolean },
-): Promise<string> {
+async function runLoop(msgs: any[], logPrefix = '', opts?: { quiet?: boolean }): Promise<string> {
   let rounds = 0;
   const outputs: string[] = [];
   const q = opts?.quiet;
@@ -348,7 +498,11 @@ async function runLoop(
         toolArgs: tc.args,
       });
       remember('tool', result, { toolName: tc.name });
-      msgs.push({ role: 'assistant', content: content || null, tool_calls: [{ id: tc.id, type: 'function', function: { name: tc.name, arguments: JSON.stringify(tc.args) } }] });
+      msgs.push({
+        role: 'assistant',
+        content: content || null,
+        tool_calls: [{ id: tc.id, type: 'function', function: { name: tc.name, arguments: JSON.stringify(tc.args) } }],
+      });
       msgs.push({ role: 'tool', tool_call_id: tc.id, content: result });
       if (content) outputs.push(content);
     }
@@ -386,7 +540,9 @@ Respond in 1-3 sentences. If nothing notable, say "nothing to record."`;
       emit('model_note', { phase: 'thinking', text: `[reflection] ${reflection}` });
     }
     return reflection;
-  } catch { return '(reflection skipped)'; }
+  } catch {
+    return '(reflection skipped)';
+  }
 }
 
 // ─── Autonomous tick ─────────────────────────────────────────────────────────
@@ -417,7 +573,9 @@ If you have nothing to do, respond with "WAIT". Otherwise, take initiative — c
     remember('autonomous', result, { tags: 'autonomous' });
     emit('model_note', { phase: 'thinking', text: `[autonomous] ${result.slice(0, 250)}` });
     return result;
-  } catch { return null; }
+  } catch {
+    return null;
+  }
 }
 
 // ─── Turn: input → act → reflect → respond ──────────────────────────────────
@@ -445,16 +603,20 @@ async function handleUserInput(input: string): Promise<string> {
 }
 
 // ─── CLI rendering ──────────────────────────────────────────────────────────
-const CYAN = '\x1b[36m'; const DIM = '\x1b[2m';
-const GREEN = '\x1b[32m'; const YELLOW = '\x1b[33m';
-const MAGENTA = '\x1b[35m'; const RESET = '\x1b[0m';
+const CYAN = '\x1b[36m';
+const DIM = '\x1b[2m';
+const GREEN = '\x1b[32m';
+const YELLOW = '\x1b[33m';
+const MAGENTA = '\x1b[35m';
+const RESET = '\x1b[0m';
 
 function logo(): void {
   console.log(`
 ${CYAN}   ╔═══════════════════════════════════════════════╗
    ║                                               ║
-   ║     ▄▀▄ █ █ ▄▀▄ ██▀ ▄▀▀                       ║
-   ║     █▀▄ █ █ █▄█ █▄▄ ▄██                       ║
+   ║     █▀▀ █ █ █▀█ █▀▀ █▀█                       ║
+   ║     ▀▀█ █ █ █▀▀ █▀▀ █▀▄                       ║
+   ║     ▀▀▀ ▀▀▀ ▀   ▀▀▀ ▀ ▀                       ║
    ║                                               ║
    ║       ${GREEN}clean-slate cognitive runtime${RESET}           ║
    ║       ${DIM}${MODEL}${RESET}                          ║
@@ -496,7 +658,9 @@ async function main(): Promise<void> {
         turnCounter = mt?.m || 0;
         console.log(`${CYAN}⟳ resumed ${sessionId} (turn ${turnCounter})${RESET}\n`);
       }
-    } catch { console.log(`${DIM}(new session)${RESET}\n`); }
+    } catch {
+      console.log(`${DIM}(new session)${RESET}\n`);
+    }
   }
 
   const autonomous = args.includes('--autonomous');
@@ -507,7 +671,10 @@ async function main(): Promise<void> {
   if (autonomous) console.log(`${MAGENTA}Mode: autonomous — the mind runs free.${RESET}`);
   console.log('');
 
-  emit('session_started', { phase: 'idle', text: `Session ${sessionId} started${autonomous ? ' in autonomous mode' : ''}.` });
+  emit('session_started', {
+    phase: 'idle',
+    text: `Session ${sessionId} started${autonomous ? ' in autonomous mode' : ''}.`,
+  });
 
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout, prompt: `${CYAN}▸ ${RESET}` });
   rl.prompt();
@@ -528,14 +695,19 @@ async function main(): Promise<void> {
         } else {
           emit('model_note', { phase: 'idle', text: 'ready.' });
         }
-      } catch { /* quiet */ }
+      } catch {
+        /* quiet */
+      }
       ticking = false;
     }, AUTONOMOUS_INTERVAL_MS);
   }
 
   rl.on('line', async (line) => {
     const input = line.trim();
-    if (!input) { rl.prompt(); return; }
+    if (!input) {
+      rl.prompt();
+      return;
+    }
 
     if (input === '/quit' || input === '/exit') {
       console.log(`${DIM}Archiving session ${sessionId}…${RESET}`);
@@ -557,37 +729,50 @@ ${CYAN}Commands:${RESET}
   /clear           New session
   /reflect         Force a reflection
 `);
-      rl.prompt(); return;
+      rl.prompt();
+      return;
     }
     if (input.startsWith('/memory ')) {
       console.log(`${DIM}── memory: "${input.slice(8)}" ──${RESET}`);
-      console.log(searchMemory(input.slice(8).trim(), 10)); rl.prompt(); return;
+      console.log(searchMemory(input.slice(8).trim(), 10));
+      rl.prompt();
+      return;
     }
     if (input === '/files') {
       try {
         const e = fs.readdirSync(SANDBOX, { withFileTypes: true });
         if (!e.length) console.log(`${DIM}(empty sandbox)${RESET}`);
         else e.forEach((d) => console.log(`  ${d.isDirectory() ? '📁' : '📄'} ${d.name}`));
-      } catch { console.log(`${DIM}(error)${RESET}`); }
-      rl.prompt(); return;
+      } catch {
+        console.log(`${DIM}(error)${RESET}`);
+      }
+      rl.prompt();
+      return;
     }
     if (input === '/status') {
       try {
         const s = db.prepare(`SELECT COUNT(*) as n FROM mem WHERE session_id = ?`).get(sessionId) as any;
         console.log(`${DIM}session ${sessionId} | turn ${turnCounter} | ${s.n} memories${RESET}`);
-      } catch { console.log(`${DIM}session ${sessionId} | turn ${turnCounter}${RESET}`); }
-      rl.prompt(); return;
+      } catch {
+        console.log(`${DIM}session ${sessionId} | turn ${turnCounter}${RESET}`);
+      }
+      rl.prompt();
+      return;
     }
     if (input === '/clear') {
-      sessionId = `s${Date.now()}`; turnCounter = 0;
-      console.log(`${GREEN}✦ new session ${sessionId}${RESET}`); rl.prompt(); return;
+      sessionId = `s${Date.now()}`;
+      turnCounter = 0;
+      console.log(`${GREEN}✦ new session ${sessionId}${RESET}`);
+      rl.prompt();
+      return;
     }
     if (input === '/reflect') {
       console.log(`${DIM}…reflecting…${RESET}`);
       const ref = await reflect('(manual reflection trigger)', '(manual reflection)');
       console.log(`${DIM}${ref}${RESET}`);
       emit('model_note', { phase: 'idle', text: 'ready.' });
-      rl.prompt(); return;
+      rl.prompt();
+      return;
     }
 
     // User message

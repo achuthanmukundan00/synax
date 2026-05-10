@@ -8,88 +8,88 @@ import { RUNTIME_COLORS } from "../eventTypes";
  * Red containment cage that appears around the morphology when
  * a high-risk shell command is about to be executed.
  *
- * Visual: jagged red beam cage, scanlines, command preview.
- * The cage communicates: "the model is about to do something consequential."
+ * Creates cage geometry once, toggles visibility. No per-frame destruction.
  */
 const SuspicionCage: React.FC = () => {
   const groupRef = useRef<THREE.Group>(null);
   const shell = useRuntimeStore((s) => s.shell);
-  const instability = useRuntimeStore((s) => s.instability);
-
   const isHighRisk = shell.risk === "high";
 
-  // Cage geometry — vertical bars forming a cylinder
   const barCount = 16;
   const radius = 1.2;
   const height = 8.5;
 
-  const barData = useMemo(() => {
-    return Array.from({ length: barCount }, (_, i) => {
+  // Precompute bar positions
+  const barData = useMemo(() =>
+    Array.from({ length: barCount }, (_, i) => {
       const angle = (i / barCount) * Math.PI * 2;
-      const x = Math.cos(angle) * radius;
-      const z = Math.sin(angle) * radius;
-      return { x, z, angle };
-    });
-  }, [barCount, radius]);
+      return { x: Math.cos(angle) * radius, z: Math.sin(angle) * radius };
+    }),
+  []);
 
-  const cageRefs = useRef<THREE.Mesh[]>([]);
+  const barGeo = useMemo(() => new THREE.CylinderGeometry(0.008, 0.008, height, 4), []);
+  const ringGeo = useMemo(() => new THREE.TorusGeometry(radius, 0.01, 8, 32), []);
 
-  const barGeo = useMemo(
-    () => new THREE.CylinderGeometry(0.008, 0.008, height, 4),
-    [height]
-  );
+  // Persistent materials (updated in useFrame, not recreated)
+  const barMatsRef = useRef<THREE.MeshBasicMaterial[]>([]);
+  const ringMatsRef = useRef<THREE.MeshBasicMaterial[]>([]);
+  const barsRef = useRef<THREE.Mesh[]>([]);
+  const ringsRef = useRef<THREE.Mesh[]>([]);
+  const initialized = useRef(false);
 
-  useFrame((state) => {
-    if (!groupRef.current) return;
-    const t = state.clock.elapsedTime;
+  // Create cage meshes once on first render when group is available
+  const initCage = (grp: THREE.Group) => {
+    if (initialized.current) return;
+    initialized.current = true;
 
-    // Clear and rebuild cage bars (only when high risk)
-    const grp = groupRef.current;
-    while (grp.children.length > 0) {
-      const child = grp.children[0];
-      if (child instanceof THREE.Mesh && child.material instanceof THREE.Material) {
-        child.material.dispose();
-      }
-      grp.remove(child);
-    }
-
-    if (!isHighRisk) return;
-
-    const opacity = 0.3 + Math.sin(t * 6) * 0.15;
-
-    // Red bars
     barData.forEach(({ x, z }) => {
       const mat = new THREE.MeshBasicMaterial({
         color: RUNTIME_COLORS.suspicious,
-        transparent: true,
-        opacity,
-        depthWrite: false,
+        transparent: true, opacity: 0, depthWrite: false,
         blending: THREE.AdditiveBlending,
       });
       const bar = new THREE.Mesh(barGeo, mat);
       bar.position.set(x, 0, z);
+      bar.visible = false;
       grp.add(bar);
+      barMatsRef.current.push(mat);
+      barsRef.current.push(bar);
     });
 
-    // Top and bottom rings
     for (const y of [-height / 2, height / 2]) {
-      const ringGeoTop = new THREE.TorusGeometry(radius, 0.01, 8, 32);
-      const ringMat = new THREE.MeshBasicMaterial({
+      const mat = new THREE.MeshBasicMaterial({
         color: RUNTIME_COLORS.suspicious,
-        transparent: true,
-        opacity: opacity * 1.3,
-        depthWrite: false,
+        transparent: true, opacity: 0, depthWrite: false,
         blending: THREE.AdditiveBlending,
       });
-      const ring = new THREE.Mesh(ringGeoTop, ringMat);
+      const ring = new THREE.Mesh(ringGeo, mat);
       ring.position.set(0, y, 0);
+      ring.visible = false;
       grp.add(ring);
+      ringMatsRef.current.push(mat);
+      ringsRef.current.push(ring);
     }
+  };
 
-    // Pulse rotation
-    grp.rotation.y += 0.01;
-    const scalePulse = 1 + Math.sin(t * 5) * 0.03;
-    grp.scale.setScalar(scalePulse);
+  useFrame((state) => {
+    const grp = groupRef.current;
+    if (!grp) return;
+    initCage(grp);
+
+    const t = state.clock.elapsedTime;
+    const opacity = 0.3 + Math.sin(t * 6) * 0.15;
+    const visible = isHighRisk;
+
+    barsRef.current.forEach((bar) => { bar.visible = visible; });
+    ringsRef.current.forEach((ring) => { ring.visible = visible; });
+
+    barMatsRef.current.forEach((mat) => { mat.opacity = opacity; });
+    ringMatsRef.current.forEach((mat) => { mat.opacity = opacity * 1.3; });
+
+    if (visible) {
+      grp.rotation.y += 0.01;
+      grp.scale.setScalar(1 + Math.sin(t * 5) * 0.03);
+    }
   });
 
   return <group ref={groupRef} />;

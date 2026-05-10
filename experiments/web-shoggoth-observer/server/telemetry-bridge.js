@@ -141,7 +141,9 @@ function createObserverEventSink() {
       case 'task_started':
         bridgeEvent.type = 'session_started';
         bridgeEvent.modelId = synaxEvent.model;
+        bridgeModelId = synaxEvent.model || bridgeModelId;
         bridgeEvent.providerName = synaxEvent.providerName;
+        bridgeProviderName = synaxEvent.providerName || bridgeProviderName;
         bridgeEvent.text = 'Session started: ' + (synaxEvent.task || '');
         bridgeEvent.phase = 'idle';
         break;

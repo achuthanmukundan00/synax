@@ -1,7 +1,7 @@
 import type { ModelMorphologySpec } from "../eventTypes";
 import { FAMILY_COLORS } from "../eventTypes";
 
-// ─── Utility helpers ────────────────────────────────────────────────────
+// ─── Build a profile dynamically from provider + model hints ────────────
 
 function layerGroupCount(actualLayers?: number | string): number {
   const n = typeof actualLayers === "number" ? actualLayers : undefined;
@@ -16,300 +16,273 @@ function visualExpertCount(actual?: number | string): number {
   return 256;
 }
 
-// ─── Model Registry ─────────────────────────────────────────────────────
-
-export const MODEL_REGISTRY: Record<string, ModelMorphologySpec> = {
-
-  // ── Opaque Frontier: GPT-5.5 / OpenAI API ──────────────────────────────
-  "gpt-5.5": {
-    id: "gpt-5.5",
-    displayName: "GPT-5.5",
-    provider: "openai",
-    family: "openai",
-    architectureConfidence: "opaque",
-    architectureClass: "opaque-frontier-model",
-    parameterScale: "unknown",
-    activeParameterScale: "unknown",
-    context: {
-      maxTokens: "from-runtime-if-available",
-      visual: "external-context-rails",
-    },
-    visual: {
-      baseColor: FAMILY_COLORS.openai,
-      accentColor: "#ffffff",
-      shellOpacity: 0.18,
-      bloomStrength: 0.75,
-      scaleClass: "frontier",
-      morphologyPreset: "opaque-frontier-core",
-      labels: ["opaque architecture", "telemetry driven", "agent observable"],
-    },
-  },
-
-  // ── Opaque Frontier: Claude Opus 4.7 ──────────────────────────────────
-  "claude-opus-4.7": {
-    id: "claude-opus-4.7",
-    displayName: "Claude Opus 4.7",
-    provider: "anthropic",
-    family: "anthropic",
-    architectureConfidence: "opaque",
-    architectureClass: "opaque-frontier-model",
-    parameterScale: "unknown",
-    activeParameterScale: "unknown",
-    context: {
-      maxTokens: "from-runtime-if-available",
-      visual: "external-context-rails",
-    },
-    visual: {
-      baseColor: FAMILY_COLORS.anthropic,
-      accentColor: "#fff1df",
-      shellOpacity: 0.2,
-      bloomStrength: 0.72,
-      scaleClass: "frontier",
-      morphologyPreset: "opaque-reasoning-core",
-      labels: ["opaque architecture", "reasoning shell", "agent observable"],
-    },
-  },
-
-  // ── Local Dense Transformer (generic) ─────────────────────────────────
-  "local-dense-transformer": {
-    id: "local-dense-transformer",
-    displayName: "Local Dense Transformer",
-    provider: "local",
-    architectureConfidence: "partial",
-    architectureClass: "dense-transformer",
-    parameterScale: "unknown",
-    transformer: {
-      layers: "from-metadata-if-available",
-      hiddenSize: "from-metadata-if-available",
-      residualStyle: "central-spine",
-    },
-    attention: {
-      heads: "from-metadata-if-available",
-      kvHeads: "from-metadata-if-available",
-      style: "unknown-or-gqa",
-      visual: "side-rail-attention",
-    },
-    visual: {
-      baseColor: FAMILY_COLORS.generic,
-      accentColor: "#e8f7ff",
-      shellOpacity: 0.16,
-      bloomStrength: 0.85,
-      scaleClass: "large",
-      morphologyPreset: "dense-transformer-core",
-      labels: ["dense stack", "local inference", "transformer backbone"],
-    },
-  },
-
-  // ── Local MoE Transformer (generic) ───────────────────────────────────
-  "local-moe-transformer": {
-    id: "local-moe-transformer",
-    displayName: "Local MoE Transformer",
-    provider: "local",
-    architectureConfidence: "partial",
-    architectureClass: "moe-transformer",
-    parameterScale: "unknown",
-    activeParameterScale: "unknown",
-    moe: {
-      experts: "from-metadata-if-available",
-      activeExperts: "from-metadata-if-available",
-      visual: "radial-expert-banks",
-    },
-    visual: {
-      baseColor: FAMILY_COLORS.generic,
-      accentColor: "#e8f7ff",
-      shellOpacity: 0.14,
-      bloomStrength: 0.9,
-      scaleClass: "giant",
-      morphologyPreset: "moe-transformer-core",
-      labels: ["sparse MoE", "expert banks", "router gates"],
-    },
-  },
-
-  // ── DeepSeek ──────────────────────────────────────────────────────────
-  "deepseek": {
-    id: "deepseek",
-    displayName: "DeepSeek",
-    provider: "local",
-    family: "deepseek",
-    architectureConfidence: "partial",
-    architectureClass: "moe-transformer",
-    parameterScale: "unknown",
-    moe: {
-      experts: "from-metadata-if-available",
-      activeExperts: "from-metadata-if-available",
-      visual: "radial-expert-banks",
-    },
-    visual: {
-      baseColor: FAMILY_COLORS.deepseek,
-      accentColor: "#ff8a7a",
-      shellOpacity: 0.15,
-      bloomStrength: 0.92,
-      scaleClass: "giant",
-      morphologyPreset: "moe-transformer-core",
-      labels: ["DeepSeek MoE", "expert banks", "deep stack"],
-    },
-  },
-
-  // ── Qwen ──────────────────────────────────────────────────────────────
-  "qwen": {
-    id: "qwen",
-    displayName: "Qwen",
-    provider: "local",
-    family: "qwen",
-    architectureConfidence: "partial",
-    architectureClass: "dense-transformer",
-    parameterScale: "unknown",
-    transformer: {
-      layers: "from-metadata-if-available",
-      residualStyle: "central-spine",
-    },
-    visual: {
-      baseColor: FAMILY_COLORS.qwen,
-      accentColor: "#80ddff",
-      shellOpacity: 0.17,
-      bloomStrength: 0.82,
-      scaleClass: "large",
-      morphologyPreset: "dense-transformer-core",
-      labels: ["Qwen dense", "lattice stack"],
-    },
-  },
-
-  // ── Llama ─────────────────────────────────────────────────────────────
-  "llama": {
-    id: "llama",
-    displayName: "Llama",
-    provider: "local",
-    family: "llama",
-    architectureConfidence: "partial",
-    architectureClass: "dense-transformer",
-    parameterScale: "unknown",
-    visual: {
-      baseColor: FAMILY_COLORS.llama,
-      accentColor: "#9ad4ff",
-      shellOpacity: 0.16,
-      bloomStrength: 0.8,
-      scaleClass: "large",
-      morphologyPreset: "dense-transformer-core",
-      labels: ["Llama dense", "transformer stack"],
-    },
-  },
-
-  // ── Gemini ────────────────────────────────────────────────────────────
-  "gemini": {
-    id: "gemini",
-    displayName: "Gemini",
-    provider: "google",
-    family: "google",
-    architectureConfidence: "opaque",
-    architectureClass: "opaque-frontier-model",
-    parameterScale: "unknown",
-    visual: {
-      baseColor: FAMILY_COLORS.google,
-      accentColor: "#c4e0ff",
-      shellOpacity: 0.19,
-      bloomStrength: 0.7,
-      scaleClass: "frontier",
-      morphologyPreset: "opaque-frontier-core",
-      labels: ["opaque frontier", "Google API", "multimodal capable"],
-    },
-  },
-
-  // ── Coding-optimized agent overlay ────────────────────────────────────
-  "coding-agent": {
-    id: "coding-agent",
-    displayName: "Synax Coding Agent",
-    provider: "local",
-    architectureConfidence: "partial",
-    architectureClass: "coding-optimized-transformer",
-    visual: {
-      baseColor: FAMILY_COLORS.generic,
-      accentColor: "#e8f7ff",
-      shellOpacity: 0.18,
-      bloomStrength: 0.78,
-      scaleClass: "large",
-      morphologyPreset: "coder-transformer-core",
-      labels: ["coding agent", "tool orbit active", "filesystem aware"],
-    },
-  },
-
-  // ── Reasoning-optimized ───────────────────────────────────────────────
-  "reasoning-model": {
-    id: "reasoning-model",
-    displayName: "Reasoning Model",
-    provider: "local",
-    architectureConfidence: "opaque",
-    architectureClass: "reasoning-optimized-transformer",
-    visual: {
-      baseColor: FAMILY_COLORS.generic,
-      accentColor: "#ffe8c0",
-      shellOpacity: 0.2,
-      bloomStrength: 0.7,
-      scaleClass: "large",
-      morphologyPreset: "reasoning-core",
-      labels: ["reasoning shell", "deliberation loops", "nested cognition"],
-    },
-  },
-};
-
-// ─── Default fallback ───────────────────────────────────────────────────
-export const DEFAULT_SPEC: ModelMorphologySpec = {
-  id: "default",
-  displayName: "Synax Agent",
-  provider: "local",
-  architectureConfidence: "opaque",
-  architectureClass: "opaque-frontier-model",
-  parameterScale: "unknown",
-  activeParameterScale: "unknown",
-  context: {
-    maxTokens: "from-runtime-if-available",
-    visual: "external-context-rails",
-  },
-  visual: {
-    baseColor: FAMILY_COLORS.generic,
-    accentColor: "#e8f7ff",
-    shellOpacity: 0.17,
-    bloomStrength: 0.8,
-    scaleClass: "large",
-    morphologyPreset: "opaque-frontier-core",
-    labels: ["observing agent", "telemetry driven"],
-  },
-};
-
-// ─── Resolve model spec from ID or event data ───────────────────────────
-export function resolveModelSpec(modelId: string, provider?: string): ModelMorphologySpec {
-  const key = modelId.toLowerCase().trim();
-
-  // Direct match
-  if (MODEL_REGISTRY[key]) return MODEL_REGISTRY[key];
-
-  // Substring match
-  for (const [id, spec] of Object.entries(MODEL_REGISTRY)) {
-    if (key.includes(id) || id.includes(key)) return spec;
-  }
-
-  // Provider-based fallback
-  if (provider === "openai") return MODEL_REGISTRY["gpt-5.5"]!;
-  if (provider === "anthropic") return MODEL_REGISTRY["claude-opus-4.7"]!;
-  if (provider === "google") return MODEL_REGISTRY["gemini"]!;
-
-  // Family-based detection
-  for (const [family, _color] of Object.entries(FAMILY_COLORS)) {
-    if (key.includes(family)) {
-      const match = Object.values(MODEL_REGISTRY).find((s) => s.family === family);
-      if (match) return match;
-    }
-  }
-
-  // Detect coding/reasoning from model ID hints
-  if (key.includes("coder") || key.includes("code")) return MODEL_REGISTRY["coding-agent"]!;
-  if (key.includes("reason") || key.includes("think") || key.includes("deep")) {
-    return MODEL_REGISTRY["reasoning-model"]!;
-  }
-
-  return DEFAULT_SPEC;
+function normalizeProvider(raw: string | undefined): string {
+  if (!raw) return "unknown";
+  const p = raw.toLowerCase().trim();
+  if (p.includes("openai")) return "openai";
+  if (p.includes("anthropic") || p.includes("claude")) return "anthropic";
+  if (p.includes("google") || p.includes("gemini")) return "google";
+  if (p.includes("deepseek")) return "deepseek";
+  if (p.includes("relay")) return "relay";
+  if (p.includes("local")) return "local";
+  return "unknown";
 }
 
+// ─── Build a profile dynamically from provider + model hints ────────────
+
+interface ProfileInput {
+  provider: string;
+  modelId: string;
+}
+
+function buildProfile(input: ProfileInput): ModelMorphologySpec {
+  const { provider, modelId } = input;
+  const id = `${provider}-${modelId || "unknown"}`;
+  const nameLower = modelId.toLowerCase();
+
+  // ── DeepSeek ──────────────────────────────────────────────────────────
+  if (provider === "deepseek" || nameLower.includes("deepseek")) {
+    const isR1 = nameLower.includes("r1");
+    return {
+      id, displayName: "DeepSeek",
+      provider: "deepseek",
+      family: "deepseek",
+      architectureConfidence: "partial",
+      architectureClass: "moe-transformer",
+      parameterScale: "unknown",
+      activeParameterScale: "unknown",
+      moe: { experts: "from-metadata-if-available", activeExperts: "from-metadata-if-available", visual: "radial-expert-banks" },
+      context: { maxTokens: "from-runtime-if-available", visual: "external-context-rails" },
+      visual: {
+        baseColor: FAMILY_COLORS.deepseek,
+        accentColor: "#ffd0c8",
+        shellOpacity: 0.14,
+        bloomStrength: 0.92,
+        scaleClass: "frontier",
+        morphologyPreset: "moe-expert-field",
+        labels: ["MoE / Expert Field", isR1 ? "reasoning capable" : "deep stack", "provider-inferred + telemetry driven"],
+      },
+    };
+  }
+
+  // ── Anthropic ─────────────────────────────────────────────────────────
+  if (provider === "anthropic" || nameLower.includes("claude")) {
+    return {
+      id, displayName: "Anthropic Frontier",
+      provider: "anthropic",
+      family: "anthropic",
+      architectureConfidence: "opaque",
+      architectureClass: "opaque-frontier-model",
+      parameterScale: "unknown",
+      activeParameterScale: "unknown",
+      context: { maxTokens: "from-runtime-if-available", visual: "external-context-rails" },
+      visual: {
+        baseColor: FAMILY_COLORS.anthropic,
+        accentColor: "#fff0d0",
+        shellOpacity: 0.2,
+        bloomStrength: 0.72,
+        scaleClass: "frontier",
+        morphologyPreset: "frontier-reasoning-core",
+        labels: ["GENERALIZED REASONING CORE", "provider-inferred + simulated morphology", "opaque architecture"],
+      },
+    };
+  }
+
+  // ── OpenAI ────────────────────────────────────────────────────────────
+  if (provider === "openai" || nameLower.includes("gpt")) {
+    return {
+      id, displayName: "OpenAI Frontier",
+      provider: "openai",
+      family: "openai",
+      architectureConfidence: "opaque",
+      architectureClass: "opaque-frontier-model",
+      parameterScale: "unknown",
+      activeParameterScale: "unknown",
+      context: { maxTokens: "from-runtime-if-available", visual: "external-context-rails" },
+      visual: {
+        baseColor: FAMILY_COLORS.openai,
+        accentColor: "#ffffff",
+        shellOpacity: 0.18,
+        bloomStrength: 0.75,
+        scaleClass: "frontier",
+        morphologyPreset: "frontier-reasoning-core",
+        labels: ["GENERALIZED REASONING CORE", "provider-inferred + simulated morphology", "opaque architecture"],
+      },
+    };
+  }
+
+  // ── Google ────────────────────────────────────────────────────────────
+  if (provider === "google" || nameLower.includes("gemini")) {
+    return {
+      id, displayName: "Google Frontier",
+      provider: "google",
+      family: "google",
+      architectureConfidence: "opaque",
+      architectureClass: "opaque-frontier-model",
+      parameterScale: "unknown",
+      activeParameterScale: "unknown",
+      context: { maxTokens: "from-runtime-if-available", visual: "external-context-rails" },
+      visual: {
+        baseColor: FAMILY_COLORS.google,
+        accentColor: "#c4e0ff",
+        shellOpacity: 0.19,
+        bloomStrength: 0.7,
+        scaleClass: "frontier",
+        morphologyPreset: "frontier-reasoning-core",
+        labels: ["GENERALIZED FRONTIER CORE", "provider-inferred + simulated morphology", "opaque architecture"],
+      },
+    };
+  }
+
+  // ── Relay / Local — check model name for Qwen, Llama, coding ──────────
+  if (provider === "relay" || provider === "local") {
+    const isQwen = nameLower.includes("qwen");
+    const isCoder = nameLower.includes("coder") || nameLower.includes("code");
+    const isLlama = nameLower.includes("llama");
+    const isMistral = nameLower.includes("mistral");
+    const isMoE = nameLower.includes("moe") || nameLower.includes("mixtral");
+
+    if (isQwen) {
+      return {
+        id, displayName: "Qwen / Local Coder",
+        provider: "local",
+        family: "qwen",
+        architectureConfidence: "partial",
+        architectureClass: isCoder ? "coding-optimized-transformer" : "dense-transformer",
+        parameterScale: "unknown",
+        transformer: { layers: "from-metadata-if-available", residualStyle: "central-spine" },
+        visual: {
+          baseColor: FAMILY_COLORS.qwen,
+          accentColor: "#e8f7ff",
+          shellOpacity: 0.17,
+          bloomStrength: 0.82,
+          scaleClass: "large",
+          morphologyPreset: isCoder ? "coder-reactor" : "dense-core",
+          labels: [
+            isCoder ? "QWEN / LOCAL CODER" : "QWEN / DENSE",
+            isCoder ? "CODING TRANSFORMER" : "DENSE TRANSFORMER",
+            "provider-inferred + telemetry driven",
+          ],
+        },
+      };
+    }
+
+    if (isLlama) {
+      return {
+        id, displayName: "Llama",
+        provider: "local",
+        family: "llama",
+        architectureConfidence: "partial",
+        architectureClass: "dense-transformer",
+        parameterScale: "unknown",
+        visual: {
+          baseColor: FAMILY_COLORS.llama,
+          accentColor: "#9ad4ff",
+          shellOpacity: 0.16,
+          bloomStrength: 0.8,
+          scaleClass: "large",
+          morphologyPreset: "dense-core",
+          labels: ["LLAMA / DENSE", "DENSE TRANSFORMER", "provider-inferred + telemetry driven"],
+        },
+      };
+    }
+
+    if (isMistral || isMoE) {
+      return {
+        id, displayName: "Mistral MoE",
+        provider: "local",
+        family: "mistral",
+        architectureConfidence: "partial",
+        architectureClass: "moe-transformer",
+        moe: { experts: "from-metadata-if-available", activeExperts: "from-metadata-if-available", visual: "radial-expert-banks" },
+        visual: {
+          baseColor: FAMILY_COLORS.mistral,
+          accentColor: "#ffc8a0",
+          shellOpacity: 0.14,
+          bloomStrength: 0.9,
+          scaleClass: "giant",
+          morphologyPreset: "moe-expert-field",
+          labels: ["MISTRAL / MOE", "EXPERT FIELD", "provider-inferred + telemetry driven"],
+        },
+      };
+    }
+
+    // Generic Relay/local fallback
+    return {
+      id, displayName: "Relay Local Model",
+      provider: "local",
+      architectureConfidence: "partial",
+      architectureClass: "dense-transformer",
+      parameterScale: "unknown",
+      context: { maxTokens: "from-runtime-if-available", visual: "external-context-rails" },
+      visual: {
+        baseColor: FAMILY_COLORS.generic,
+        accentColor: "#e8f7ff",
+        shellOpacity: 0.17,
+        bloomStrength: 0.8,
+        scaleClass: "large",
+        morphologyPreset: "relay-local-core",
+        labels: ["RELAY / LOCAL", "DENSE FALLBACK", "provider-inferred + telemetry driven"],
+      },
+    };
+  }
+
+  // ── Unknown / default ─────────────────────────────────────────────────
+  return {
+    id, displayName: "Unknown Model",
+    provider: "unknown",
+    architectureConfidence: "partial",
+    architectureClass: "dense-transformer",
+    parameterScale: "unknown",
+    activeParameterScale: "unknown",
+    transformer: { layers: "from-metadata-if-available", residualStyle: "central-spine" },
+    context: { maxTokens: "from-runtime-if-available", visual: "external-context-rails" },
+    visual: {
+      baseColor: FAMILY_COLORS.generic,
+      accentColor: "#e8f7ff",
+      shellOpacity: 0.17,
+      bloomStrength: 0.8,
+      scaleClass: "large",
+      morphologyPreset: "dense-core",
+      labels: ["UNKNOWN MODEL", "DENSE FALLBACK", "limited metadata + telemetry driven"],
+    },
+  };
+}
+
+// ─── Exported resolver ──────────────────────────────────────────────────
+
+export function resolveModelSpec(modelId: string, providerName?: string): ModelMorphologySpec {
+  const prov = normalizeProvider(providerName);
+
+  // Use model name hints first if provider is Relay/local
+  if (prov === "relay" || prov === "local") {
+    const nameLower = (modelId || "").toLowerCase().replace(/^.*[\\/]/, "").replace(/^models--/, "");
+    return buildProfile({ provider: prov, modelId: nameLower });
+  }
+
+  // For known cloud providers, use provider as primary signal
+  if (prov !== "unknown") {
+    return buildProfile({ provider: prov, modelId: modelId || "" });
+  }
+
+  // Fallback: try to infer provider from model name
+  const nameLower = (modelId || "").toLowerCase();
+  if (nameLower.includes("deepseek")) return buildProfile({ provider: "deepseek", modelId: nameLower });
+  if (nameLower.includes("claude")) return buildProfile({ provider: "anthropic", modelId: nameLower });
+  if (nameLower.includes("gpt") || nameLower.includes("openai")) return buildProfile({ provider: "openai", modelId: nameLower });
+  if (nameLower.includes("gemini")) return buildProfile({ provider: "google", modelId: nameLower });
+  if (nameLower.includes("qwen")) return buildProfile({ provider: "relay", modelId: nameLower });
+  if (nameLower.includes("llama")) return buildProfile({ provider: "relay", modelId: nameLower });
+
+  // True fallback
+  return buildProfile({ provider: "unknown", modelId: nameLower });
+}
+
+// ─── Default spec ───────────────────────────────────────────────────────
+export const DEFAULT_SPEC: ModelMorphologySpec = buildProfile({ provider: "unknown", modelId: "default" });
+
 // ─── Derive visual parameters for rendering ─────────────────────────────
+
 export interface ResolvedVisualParams {
   layerCount: number;
   attentionHeads: number;

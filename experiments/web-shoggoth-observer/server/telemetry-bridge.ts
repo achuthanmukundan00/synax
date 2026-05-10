@@ -191,12 +191,14 @@ export function createObserverEventSink(): (event: { type: string; [key: string]
 
     switch (synaxEvent.type) {
       case "task_started": {
-        const model = (synaxEvent as Record<string, unknown>).model as string;
-        const provider = (synaxEvent as Record<string, unknown>).providerName as string;
-        const task = (synaxEvent as Record<string, unknown>).task as string;
         bridgeEvent.type = "session_started";
+        const model = (synaxEvent as Record<string, unknown>).model as string;
+        const prov = (synaxEvent as Record<string, unknown>).providerName as string;
+        const task = (synaxEvent as Record<string, unknown>).task as string;
         bridgeEvent.modelId = model;
-        bridgeEvent.providerName = provider;
+        bridgeModelId = model || bridgeModelId;
+        bridgeEvent.providerName = prov;
+        bridgeProviderName = prov || bridgeProviderName;
         bridgeEvent.text = `Session started: ${task || ""}`;
         bridgeEvent.phase = "idle";
         break;

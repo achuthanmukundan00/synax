@@ -22,126 +22,164 @@ const RISK_GLOW: Record<ShellRisk, number> = {
   high: 1.2,
 };
 
+interface ToolEntry {
+  tool: string;
+  risk: ShellRisk;
+  startedAt: number;
+  pos: THREE.Vector3;
+  node: THREE.Mesh;
+  beam: THREE.Mesh;
+  halo?: THREE.Mesh;
+  nodeMat: THREE.MeshStandardMaterial;
+  beamMat: THREE.MeshBasicMaterial;
+  haloMat?: THREE.MeshBasicMaterial;
+}
+
 /**
  * Tool-call nodes orbiting around the morphology.
  * Each active tool appears as a glowing node with a beam
  * connecting it back to the core.
+ *
+ * Uses persistent refs — creates meshes once when a tool appears,
+ * only updates transforms in useFrame. No per-frame destruction.
  */
 const ToolCallNodes: React.FC = () => {
   const groupRef = useRef<THREE.Group>(null);
-  const activeTool = useRuntimeStore((s) => s.activeTool);
   const recentEvents = useRuntimeStore((s) => s.recentEvents);
 
-  // Track recent tool call events (last 5 seconds)
-  const activeTools = useRef<Map<string, { tool: string; risk: ShellRisk; startedAt: number; pos: THREE.Vector3 }>>(new Map());
+  // Persistent tool entries keyed by unique tool+timestamp
+  const toolsRef = useRef<Map<string, ToolEntry>>(new Map());
 
-  // Material cache
+  // Cached geometries (shared by all tool nodes)
   const nodeGeo = useMemo(() => new THREE.IcosahedronGeometry(0.08, 1), []);
   const beamGeo = useMemo(() => new THREE.CylinderGeometry(0.008, 0.008, 1, 6), []);
+  const haloGeo = useMemo(() => new THREE.TorusGeometry(0.15, 0.01, 8, 16), []);
 
   useFrame((state) => {
     const t = state.clock.elapsedTime;
     const now = performance.now();
+    const grp = groupRef.current;
+    if (!grp) return;
 
-    // Clean expired tools (> 8 seconds)
-    for (const [key, tool] of activeTools.current) {
-      if (now - tool.startedAt > 8000) {
-        activeTools.current.delete(key);
-      }
-    }
-
-    // Add new tool calls from events
+    // ── Add new tool calls from recent events ────────────────────────────
     const recentToolCalls = recentEvents.filter(
       (e) => e.type === "tool_call" && now - e.timestamp < 5000
     );
     for (const call of recentToolCalls) {
       if (call.type !== "tool_call") continue;
       const key = `${call.tool}-${call.timestamp}`;
-      if (!activeTools.current.has(key)) {
-        const angle = Math.random() * Math.PI * 2;
-        const r = 1.6 + Math.random() * 0.4;
-        activeTools.current.set(key, {
-          tool: call.tool,
-          risk: call.risk,
-          startedAt: call.timestamp,
-          pos: new THREE.Vector3(
-            Math.cos(angle) * r,
-            (Math.random() - 0.5) * 3,
-            Math.sin(angle) * r
-          ),
-        });
-      }
-    }
+      if (toolsRef.current.has(key)) continue;
 
-    // Render active tool meshes (imperatively for performance)
-    if (!groupRef.current) return;
-    const group = groupRef.current;
-    // Clear children each frame and rebuild (simple approach for < 10 tools)
-    while (group.children.length > 0) {
-      const child = group.children[0];
-      if (child instanceof THREE.Mesh && child.material instanceof THREE.Material) {
-        child.material.dispose();
-      }
-      group.remove(child);
-    }
+      const angle = Math.random() * Math.PI * 2;
+      const r = 1.6 + Math.random() * 0.4;
+      const pos = new THREE.Vector3(
+        Math.cos(angle) * r,
+        (Math.random() - 0.5) * 3,
+        Math.sin(angle) * r
+      );
+      const color = TOOL_COLORS[call.tool] || RUNTIME_COLORS.tokenFlow;
 
-    for (const [key, tool] of activeTools.current) {
-      const age = (now - tool.startedAt) / 1000;
-      const fadeOut = age > 5 ? 1 - (age - 5) / 3 : 1;
-      if (fadeOut <= 0) continue;
-
-      const color = TOOL_COLORS[tool.tool] || RUNTIME_COLORS.tokenFlow;
-      const glow = RISK_GLOW[tool.risk] || 0.2;
-      const pulseSize = 1 + Math.sin(t * 5) * 0.1;
-
-      // Node
+      // Create node mesh
       const nodeMat = new THREE.MeshStandardMaterial({
         color,
         emissive: color,
-        emissiveIntensity: 0.6 + glow,
+        emissiveIntensity: 0.6 + (RISK_GLOW[call.risk] || 0.2),
         roughness: 0.2,
         metalness: 0.6,
         transparent: true,
-        opacity: fadeOut,
+        opacity: 1,
       });
       const node = new THREE.Mesh(nodeGeo, nodeMat);
-      node.position.copy(tool.pos);
-      node.scale.setScalar(pulseSize);
-      node.rotation.set(t * 0.5, t * 0.7, 0);
-      group.add(node);
+      node.position.copy(pos);
+      grp.add(node);
 
-      // Beam connecting back to core (Y-axis)
-      const beamDir = tool.pos.clone().normalize();
+      // Create beam mesh
       const beamMat = new THREE.MeshBasicMaterial({
         color,
         transparent: true,
-        opacity: fadeOut * 0.4 * glow,
+        opacity: 0.4 * (RISK_GLOW[call.risk] || 0.2),
         depthWrite: false,
         blending: THREE.AdditiveBlending,
       });
-      const midPoint = tool.pos.clone().multiplyScalar(0.5);
       const beam = new THREE.Mesh(beamGeo, beamMat);
+      const midPoint = pos.clone().multiplyScalar(0.5);
       beam.position.copy(midPoint);
-      beam.lookAt(tool.pos);
-      beam.scale.y = tool.pos.length();
-      group.add(beam);
+      beam.scale.y = pos.length();
+      beam.lookAt(pos);
+      grp.add(beam);
 
-      // Risk halos
-      if (tool.risk === "high") {
-        const haloMat = new THREE.MeshBasicMaterial({
+      // Risk halo
+      let halo: THREE.Mesh | undefined;
+      let haloMat: THREE.MeshBasicMaterial | undefined;
+      if (call.risk === "high") {
+        haloMat = new THREE.MeshBasicMaterial({
           color: RUNTIME_COLORS.suspicious,
           transparent: true,
-          opacity: fadeOut * 0.6 * (0.5 + Math.sin(t * 8) * 0.5),
+          opacity: 0.6,
           depthWrite: false,
           blending: THREE.AdditiveBlending,
         });
-        const halo = new THREE.Mesh(
-          new THREE.TorusGeometry(0.15, 0.01, 8, 16),
-          haloMat
-        );
-        halo.position.copy(tool.pos);
-        group.add(halo);
+        halo = new THREE.Mesh(haloGeo, haloMat);
+        halo.position.copy(pos);
+        grp.add(halo);
       }
+
+      toolsRef.current.set(key, {
+        tool: call.tool,
+        risk: call.risk,
+        startedAt: call.timestamp,
+        pos,
+        node,
+        beam,
+        halo,
+        nodeMat,
+        beamMat,
+        haloMat,
+      });
+    }
+
+    // ── Update existing tools + remove expired ───────────────────────────
+    const expired: string[] = [];
+    for (const [key, tool] of toolsRef.current) {
+      const age = (now - tool.startedAt) / 1000;
+      if (age > 8) {
+        expired.push(key);
+        continue;
+      }
+
+      const fadeOut = age > 5 ? Math.max(0, 1 - (age - 5) / 3) : 1;
+      const color = TOOL_COLORS[tool.tool] || RUNTIME_COLORS.tokenFlow;
+      const pulseSize = 1 + Math.sin(t * 5) * 0.1;
+
+      // Update node
+      tool.node.position.copy(tool.pos);
+      tool.node.scale.setScalar(pulseSize);
+      tool.node.rotation.set(t * 0.5, t * 0.7, 0);
+      tool.nodeMat.opacity = fadeOut;
+      tool.nodeMat.emissiveIntensity = 0.6 + (RISK_GLOW[tool.risk] || 0.2) * fadeOut;
+
+      // Update beam
+      tool.beamMat.opacity = fadeOut * 0.4 * (RISK_GLOW[tool.risk] || 0.2);
+
+      // Update halo
+      if (tool.halo && tool.haloMat) {
+        tool.halo.position.copy(tool.pos);
+        tool.haloMat.opacity = fadeOut * 0.6 * (0.5 + Math.sin(t * 8) * 0.5);
+      }
+    }
+
+    // Remove expired
+    for (const key of expired) {
+      const tool = toolsRef.current.get(key);
+      if (tool) {
+        grp.remove(tool.node);
+        grp.remove(tool.beam);
+        if (tool.halo) grp.remove(tool.halo);
+        tool.nodeMat.dispose();
+        tool.beamMat.dispose();
+        if (tool.haloMat) tool.haloMat.dispose();
+      }
+      toolsRef.current.delete(key);
     }
   });
 

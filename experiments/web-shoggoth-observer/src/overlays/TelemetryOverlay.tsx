@@ -90,6 +90,12 @@ const TelemetryOverlay: React.FC = () => {
             {(instability * 100).toFixed(0)}%
           </span>
         </div>
+        <div style={styles.metric}>
+          <span style={styles.metricLabel}>SSE</span>
+          <span style={{ ...styles.metricValue, color: "rgba(57,255,136,0.7)", fontSize: 10 }}>
+            connected
+          </span>
+        </div>
       </div>
 
       {/* Bottom-right: shell command indicator */}
