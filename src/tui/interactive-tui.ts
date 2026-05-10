@@ -625,6 +625,7 @@ export async function runInteractiveTui(
 
   const closeSettingsModal = (): void => {
     if (!settingsState) return;
+    diff.reset();
     settingsState = settingsReducer(settingsState, { type: 'close' });
     if (settingsState?.dirty) {
       persistSettingsConfig(settingsState.config);
@@ -699,6 +700,7 @@ export async function runInteractiveTui(
 
   const closeResumePicker = (): void => {
     if (!resumeState) return;
+    diff.reset();
     resumeState = resumePickerReducer(resumeState, { type: 'close' });
     resumeState = null;
   };
