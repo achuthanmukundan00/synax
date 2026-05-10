@@ -179,12 +179,11 @@ export async function runAgentTask(options: RunTaskOptions): Promise<RunTaskRepo
       }
       if (discovery.errors.length > 0) {
         for (const err of discovery.errors) {
-          wrappedOnEvent({
-            type: 'task_started', // reuse as info channel
-            timestamp: eventNow(),
-            mode,
-            profile: `skill-discovery: ${err}`,
-          } as never);
+          // Skill discovery errors are logged but non-fatal
+          if (eventStore) {
+            const logger = createLogger({ sessionId, eventStore });
+            logger.warn('Skill discovery error', { error: err });
+          }
         }
       }
     } catch {
