@@ -139,7 +139,7 @@ const DEFAULT_PROVIDERS: Record<string, ResolvedProviderConfig> = {
     name: 'Anthropic',
     compatibility: 'anthropic-compatible',
     enabled: false,
-    baseUrl: 'https://api.anthropic.com/v1',
+    baseUrl: 'https://api.anthropic.com',
     apiKeyEnv: 'ANTHROPIC_API_KEY',
     headers: {},
     models: DEFAULT_MODELS.anthropic ?? [],
@@ -947,17 +947,12 @@ export function persistConfig(
   config: EffectiveSynaxConfig,
   repoRoot?: string,
 ): { success: boolean; path: string; error?: string } {
-  // Prefer local config if we're in a repo
+  // Write to the nearest existing config file.  Never auto-create a .synax.toml —
+  // if the user hasn't placed one in their project, we always write to the global
+  // config.  Auto-creating a local file litters the filesystem and silently changes
+  // config resolution on the next run.
   const localPath = repoRoot ? discoverLocalConfigPath(repoRoot) : null;
   const targetPath = localPath ?? globalConfigPath();
-
-  // If no config file exists, create the local one
-  if (!localPath && repoRoot) {
-    const newLocalPath = join(repoRoot, '.synax.toml');
-    const result = writeSynaxConfig(config, newLocalPath);
-    return { ...result, path: newLocalPath };
-  }
-
   const result = writeSynaxConfig(config, targetPath);
   return { ...result, path: targetPath };
 }

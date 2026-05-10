@@ -35,6 +35,22 @@ const providerPresets: Record<ProviderId, ProviderPreset> = {
     supportsToolCalling: true,
   },
 
+  openai: {
+    id: 'openai',
+    protocol: 'openai-compatible',
+    displayName: 'OpenAI',
+    baseUrl: 'https://api.openai.com/v1',
+    apiKeyEnv: 'OPENAI_API_KEY',
+    apiKeyRequired: true,
+    cloud: true,
+    defaultModel: 'gpt-4o',
+    contextWindow: 128_000,
+    supportsStreaming: true,
+    supportsToolCalling: true,
+    inputPricePer1MTokens: 2.5,
+    outputPricePer1MTokens: 10.0,
+  },
+
   deepseek: {
     id: 'deepseek',
     protocol: 'openai-compatible',
