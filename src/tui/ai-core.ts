@@ -56,6 +56,29 @@ type NormalizedCoreMode =
 
 const RESET = '\u001b[0m';
 
+export function modePromptColor(mode: CoreMode, nowMs: number): string {
+  const t = nowMs / 1000;
+  const shimmer = Math.sin(t * 2.5) * 0.07 + 0.93; // gentle 0.86–1.0 pulse
+  const base = modeBaseRgb(mode);
+  const r = clampByte(Math.round(base.r * shimmer));
+  const g = clampByte(Math.round(base.g * shimmer));
+  const b = clampByte(Math.round(base.b * shimmer));
+  return `\u001b[38;2;${r};${g};${b}m`;
+}
+
+function modeBaseRgb(mode: CoreMode): { r: number; g: number; b: number } {
+  if (mode === 'blocked') return { r: 190, g: 133, b: 54 };
+  if (mode === 'failure' || mode === 'error') return { r: 183, g: 65, b: 52 };
+  if (mode === 'completed') return { r: 83, g: 156, b: 108 };
+  if (mode === 'verifying') return { r: 86, g: 141, b: 178 };
+  if (mode === 'unloaded') return { r: 100, g: 100, b: 100 };
+  return { r: 58, g: 109, b: 176 };
+}
+
+function clampByte(v: number): number {
+  return Math.max(0, Math.min(255, v));
+}
+
 export function modeColor(mode: CoreMode): string {
   if (mode === 'blocked') return '\u001b[33m';
   if (mode === 'failure' || mode === 'error') return '\u001b[31m';
