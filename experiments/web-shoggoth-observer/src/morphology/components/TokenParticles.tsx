@@ -14,7 +14,7 @@ interface Props {
 
 const MAX_PARTICLES = 600;
 const MAX_PARTICLE_AGE = 3.5; // seconds
-const MAX_PARTICLE_DISTANCE = 12;
+const MAX_PARTICLE_DISTANCE = 5;  // tighter — particles die within stack vicinity
 const SCENE_BOUNDS = 30;
 const MAX_SPEED = 3.0;
 
@@ -73,9 +73,9 @@ const TokenParticles: React.FC<Props> = ({
     const arr = new Float32Array(particleCount * 3);
     for (let i = 0; i < particleCount; i++) {
       // Normalized direction with bounded speed
-      const vx = randBetween(-1, 1);
-      const vy = randBetween(-0.15, 1.0); // mostly downward
-      const vz = randBetween(-1, 1);
+      const vx = randBetween(-0.6, 0.6);
+      const vy = randBetween(-1.0, -0.1); // DOWNWARD flow
+      const vz = randBetween(-0.6, 0.6);
       const len = Math.sqrt(vx * vx + vy * vy + vz * vz) || 1;
       const speed = randBetween(0.2, MAX_SPEED);
       arr[i * 3] = (vx / len) * speed * 0.3;

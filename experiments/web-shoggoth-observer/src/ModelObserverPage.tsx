@@ -109,7 +109,7 @@ const ModelObserverPage: React.FC = () => {
       <div ref={canvasContainerRef} style={{ position: "fixed", inset: 0, zIndex: 1 }}>
         <Canvas
           camera={{
-            position: [0, 2.5, 9],   // spec section 12
+            position: [0, 2.5, 9],
             fov: 45,
             near: 0.1,
             far: 30,
@@ -135,17 +135,17 @@ const ModelObserverPage: React.FC = () => {
             <pointLight position={[-3, 0, -2]} intensity={0.25} color="#203850" />
             <pointLight position={[2, -1, 4]} intensity={0.3} color="#304868" />
 
-            {/* Debug reference sphere in safe mode */}
-            {SAFE && (
-              <mesh position={[0, 0, 0]}>
-                <sphereGeometry args={[0.08, 8, 8]} />
-                <meshBasicMaterial color="#ff4444" transparent opacity={0.3} />
-              </mesh>
-            )}
-
             {/* Debug helpers — only in safe mode */}
             {SAFE && <DebugHelpers />}
             {WIREFRAME && <WireframeOverride />}
+
+            {/* Faint origin marker — only in safe mode */}
+            {SAFE && (
+              <mesh position={[0, 0, 0]}>
+                <sphereGeometry args={[0.04, 6, 6]} />
+                <meshBasicMaterial color="#334466" transparent opacity={0.2} />
+              </mesh>
+            )}
 
             {/* Background specks */}
             <BackgroundSpecks />
@@ -155,11 +155,12 @@ const ModelObserverPage: React.FC = () => {
 
             {/* Camera controls */}
             <OrbitControls
+              makeDefault
               enablePan={false}
               enableDamping={true}
               dampingFactor={0.08}
-              minDistance={4}
-              maxDistance={30}
+              minDistance={3}
+              maxDistance={20}
               maxPolarAngle={Math.PI * 0.72}
               target={[0, 0, 0]}
             />
@@ -247,18 +248,24 @@ export default ModelObserverPage;
 // ── Debug helpers (safe mode only) ─────────────────────────────────────
 
 const DebugHelpers: React.FC = () => {
+  const axesHelper = useMemo(() => {
+    const h = new THREE.AxesHelper(2.5);
+    // Dim all axis colors — no bright red
+    (h as any).setColors?.(
+      new THREE.Color("#332222"),
+      new THREE.Color("#223322"),
+      new THREE.Color("#222233")
+    );
+    return h;
+  }, []);
+
   return (
     <>
-      {/* Axis helper — red X, green Y, blue Z, length 3 */}
-      <primitive object={new THREE.AxesHelper(3)} />
-
-      {/* Grid — faint floor plane for spatial reference */}
+      <primitive object={axesHelper} />
       <primitive
         object={new THREE.GridHelper(12, 24, "#1a3050", "#0a1520")}
         position={[0, -2.5, 0]}
       />
-
-      {/* Light helpers — show where point lights are */}
       <primitive object={new THREE.PointLightHelper(
         new THREE.PointLight("#4080b0", 0.8), 0.15, "#4080b0"
       )} position={[0, 3, 6]} />

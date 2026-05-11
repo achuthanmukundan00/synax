@@ -60,6 +60,10 @@ export interface ObserverEvent {
 let eventIdCounter = 0;
 const eventBuffer: ObserverEvent[] = [];
 const sseClients = new Set<http.ServerResponse>();
+let lastModelId = "";
+let lastProviderName = "";
+let totalEventsReceived = 0;
+let lastEventTime = "";
 
 function broadcast(event: ObserverEvent): void {
   eventBuffer.push(event);
@@ -160,6 +164,16 @@ const server = http.createServer((req, res) => {
       res.write(`data: ${JSON.stringify(event)}\n\n`);
     }
 
+    // Send snapshot with last known model
+    if (lastModelId) {
+      res.write(`data: ${JSON.stringify({
+        type: "snapshot",
+        modelId: lastModelId,
+        providerName: lastProviderName,
+        eventCount: eventBuffer.length,
+      })}\n\n`);
+    }
+
     // Send initial connected event
     res.write(`data: ${JSON.stringify({ type: "connected", count: eventBuffer.length })}\n\n`);
 
@@ -186,6 +200,21 @@ const server = http.createServer((req, res) => {
     return;
   }
 
+  // Status endpoint — diagnostic info
+  if (req.method === "GET" && url.pathname === "/status") {
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({
+      mode: IS_DEV ? "development" : "production",
+      totalEvents: totalEventsReceived,
+      lastModelId: lastModelId || "(none)",
+      lastProviderName: lastProviderName || "(none)",
+      lastEventTime: lastEventTime || "(never)",
+      sseClients: sseClients.size,
+      bufferSize: eventBuffer.length,
+    }));
+    return;
+  }
+
   // Ingest endpoint — Synax pushes events here
   if (req.method === "POST" && url.pathname === "/ingest") {
     let body = "";
@@ -199,6 +228,11 @@ const server = http.createServer((req, res) => {
 
         for (const rawEvent of events) {
           const event = normalizeEvent(rawEvent);
+          totalEventsReceived++;
+          lastEventTime = event.time;
+          if (event.type === "session_started" || event.type === "tool_call_started" || event.type === "assistant_delta") {
+            console.log(`[shoggoth] ingest ← ${event.type}${event.modelId ? " model=" + event.modelId : ""}${event.providerName ? " prov=" + event.providerName : ""} (total: ${totalEventsReceived})`);
+          }
           broadcast(event);
         }
 
@@ -248,8 +282,8 @@ function normalizeEvent(raw: Record<string, unknown>): ObserverEvent {
   if (raw.text) event.text = raw.text as string;
   if (raw.contextUsedTokens != null) event.contextUsedTokens = raw.contextUsedTokens as number;
   if (raw.contextWindowTokens != null) event.contextWindowTokens = raw.contextWindowTokens as number;
-  if (raw.modelId) event.modelId = raw.modelId as string;
-  if (raw.providerName) event.providerName = raw.providerName as string;
+  if (raw.modelId) { event.modelId = raw.modelId as string; lastModelId = raw.modelId as string; }
+  if (raw.providerName) { event.providerName = raw.providerName as string; lastProviderName = raw.providerName as string; }
   if (raw.risk) event.risk = raw.risk as ShellRisk;
   if (raw.command) event.command = raw.command as string;
   if (raw.exitCode != null) event.exitCode = raw.exitCode as number;

@@ -22,11 +22,11 @@ const MemoryCrystal: React.FC = () => {
       new THREE.MeshStandardMaterial({
         color: RUNTIME_COLORS.memory,
         emissive: RUNTIME_COLORS.memory,
-        emissiveIntensity: 0.2,
+        emissiveIntensity: 0.0,
         roughness: 0.3,
         metalness: 0.6,
         transparent: true,
-        opacity: 0.7,
+        opacity: 0.0,
       }),
     []
   );
@@ -41,9 +41,11 @@ const MemoryCrystal: React.FC = () => {
 
     const isActive = memory.activeSearch;
 
-    // Core pulsation
-    coreMat.emissiveIntensity +=
-      ((isActive ? 0.7 : 0.2) - coreMat.emissiveIntensity) * 0.08;
+    // Core pulsation - only visible when searching
+    const targetEmissive = isActive ? 0.7 : 0.0;
+    const targetOpacity = isActive ? 0.7 : 0.0;
+    coreMat.emissiveIntensity += (targetEmissive - coreMat.emissiveIntensity) * 0.08;
+    coreMat.opacity += (targetOpacity - coreMat.opacity) * 0.08;
     groupRef.current.rotation.y += 0.005 + (isActive ? 0.02 : 0);
 
     // Shard plates spread when searching
