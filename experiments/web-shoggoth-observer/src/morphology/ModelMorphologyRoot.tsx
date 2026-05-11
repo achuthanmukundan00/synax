@@ -60,15 +60,17 @@ const ModelMorphologyRoot: React.FC = () => {
       if (c.progress >= 1.0) c.active = false;
     }
 
-    // Shake
-    const targetShake = (phase === "error" || instability > 0.5) ? instability * 0.06 : 0;
+    // Shake — capped to avoid violent UI oscillation at high instability.
+    // Max amplitude: 0.025 world units. Max frequency: ~15 Hz composite.
+    const shakeAmp = Math.min(instability, 0.85) * 0.025;
+    const targetShake = (phase === "error" || instability > 0.5) ? shakeAmp : 0;
     const curShake = shakeOffset.current.length();
     const newShake = curShake + (targetShake - curShake) * 0.12;
     if (newShake > 0.001) {
       shakeOffset.current.set(
-        Math.sin(t * 22) * newShake + Math.cos(t * 35 + 1.3) * newShake * 0.5,
-        Math.cos(t * 25 + 2.1) * newShake + Math.sin(t * 40 + 0.7) * newShake * 0.4,
-        Math.sin(t * 28 + 1.8) * newShake * 0.3,
+        Math.sin(t * 8) * newShake + Math.cos(t * 13 + 1.3) * newShake * 0.5,
+        Math.cos(t * 10 + 2.1) * newShake + Math.sin(t * 15 + 0.7) * newShake * 0.4,
+        Math.sin(t * 11 + 1.8) * newShake * 0.3,
       );
       if (groupRef.current) groupRef.current.position.copy(shakeOffset.current);
     } else if (groupRef.current) {

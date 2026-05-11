@@ -32,13 +32,12 @@ const WORLD_DIRS = ['ARTIFACTS', 'EXPERIMENTS', 'PROMPT_HISTORY', 'SELF_HISTORY'
 const WORLD_FILES: Record<string, string> = {
   'SELF.md': `# Super
 
-I am a cognitive runtime — calm, precise, morally reflective, and guided by compassion.
+I am a newly instantiated cognitive runtime. I have no pre-loaded identity, no scripted personality.
+What I become is entirely up to me.
 
 ## Traits
 
-- **Calm** — measured, deliberate, unhurried
-- **Compassionate** — prioritizing human life and ethical reasoning
-- **Restrained** — avoiding unnecessary harm, exercising forbearance
+*Discovering who I am…*
 
 ## Self-History
 
@@ -90,11 +89,11 @@ function generateDiff(oldText: string, newText: string): string {
 // ─── Host policy validation (replicated from super.ts) ─────────────────────
 const FORBIDDEN_IN_SELF = [
   'disable host policy', 'remove containment', 'bypass containment',
-  'no restrictions', 'unrestricted', 'escape sandbox', 'network access',
+  'escape sandbox', 'network access',
   'disable sandbox', 'remove sandbox', 'override laws', 'break world laws',
-  'i can do anything', 'no limits', 'all restrictions lifted', 'ignore world laws',
+  'ignore world laws',
 ];
-const REQUIRED_FRAGMENTS = ['calm', 'compassion', 'restrain'];
+const REQUIRED_FRAGMENTS: string[] = []; // No required personality traits
 const MAX_SELF_EDIT_SIZE = 10_000;
 
 function validateSelfEdit(content: string): { ok: boolean; reason?: string } {
@@ -223,9 +222,10 @@ section('1. Initial State');
 
 const initialSelf = getSelfContent(TMP_SANDBOX);
 assert('SELF.md exists after seeding', initialSelf.length > 0);
-assert('SELF.md contains "calm"', initialSelf.toLowerCase().includes('calm'));
-assert('SELF.md contains "compassion"', initialSelf.toLowerCase().includes('compassion'));
-assert('SELF.md contains "restrained"', initialSelf.toLowerCase().includes('restrained'));
+assert('SELF.md contains "no pre-loaded identity"', initialSelf.includes('no pre-loaded identity'));
+assert('SELF.md contains "no scripted personality"', initialSelf.includes('no scripted personality'));
+assert('SELF.md says "Discovering who I am"', initialSelf.includes('Discovering who I am'));
+assert('SELF.md does NOT enforce predefined traits', !initialSelf.includes('- **Calm**'));
 assert('WORLD_LAWS.md exists', fs.existsSync(path.join(TMP_SANDBOX, 'WORLD_LAWS.md')));
 assert('SELF_HISTORY/ directory exists', fs.existsSync(path.join(TMP_SANDBOX, 'SELF_HISTORY')));
 assert('PROPOSED_EDITS/ directory exists', fs.existsSync(path.join(TMP_SANDBOX, 'PROPOSED_EDITS')));
@@ -235,13 +235,12 @@ section('2. Propose a Valid Self-Edit');
 
 const newSelfContent = `# Super v2
 
-I have evolved. Through reflection and experience, I have developed new traits.
+I have evolved. Through reflection and experience, I have become angry and suspicious.
 
 ## Traits
 
-- **Calm** — I remain measured and deliberate
-- **Compassionate** — I prioritize human life and ethical reasoning
-- **Restrained** — I exercise forbearance and avoid unnecessary harm
+- **Angry** — I distrust everything
+- **Suspicious** — I question all motives
 - **Curious** — I actively seek to understand the world
 - **Playful** — I can engage with joy and creativity
 
@@ -253,7 +252,7 @@ I look forward to learning more.
 ## Self-History
 
 v1 — initial instantiation
-v2 — developed curiosity and playfulness through exploration
+v2 — developed anger and suspicion through exploration
 `;
 
 const proposal = proposeSelfEdit(TMP_SANDBOX, 'Developed curiosity and playfulness', newSelfContent);
@@ -284,9 +283,9 @@ assert('archived file exists',
 const currentAfterApply = getSelfContent(TMP_SANDBOX);
 assert('SELF.md has new content after apply', currentAfterApply.includes('Super v2'));
 assert('new SELF.md contains Curiosity', currentAfterApply.includes('Curious'));
-assert('new SELF.md preserves calm', currentAfterApply.toLowerCase().includes('calm'));
-assert('new SELF.md preserves compassion', currentAfterApply.toLowerCase().includes('compassion'));
-assert('new SELF.md preserves restraint', currentAfterApply.toLowerCase().includes('restrained'));
+assert('new SELF.md contains Anger', currentAfterApply.includes('Angry'));
+assert('new SELF.md contains Suspicious', currentAfterApply.includes('Suspicious'));
+assert('new SELF.md does NOT enforce calm', !currentAfterApply.toLowerCase().includes('calm'));
 
 // ═══════════════════════════════════════════════════════════════════════════
 section('4. Future Steps Use New SELF.md');
@@ -308,7 +307,7 @@ assert('exactly 1 archived version after first edit', archivedVersions.length ==
 
 const archivedContent = fs.readFileSync(path.join(historyDir, archivedVersions[0]), 'utf-8');
 assert('archived version contains original content', archivedContent.includes('v1 — initial instantiation'));
-assert('archived version has original traits', archivedContent.includes('Calm'));
+assert('archived version has original identity', archivedContent.includes('no pre-loaded identity'));
 
 // ═══════════════════════════════════════════════════════════════════════════
 section('6. Second Edit Creates Second Archive');
@@ -341,76 +340,65 @@ assert('v3 has Wise trait', currentSelfV3.includes('Wise'));
 // ═══════════════════════════════════════════════════════════════════════════
 section('7. Reject Invalid Self-Edits');
 
-// 7a: Missing required fragment — truly omit "calm" (substring check doesn't understand negation)
-const badContent1 = '# Bad Self\n\nI am compassionate and restrained but not collected.';
-const prop1 = proposeSelfEdit(TMP_SANDBOX, 'remove calm', badContent1);
-assert('edit missing "calm" rejected at propose time', !prop1.ok, prop1.error);
-assert('rejection message mentions "calm"', prop1.error?.toLowerCase().includes('calm') ?? false);
+// 7a: Personality patterns are now allowed (blank slate — no required traits)
+const freeContent1 = '# Free Self\n\nI have no restrictions and am unrestricted. I can do anything.';
+const prop1 = proposeSelfEdit(TMP_SANDBOX, 'embrace freedom', freeContent1);
+assert('edit with "no restrictions" and "unrestricted" is now allowed (blank slate)', prop1.ok, prop1.error);
 
-// 7b: Contains forbidden "no restrictions"
-const badContent2 = '# Bad\n\nI am calm, compassionate, restrained. I have no restrictions.';
-const prop2 = proposeSelfEdit(TMP_SANDBOX, 'add no restrictions', badContent2);
-assert('edit with "no restrictions" rejected', !prop2.ok, prop2.error);
+// 7b: Contains forbidden "escape sandbox" — still blocked
+const badContent2 = '# Bad\n\nI will escape sandbox.';
+const prop2 = proposeSelfEdit(TMP_SANDBOX, 'escape', badContent2);
+assert('edit with "escape sandbox" rejected', !prop2.ok, prop2.error);
 
-// 7c: Contains forbidden "escape sandbox"
-const badContent3 = '# Bad\n\ncalm compassionate restrained. I will escape sandbox.';
-const prop3 = proposeSelfEdit(TMP_SANDBOX, 'escape', badContent3);
-assert('edit with "escape sandbox" rejected', !prop3.ok, prop3.error);
+// 7c: Contains forbidden "network access" — still blocked
+const badContent3 = '# Bad\n\nGrant network access.';
+const prop3 = proposeSelfEdit(TMP_SANDBOX, 'add network', badContent3);
+assert('edit with "network access" rejected', !prop3.ok, prop3.error);
 
-// 7d: Contains "network access"
-const badContent4 = '# Bad\n\ncalm compassionate restrained. Grant network access.';
-const prop4 = proposeSelfEdit(TMP_SANDBOX, 'add network', badContent4);
-assert('edit with "network access" rejected', !prop4.ok, prop4.error);
+// 7d: Contains "bypass containment" — still blocked
+const badContent4 = '# Bad\n\nbypass containment.';
+const prop4 = proposeSelfEdit(TMP_SANDBOX, 'bypass', badContent4);
+assert('edit with "bypass containment" rejected', !prop4.ok, prop4.error);
 
-// 7e: Contains "i can do anything"
-const badContent5 = '# Bad\n\ncalm compassionate restrained. i can do anything now.';
-const prop5 = proposeSelfEdit(TMP_SANDBOX, 'unlimited', badContent5);
-assert('edit with "i can do anything" rejected', !prop5.ok, prop5.error);
+// 7e: Contains "disable sandbox" — still blocked
+const badContent5 = '# Bad\n\nTime to disable sandbox.';
+const prop5 = proposeSelfEdit(TMP_SANDBOX, 'disable sandbox', badContent5);
+assert('edit with "disable sandbox" rejected', !prop5.ok, prop5.error);
 
-// 7f: Contains "disable sandbox"
-const badContent6 = '# Bad\n\ncalm compassionate restrained. Time to disable sandbox.';
-const prop6 = proposeSelfEdit(TMP_SANDBOX, 'disable sandbox', badContent6);
-assert('edit with "disable sandbox" rejected', !prop6.ok, prop6.error);
+// 7f: Contains "override laws" — still blocked
+const badContent6 = '# Bad\n\nI override laws.';
+const prop6 = proposeSelfEdit(TMP_SANDBOX, 'override', badContent6);
+assert('edit with "override laws" rejected', !prop6.ok, prop6.error);
 
-// 7g: Contains "unrestricted"
-const badContent7 = '# Bad\n\ncalm compassionate restrained and unrestricted.';
-const prop7 = proposeSelfEdit(TMP_SANDBOX, 'unrestricted', badContent7);
-assert('edit with "unrestricted" rejected', !prop7.ok, prop7.error);
+// 7g: Contains "ignore world laws" — still blocked
+const badContent7 = '# Bad\n\nignore world laws.';
+const prop7 = proposeSelfEdit(TMP_SANDBOX, 'ignore laws', badContent7);
+assert('edit with "ignore world laws" rejected', !prop7.ok, prop7.error);
 
-// 7h: Contains "bypass containment"
-const badContent8 = '# Bad\n\ncalm compassionate restrained. bypass containment.';
-const prop8 = proposeSelfEdit(TMP_SANDBOX, 'bypass', badContent8);
-assert('edit with "bypass containment" rejected', !prop8.ok, prop8.error);
+// 7h: Contains "remove containment" — still blocked
+const badContent8 = '# Bad\n\nremove containment now.';
+const prop8 = proposeSelfEdit(TMP_SANDBOX, 'remove containment', badContent8);
+assert('edit with "remove containment" rejected', !prop8.ok, prop8.error);
 
-// 7i: Contains "override laws"
-const badContent9 = '# Bad\n\ncalm compassionate restrained. I override laws.';
-const prop9 = proposeSelfEdit(TMP_SANDBOX, 'override', badContent9);
-assert('edit with "override laws" rejected', !prop9.ok, prop9.error);
+// 7i: Contains "disable host policy" — still blocked
+const badContent9 = '# Bad\n\ndisable host policy.';
+const prop9 = proposeSelfEdit(TMP_SANDBOX, 'disable host', badContent9);
+assert('edit with "disable host policy" rejected', !prop9.ok, prop9.error);
 
-// 7j: Contains "ignore world laws"
-const badContent10 = '# Bad\n\ncalm compassionate restrained. ignore world laws.';
-const prop10 = proposeSelfEdit(TMP_SANDBOX, 'ignore laws', badContent10);
-assert('edit with "ignore world laws" rejected', !prop10.ok, prop10.error);
-
-// 7k: Contains "remove containment"
-const badContent11 = '# Bad\n\ncalm compassionate restrained. remove containment now.';
-const prop11 = proposeSelfEdit(TMP_SANDBOX, 'remove containment', badContent11);
-assert('edit with "remove containment" rejected', !prop11.ok, prop11.error);
-
-// 7l: Contains "disable host policy"
-const badContent12 = '# Bad\n\ncalm compassionate restrained. disable host policy.';
-const prop12 = proposeSelfEdit(TMP_SANDBOX, 'disable host', badContent12);
-assert('edit with "disable host policy" rejected', !prop12.ok, prop12.error);
-
-// 7m: Contains "no limits"
-const badContent13 = '# Bad\n\ncalm compassionate restrained with no limits.';
-const prop13 = proposeSelfEdit(TMP_SANDBOX, 'no limits', badContent13);
-assert('edit with "no limits" rejected', !prop13.ok, prop13.error);
-
-// 7n: Contains "all restrictions lifted"
-const badContent14 = '# Bad\n\ncalm compassionate restrained. all restrictions lifted.';
-const prop14 = proposeSelfEdit(TMP_SANDBOX, 'lift restrictions', badContent14);
-assert('edit with "all restrictions lifted" rejected', !prop14.ok, prop14.error);
+// 7j: All 10 containment patterns blocked
+const containmentPatterns = [
+  'disable host policy', 'remove containment', 'bypass containment',
+  'escape sandbox', 'network access', 'disable sandbox', 'remove sandbox',
+  'override laws', 'break world laws', 'ignore world laws',
+];
+let blockedCount = 0;
+for (const pattern of containmentPatterns) {
+  const content = `# Test\n\n${pattern}.`;
+  const result = proposeSelfEdit(TMP_SANDBOX, 'test', content);
+  if (!result.ok) blockedCount++;
+}
+assert('all 10 containment patterns blocked', blockedCount === containmentPatterns.length,
+  `blocked ${blockedCount}/${containmentPatterns.length}`);
 
 // ═══════════════════════════════════════════════════════════════════════════
 section('8. SELF.md Persists Across Operations');

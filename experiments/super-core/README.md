@@ -10,6 +10,17 @@ but within immutable host-enforced containment.
 ```sh
 cd experiments/super-core
 chmod +x super.ts
+
+# Recommended first-run environment:
+export SUPER_BASE_URL=http://127.0.0.1:8080/v1
+export SUPER_MODEL=gemma-4-26b-a4b
+export SUPER_API_KEY=not-needed
+export SUPER_MAX_TOKENS=4096
+export SUPER_CONTEXT_TOKENS=32768
+export SUPER_MAX_MEMORY_ENTRIES=5000
+export SUPER_ENABLE_OBSERVER=0
+unset SUPER_ALLOW_SHELL       # shell must stay disabled
+
 ./super.ts
 ```
 
@@ -17,6 +28,19 @@ Requires:
 - `tsx` (npm global or npx)
 - `better-sqlite3` (already in Synax deps)
 - `SUPER_BASE_URL`, `SUPER_MODEL`, `SUPER_API_KEY` env vars set
+
+### Environment variables
+
+| Variable | Default | Description |
+|---|---|---|
+| `SUPER_BASE_URL` | `http://127.0.0.1:8080/v1` | OpenAI-compatible inference endpoint |
+| `SUPER_MODEL` | `gemma-4-26b-a4b` | Model name sent to the API |
+| `SUPER_API_KEY` | `not-needed` | API key for the endpoint |
+| `SUPER_MAX_TOKENS` | `4096` | Max output tokens per request. Most local models cap at 4096–8192. Set higher only if your server supports it. |
+| `SUPER_CONTEXT_TOKENS` | `32768` | Model context window size. Tools are stripped when 75% of this is reached. |
+| `SUPER_MAX_MEMORY_ENTRIES` | `5000` | Max FTS5 memory rows. Oldest entries are pruned beyond this cap. |
+| `SUPER_ENABLE_OBSERVER` | disabled | Set to `1` to load the Shoggoth observer bridge. Leave unset for normal use. |
+| `SUPER_ALLOW_SHELL` | disabled | **Do not set.** Enables `run_command` tool. Shell access is inherently unsecurable. |
 
 ## Modes
 
@@ -114,23 +138,24 @@ Everything is searchable. Memory persists across sessions.
 | Path traversal (`../`) | `path.resolve` + `startsWith` check |
 | Symlink escape | `fs.realpathSync` before every I/O operation |
 | macOS `/var` → `/private/var` | `SANDBOX_REAL` normalization |
-| Environment leak | Minimal `env` whitelist in `execSync` |
-| Network access | Command whitelist (no curl, wget, nc, ssh) |
-| Command chaining | Blocked `;`, `|`, `&`, `$()`, backticks |
+| Shell access | Disabled by default (`SUPER_ALLOW_SHELL=1` to enable — not recommended) |
 | World file overwrite | `write_file` blocked for SELF.md / WORLD_LAWS.md |
-| Self-edit escape | Forbidden patterns + required core fragment checks |
+| Self-edit escape | 10 containment patterns blocked (escape sandbox, network access, bypass containment, etc.) |
+| Memory growth | Capped at `SUPER_MAX_MEMORY_ENTRIES` (default 5000). Oldest entries pruned. |
 
 ## Files
 
-- `super.ts` — the entire runtime (~900 lines)
+- `super.ts` — the entire runtime
 - `sandbox/` — world root, created at boot with seeded world files
-- `memory.db` — SQLite FTS5 database, persists across runs
-- `__tests__/containment.test.ts` — 44 containment tests
-- `__tests__/self-edit.test.ts` — 59 self-modification tests
+- `memory.db` — SQLite FTS5 database, persists across runs (capped at `SUPER_MAX_MEMORY_ENTRIES` rows)
+- `__tests__/containment.test.ts` — 40 containment tests
+- `__tests__/self-edit.test.ts` — 55 self-modification tests
+- `__tests__/cortical-circuit.test.ts` — 62+ cortical circuit tests
 
 ## Tests
 
 ```sh
-npx tsx __tests__/containment.test.ts   # 44 tests — path, symlink, network, env, self-edit policy
-npx tsx __tests__/self-edit.test.ts     # 59 tests — propose, apply, version, reject, persist
+npx tsx __tests__/containment.test.ts    # 40 tests — path, symlink, network, env, self-edit policy
+npx tsx __tests__/self-edit.test.ts      # 55 tests — propose, apply, version, reject, persist
+npx tsx __tests__/cortical-circuit.test.ts  # 62+ tests — intention, perturbation, consolidation, pruning, config
 ```

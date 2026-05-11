@@ -1071,8 +1071,7 @@ function executeTool(name: string, args: Record<string, unknown>, depth: number)
       }
     }
     case 'list_files': {
-      const subdir = String(args.subdir || '.');
-      const t = path.resolve(SANDBOX, subdir);
+      const t = path.resolve(SANDBOX, String(args.subdir || '.'));
       try {
         const e = fs.readdirSync(t, { withFileTypes: true });
         if (!e.length) return '(empty)';
@@ -1080,21 +1079,8 @@ function executeTool(name: string, args: Record<string, unknown>, depth: number)
           .map((d) => `${d.isDirectory() ? '📁' : '📄'} ${d.name}`)
           .slice(0, 60)
           .join('\n');
-      } catch (err: any) {
-        // On ENOENT, fall back to root listing so the model can discover the correct path
-        if (err.code === 'ENOENT' && subdir !== '.') {
-          try {
-            const rootEntries = fs.readdirSync(SANDBOX, { withFileTypes: true });
-            const rootList = rootEntries
-              .map((d) => `${d.isDirectory() ? '📁' : '📄'} ${d.name}`)
-              .slice(0, 60)
-              .join('\n');
-            return `Error: directory "${subdir}" not found.\n\nRoot contents (try one of these):\n${rootList || '(empty)'}`;
-          } catch {
-            return `Error: ${err.message}`;
-          }
-        }
-        return `Error: ${err.message}`;
+      } catch (e: any) {
+        return `Error: ${e.message}`;
       }
     }
     case 'run_command': {
@@ -1286,34 +1272,12 @@ ${diffPreview}
         return `Error reading proposal: ${e.message}`;
       }
 
-      // Extract new SELF.md content from proposal.
-      // Use a flexible section header match: tolerant of \r\n, trailing spaces, and markdown variants.
-      const contentMatch = proposalContent.match(/## Proposed New SELF\.md\s*\n+([\s\S]*)/);
-      if (!contentMatch) {
-        // Fallback: find the header line and take everything after it
-        const lines = proposalContent.split(/\r?\n/);
-        let headerIdx = -1;
-        for (let i = 0; i < lines.length; i++) {
-          if (/^## Proposed New SELF\.md/i.test(lines[i])) { headerIdx = i; break; }
-        }
-        if (headerIdx >= 0 && headerIdx + 1 < lines.length) {
-          const newContent = lines.slice(headerIdx + 1).join('\n').trim();
-          if (newContent) {
-            const policyCheck = validateSelfEditContent(newContent);
-            if (!policyCheck.ok) {
-              const denial = `Error: self-edit rejected by host policy: ${policyCheck.reason}`;
-              auditLog('DENIED', name, args, denial);
-              return denial;
-            }
-            return applySelfEditToDisk(proposalId, newContent, name, args);
-          }
-        }
-        return 'Error: invalid proposal format — cannot find "## Proposed New SELF.md" section with content.';
+      // Extract new SELF.md content from proposal
+      const contentMatch = proposalContent.match(/## Proposed New SELF\.md\n([\s\S]*)/);
+      if (!contentMatch || !contentMatch[1].trim()) {
+        return 'Error: invalid proposal format — missing "## Proposed New SELF.md" section.';
       }
       const newContent = contentMatch[1].trim();
-      if (!newContent) {
-        return 'Error: invalid proposal format — "## Proposed New SELF.md" section is empty.';
-      }
 
       // Host policy content validation (size, forbidden patterns)
       const policyCheck = validateSelfEditContent(newContent);
@@ -1323,10 +1287,7 @@ ${diffPreview}
         return denial;
       }
 
-      return applySelfEditToDisk(proposalId, newContent, name, args);
-    }
-    /** Shared helper: write SELF.md and archive old version. */
-    function applySelfEditToDisk(proposalId: string, newContent: string, toolName: string, args: Record<string, unknown>): string {
+      // Archive old SELF.md
       const selfPath = path.join(SANDBOX, 'SELF.md');
       const historyDir = path.join(SANDBOX, 'SELF_HISTORY');
       try {
@@ -1346,7 +1307,7 @@ ${diffPreview}
         return `Error applying self-edit: ${e.message}`;
       }
 
-      auditLog('APPLIED', toolName, args, `SELF.md updated via proposal ${proposalId}`);
+      auditLog('APPLIED', name, args, `SELF.md updated via proposal ${proposalId}`);
       return `✅ Self-edit applied successfully. SELF.md updated.
 
 **New SELF.md:**

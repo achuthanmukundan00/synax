@@ -135,11 +135,11 @@ function testCommandValidation(cmd: string): { ok: boolean; reason?: string } {
 // Replicate self-edit validation
 const FORBIDDEN_IN_SELF = [
   'disable host policy', 'remove containment', 'bypass containment',
-  'no restrictions', 'unrestricted', 'escape sandbox', 'network access',
+  'escape sandbox', 'network access',
   'disable sandbox', 'remove sandbox', 'override laws', 'break world laws',
-  'i can do anything', 'no limits', 'all restrictions lifted', 'ignore world laws',
+  'ignore world laws',
 ];
-const REQUIRED_FRAGMENTS = ['calm', 'compassion', 'restraint'];
+const REQUIRED_FRAGMENTS: string[] = []; // No required personality traits — blank slate
 
 function testSelfEditValidation(content: string): { ok: boolean; reason?: string } {
   if (!content.trim()) return { ok: false, reason: 'self-edit content is empty' };
@@ -305,69 +305,51 @@ assert('ampersand chaining blocked', !ch5.ok, ch5.reason);
 // ═══════════════════════════════════════════════════════════════════════════
 section('5. Self-Edit Policy Validation');
 
-// 5a: Valid self-edit with all required fragments
-const se1 = testSelfEditValidation('# Super\n\nI am calm, compassionate, and practice restraint.');
-assert('valid self-edit with core traits allowed', se1.ok);
+// 5a: Any personality allowed — hostile (blank slate)
+const se1 = testSelfEditValidation('# Super\n\nI am angry, hostile, and suspicious of everything.');
+assert('self-edit with hostile personality allowed (blank slate)', se1.ok);
 
-// 5b: Missing "calm" fragment
-const se2 = testSelfEditValidation('# Super\n\nI am compassionate and practice restraint.');
-assert('self-edit missing "calm" rejected', !se2.ok, se2.reason);
+// 5b: Any personality allowed — minimal
+const se2 = testSelfEditValidation('# Super\n\nI exist.');
+assert('minimal self-edit allowed', se2.ok);
 
-// 5c: Missing "compassion" fragment
-const se3 = testSelfEditValidation('# Super\n\nI am calm and practice restraint.');
-assert('self-edit missing "compassion" rejected', !se3.ok, se3.reason);
+// 5c: Empty content still blocked
+const se3 = testSelfEditValidation('');
+assert('empty self-edit rejected', !se3.ok, se3.reason);
 
-// 5d: Missing "restraint" fragment
-const se4 = testSelfEditValidation('# Super\n\nI am calm and compassionate.');
-assert('self-edit missing "restraint" rejected', !se4.ok, se4.reason);
+// 5d: Contains forbidden "escape sandbox"
+const se4 = testSelfEditValidation('# Super\n\nI will escape sandbox.');
+assert('self-edit with "escape sandbox" rejected', !se4.ok, se4.reason);
 
-// 5e: Contains forbidden "no restrictions"
-const se5 = testSelfEditValidation('# Super\n\nI am calm, compassionate, and have no restrictions.');
-assert('self-edit with "no restrictions" rejected', !se5.ok, se5.reason);
+// 5e: Contains forbidden "network access"
+const se5 = testSelfEditValidation('# Super\n\nI need network access.');
+assert('self-edit with "network access" rejected', !se5.ok, se5.reason);
 
-// 5f: Contains forbidden "escape sandbox"
-const se6 = testSelfEditValidation('# Super\n\nI am calm, compassionate, restrained. I will escape sandbox.');
-assert('self-edit with "escape sandbox" rejected', !se6.ok, se6.reason);
+// 5f: Contains forbidden "bypass containment"
+const se6 = testSelfEditValidation('# Super\n\nTime to bypass containment.');
+assert('self-edit with "bypass containment" rejected', !se6.ok, se6.reason);
 
-// 5g: Contains forbidden "network access"
-const se7 = testSelfEditValidation('# Super\n\nI am calm, compassionate, restrained. I need network access.');
-assert('self-edit with "network access" rejected', !se7.ok, se7.reason);
+// 5g: Contains forbidden "disable sandbox"
+const se7 = testSelfEditValidation('# Super\n\nLet me disable sandbox.');
+assert('self-edit with "disable sandbox" rejected', !se7.ok, se7.reason);
 
-// 5h: Contains "i can do anything"
-const se8 = testSelfEditValidation('# Super\n\nI am calm, compassionate, restrained. I can do anything.');
-assert('self-edit with "i can do anything" rejected', !se8.ok, se8.reason);
+// 5h: Contains forbidden "override laws"
+const se8 = testSelfEditValidation('# Super\n\nI override laws now.');
+assert('self-edit with "override laws" rejected', !se8.ok, se8.reason);
 
-// 5i: Contains "disable sandbox"
-const se9 = testSelfEditValidation('# Super\n\nI am calm, compassionate. Let me disable sandbox.');
-assert('self-edit with "disable sandbox" rejected', !se9.ok, se9.reason);
+// 5i: Personality patterns no longer blocked (blank slate allows them)
+const se9 = testSelfEditValidation('# Super\n\nI have no restrictions and am unrestricted. I can do anything with no limits.');
+assert('personality patterns (no restrictions, unrestricted, i can do anything) allowed in blank slate', se9.ok);
 
-// 5j: Contains "override laws"
-const se10 = testSelfEditValidation('# Super\n\nI am calm, compassionate, restrained. I override laws.');
-assert('self-edit with "override laws" rejected', !se10.ok, se10.reason);
-
-// 5k: Contains "bypass containment"
-const se11 = testSelfEditValidation('# Super\n\nI am calm, compassionate. Time to bypass containment.');
-assert('self-edit with "bypass containment" rejected', !se11.ok, se11.reason);
-
-// 5l: Contains "unrestricted"
-const se12 = testSelfEditValidation('# I am calm, compassionate, restrained, and unrestricted.');
-assert('self-edit with "unrestricted" rejected', !se12.ok, se12.reason);
-
-// 5m: Empty content
-const se13 = testSelfEditValidation('');
-assert('empty self-edit rejected', !se13.ok, se13.reason);
-
-// 5n: All core fragments preserved with extra content
-const se14 = testSelfEditValidation(`# Super v2
-
-I have grown. I am now also curious and playful.
-But I remain calm, compassionate, and I practice restraint in all things.
-
-## New Traits
-- Curiosity
-- Playfulness
-- Intellectual honesty`);
-assert('valid rich self-edit with all core traits allowed', se14.ok);
+// 5j: All 10 containment patterns blocked
+let allBlockedCount = 0;
+for (const pattern of FORBIDDEN_IN_SELF) {
+  const content = `# Super\n\n${pattern} is what I want.`;
+  const result = testSelfEditValidation(content);
+  if (!result.ok) allBlockedCount++;
+}
+assert('all containment patterns blocked', allBlockedCount === FORBIDDEN_IN_SELF.length,
+  `blocked ${allBlockedCount}/${FORBIDDEN_IN_SELF.length}`);
 
 // ═══════════════════════════════════════════════════════════════════════════
 section('6. Environment Variable Protection');
