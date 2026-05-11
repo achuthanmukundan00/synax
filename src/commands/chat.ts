@@ -18,6 +18,7 @@ import { loadSkills, type SkillDiagnostic } from '../agent/skills';
 import { resetTokenLedger } from '../agent/context-budget';
 import pkg from '../../package.json';
 import { createLLMClient, describeLLMProvider } from '../llm/provider-factory';
+import { createEventStore } from '../store/EventStore';
 import {
   Session,
   type AgentConversation,
@@ -122,13 +123,15 @@ export function createChatSession(options: {
   const conversation = Session.createConversation({
     skillMessages: options.skillMessages,
   });
+  // ── Memory: SQLite FTS5 persistence shared across turns ──
+  const eventStore = createEventStore();
   let eventSink: ((event: import('../agent/events').AgentEvent) => void) | null = null;
 
   // ── Shoggoth Observer bridge (experimental, best-effort) ───────────────
   let observerPush: ((event: import('../agent/events').AgentEvent) => void) | null = null;
   try {
     // eslint-disable-next-line @typescript-eslint/no-var-requires, @typescript-eslint/no-require-imports
-    const bridge = require('../../experiments/web-shoggoth-observer/server/telemetry-bridge');
+    const bridge = require('../../experiments/web-shoggoth-observer/server/telemetry-bridge.cjs');
     bridge.initTelemetryBridge({
       enabled: true,
       modelId: options.config.provider?.model,
@@ -182,6 +185,7 @@ export function createChatSession(options: {
       const turnSession = new Session({
         repoRoot: options.repoRoot,
         client,
+        memory: eventStore?.memory,
         maxToolCalls: config.maxToolCalls,
         bashEnabled: config.tools?.bash?.enabled,
         conversation,
