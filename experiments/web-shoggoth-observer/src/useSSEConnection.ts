@@ -26,6 +26,12 @@ export function useSSEConnection() {
           console.log("[shoggoth] SSE connected, history:", data.count, "events");
           return;
         }
+        if (data.type === "snapshot") {
+          console.log("[shoggoth] snapshot:", data.modelId || "(no model)", "prov:", data.providerName || "(none)");
+          // Process snapshot as if it were a session_started with model info
+          if (data.modelId) processEvent({ ...data, type: "session_started", phase: "idle" });
+          return;
+        }
         // Use console.log so it always shows (not hidden by log levels)
         console.log(
           `[shoggoth] ← ${data.type}${data.phase ? " phase=" + data.phase : ""}${data.modelId ? " model=" + data.modelId : ""}${data.providerName ? " prov=" + data.providerName : ""}`

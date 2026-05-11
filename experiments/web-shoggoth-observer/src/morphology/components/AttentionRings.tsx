@@ -23,7 +23,7 @@ const AttentionRings: React.FC<Props> = ({
 }) => {
   const groupRef = useRef<THREE.Group>(null);
   const ringCount = 4;
-  const ringRadius = 1.15 * params.scaleMultiplier;
+  const ringRadius = 0.75 * params.scaleMultiplier;
 
   const ringMeshes = useRef<THREE.Mesh[]>([]);
 

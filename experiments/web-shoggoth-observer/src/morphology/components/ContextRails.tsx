@@ -20,7 +20,7 @@ const ContextRails: React.FC<Props> = ({ params, stackLength, contextPressure })
   const leftRef = useRef<THREE.Line>(null);
   const rightRef = useRef<THREE.Line>(null);
 
-  const railOffsetX = 1.25 * params.scaleMultiplier;
+  const railOffsetX = 0.8 * params.scaleMultiplier;
   const halfLen = stackLength / 2;
 
   // Build rail geometries

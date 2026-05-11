@@ -82,12 +82,12 @@ const TelemetryOverlay: React.FC = () => {
           </div>
         )}
         <div style={styles.metric}>
-          <span style={styles.metricLabel}>INST</span>
+          <span style={styles.metricLabel}>STEP</span>
           <span style={{
             ...styles.metricValue,
             color: instability > 0.6 ? "#ff2a2a" : instability > 0.3 ? "#f59e0b" : "rgba(200,220,240,0.8)",
           }}>
-            {(instability * 100).toFixed(0)}%
+            {phase.toUpperCase()}
           </span>
         </div>
         <div style={styles.metric}>

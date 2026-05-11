@@ -140,29 +140,32 @@ function buildProfile(input: ProfileInput): ModelMorphologySpec {
     const isCoder = nameLower.includes("coder") || nameLower.includes("code");
     const isLlama = nameLower.includes("llama");
     const isMistral = nameLower.includes("mistral");
-    const isMoE = nameLower.includes("moe") || nameLower.includes("mixtral");
+    const isMixtral = nameLower.includes("mixtral");
+    const isGemma = nameLower.includes("gemma");
+    // MoE: explicit "moe"/"mixtral" markers, or A3B/A4B/A22B active-param notation
+    const isMoE = /\bmoe\b|mixtral|mixture|\ba\d{1,2}b\b/i.test(nameLower);
 
     if (isQwen) {
+      const archClass = isCoder ? "coding-optimized-transformer" : isMoE ? "moe-transformer" : "dense-transformer";
+      const morphPreset = isCoder ? "coder-reactor" : isMoE ? "moe-expert-field" : "dense-core";
+      const descLabel = isCoder ? "QWEN / CODER" : isMoE ? "QWEN (MoE)" : "QWEN / DENSE";
+      const archLabel = isCoder ? "CODING TRANSFORMER" : isMoE ? "MOE / EXPERT FIELD" : "DENSE TRANSFORMER";
       return {
-        id, displayName: "Qwen / Local Coder",
+        id, displayName: isMoE ? "Qwen (MoE)" : "Qwen",
         provider: "local",
         family: "qwen",
         architectureConfidence: "partial",
-        architectureClass: isCoder ? "coding-optimized-transformer" : "dense-transformer",
+        architectureClass: archClass,
         parameterScale: "unknown",
-        transformer: { layers: "from-metadata-if-available", residualStyle: "central-spine" },
+        ...(isMoE ? { moe: { experts: "from-metadata-if-available", activeExperts: "from-metadata-if-available", visual: "radial-expert-banks" } } : { transformer: { layers: "from-metadata-if-available", residualStyle: "central-spine" } }),
         visual: {
           baseColor: FAMILY_COLORS.qwen,
           accentColor: "#e8f7ff",
-          shellOpacity: 0.17,
-          bloomStrength: 0.82,
-          scaleClass: "large",
-          morphologyPreset: isCoder ? "coder-reactor" : "dense-core",
-          labels: [
-            isCoder ? "QWEN / LOCAL CODER" : "QWEN / DENSE",
-            isCoder ? "CODING TRANSFORMER" : "DENSE TRANSFORMER",
-            "provider-inferred + telemetry driven",
-          ],
+          shellOpacity: isMoE ? 0.14 : 0.17,
+          bloomStrength: isMoE ? 0.9 : 0.82,
+          scaleClass: isMoE ? "giant" : "large",
+          morphologyPreset: morphPreset,
+          labels: [descLabel, archLabel, "provider-inferred + telemetry driven"],
         },
       };
     }
@@ -187,22 +190,76 @@ function buildProfile(input: ProfileInput): ModelMorphologySpec {
       };
     }
 
-    if (isMistral || isMoE) {
+    if (isGemma) {
+      const gemmaArchClass = isMoE ? "moe-transformer" : "dense-transformer";
+      const gemmaPreset = isMoE ? "moe-expert-field" : "dense-core";
       return {
-        id, displayName: "Mistral MoE",
+        id, displayName: isMoE ? "Gemma (MoE)" : "Gemma",
+        provider: "local",
+        family: "gemma",
+        architectureConfidence: "partial",
+        architectureClass: gemmaArchClass,
+        parameterScale: "unknown",
+        ...(isMoE ? { moe: { experts: "from-metadata-if-available", activeExperts: "from-metadata-if-available", visual: "radial-expert-banks" } } : {}),
+        visual: {
+          baseColor: FAMILY_COLORS.gemma,
+          accentColor: "#ffe0c0",
+          shellOpacity: isMoE ? 0.14 : 0.16,
+          bloomStrength: isMoE ? 0.88 : 0.78,
+          scaleClass: isMoE ? "giant" : "large",
+          morphologyPreset: gemmaPreset,
+          labels: [
+            isMoE ? "GEMMA (MoE)" : "GEMMA / DENSE",
+            isMoE ? "MOE / EXPERT FIELD" : "DENSE TRANSFORMER",
+            "provider-inferred + telemetry driven",
+          ],
+        },
+      };
+    }
+
+    if (isMistral || isMixtral) {
+      const mistralArchClass = isMoE ? "moe-transformer" : "dense-transformer";
+      const mistralPreset = isMoE ? "moe-expert-field" : "dense-core";
+      return {
+        id, displayName: isMoE ? "Mistral (MoE)" : "Mistral",
         provider: "local",
         family: "mistral",
         architectureConfidence: "partial",
-        architectureClass: "moe-transformer",
-        moe: { experts: "from-metadata-if-available", activeExperts: "from-metadata-if-available", visual: "radial-expert-banks" },
+        architectureClass: mistralArchClass,
+        ...(isMoE ? { moe: { experts: "from-metadata-if-available", activeExperts: "from-metadata-if-available", visual: "radial-expert-banks" } } : {}),
         visual: {
           baseColor: FAMILY_COLORS.mistral,
           accentColor: "#ffc8a0",
+          shellOpacity: isMoE ? 0.14 : 0.16,
+          bloomStrength: isMoE ? 0.9 : 0.8,
+          scaleClass: isMoE ? "giant" : "large",
+          morphologyPreset: mistralPreset,
+          labels: [
+            isMoE ? "MISTRAL (MoE)" : "MISTRAL / DENSE",
+            isMoE ? "MOE / EXPERT FIELD" : "DENSE TRANSFORMER",
+            "provider-inferred + telemetry driven",
+          ],
+        },
+      };
+    }
+
+    // Generic Relay/local MoE (no known family)
+    if (isMoE) {
+      return {
+        id, displayName: "Local MoE",
+        provider: "local",
+        architectureConfidence: "partial",
+        architectureClass: "moe-transformer",
+        parameterScale: "unknown",
+        moe: { experts: "from-metadata-if-available", activeExperts: "from-metadata-if-available", visual: "radial-expert-banks" },
+        visual: {
+          baseColor: FAMILY_COLORS.generic,
+          accentColor: "#e8f7ff",
           shellOpacity: 0.14,
           bloomStrength: 0.9,
           scaleClass: "giant",
           morphologyPreset: "moe-expert-field",
-          labels: ["MISTRAL / MOE", "EXPERT FIELD", "provider-inferred + telemetry driven"],
+          labels: ["LOCAL MoE", "EXPERT FIELD", "provider-inferred + telemetry driven"],
         },
       };
     }

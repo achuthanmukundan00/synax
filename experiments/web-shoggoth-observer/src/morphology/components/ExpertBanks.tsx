@@ -1,7 +1,6 @@
 import React, { useRef, useMemo } from "react";
 import { useFrame } from "@react-three/fiber";
 import * as THREE from "three";
-import { RUNTIME_COLORS } from "../../eventTypes";
 import type { ResolvedVisualParams } from "../modelRegistry";
 import type { SignalTruthLevel } from "../../eventTypes";
 
@@ -18,131 +17,132 @@ interface Props {
 }
 
 /**
- * Radial or side-mounted rectangular expert shards.
- * Only active expert paths light per token.
- * Inactive experts remain dark glass.
- * If routing data is unavailable, selection is simulated.
+ * Compact wireframe expert shards arranged in a ring around the central core.
+ * Dark glass when inactive, bright emissive flashes when active (80–180 ms).
+ * Sparse active routing — only a few experts light per token.
  */
 const ExpertBanks: React.FC<Props> = ({
-  params,
-  stackLength,
-  expertBanks,
-  visibleExperts,
-  activeExpertsPerToken,
-  streaming,
-  phase,
-  instability,
-  truth,
+  params, stackLength, expertBanks, visibleExperts,
+  activeExpertsPerToken, streaming, phase, instability,
 }) => {
   const groupRef = useRef<THREE.Group>(null);
   const shardMeshRef = useRef<THREE.InstancedMesh>(null);
   const dummy = useMemo(() => new THREE.Object3D(), []);
 
-  // Limit visible experts for performance
-  const cappedExperts = Math.min(visibleExperts, 512);
-  const expertsPerBank = Math.ceil(cappedExperts / expertBanks);
+  const cappedExperts = Math.min(visibleExperts, 256);
+  const banks = Math.min(expertBanks, 8);
+  const perBank = Math.ceil(cappedExperts / banks);
+  const totalShards = Math.min(banks * perBank, cappedExperts);
 
-  const bankRadius = 1.8 * params.scaleMultiplier;
-  const shardWidth = 0.06;
-  const shardHeight = 0.25;
-  const shardDepth = 0.04;
+  // Ring at moderate distance around the core
+  const ringRadius = 1.15 * params.scaleMultiplier;
+  // Small rectangular shards — thin, wire-like
+  const shardW = 0.04;
+  const shardH = 0.18;
+  const shardD = 0.025;
 
-  const shardGeo = useMemo(() => new THREE.BoxGeometry(shardWidth, shardHeight, shardDepth), []);
+  const shardGeo = useMemo(() => new THREE.BoxGeometry(shardW, shardH, shardD), []);
   const shardMat = useMemo(
     () =>
       new THREE.MeshStandardMaterial({
-        color: params.baseColor,
+        color: new THREE.Color(params.baseColor).multiplyScalar(0.3),
         emissive: params.baseColor,
-        emissiveIntensity: 0.05,
-        roughness: 0.5,
-        metalness: 0.5,
+        emissiveIntensity: 0.04,
+        roughness: 0.6,
+        metalness: 0.3,
         transparent: true,
-        opacity: 0.6,
+        opacity: 0.4,
       }),
     [params.baseColor]
   );
 
-  // Shard positions — radial banks around the core
+  // Positions — even ring + vertical distribution
   const shardData = useMemo(() => {
-    const data: { x: number; y: number; z: number; bankIndex: number; visualIndex: number }[] = [];
-    for (let b = 0; b < expertBanks; b++) {
-      const bankAngle = (b / expertBanks) * Math.PI * 2;
-      const bx = Math.cos(bankAngle) * bankRadius;
-      const bz = Math.sin(bankAngle) * bankRadius;
-      for (let e = 0; e < expertsPerBank; e++) {
-        const vi = b * expertsPerBank + e;
+    const data: { x: number; y: number; z: number; bank: number; idx: number }[] = [];
+    for (let b = 0; b < banks; b++) {
+      const angle = (b / banks) * Math.PI * 2;
+      for (let i = 0; i < perBank; i++) {
+        const vi = b * perBank + i;
         if (vi >= cappedExperts) break;
-        const y = -stackLength / 2 + (e / (expertsPerBank - 1)) * stackLength;
-        data.push({ x: bx, y, z: bz, bankIndex: b, visualIndex: vi });
+        const r = ringRadius + (i % 3) * 0.08;
+        const y = -stackLength / 2 + ((i + 0.5) / perBank) * stackLength;
+        data.push({
+          x: Math.cos(angle) * r,
+          y,
+          z: Math.sin(angle) * r,
+          bank: b,
+          idx: vi,
+        });
       }
     }
     return data;
-  }, [expertBanks, expertsPerBank, cappedExperts, bankRadius, stackLength]);
+  }, [banks, perBank, cappedExperts, ringRadius, stackLength]);
 
-  // Set initial instance positions
   useMemo(() => {
     if (!shardMeshRef.current) return;
     shardData.forEach((d, i) => {
-      const lookAngle = Math.atan2(d.z, d.x);
       dummy.position.set(d.x, d.y, d.z);
-      dummy.rotation.set(0, -lookAngle + Math.PI / 2, 0);
-      dummy.scale.setScalar(0.8);
+      dummy.lookAt(d.x * 2, d.y, d.z * 2);
+      dummy.scale.setScalar(0.7);
       dummy.updateMatrix();
       shardMeshRef.current!.setMatrixAt(i, dummy.matrix);
     });
     shardMeshRef.current.instanceMatrix.needsUpdate = true;
   }, [shardData, dummy]);
 
-  // Active expert state (simulated when truth is "simulated")
-  const activeExpertsRef = useRef<Set<number>>(new Set());
-  const lastRoutingTime = useRef(0);
+  // Track active experts with decay timer
+  const activeMap = useRef<Map<number, number>>(new Map()); // idx → activation time
+  const routeTimer = useRef(0);
+  const ACTIVATION_DURATION = 0.15; // 150ms flash
 
   useFrame((state) => {
     if (!shardMeshRef.current) return;
     const t = state.clock.elapsedTime;
 
-    // Simulate expert routing every ~200ms when streaming
-    if (streaming || phase === "think") {
-      if (t - lastRoutingTime.current > 0.15 + Math.random() * 0.1) {
-        lastRoutingTime.current = t;
-        activeExpertsRef.current.clear();
-        for (let i = 0; i < activeExpertsPerToken; i++) {
-          activeExpertsRef.current.add(Math.floor(Math.random() * cappedExperts));
-        }
+    // Route new experts when streaming/thinking
+    const routeInterval = (streaming || phase === "think") ? 0.12 : 1.2;
+    if (t - routeTimer.current > routeInterval) {
+      routeTimer.current = t;
+      // Clear expired
+      for (const [idx, at] of activeMap.current) {
+        if (t - at > ACTIVATION_DURATION * 2) activeMap.current.delete(idx);
       }
-    } else {
-      // Idle: occasional random activation
-      if (t - lastRoutingTime.current > 1.5) {
-        lastRoutingTime.current = t;
-        activeExpertsRef.current.clear();
-        for (let i = 0; i < Math.floor(activeExpertsPerToken * 0.3); i++) {
-          activeExpertsRef.current.add(Math.floor(Math.random() * cappedExperts));
-        }
+      // Activate new batch
+      const count = (streaming || phase === "think") ? activeExpertsPerToken : 2;
+      for (let i = 0; i < count; i++) {
+        const ri = Math.floor(Math.random() * totalShards);
+        activeMap.current.set(ri, t);
       }
     }
 
-    // Animate shards: active shards get brighter
-    const activeSet = activeExpertsRef.current;
-    for (let i = 0; i < Math.min(shardData.length, cappedExperts); i++) {
+    // Animate shards
+    for (let i = 0; i < Math.min(shardData.length, totalShards); i++) {
       const d = shardData[i];
-      const isActive = activeSet.has(d.visualIndex);
-      const targetScale = isActive ? 1.2 : 0.8 + Math.sin(t * 1.5 + i * 0.1) * 0.05;
-      const lookAngle = Math.atan2(d.z, d.x);
+      const actTime = activeMap.current.get(d.idx);
+      const isActive = actTime != null && (t - actTime) < ACTIVATION_DURATION;
+      const age = actTime != null ? t - actTime : 999;
+
+      // Active: bright flash that decays
+      const scale = isActive
+        ? 1.0 + Math.max(0, 1 - age / ACTIVATION_DURATION) * 0.6
+        : 0.65 + Math.sin(t * 1.0 + i * 0.1) * 0.03;
+
       dummy.position.set(d.x, d.y, d.z);
-      dummy.rotation.set(0, -lookAngle + Math.PI / 2, 0);
-      dummy.scale.setScalar(targetScale);
+      dummy.lookAt(d.x * 2, d.y, d.z * 2);
+      dummy.scale.setScalar(scale);
       dummy.updateMatrix();
       shardMeshRef.current.setMatrixAt(i, dummy.matrix);
     }
     shardMeshRef.current.instanceMatrix.needsUpdate = true;
 
-    // Emissive pulses with activity
-    shardMat.emissiveIntensity = 0.05 + (streaming ? 0.15 : 0) + instability * 0.1;
+    // Material pulse
+    shardMat.emissiveIntensity = 0.04 + (streaming ? 0.12 : 0) + instability * 0.06;
+    shardMat.opacity = 0.35 + (streaming ? 0.15 : 0);
   });
 
   return (
     <group ref={groupRef}>
-      <instancedMesh ref={shardMeshRef} args={[shardGeo, shardMat, shardData.length]} />
+      <instancedMesh ref={shardMeshRef} args={[shardGeo, shardMat, totalShards]} />
     </group>
   );
 };

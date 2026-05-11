@@ -22,15 +22,15 @@ const ResidualHighway: React.FC<Props> = ({ params, streaming, instability }) =>
   const coreMat = useMemo(
     () =>
       new THREE.MeshStandardMaterial({
-        color: params.baseColor,
-        emissive: params.baseColor,
-        emissiveIntensity: 0.7,
-        roughness: 0.2,
-        metalness: 0.6,
+        color: new THREE.Color(params.baseColor).multiplyScalar(0.4),
+        emissive: params.accentColor,
+        emissiveIntensity: 0.4,
+        roughness: 0.15,
+        metalness: 0.7,
         transparent: true,
-        opacity: 0.7,
+        opacity: 0.55,
       }),
-    [params.baseColor]
+    [params.baseColor, params.accentColor]
   );
 
   useFrame((state) => {

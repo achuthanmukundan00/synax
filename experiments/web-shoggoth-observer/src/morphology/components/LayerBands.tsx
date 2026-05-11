@@ -13,9 +13,9 @@ interface Props {
 }
 
 /**
- * Stacked translucent rectangular slabs representing transformer layer groups.
- * Each band is a BoxGeometry slab — wide, thin, deep — like compute plates.
- * Stacked vertically along Y axis.
+ * Thin wireframe-like rectangular plates stacked vertically.
+ * Each slab is an accent-colored translucent glass plate — not a solid block.
+ * Small, subtle, layered — readable as transformer compute layers.
  */
 const LayerBands: React.FC<Props> = ({
   params, layerCount, stackLength, streaming, instability, cascadeProgress,
@@ -26,31 +26,27 @@ const LayerBands: React.FC<Props> = ({
   const layerSpacing = stackLength / (layerCount - 1);
   const stackStart = -stackLength / 2;
 
-  // Rectangular slab — wide (X), thin (Y), deep (Z)
-  const slabWidth = 2.0 * params.scaleMultiplier;
-  const slabHeight = 0.06 * params.scaleMultiplier;
-  const slabDepth = 0.9 * params.scaleMultiplier;
+  // Thin plate — narrow width, very thin height, moderate depth
+  const w = 1.0 * params.scaleMultiplier;
+  const h = 0.015 * params.scaleMultiplier;
+  const d = 0.35 * params.scaleMultiplier;
 
-  const geo = useMemo(
-    () => new THREE.BoxGeometry(slabWidth, slabHeight, slabDepth),
-    [slabWidth, slabHeight, slabDepth]
-  );
+  const geo = useMemo(() => new THREE.BoxGeometry(w, h, d), [w, h, d]);
 
   const mat = useMemo(
     () =>
       new THREE.MeshStandardMaterial({
-        color: params.baseColor,
+        color: new THREE.Color(params.baseColor).multiplyScalar(0.35),
         emissive: params.baseColor,
-        emissiveIntensity: 0.2,
-        roughness: 0.35,
-        metalness: 0.5,
+        emissiveIntensity: 0.08,
+        roughness: 0.5,
+        metalness: 0.3,
         transparent: true,
-        opacity: 0.75,
+        opacity: 0.45,
       }),
     [params.baseColor]
   );
 
-  // Set initial positions along Y
   useMemo(() => {
     if (!meshRef.current) return;
     for (let l = 0; l < layerCount; l++) {
@@ -69,21 +65,20 @@ const LayerBands: React.FC<Props> = ({
 
     for (let l = 0; l < layerCount; l++) {
       const y = stackStart + l * layerSpacing;
-      const wobble = 1 + Math.sin(t * 0.8 + l * 0.2) * 0.03;
-
       const layerNorm = l / (layerCount - 1);
       const distToWave = Math.abs(layerNorm - cascadeProgress);
-      const cascadeBoost = Math.max(0, 1 - distToWave * 4) * 0.12;
+      const cascadeBoost = Math.max(0, 1 - distToWave * 6) * 0.3;
 
       dummy.position.set(0, y, 0);
-      dummy.rotation.set(0, 0, Math.sin(t * 0.3 + l * 0.1) * 0.03);
-      dummy.scale.set(1, wobble + cascadeBoost, 1);
+      dummy.rotation.set(0, 0, Math.sin(t * 0.3 + l * 0.1) * 0.02);
+      dummy.scale.set(1 + cascadeBoost * 0.5, 1 + cascadeBoost * 3, 1);
       dummy.updateMatrix();
       meshRef.current.setMatrixAt(l, dummy.matrix);
     }
     meshRef.current.instanceMatrix.needsUpdate = true;
 
-    mat.emissiveIntensity = 0.2 + (streaming ? 0.15 : 0) + Math.sin(t * 1.5) * 0.05 + instability * 0.15;
+    mat.emissiveIntensity = 0.08 + (streaming ? 0.1 : 0) + instability * 0.08;
+    mat.opacity = 0.4 + (streaming ? 0.15 : 0) + cascadeProgress * 0.1;
   });
 
   return <instancedMesh ref={meshRef} args={[geo, mat, layerCount]} />;
