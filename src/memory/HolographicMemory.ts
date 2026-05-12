@@ -59,6 +59,9 @@ export interface HandoffManifest {
 
 // ─── HolographicMemory ───────────────────────────────────────────────────────
 
+/**
+ * @public
+ */
 export class HolographicMemory {
   private db: Database.Database | null;
   private insertStmt: Database.Statement | null = null;
