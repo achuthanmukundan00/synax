@@ -130,6 +130,7 @@ describe('extension interfaces', () => {
       'write',
       'edit',
       'search_memory',
+      'view_image',
     ]);
 
     await expect(
