@@ -2,7 +2,8 @@ import { defineConfig } from 'vitepress';
 
 export default defineConfig({
   title: 'Synax',
-  description: 'Local-first CLI coding agent with multi-provider routing and native tool-call parsers for 26 model families',
+  description:
+    'Local-first CLI coding agent with multi-provider routing and native tool-call parsers for 26 model families',
   base: '/',
   cleanUrls: true,
   themeConfig: {
@@ -32,6 +33,7 @@ export default defineConfig({
           { text: 'Safety and Context', link: '/guide/safety-context' },
           { text: 'Compatibility Reports', link: '/guide/compatibility' },
           { text: 'Development', link: '/guide/development' },
+          { text: 'Runtime Architecture', link: '/architecture/runtime' },
         ],
       },
     ],
