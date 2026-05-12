@@ -741,7 +741,9 @@ describe('preflight enforcement within tool loop', () => {
     expect(result.finalAnswer).toBe('done');
     // The loop-detection error was delivered to the model as a tool result
     const toolMsgs = client.requests.flatMap((r: unknown) =>
-      ((r as Record<string, unknown>).messages as Array<Record<string, unknown>> ?? []).filter((m: Record<string, unknown>) => m.role === 'tool' && String(m.content ?? '').includes('Read loop detected')),
+      (((r as Record<string, unknown>).messages as Array<Record<string, unknown>>) ?? []).filter(
+        (m: Record<string, unknown>) => m.role === 'tool' && String(m.content ?? '').includes('Read loop detected'),
+      ),
     );
     expect(toolMsgs.length).toBeGreaterThanOrEqual(1);
   });
@@ -912,8 +914,14 @@ describe('progressive loop resistance', () => {
     expect(result.terminalState).toBe('completed');
     expect(result.finalAnswer).toBe('ok');
     // The loop-detection error was delivered to the model as a tool result
-    const toolMsgs = client.requests.flatMap((r: unknown) => ((r as Record<string, unknown>).messages as Array<Record<string, unknown>> ?? []).filter((m: Record<string, unknown>) => m.role === 'tool'));
-    const loopMsg = toolMsgs.find((m: Record<string, unknown>) => /already read|reread|duplicate|loop/i.test(String(m.content ?? '')));
+    const toolMsgs = client.requests.flatMap((r: unknown) =>
+      (((r as Record<string, unknown>).messages as Array<Record<string, unknown>>) ?? []).filter(
+        (m: Record<string, unknown>) => m.role === 'tool',
+      ),
+    );
+    const loopMsg = toolMsgs.find((m: Record<string, unknown>) =>
+      /already read|reread|duplicate|loop/i.test(String(m.content ?? '')),
+    );
     expect(loopMsg).toBeDefined();
   });
 

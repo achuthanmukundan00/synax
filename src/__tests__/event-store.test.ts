@@ -56,7 +56,16 @@ describe('EventStore', () => {
     }
 
     // Verify tables exist by querying them
-    const db = (store as unknown as { db: { prepare: (sql: string) => { all: () => Array<{ name: string }>; get: (...args: unknown[]) => Record<string, unknown> | undefined } } }).db;
+    const db = (
+      store as unknown as {
+        db: {
+          prepare: (sql: string) => {
+            all: () => Array<{ name: string }>;
+            get: (...args: unknown[]) => Record<string, unknown> | undefined;
+          };
+        };
+      }
+    ).db;
     expect(db).toBeTruthy();
 
     const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name").all() as Array<{
@@ -85,7 +94,11 @@ describe('EventStore', () => {
       createdAt: new Date().toISOString(),
     });
 
-    const db = (store as unknown as { db: { prepare: (sql: string) => { get: (...args: unknown[]) => Record<string, unknown> | undefined } } }).db;
+    const db = (
+      store as unknown as {
+        db: { prepare: (sql: string) => { get: (...args: unknown[]) => Record<string, unknown> | undefined } };
+      }
+    ).db;
     const row = db.prepare('SELECT * FROM sessions WHERE id = ?').get('test-session-1');
     expect(row).toBeTruthy();
     if (!row) throw new Error('expected row');
@@ -171,7 +184,11 @@ describe('EventStore', () => {
       changedFiles: ['src/a.ts', 'src/b.ts'],
     });
 
-    const db = (store as unknown as { db: { prepare: (sql: string) => { get: (...args: unknown[]) => Record<string, unknown> | undefined } } }).db;
+    const db = (
+      store as unknown as {
+        db: { prepare: (sql: string) => { get: (...args: unknown[]) => Record<string, unknown> | undefined } };
+      }
+    ).db;
     const row = db.prepare('SELECT * FROM sessions WHERE id = ?').get('test-session-3');
     if (!row) throw new Error('expected row');
     expect(row.terminal_state).toBe('completed');
@@ -220,10 +237,18 @@ describe('EventStore', () => {
 
     expect(store.getEventCount('test-session-4')).toBe(0);
 
-    store.appendEvent('test-session-4', { type: 'test', timestamp: new Date().toISOString() } as unknown as AgentEvent, 1);
+    store.appendEvent(
+      'test-session-4',
+      { type: 'test', timestamp: new Date().toISOString() } as unknown as AgentEvent,
+      1,
+    );
     expect(store.getEventCount('test-session-4')).toBe(1);
 
-    store.appendEvent('test-session-4', { type: 'test2', timestamp: new Date().toISOString() } as unknown as AgentEvent, 2);
+    store.appendEvent(
+      'test-session-4',
+      { type: 'test2', timestamp: new Date().toISOString() } as unknown as AgentEvent,
+      2,
+    );
     expect(store.getEventCount('test-session-4')).toBe(2);
 
     store.close();
@@ -247,7 +272,11 @@ describe('EventStore', () => {
       spanEvents: [{ name: 'response_received', timestamp: 1500, data: { toolCallCount: 2 } }],
     });
 
-    const db = (store as unknown as { db: { prepare: (sql: string) => { get: (...args: unknown[]) => Record<string, unknown> | undefined } } }).db;
+    const db = (
+      store as unknown as {
+        db: { prepare: (sql: string) => { get: (...args: unknown[]) => Record<string, unknown> | undefined } };
+      }
+    ).db;
     const row = db.prepare('SELECT * FROM spans WHERE id = ?').get('span-1');
     expect(row).toBeTruthy();
     if (!row) throw new Error('expected row');
