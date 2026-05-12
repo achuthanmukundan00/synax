@@ -25,11 +25,11 @@ describe('layout input dock', () => {
   });
 
   it('places the cursor on the typed text row instead of the padded dock row', () => {
-    expect(inputCursorPosition('hi synax', 80, 24)).toEqual({ row: 21, col: 10 });
+    expect(inputCursorPosition('hi synax', 80, 24)).toEqual({ row: 21, col: 11 });
   });
 
   it('places the cursor after trailing input spaces', () => {
-    expect(inputCursorPosition('hi synax   ', 80, 24)).toEqual({ row: 21, col: 13 });
+    expect(inputCursorPosition('hi synax   ', 80, 24)).toEqual({ row: 21, col: 14 });
   });
 
   it('places the cursor on the final visible wrapped input line', () => {

@@ -30,7 +30,7 @@ exports[`interactive layout visual agreements matches the active docked-core ren
 
 
 ┌─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
-│ continue polishing the feed                                                                                         │
+│  continue polishing the feed                                                                                        │
 │                                                                                                                     │
 └ Enter submit · Ctrl+D exit · Shift+↵ newline · Ctrl+C clear · /help · !cmd ─────────────────────────────────────────┘"
 `;
@@ -66,7 +66,7 @@ exports[`interactive layout visual agreements matches the blocked budget-exhaust
 
 
 ┌─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
-│ Ask Synax to inspect, edit, test, or commit…                                                                        │
+│  Ask Synax to inspect, edit, test, or commit…                                                                       │
 └ Enter submit · Ctrl+D exit · Shift+↵ newline · Ctrl+C clear · /help · !cmd ─────────────────────────────────────────┘"
 `;
 
@@ -101,7 +101,7 @@ exports[`interactive layout visual agreements matches the completed render snaps
 
 
 ┌─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
-│ Ask Synax to inspect, edit, test, or commit…                                                                        │
+│  Ask Synax to inspect, edit, test, or commit…                                                                       │
 └ Enter submit · Ctrl+D exit · Shift+↵ newline · Ctrl+C clear · /help · !cmd ─────────────────────────────────────────┘"
 `;
 
@@ -128,7 +128,7 @@ exports[`interactive layout visual agreements matches the idle large-core render
 
 
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│ Ask Synax to inspect, edit, test, or commit…                                │
+│  Ask Synax to inspect, edit, test, or commit…                               │
 └ Enter submit · Ctrl+D exit · Shift+↵ newline · Ctrl+C clear · /help · !cmd ─┘"
 `;
 
@@ -148,7 +148,7 @@ exports[`interactive layout visual agreements matches the narrow terminal fallba
 
 
 ┌─────────────────────────────────────────────────────┐
-│ short task                                          │
+│  short task                                         │
 │                                                     │
 └ Enter submit · Ctrl+D exit · Shift+↵ newline · Ctrl+C…"
 `;
