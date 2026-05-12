@@ -100,9 +100,16 @@ export interface InlinePasteInputSession {
   handlePasteStart(): void;
   handlePasteChunk(text: string): void;
   handlePasteEnd(): void;
+  handleCursorLeft(): void;
+  handleCursorRight(): void;
+  handleCursorUp(): void;
+  handleCursorDown(): void;
+  handleHome(): void;
+  handleEnd(): void;
   getDraft(): InlinePasteDraft;
   getPreview(): string;
   getVisibleBody(): string;
+  getCursorOffset(): number;
   hasPaste(): boolean;
 }
 
@@ -252,45 +259,289 @@ export function createInlinePasteInputSession(): InlinePasteInputSession {
   let current = draft.segments[0] as InlineTextSegment;
   let pasteText = '';
   let pasteActive = false;
+  /** 0-indexed character offset within the current text segment. */
+  let cursorCharOffset = 0;
+
+  /** Find the last text segment in the draft, or create one. */
+  const ensureTextSegment = (): InlineTextSegment => {
+    const last = draft.segments[draft.segments.length - 1];
+    if (last?.kind === 'text') return last;
+    const seg: InlineTextSegment = { kind: 'text', text: '' };
+    draft.segments.push(seg);
+    return seg;
+  };
+
+  /** Map cursor to (segment index, char offset) into draft.segments. */
+  const cursorToSegOffset = (): { segIdx: number; charOff: number } => {
+    const currentIdx = draft.segments.lastIndexOf(current);
+    if (currentIdx < 0) return { segIdx: draft.segments.length - 1, charOff: 0 };
+    return { segIdx: currentIdx, charOff: Math.min(cursorCharOffset, current.text.length) };
+  };
+
+  /** Re-locate cursor to (segIdx, charOff). */
+  const setCursorSeg = (segIdx: number, charOff: number): void => {
+    const seg = draft.segments[segIdx];
+    if (!seg || seg.kind !== 'text') {
+      // Land on the nearest text segment.
+      for (let i = segIdx; i >= 0; i -= 1) {
+        if (draft.segments[i]?.kind === 'text') {
+          current = draft.segments[i] as InlineTextSegment;
+          cursorCharOffset = current.text.length;
+          return;
+        }
+      }
+      for (let i = segIdx + 1; i < draft.segments.length; i += 1) {
+        if (draft.segments[i]?.kind === 'text') {
+          current = draft.segments[i] as InlineTextSegment;
+          cursorCharOffset = 0;
+          return;
+        }
+      }
+      current = ensureTextSegment();
+      cursorCharOffset = 0;
+      return;
+    }
+    current = seg as InlineTextSegment;
+    cursorCharOffset = Math.max(0, Math.min(charOff, current.text.length));
+  };
+
+  /** Compute the flat visible-body offset from segment-level cursor. */
+  const computeVisibleOffset = (): number => {
+    let offset = 0;
+    for (let i = 0; i < draft.segments.length; i += 1) {
+      const seg = draft.segments[i];
+      if (seg === current) {
+        return offset + cursorCharOffset;
+      }
+      if (seg.kind === 'text') {
+        offset += seg.text.length;
+      } else {
+        offset += `[pasted: ${seg.lines} lines, ${seg.chars} chars]`.length;
+      }
+    }
+    return offset;
+  };
+
+  /** Given a flat visible-body offset, position the cursor. */
+  const setCursorFromVisibleOffset = (target: number): void => {
+    let offset = 0;
+    for (let i = 0; i < draft.segments.length; i += 1) {
+      const seg = draft.segments[i];
+      let segLen = 0;
+      if (seg.kind === 'text') {
+        segLen = seg.text.length;
+        if (offset + segLen >= target) {
+          setCursorSeg(i, target - offset);
+          return;
+        }
+      } else {
+        segLen =
+          `[pasted: ${(seg as InlinePasteAttachment).lines} lines, ${(seg as InlinePasteAttachment).chars} chars]`
+            .length;
+        if (offset + segLen >= target) {
+          // Target falls in a paste segment; snap to nearest text boundary.
+          // Try the next text segment.
+          for (let j = i + 1; j < draft.segments.length; j += 1) {
+            if (draft.segments[j]?.kind === 'text') {
+              setCursorSeg(j, 0);
+              return;
+            }
+          }
+          // Try the previous text segment.
+          for (let j = i - 1; j >= 0; j -= 1) {
+            if (draft.segments[j]?.kind === 'text') {
+              setCursorSeg(j, draft.segments[j].text.length);
+              return;
+            }
+          }
+          setCursorSeg(0, 0);
+          return;
+        }
+      }
+      offset += segLen;
+    }
+    // Past end: move to end of last text segment.
+    for (let i = draft.segments.length - 1; i >= 0; i -= 1) {
+      if (draft.segments[i]?.kind === 'text') {
+        setCursorSeg(i, draft.segments[i].text.length);
+        return;
+      }
+    }
+    // No text segments at all: create one.
+    const seg = ensureTextSegment();
+    setCursorSeg(draft.segments.indexOf(seg), 0);
+  };
 
   return {
     handleText(text: string): void {
       if (!text) return;
-      current.text += text;
-    },
-    handleBackspace(): void {
-      if (current.text.length > 0) {
-        current.text = current.text.slice(0, -1);
+      const { segIdx, charOff } = cursorToSegOffset();
+      const seg = draft.segments[segIdx];
+      if (!seg || seg.kind !== 'text') {
+        current.text += text;
+        cursorCharOffset = current.text.length;
         return;
       }
-
-      const currentIndex = draft.segments.lastIndexOf(current);
-      if (currentIndex > 0) {
-        const previous = draft.segments[currentIndex - 1];
-        if (previous.kind === 'paste') {
-          draft.segments.splice(currentIndex - 1, 1);
+      seg.text = seg.text.slice(0, charOff) + text + seg.text.slice(charOff);
+      cursorCharOffset = charOff + text.length;
+    },
+    handleBackspace(): void {
+      const { segIdx, charOff } = cursorToSegOffset();
+      if (charOff > 0) {
+        const seg = draft.segments[segIdx];
+        if (seg && seg.kind === 'text') {
+          seg.text = seg.text.slice(0, charOff - 1) + seg.text.slice(charOff);
+          cursorCharOffset = charOff - 1;
+          // If the segment is now empty and it's not the only text segment, prune it.
+          if (seg.text.length === 0) {
+            const textSegs = draft.segments.filter((s) => s.kind === 'text');
+            if (textSegs.length > 1) {
+              const idx = draft.segments.indexOf(seg);
+              draft.segments.splice(idx, 1);
+              // Move to the end of the previous segment.
+              for (let i = idx - 1; i >= 0; i -= 1) {
+                if (draft.segments[i]?.kind === 'text') {
+                  current = draft.segments[i] as InlineTextSegment;
+                  cursorCharOffset = current.text.length;
+                  return;
+                }
+              }
+              current = ensureTextSegment();
+              cursorCharOffset = 0;
+            }
+          }
           return;
         }
       }
 
-      for (let index = draft.segments.length - 2; index >= 0; index -= 1) {
+      // At start of segment: try to remove previous segment.
+      if (segIdx > 0) {
+        const previous = draft.segments[segIdx - 1];
+        if (previous.kind === 'paste') {
+          draft.segments.splice(segIdx - 1, 1);
+          // Cursor stays at the same position in current segment.
+          return;
+        }
+        if (previous.kind === 'text' && previous.text.length > 0) {
+          previous.text = previous.text.slice(0, -1);
+          current = previous;
+          cursorCharOffset = previous.text.length;
+          return;
+        }
+      }
+
+      // Try any previous text segment.
+      for (let index = segIdx - 1; index >= 0; index -= 1) {
         const segment = draft.segments[index];
         if (segment.kind !== 'text' || segment.text.length === 0) continue;
         segment.text = segment.text.slice(0, -1);
         current = segment;
+        cursorCharOffset = current.text.length;
         return;
       }
+    },
+    handleCursorLeft(): void {
+      const { segIdx, charOff } = cursorToSegOffset();
+      if (charOff > 0) {
+        setCursorSeg(segIdx, charOff - 1);
+        return;
+      }
+      // At start of segment: move to end of previous text segment.
+      for (let i = segIdx - 1; i >= 0; i -= 1) {
+        if (draft.segments[i]?.kind === 'text') {
+          setCursorSeg(i, draft.segments[i].text.length);
+          return;
+        }
+      }
+    },
+    handleCursorRight(): void {
+      const { segIdx, charOff } = cursorToSegOffset();
+      const seg = draft.segments[segIdx];
+      if (seg && seg.kind === 'text' && charOff < seg.text.length) {
+        setCursorSeg(segIdx, charOff + 1);
+        return;
+      }
+      // At end of segment: move to start of next text segment.
+      for (let i = segIdx + 1; i < draft.segments.length; i += 1) {
+        if (draft.segments[i]?.kind === 'text') {
+          setCursorSeg(i, 0);
+          return;
+        }
+      }
+    },
+    handleCursorUp(): void {
+      const body = renderInlinePastePreview(draft);
+      const cursorOffset = computeVisibleOffset();
+      const lines = body.split('\n');
+      // Find which line the cursor is on.
+      let lineStart = 0;
+      let currentLineIdx = 0;
+      for (let i = 0; i < lines.length; i += 1) {
+        const lineLen = lines[i].length + 1; // +1 for the \n separator
+        if (cursorOffset < lineStart + lineLen || i === lines.length - 1) {
+          currentLineIdx = i;
+          break;
+        }
+        lineStart += lineLen;
+      }
+      if (currentLineIdx === 0) return;
+      const prevLineLen = lines[currentLineIdx - 1].length;
+      const colInLine = cursorOffset - lineStart;
+      const newCol = Math.min(colInLine, prevLineLen);
+      let newOffset = 0;
+      for (let i = 0; i < currentLineIdx - 1; i += 1) {
+        newOffset += lines[i].length + 1;
+      }
+      newOffset += newCol;
+      setCursorFromVisibleOffset(newOffset);
+    },
+    handleCursorDown(): void {
+      const body = renderInlinePastePreview(draft);
+      const cursorOffset = computeVisibleOffset();
+      const lines = body.split('\n');
+      let lineStart = 0;
+      let currentLineIdx = 0;
+      for (let i = 0; i < lines.length; i += 1) {
+        const lineLen = lines[i].length + 1;
+        if (cursorOffset < lineStart + lineLen || i === lines.length - 1) {
+          currentLineIdx = i;
+          break;
+        }
+        lineStart += lineLen;
+      }
+      if (currentLineIdx >= lines.length - 1) return;
+      const nextLineLen = lines[currentLineIdx + 1].length;
+      const colInLine = cursorOffset - lineStart;
+      const newCol = Math.min(colInLine, nextLineLen);
+      let newOffset = 0;
+      for (let i = 0; i <= currentLineIdx; i += 1) {
+        newOffset += lines[i].length + 1;
+      }
+      newOffset += newCol;
+      setCursorFromVisibleOffset(newOffset);
+    },
+    handleHome(): void {
+      setCursorFromVisibleOffset(0);
+    },
+    handleEnd(): void {
+      const body = renderInlinePastePreview(draft);
+      setCursorFromVisibleOffset(body.length);
     },
     handlePasteStart(): void {
       if (pasteActive) return;
       pasteActive = true;
       pasteText = '';
+      // Move cursor to end before starting paste.
+      current = ensureTextSegment();
+      cursorCharOffset = current.text.length;
       current = { kind: 'text', text: '' };
       draft.segments.push(current);
+      cursorCharOffset = 0;
     },
     handlePasteChunk(text: string): void {
       if (!pasteActive) {
-        current.text += text;
+        // Fallback: regular text insertion at cursor
+        this.handleText(text);
         return;
       }
       pasteText += text;
@@ -306,6 +557,9 @@ export function createInlinePasteInputSession(): InlinePasteInputSession {
       };
       mergePasteAttachment(draft, attachment);
       pasteText = '';
+      // Cursor stays at the end of the last text segment.
+      current = ensureTextSegment();
+      cursorCharOffset = current.text.length;
     },
     getDraft(): InlinePasteDraft {
       return draft;
@@ -315,6 +569,9 @@ export function createInlinePasteInputSession(): InlinePasteInputSession {
     },
     getVisibleBody(): string {
       return renderInlinePastePreview(draft);
+    },
+    getCursorOffset(): number {
+      return computeVisibleOffset();
     },
     hasPaste(): boolean {
       return draft.segments.some((segment) => segment.kind === 'paste');
