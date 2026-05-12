@@ -245,7 +245,7 @@ export interface OrchestrationResult {
 /**
  * Result of attempting to parse an orchestration plan from a model response.
  */
-export type PlanParseResult = 
+export type PlanParseResult =
   | { success: true; plan: OrchestrationPlan }
   | { success: false; inline: true; error?: string };
 

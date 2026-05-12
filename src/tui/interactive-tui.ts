@@ -1235,6 +1235,25 @@ export async function runInteractiveTui(
 
   // ── Main event loop ──────────────────────────────────────────
 
+  // Terminal resize handling — forces a full redraw so the layout
+  // adapts to the new columns/rows immediately.
+  let resizeDebounce: ReturnType<typeof setTimeout> | null = null;
+  const onResize = (): void => {
+    if (exiting) return;
+    if (resizeDebounce) clearTimeout(resizeDebounce);
+    resizeDebounce = setTimeout(() => {
+      resizeDebounce = null;
+      if (exiting) return;
+      diff.reset();
+      historyScrollOffset = 0;
+      startRenderLoop();
+      paint(true);
+    }, 50);
+  };
+  const stdoutStream =
+    options?.stdout ?? (process.stdout as unknown as Writable & { isTTY?: boolean; columns?: number; rows?: number });
+  stdoutStream.on?.('resize', onResize);
+
   terminal.start();
   try {
     startRenderLoop();
@@ -1245,6 +1264,7 @@ export async function runInteractiveTui(
     }
   } finally {
     stopRenderLoop();
+    stdoutStream.off?.('resize', onResize);
     stdin?.off('data', onData);
     terminal.stop();
   }

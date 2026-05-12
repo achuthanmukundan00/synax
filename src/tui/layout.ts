@@ -153,9 +153,9 @@ function renderOperationalSurface(
   bodyHeight: number,
   state: InteractiveViewState,
 ): void {
-  const showSideCore = width >= 110 && bodyHeight >= 18;
-  const showHeaderCore = !showSideCore && width >= 70 && bodyHeight >= 18;
   const sideWidth = operationalSideWidth(width, bodyHeight);
+  const showSideCore = sideWidth > 0;
+  const showHeaderCore = !showSideCore && width >= 70 && bodyHeight >= 14;
   const transcriptWidth = operationalTranscriptWidth(width, bodyHeight);
   const transcriptLines = renderTranscript({ ...state, nowMs: state.nowMs }, Math.max(24, transcriptWidth));
   const visibleRows = Math.max(1, bodyHeight - 3);
@@ -172,19 +172,29 @@ function renderOperationalSurface(
   }
 
   if (showSideCore) {
+    // x = width - sideWidth ensures right-aligned. The core module inner width
+    // is sideWidth - 2 (for its own borders).
     putBlock(lines, 2, width - sideWidth, renderCoreModule(state, sideWidth - 2, bodyHeight - 2), width);
   } else if (showHeaderCore) {
     putBlock(lines, 1, Math.max(2, width - 34), renderCompactCoreModule(state), width);
   }
 }
 
+/** The side panel is shown for wider terminals and scales adaptively.
+ *  Below 110 cols it stays hidden, preserving the transcript-only layout
+ *  that works well on narrow displays. */
 function operationalSideWidth(width: number, bodyHeight: number): number {
-  return width >= 110 && bodyHeight >= 18 ? 38 : 0;
+  if (bodyHeight < 14) return 0;
+  if (width >= 140) return Math.min(44, Math.floor(width * 0.26));
+  if (width >= 120) return Math.min(42, Math.floor(width * 0.28));
+  if (width >= 110) return 38;
+  return 0;
 }
 
 function operationalTranscriptWidth(width: number, bodyHeight: number): number {
   const sideWidth = operationalSideWidth(width, bodyHeight);
-  return sideWidth > 0 ? width - sideWidth - 5 : width - 4;
+  // Side panel: inner width + 2 border chars; leave 1 separator column.
+  return sideWidth > 0 ? width - (sideWidth + 2) - 1 : width - 2;
 }
 
 function elapsed(startedAtMs: number, nowMs: number): string {
@@ -199,6 +209,7 @@ function clip(text: string, width: number): string {
   const target = Math.max(0, width - 1);
   let visibleCount = 0;
   let out = '';
+  let activeAnsi = '';
 
   for (let i = 0; i < text.length; i += 1) {
     if (text[i] === '\u001b') {
@@ -207,6 +218,7 @@ function clip(text: string, width: number): string {
       if (match) {
         out += match[0];
         i += match[0].length - 1;
+        activeAnsi = match[0] === '\u001b[0m' ? '' : match[0];
         continue;
       }
     }
@@ -216,13 +228,17 @@ function clip(text: string, width: number): string {
     visibleCount += 1;
   }
 
-  return `${out}…`;
+  out += '…';
+  if (activeAnsi && !out.endsWith('\u001b[0m')) {
+    out += '\u001b[0m';
+  }
+  return out;
 }
 
 function pad(line: string, width: number): string {
   const visible = visibleLength(line);
   if (visible >= width) return line;
-  return `${line}${' '.repeat(width - visible)}`;
+  return `${line}${' '.repeat(Math.max(0, width - visible))}`;
 }
 
 function sliceVisible(line: string, start: number, end: number): string {
@@ -263,35 +279,62 @@ function stripAnsi(input: string): string {
 }
 
 /**
- * Calculate the visual length of a string in a terminal.
- * Correctly accounts for multi-width characters (e.g. emojis).
+ * Calculate the visual (display) width of a string in a terminal.
+ * Accounts for CJK ideographs, fullwidth forms, emoji, and other
+ * characters that occupy two column positions.
  */
 function visibleLength(input: string): number {
   const stripped = stripAnsi(input);
   let len = 0;
   for (let i = 0; i < stripped.length; i++) {
     const code = stripped.charCodeAt(i);
-    // Emojis and other non-ASCII characters often take two columns.
-    // This is a simple approximation. For emoji support, we need a
-    // more robust unicode width library (e.g. 'string-width').
-    // Since we don't have one, we can at least handle some common cases.
-    if (code > 0x1f000) {
-      len += 2;
-      // Handle surrogate pairs
-      if (
-        code >= 0xd800 &&
-        code <= 0xdbff &&
-        i + 1 < stripped.length &&
-        stripped.charCodeAt(i + 1) >= 0xdc00 &&
-        stripped.charCodeAt(i + 1) <= 0xdfff
-      ) {
-        i++;
-      }
-    } else {
-      len++;
+    let displayWidth = 1;
+
+    if (isSurrogateLead(code) && i + 1 < stripped.length && isSurrogateTrail(stripped.charCodeAt(i + 1))) {
+      // Supplementary-plane character (U+10000–U+10FFFF) — decode the surrogate pair.
+      const hi = code;
+      const lo = stripped.charCodeAt(i + 1);
+      const cp = ((hi & 0x3ff) << 10) | ((lo & 0x3ff) + 0x10000);
+      displayWidth = charDisplayWidth(cp);
+      i++;
+    } else if (!isSurrogateLead(code) && !isSurrogateTrail(code)) {
+      displayWidth = charDisplayWidth(code);
     }
+    // Lone surrogates are invalid UTF-16, treat as single-width to avoid drift.
+    len += displayWidth;
   }
   return len;
+}
+
+function isSurrogateLead(code: number): boolean {
+  return code >= 0xd800 && code <= 0xdbff;
+}
+
+function isSurrogateTrail(code: number): boolean {
+  return code >= 0xdc00 && code <= 0xdfff;
+}
+
+/** Terminal display width for a Unicode code point.
+ *  Covers CJK ideographs, fullwidth forms, Hangul, emoji, and symbols. */
+function charDisplayWidth(cp: number): number {
+  // CJK Unified Ideographs
+  if ((cp >= 0x4e00 && cp <= 0x9fff) || (cp >= 0x3400 && cp <= 0x4dbf)) return 2;
+  // CJK Compatibility Ideographs
+  if (cp >= 0xf900 && cp <= 0xfaff) return 2;
+  // CJK Compatibility Forms + CJK Radicals + Kangxi Radicals + Ideographic Description
+  if (cp >= 0x2e80 && cp <= 0x2fdf) return 2;
+  if (cp >= 0x2ff0 && cp <= 0x2fff) return 2;
+  // Fullwidth Forms
+  if ((cp >= 0xff01 && cp <= 0xff60) || (cp >= 0xffe0 && cp <= 0xffe6)) return 2;
+  // Hangul Syllables
+  if (cp >= 0xac00 && cp <= 0xd7a3) return 2;
+  // Miscellaneous Symbols and Dingbats (emoji-adjacent blocks)
+  if ((cp >= 0x2600 && cp <= 0x27bf) || (cp >= 0x2300 && cp <= 0x23ff)) return 2;
+  // Emoticons, Symbols & Pictographs, Transport & Map, Supplemental Symbols, Chess, etc.
+  if (cp >= 0x1f000) return 2;
+  // Supplementary Ideographic Plane (U+20000–U+2FFFF) and Tertiary (U+30000–U+3FFFF)
+  if (cp >= 0x20000 && cp <= 0x3ffff) return 2;
+  return 1;
 }
 
 function wrapInputText(text: string, maxWidth: number): string[] {
