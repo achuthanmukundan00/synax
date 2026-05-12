@@ -605,7 +605,8 @@ describe('interactive layout visual agreements', () => {
       .map(stripAnsi)
       .join('\n');
 
-    expect(plain).toContain('Synax v0.0.22-alpha  Ready  0:25');
+    const pkgVersion = require('../../package.json').version;
+    expect(plain).toContain(`Synax v${pkgVersion}  Ready  0:25`);
   });
 
   it('renders terminal-state status bars in the header without redundant final summary blocks', () => {
@@ -1865,6 +1866,7 @@ describe('interactive tui runtime', () => {
       resolveSubmitted = resolve;
     });
     const session: ChatSession = {
+      sessionId: 'test-session',
       conversation: createChatSession({
         repoRoot: process.cwd(),
         config: { provider: { kind: 'openai-compatible', base_url: 'http://localhost/v1', model: 'fake' } },
@@ -1900,6 +1902,7 @@ describe('interactive tui runtime', () => {
       resolveSubmitted = resolve;
     });
     const session: ChatSession = {
+      sessionId: 'test-session',
       conversation: createChatSession({
         repoRoot: process.cwd(),
         config: { provider: { kind: 'openai-compatible', base_url: 'http://localhost/v1', model: 'fake' } },
@@ -1952,6 +1955,7 @@ describe('interactive tui runtime', () => {
       resolveSlash = resolve;
     });
     const session: ChatSession = {
+      sessionId: 'test-session',
       conversation: createChatSession({
         repoRoot: process.cwd(),
         config: { provider: { kind: 'openai-compatible', base_url: 'http://localhost/v1', model: 'fake' } },
@@ -1993,6 +1997,7 @@ describe('interactive tui runtime', () => {
       resolveShell = resolve;
     });
     const session: ChatSession = {
+      sessionId: 'test-session',
       conversation: createChatSession({
         repoRoot: process.cwd(),
         config: { provider: { kind: 'openai-compatible', base_url: 'http://localhost/v1', model: 'fake' } },
@@ -2038,6 +2043,7 @@ describe('interactive tui runtime', () => {
       resolveExit = resolve;
     });
     const session: ChatSession = {
+      sessionId: 'test-session',
       conversation: createChatSession({
         repoRoot: process.cwd(),
         config: { provider: { kind: 'openai-compatible', base_url: 'http://localhost/v1', model: 'fake' } },
@@ -2084,6 +2090,7 @@ describe('interactive tui runtime', () => {
       resolveSubmitted = resolve;
     });
     const session: ChatSession = {
+      sessionId: 'test-session',
       conversation: createChatSession({
         repoRoot: process.cwd(),
         config: { provider: { kind: 'openai-compatible', base_url: 'http://localhost/v1', model: 'qwen' } },
@@ -2155,6 +2162,7 @@ describe('interactive tui runtime', () => {
   it('listens to the default stdin when no custom stdin is provided', async () => {
     const stdout = new CapturingWritable();
     const session: ChatSession = {
+      sessionId: 'test-session',
       conversation: createChatSession({
         repoRoot: process.cwd(),
         config: { provider: { kind: 'openai-compatible', base_url: 'http://localhost/v1', model: 'fake' } },

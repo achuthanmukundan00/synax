@@ -34,11 +34,24 @@ import type { NormalizedProviderConfig, ProviderMetadata } from '../llm/types';
 import { detectDirtyTree, readLatestCheckpoint, undoLastEdit } from '../agent/safety';
 import { runInteractiveTui } from '../tui/interactive-tui';
 import { isSecretTrigger } from '../backrooms/trigger';
+import {
+  createSession,
+  appendSessionEvent,
+  upsertSessionMeta,
+  generateSessionId,
+  findSessionMeta,
+  readSessionEvents,
+  generateSessionTitle,
+  generateSessionSummary,
+  type SessionEvent,
+} from '../sessions/session-store';
 
 const execFileAsync = promisify(execFile);
 
 export interface ChatSession {
   conversation: AgentConversation;
+  /** Persistent session ID for cross-session resume. */
+  sessionId: string;
   handleUserMessage(message: string): Promise<ChatTurnReport>;
   handleSlashCommand(command: string): Promise<SlashCommandReport>;
   handleShellCommand?(command: string): Promise<ShellCommandReport>;
@@ -48,6 +61,10 @@ export interface ChatSession {
   refreshConfig?: (config: ProjectConfig, thinkingLevel?: import('../config/schema').ThinkingLevel) => void;
   /** Reset the conversation to a fresh state (for /new). Preserves skill messages. */
   resetConversation?: () => void;
+  /** Finalize the current session (mark as completed/cancelled) and start a new one. */
+  startNewSession?: () => void;
+  /** Append a session event for persistence. */
+  appendSessionEvent?: (event: SessionEvent) => void;
 }
 
 export interface ChatTurnReport {
@@ -118,6 +135,8 @@ export function createChatSession(options: {
   skillMessages?: string[];
   /** Skill diagnostics for display/debug. */
   skillDiagnostics?: SkillDiagnostic[];
+  /** Optional session ID to resume. When set, the session store entry for that ID is reused. */
+  resumeSessionId?: string;
 }): ChatSession {
   const conversation = Session.createConversation({
     skillMessages: options.skillMessages,
@@ -131,8 +150,65 @@ export function createChatSession(options: {
 
   const getConfig = (): ProjectConfig => configRef.current;
 
+  // ── Session persistence ────────────────────────────────────────────
+  let sessionId = options.resumeSessionId ?? generateSessionId();
+  const createSessionRecord = (id: string): void => {
+    try {
+      createSession({
+        id,
+        workspacePath: options.repoRoot,
+        title: 'New session',
+        activeModel: configRef.current.provider?.model ?? undefined,
+      });
+    } catch {
+      // Best-effort: session persistence is non-critical
+    }
+  };
+  createSessionRecord(sessionId);
+
+  const appendSessionEventFn = (event: SessionEvent): void => {
+    try {
+      appendSessionEvent(sessionId, event);
+    } catch {
+      // Best-effort
+    }
+  };
+
+  const updateSessionTitle = (): void => {
+    try {
+      const events = readSessionEvents(sessionId);
+      const title = generateSessionTitle(events);
+      const summary = generateSessionSummary(events);
+      const meta = findSessionMeta(sessionId);
+      if (meta) {
+        upsertSessionMeta({ ...meta, title, summary });
+      }
+    } catch {
+      // Best-effort
+    }
+  };
+
+  const finalizeCurrentSession = (status: 'completed' | 'cancelled' | 'failed'): void => {
+    try {
+      const meta = findSessionMeta(sessionId);
+      if (meta && meta.status === 'active') {
+        upsertSessionMeta({ ...meta, status, updatedAt: new Date().toISOString() });
+      }
+    } catch {
+      // Best-effort
+    }
+  };
+
+  const startNewSessionId = (): string => {
+    finalizeCurrentSession('cancelled');
+    sessionId = generateSessionId();
+    createSessionRecord(sessionId);
+    return sessionId;
+  };
+
   return {
     conversation,
+    sessionId,
     setEventSink: (sink) => {
       eventSink = sink;
     },
@@ -142,6 +218,10 @@ export function createChatSession(options: {
     },
     resetConversation: () => {
       // Reset the shared conversation in-place to a clean slate
+      finalizeCurrentSession('cancelled');
+      sessionId = generateSessionId();
+      createSessionRecord(sessionId);
+
       const fresh = Session.createConversation({
         skillMessages: options.skillMessages,
       });
@@ -151,7 +231,24 @@ export function createChatSession(options: {
       conversation.assemblyStats = null;
       resetTokenLedger(conversation.tokenLedger);
     },
+    startNewSession: () => {
+      startNewSessionId();
+      const fresh = Session.createConversation({
+        skillMessages: options.skillMessages,
+      });
+      conversation.messages.splice(0, conversation.messages.length, ...fresh.messages);
+      conversation.inspectionLedger = fresh.inspectionLedger;
+      conversation.latestCompaction = null;
+      conversation.assemblyStats = null;
+      resetTokenLedger(conversation.tokenLedger);
+    },
+    appendSessionEvent: appendSessionEventFn,
     async handleUserMessage(message: string): Promise<ChatTurnReport> {
+      appendSessionEventFn({
+        type: 'user_message',
+        at: new Date().toISOString(),
+        content: message,
+      });
       const config = getConfig();
       const factoryInput = toProviderFactoryInput(config);
       if (thinkingLevelRef) factoryInput.thinkingLevel = thinkingLevelRef;
@@ -220,6 +317,33 @@ export function createChatSession(options: {
           : [];
       const finalDirtyTree = await detectDirtyTree(options.repoRoot);
       saveContextState(options.repoRoot, result.conversation);
+      appendSessionEventFn({
+        type: 'assistant_message',
+        at: new Date().toISOString(),
+        content: result.finalAnswer || result.error || result.terminalState,
+      });
+      appendSessionEventFn({
+        type: 'state_snapshot',
+        at: new Date().toISOString(),
+        snapshot: {
+          terminalState: result.terminalState,
+          steps: result.steps,
+          toolCalls: result.toolCalls.length,
+          changedFiles: result.changedFiles,
+        },
+      });
+      // Finalize session on terminal states
+      if (
+        result.terminalState === 'completed' ||
+        result.terminalState === 'blocked' ||
+        result.terminalState === 'budget_exhausted' ||
+        result.terminalState === 'model_error' ||
+        result.terminalState === 'tool_error' ||
+        result.terminalState === 'failed_verification'
+      ) {
+        finalizeCurrentSession(result.terminalState === 'completed' ? 'completed' : 'failed');
+      }
+      updateSessionTitle();
       return {
         terminalState: result.terminalState,
         finalAnswer: result.finalAnswer,
