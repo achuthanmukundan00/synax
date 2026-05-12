@@ -224,7 +224,7 @@ describe('LLM client — basic chat', () => {
     expect(body.messages[1].reasoning_content).toBe('');
   });
 
-  test('does not send DeepSeek thinking fields or reasoning metadata to local Relay models', async () => {
+  test('sends system thinking fields and reasoning metadata to local Relay models when thinking is enabled', async () => {
     srv.close();
     srv = await createMockServer((_req, res) => {
       captured = _req;
@@ -237,14 +237,14 @@ describe('LLM client — basic chat', () => {
     });
 
     await client.chat({
-      messages: [{ role: 'assistant', content: 'prior', reasoning_content: 'deepseek-only' }],
+      messages: [{ role: 'assistant', content: 'prior', reasoning_content: 'thinking-metadata' }],
     });
 
     if (!captured) throw new Error('No request captured');
     const body = JSON.parse(captured.body);
-    expect(body.thinking).toBeUndefined();
-    expect(body.reasoning_effort).toBeUndefined();
-    expect(body.messages[0].reasoning_content).toBeUndefined();
+    expect(body.thinking).toEqual({ type: 'enabled' });
+    expect(body.reasoning_effort).toBe('high');
+    expect(body.messages[0].reasoning_content).toBe('thinking-metadata');
   });
 
   test('sends tools and parses OpenAI-compatible tool calls', async () => {

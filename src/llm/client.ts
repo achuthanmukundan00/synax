@@ -553,8 +553,8 @@ export function createOpenAICompatibleClient(
       const body = {
         model,
         messages: normalizeMessagesForProvider(opts.messages, {
-          preserveReasoningContent: isDeepSeek,
-          requireReasoningContent: Boolean(isDeepSeek && thinkingEnabled),
+          preserveReasoningContent: Boolean(isDeepSeek || thinkingEnabled),
+          requireReasoningContent: Boolean(thinkingEnabled),
         }),
         temperature: opts.temperature ?? 0,
         stream: Boolean(opts.onDelta),
@@ -562,7 +562,7 @@ export function createOpenAICompatibleClient(
         ...(opts.tools && opts.tools.length > 0
           ? { tools: opts.tools.map(toOpenAIToolDefinition), tool_choice: 'auto' }
           : {}),
-        ...(isDeepSeek ? deepSeekThinkingParams(cfg.thinkingLevel) : {}),
+        ...systemThinkingParams(cfg.thinkingLevel),
       };
 
       // Vision capability check: warn when image content is sent to a
@@ -657,7 +657,7 @@ function isDeepSeekProvider(cfg: NormalizedProviderConfig, baseUrl: string): boo
   return /deepseek/i.test(cfg.model ?? '');
 }
 
-function deepSeekThinkingParams(level: NormalizedProviderConfig['thinkingLevel']): Record<string, unknown> {
+function systemThinkingParams(level: NormalizedProviderConfig['thinkingLevel']): Record<string, unknown> {
   if (!level || level === 'off') return {};
   const effort = level === 'auto' ? 'high' : level;
   return {
