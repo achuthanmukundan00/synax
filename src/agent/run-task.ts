@@ -17,6 +17,11 @@ import { TokenCounter } from '../metrics/TokenCounter';
 import { CostTracker } from '../metrics/CostTracker';
 import { resolveStrategy, getStrategy } from '../context/ContextStrategy';
 import { VERIFICATION_CONTRACTS, type VerificationContract } from '../session/verification-contracts';
+import {
+  createSession as createStoreSession,
+  upsertSessionMeta,
+  generateSessionId as generateStoreSessionId,
+} from '../sessions/session-store';
 
 export interface RunTaskOptions {
   repoRoot: string;
@@ -132,6 +137,18 @@ export async function runAgentTask(options: RunTaskOptions): Promise<RunTaskRepo
       model: metadata.modelId,
       createdAt: new Date().toISOString(),
     });
+  }
+
+  // Also register in session-store for /resume discoverability
+  try {
+    createStoreSession({
+      id: sessionId,
+      workspacePath: options.repoRoot,
+      title: options.task.slice(0, 80),
+      activeModel: metadata.modelId,
+    });
+  } catch {
+    // Best-effort
   }
 
   // Wrap user's onEvent to also write to the event store
@@ -460,6 +477,24 @@ export async function runAgentTask(options: RunTaskOptions): Promise<RunTaskRepo
     });
   }
 
+  // Finalize in session-store for /resume discoverability
+  try {
+    upsertSessionMeta({
+      id: sessionId,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      workspacePath: options.repoRoot,
+      title: options.task.slice(0, 80),
+      summary: finalAnswer.slice(0, 120),
+      activeModel: metadata.modelId,
+      messageCount: 1,
+      eventCount: 1,
+      status: terminalState === 'completed' ? 'completed' : 'failed',
+    });
+  } catch {
+    // Best-effort
+  }
+
   if (options.recordRunArtifacts !== false) {
     await writeRunLog(options.repoRoot, {
       task: options.task,
@@ -506,16 +541,7 @@ function unique(values: string[]): string[] {
 }
 
 function generateSessionId(): string {
-  const now = new Date();
-  const yyyy = now.getFullYear().toString();
-  const mm = (now.getMonth() + 1).toString().padStart(2, '0');
-  const dd = now.getDate().toString().padStart(2, '0');
-  const hh = now.getHours().toString().padStart(2, '0');
-  const min = now.getMinutes().toString().padStart(2, '0');
-  const ss = now.getSeconds().toString().padStart(2, '0');
-  const ms = now.getMilliseconds().toString().padStart(3, '0');
-  const rand = Math.random().toString(36).slice(2, 6);
-  return `${yyyy}${mm}${dd}${hh}${min}${ss}${ms}-${rand}`;
+  return generateStoreSessionId();
 }
 
 async function gitHead(repoRoot: string): Promise<string | null> {
