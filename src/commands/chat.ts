@@ -26,6 +26,7 @@ import {
   type AgentActivity,
   type AgentTurnResult,
 } from '../session/Session';
+import { createSessionComponents, createAgentSession } from '../session/SessionFactory';
 import { runVerification, type VerificationResult } from '../agent/verification';
 import { buildProjectProfile, formatTextProfile } from '../config/profile';
 import { buildInspectConfigProfile } from './inspect';
@@ -158,9 +159,6 @@ export function createChatSession(options: {
   /** Optional session ID to resume. When set, the session store entry for that ID is reused. */
   resumeSessionId?: string;
 }): ChatSession {
-  const conversation = Session.createConversation({
-    skillMessages: options.skillMessages,
-  });
   let eventSink: ((event: import('../agent/events').AgentEvent) => void) | null = null;
 
   /** Config wrapper: the TUI updates this reference when settings change. */
@@ -170,25 +168,51 @@ export function createChatSession(options: {
 
   const getConfig = (): ProjectConfig => configRef.current;
 
-  // ── Session persistence ────────────────────────────────────────────
-  let sessionId = options.resumeSessionId ?? generateSessionId();
-  const createSessionRecord = (id: string): void => {
-    try {
-      createSession({
-        id,
-        workspacePath: options.repoRoot,
-        title: 'New session',
-        activeModel: configRef.current.provider?.model ?? undefined,
-      });
-    } catch {
-      // Best-effort: session persistence is non-critical
-    }
-  };
-  createSessionRecord(sessionId);
+  // ── Create shared observability components via factory (once per session) ──
+  const modelContextWindow =
+    options.config.contextWindowTokens ?? options.config.contextBudgetTokens ?? 131072;
+  const sessionId = options.resumeSessionId ?? generateSessionId();
+
+  const components = createSessionComponents({
+    repoRoot: options.repoRoot,
+    modelId: configRef.current.provider?.model ?? '',
+    contextWindow: modelContextWindow,
+    modelContextWindow,
+    sessionId,
+  });
+
+  // Register in EventStore
+  if (components.eventStore) {
+    components.eventStore.startSession({
+      id: sessionId,
+      repoRoot: options.repoRoot,
+      mode: 'patch',
+      model: configRef.current.provider?.model ?? '',
+      createdAt: new Date().toISOString(),
+    });
+  }
+
+  // ── Conversation + session persistence ───────────────────────────
+  const conversation = Session.createConversation({
+    skillMessages: components.skillMessages,
+  });
+
+  try {
+    createSession({
+      id: sessionId,
+      workspacePath: options.repoRoot,
+      title: 'New session',
+      activeModel: configRef.current.provider?.model ?? undefined,
+    });
+  } catch {
+    // Best-effort: session persistence is non-critical
+  }
+
+  const sessionIdRef: { current: string } = { current: sessionId };
 
   const appendSessionEventFn = (event: SessionEvent): void => {
     try {
-      appendSessionEvent(sessionId, event);
+      appendSessionEvent(sessionIdRef.current, event);
     } catch {
       // Best-effort
     }
@@ -196,10 +220,10 @@ export function createChatSession(options: {
 
   const updateSessionTitle = (): void => {
     try {
-      const events = readSessionEvents(sessionId);
+      const events = readSessionEvents(sessionIdRef.current);
       const title = generateSessionTitle(events);
       const summary = generateSessionSummary(events);
-      const meta = findSessionMeta(sessionId);
+      const meta = findSessionMeta(sessionIdRef.current);
       if (meta) {
         upsertSessionMeta({ ...meta, title, summary });
       }
@@ -210,7 +234,7 @@ export function createChatSession(options: {
 
   const finalizeCurrentSession = (status: 'completed' | 'cancelled' | 'failed'): void => {
     try {
-      const meta = findSessionMeta(sessionId);
+      const meta = findSessionMeta(sessionIdRef.current);
       if (meta && meta.status === 'active') {
         upsertSessionMeta({ ...meta, status, updatedAt: new Date().toISOString() });
       }
@@ -221,15 +245,38 @@ export function createChatSession(options: {
 
   const startNewSessionId = (): string => {
     finalizeCurrentSession('cancelled');
-    sessionId = generateSessionId();
-    createSessionRecord(sessionId);
-    return sessionId;
+    const newId = generateSessionId();
+    // Update the shared component's sessionId
+    (components as { sessionId: string }).sessionId = newId;
+    // Register new session in EventStore
+    if (components.eventStore) {
+      components.eventStore.startSession({
+        id: newId,
+        repoRoot: options.repoRoot,
+        mode: 'patch',
+        model: configRef.current.provider?.model ?? '',
+        createdAt: new Date().toISOString(),
+      });
+    }
+    try {
+      createSession({
+        id: newId,
+        workspacePath: options.repoRoot,
+        title: 'New session',
+        activeModel: configRef.current.provider?.model ?? undefined,
+      });
+    } catch {
+      // Best-effort
+    }
+    return newId;
   };
 
   const doResetConversation = (): void => {
-    startNewSessionId();
+    const newSessionId = startNewSessionId();
+    // Update closure-mutable sessionId for subsequent appendSessionEvent calls
+    (sessionIdRef as { current: string }).current = newSessionId;
     const fresh = Session.createConversation({
-      skillMessages: options.skillMessages,
+      skillMessages: components.skillMessages,
     });
     conversation.messages.splice(0, conversation.messages.length, ...fresh.messages);
     conversation.inspectionLedger = fresh.inspectionLedger;
@@ -237,6 +284,8 @@ export function createChatSession(options: {
     conversation.assemblyStats = null;
     resetTokenLedger(conversation.tokenLedger);
   };
+
+
 
   /** Abort controller for the currently running turn. */
   let currentAbortController: AbortController | null = null;
@@ -283,20 +332,18 @@ export function createChatSession(options: {
       const factoryResult = createLLMClient(factoryInput);
       const client = factoryResult.client;
       const beforeHead = await gitHead(options.repoRoot);
-      const turnSession = new Session({
+      // Create a fresh AbortController per turn.
+      currentAbortController = new AbortController();
+
+      const { session: turnSession } = createAgentSession({
         repoRoot: options.repoRoot,
         client,
-        maxToolCalls: config.maxToolCalls,
-        bashEnabled: config.tools?.bash?.enabled,
+        config,
+        components,
+        mode: 'patch',
         conversation,
-        contextBudget: {
-          contextBudgetTokens: config.contextBudgetTokens,
-          contextWindowTokens: config.contextWindowTokens,
-          reservedOutputTokens: config.reservedOutputTokens,
-          keepRecentTokens: config.keepRecentTokens,
-          maxSingleReadResultTokens: config.maxSingleReadResultTokens,
-          maxTotalReadResultTokensPerTurn: config.maxTotalReadResultTokensPerTurn,
-        },
+        skipStoreRegistration: true,
+        onSessionEvent: (event) => appendSessionEventFn(event),
         onActivity(activity) {
           options.onActivity?.(activity);
           if (options.tui && activity.kind === 'model_response') {
@@ -322,25 +369,7 @@ export function createChatSession(options: {
           }
         },
         onEvent: (event) => eventSink?.(event),
-        onBudget(snapshot) {
-          eventSink?.({
-            type: 'context_budget_updated',
-            timestamp: new Date().toISOString(),
-            estimatedInputTokens: snapshot.estimatedInputTokens,
-            inputLimit: snapshot.inputLimit,
-            contextWindowTokens: snapshot.contextWindowTokens,
-            reservedOutputTokens: snapshot.reservedOutputTokens,
-            step: snapshot.step,
-          });
-          if (!options.tui) {
-            console.log(formatBudgetSnapshot(snapshot));
-          }
-        },
-        abortSignal: (() => {
-          // Create a fresh AbortController per turn.
-          currentAbortController = new AbortController();
-          return currentAbortController.signal;
-        })(),
+        abortSignal: currentAbortController.signal,
         onSteeringCheck: () => {
           const msg = pendingSteeringMessage;
           if (msg) {
@@ -350,9 +379,22 @@ export function createChatSession(options: {
           return undefined;
         },
       });
+
+      // Extend onBudget with chat-specific console logging for non-TUI mode.
+      // The factory's default onBudget already fires wrappedOnEvent for
+      // EventStore persistence and JSONL session logging. We compose the
+      // factory default with chat's own CLI budget display.
+      const factoryOnBudget = turnSession.onBudget;
+      turnSession.onBudget = (snapshot) => {
+        factoryOnBudget?.(snapshot);
+        if (!options.tui) {
+          console.log(formatBudgetSnapshot(snapshot));
+        }
+      };
+
       let result: AgentTurnResult;
       try {
-        result = await turnSession.startTurn(message);
+        result = await turnSession.startTurnWithRecovery(message);
       } catch (error) {
         if (currentAbortController?.signal.aborted) {
           return {
@@ -404,7 +446,7 @@ export function createChatSession(options: {
         finalizeCurrentSession(result.terminalState === 'completed' ? 'completed' : 'failed');
       }
       // Only refresh title/summary on first turn to avoid O(n) disk reads every turn
-      const meta = findSessionMeta(sessionId);
+      const meta = findSessionMeta(sessionIdRef.current);
       if (!meta || meta.messageCount <= 1) {
         updateSessionTitle();
       }
@@ -423,7 +465,7 @@ export function createChatSession(options: {
         repoRoot: options.repoRoot,
         config: getConfig(),
         conversation,
-        skillMessages: options.skillMessages,
+        skillMessages: components.skillMessages,
       });
     },
     async handleShellCommand(command: string): Promise<ShellCommandReport> {
