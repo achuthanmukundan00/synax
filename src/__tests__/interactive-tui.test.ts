@@ -10,6 +10,7 @@ import { createTerminalSession } from '../tui/terminal';
 import { renderSettings } from '../settings/settings-renderer';
 import { createSettingsState, settingsReducer } from '../settings/settings-state';
 import type { EffectiveSynaxConfig } from '../config/schema';
+import pkg from '../../package.json';
 import { PassThrough, Writable } from 'stream';
 
 const EXPECTED_MAX_INPUT_CHARS = 4096;
@@ -605,7 +606,7 @@ describe('interactive layout visual agreements', () => {
       .map(stripAnsi)
       .join('\n');
 
-    expect(plain).toContain('Synax v0.0.22-alpha  Ready  0:25');
+    expect(plain).toContain(`Synax v${pkg.version}  Ready  0:25`);
   });
 
   it('renders terminal-state status bars in the header without redundant final summary blocks', () => {
