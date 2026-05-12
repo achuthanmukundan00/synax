@@ -15,7 +15,7 @@
  * with the Anthropic protocol will throw a clear error.
  */
 
-import type { ChatOptions, ChatResponse, LlmError } from './types';
+import type { ChatContent, ChatOptions, ChatResponse, LlmError } from './types';
 
 // ─── Anthropic API types ───────────────────────────────
 
@@ -89,18 +89,31 @@ function classifyStatus(status: number): LlmError['type'] {
 
 // ─── Message mapping ───────────────────────────────────
 
-function extractSystemPrompt(messages: Array<{ role: string; content: string }>): string | undefined {
-  const systemMessages = messages
-    .filter((m) => m.role === 'system')
-    .map((m) => m.content)
-    .filter((c) => c.trim().length > 0);
+function extractSystemPrompt(messages: Array<{ role: string; content: ChatContent }>): string | undefined {
+  const systemMessages: string[] = [];
+  for (const m of messages) {
+    if (m.role !== 'system') continue;
+    if (typeof m.content === 'string' && m.content.trim().length > 0) {
+      systemMessages.push(m.content);
+    }
+  }
 
   if (systemMessages.length === 0) return undefined;
   return systemMessages.join('\n\n');
 }
 
+function toAnthropicContent(content: ChatContent): string {
+  if (typeof content === 'string') return content;
+  // Flatten multimodal content: join text parts and skip image parts
+  // (full image support in Anthropic adapter is deferred to a follow-up).
+  return content
+    .filter((part): part is import('./types').TextContentPart => part.type === 'text')
+    .map((part) => part.text)
+    .join('\n');
+}
+
 function mapMessages(
-  messages: Array<{ role: string; content: string; tool_call_id?: string; name?: string; tool_calls?: unknown }>,
+  messages: Array<{ role: string; content: ChatContent; tool_call_id?: string; name?: string; tool_calls?: unknown }>,
 ): AnthropicMessage[] {
   const result: AnthropicMessage[] = [];
 
@@ -113,15 +126,15 @@ function mapMessages(
       // content block sequencing and is deferred to a follow-up PR.
       result.push({
         role: 'user',
-        content: msg.content,
+        content: toAnthropicContent(msg.content),
       });
       continue;
     }
 
     if (msg.role === 'user') {
-      result.push({ role: 'user', content: msg.content });
+      result.push({ role: 'user', content: toAnthropicContent(msg.content) });
     } else if (msg.role === 'assistant') {
-      result.push({ role: 'assistant', content: msg.content });
+      result.push({ role: 'assistant', content: toAnthropicContent(msg.content) });
     }
     // Unknown roles are silently skipped.
   }

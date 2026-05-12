@@ -233,6 +233,34 @@ describe('loadProjectConfig', () => {
     expect(result.errors).toHaveLength(0);
     expect(result.config.tools?.bash?.enabled).toBe(true);
   });
+
+  it('loads provider from new multi-provider format without overwriting with preset defaults', () => {
+    const configPath = join(TMP, '.synax.toml');
+    const toml = [
+      '[active]',
+      'provider = "relay"',
+      'model = "test-model"',
+      '',
+      '[providers.relay]',
+      'enabled = true',
+      'name = "Relay"',
+      'compatibility = "openai-compatible"',
+      'base_url = "https://example.com/v1"',
+      '',
+      '[[providers.relay.models]]',
+      'id = "test-model"',
+      'display_name = "Test Model"',
+      'context_window = 32768',
+    ].join('\n');
+    writeFileSync(configPath, toml);
+    const result = loadProjectConfig(TMP);
+    expect(result.errors).toHaveLength(0);
+    expect(result.config.provider?.preset).toBe('relay');
+    expect(result.config.provider?.baseUrl).toBe('https://example.com/v1');
+    expect(result.config.provider?.model).toBe('test-model');
+    // Ensure we didn't fallback to preset defaults (which would be http://127.0.0.1:1234/v1)
+    expect(result.config.provider?.baseUrl).not.toBe('http://127.0.0.1:1234/v1');
+  });
 });
 
 // ─── generateDefaultConfig ──────────────────────────────────

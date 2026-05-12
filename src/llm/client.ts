@@ -18,6 +18,7 @@ import {
 import { repairJson } from './repair/json-repair';
 import { repairXml } from './repair/xml-repair';
 import { sanitizeReasoning } from './repair/reasoning-sanitizer';
+import { isVisionCapableModel } from './image-utils';
 
 // ---------------------------------------------------------------------------
 // Error helpers
@@ -564,6 +565,23 @@ export function createOpenAICompatibleClient(
         ...(isDeepSeek ? deepSeekThinkingParams(cfg.thinkingLevel) : {}),
       };
 
+      // Vision capability check: warn when image content is sent to a
+      // model that doesn't appear to support vision inputs.
+      if (!isVisionCapableModel(model)) {
+        for (const msg of opts.messages) {
+          if (Array.isArray(msg.content)) {
+            const hasImage = msg.content.some((part) => part.type === 'image_url');
+            if (hasImage) {
+              process.stderr.write(
+                `[synax] ⚠️ Image content detected in request, but model "${model}" does not match known vision-capable patterns.\n` +
+                  `[synax] The provider may reject the request or ignore the image.\n`,
+              );
+              break;
+            }
+          }
+        }
+      }
+
       const result = opts.onDelta
         ? await dispatchStreamingRequest(endpoint, body, headers, timeoutMs, opts.onDelta, opts.signal)
         : await dispatchRequest(endpoint, body, headers, timeoutMs, opts.signal);
@@ -657,6 +675,16 @@ function normalizeMessagesForProvider(
   );
   return messages.map((message) => {
     const normalized = { ...message };
+    // Strip internal compaction markers before sending to the provider.
+    // These are not part of the OpenAI Chat Completions message schema
+    // and cause 400 errors with strict providers (OpenRouter, Relay, DeepSeek).
+    delete (normalized as Record<string, unknown>)._tool_call_ids;
+    delete (normalized as Record<string, unknown>)._tool_result_ids;
+
+    // Ensure tool messages have the required tool_call_id
+    if (normalized.role === 'tool' && !('tool_call_id' in normalized)) {
+      (normalized as Record<string, unknown>).tool_call_id = 'unknown';
+    }
     if (Array.isArray(normalized.tool_calls) && normalized.tool_calls.length === 0) {
       delete normalized.tool_calls;
     }

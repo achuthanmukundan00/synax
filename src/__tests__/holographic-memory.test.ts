@@ -357,5 +357,393 @@ describe('HolographicMemory', () => {
       const index = nullMemory.buildMemoryIndex();
       expect(index).toBeNull();
     });
+
+    it('includes domain tags in compact context', () => {
+      if (!db) return;
+      const mem = new HolographicMemory(db);
+      mem.store({ sessionId: 's1', turnId: 1, role: 'user', content: 'Find leads', domainTags: ['autocareer'] });
+      mem.store({
+        sessionId: 's1',
+        turnId: 1,
+        role: 'tool',
+        toolName: 'read',
+        filePaths: ['leads.csv'],
+        content: 'Job leads found',
+        domainTags: ['autocareer', 'job-search'],
+      });
+
+      const index = mem.buildMemoryIndex();
+      expect(index).not.toBeNull();
+      const idx = index as string;
+      expect(idx).toContain('Domain:');
+      expect(idx).toContain('autocareer');
+      expect(idx).toContain('job-search');
+      // Should also still have the standard sections
+      expect(idx).toContain('[Memory:');
+    });
+  });
+
+  // ── Cross-session durability ──────────────────────────────────────────
+
+  describe('cross-session durability', () => {
+    it('survives database close and reopen', () => {
+      if (!db) return;
+
+      // Session 1: store entries
+      const mem1 = new HolographicMemory(db);
+      mem1.store({ sessionId: 's1', turnId: 1, role: 'user', content: 'Fix login form validation' });
+      mem1.store({
+        sessionId: 's1',
+        turnId: 1,
+        role: 'tool',
+        toolName: 'bash',
+        content: 'Error: TS2322 at src/LoginForm.tsx:42',
+      });
+      mem1.store({
+        sessionId: 's1',
+        turnId: 2,
+        role: 'assistant',
+        content: 'Fixed the type coercion issue in LoginForm',
+      });
+
+      // Verify entries exist
+      expect(mem1.search('TS2322').length).toBeGreaterThan(0);
+      expect(mem1.search('login').length).toBeGreaterThan(0);
+
+      // Close the database (simulate process restart)
+      db.close();
+
+      // Reopen the same file WITHOUT wiping (simulate new process)
+      const SQLite = loadBetterSqlite3();
+      if (!SQLite) return;
+      const reopenedDb = new SQLite(DB_PATH);
+
+      try {
+        const mem2 = new HolographicMemory(reopenedDb);
+
+        // Session 2: should find entries from session 1
+        const results = mem2.search('TS2322');
+        expect(results.length).toBeGreaterThan(0);
+        expect(results[0].content).toContain('TS2322');
+
+        // Should also find by keyword
+        const loginResults = mem2.search('login');
+        expect(loginResults.length).toBeGreaterThan(0);
+        expect(loginResults.some((r) => r.content.toLowerCase().includes('login'))).toBe(true);
+
+        // New entries from session 2 should coexist with session 1 entries
+        mem2.store({ sessionId: 's2', turnId: 1, role: 'user', content: 'Add signup form' });
+        mem2.store({
+          sessionId: 's2',
+          turnId: 1,
+          role: 'tool',
+          toolName: 'bash',
+          content: 'Error: missing password validation in SignupForm',
+        });
+
+        const crossSessionResults = mem2.search('error');
+        expect(crossSessionResults.length).toBeGreaterThanOrEqual(2); // at least one from each session
+        const s1Errors = crossSessionResults.filter((r) => r.sessionId === 's1');
+        const s2Errors = crossSessionResults.filter((r) => r.sessionId === 's2');
+        expect(s1Errors.length).toBeGreaterThan(0);
+        expect(s2Errors.length).toBeGreaterThan(0);
+      } finally {
+        reopenedDb.close();
+      }
+    });
+
+    it('reads entries across sessions via persistent file', () => {
+      // Uses the existing file-based test pattern in openTestDb
+      if (!db) return;
+
+      const mem = new HolographicMemory(db);
+      mem.store({
+        sessionId: 'sA',
+        turnId: 1,
+        role: 'user',
+        content: 'Search for python backend remote canada job leads',
+        domainTags: ['autocareer'],
+      });
+      mem.store({
+        sessionId: 'sA',
+        turnId: 1,
+        role: 'tool',
+        toolName: 'read',
+        filePaths: ['leads.json'],
+        content: 'Found 50 job leads matching python backend canada remote',
+        domainTags: ['autocareer'],
+      });
+
+      // Multi-session insert pattern: same DB, different session IDs
+      for (let session = 1; session <= 5; session++) {
+        const sid = `product-session-${session}`;
+        for (let lead = 1; lead <= 10; lead++) {
+          mem.store({
+            sessionId: sid,
+            turnId: lead,
+            role: 'tool',
+            toolName: 'read',
+            filePaths: ['leads.csv'],
+            content: `Lead ${lead} in session ${session}: python backend engineer remote canada`,
+            domainTags: ['autocareer'],
+          });
+        }
+      }
+
+      // Search across all sessions
+      const results = mem.search('python backend remote canada');
+      expect(results.length).toBeGreaterThan(0);
+      // Should find leads from multiple sessions
+      const sessionIds = new Set(results.map((r) => r.sessionId));
+      expect(sessionIds.size).toBeGreaterThanOrEqual(2);
+    });
+  });
+
+  // ── Domain tags ──────────────────────────────────────────────────────
+
+  describe('domain tags', () => {
+    it('stores and retrieves domain tags', () => {
+      if (!db) return;
+      const mem = new HolographicMemory(db);
+
+      mem.store({
+        sessionId: 's1',
+        turnId: 1,
+        role: 'user',
+        content: 'Find python jobs in toronto',
+        domainTags: ['autocareer', 'job-search'],
+      });
+
+      mem.store({
+        sessionId: 's1',
+        turnId: 2,
+        role: 'assistant',
+        content: 'Found a chord progression in D minor with Operator bass',
+        domainTags: ['wytos', 'music-analysis'],
+      });
+
+      // Search with domain-specific terms
+      const autoResults = mem.search('python jobs');
+      expect(autoResults.length).toBeGreaterThan(0);
+
+      const wytosResults = mem.search('D minor Operator');
+      expect(wytosResults.length).toBeGreaterThan(0);
+      expect(wytosResults[0].content).toContain('D minor');
+
+      // Search results should include domain tags
+      expect(autoResults[0].domainTags).toBeDefined();
+      expect(autoResults[0].domainTags).toContain('autocareer');
+    });
+
+    it('domain tags appear in handoff manifest', () => {
+      if (!db) return;
+      const mem = new HolographicMemory(db);
+
+      mem.store({
+        sessionId: 's1',
+        turnId: 1,
+        role: 'user',
+        content: 'Triage job leads',
+        domainTags: ['autocareer', 'triage'],
+      });
+
+      mem.store({
+        sessionId: 's1',
+        turnId: 1,
+        role: 'tool',
+        toolName: 'read',
+        filePaths: ['leads.csv'],
+        content: '50 leads processed',
+        domainTags: ['autocareer'],
+      });
+
+      const manifest = mem.handoff();
+      expect(manifest.domainTags.length).toBeGreaterThan(0);
+      expect(manifest.domainTags).toContain('autocareer');
+    });
+
+    it('domain tags appear in suggested search terms', () => {
+      if (!db) return;
+      const mem = new HolographicMemory(db);
+
+      mem.store({
+        sessionId: 's1',
+        turnId: 1,
+        role: 'user',
+        content: 'Analyze audio track',
+        domainTags: ['wytos', 'creative', 'audio-analysis'],
+      });
+
+      const terms = mem.getSuggestedSearchTerms();
+      expect(terms.length).toBeGreaterThan(0);
+      // Domain tags should be included as search terms
+      expect(terms).toContain('wytos');
+      expect(terms).toContain('creative');
+      expect(terms).toContain('audio-analysis');
+    });
+  });
+
+  // ── Product scenario: AutoCareer ────────────────────────────────────
+
+  describe('AutoCareer scenario: job lead memory across sessions', () => {
+    it('stores 500 leads across 10 sessions and finds relevant ones via FTS5', () => {
+      if (!db) return;
+      const mem = new HolographicMemory(db);
+
+      const jobTitles = [
+        'python backend engineer remote canada',
+        'senior typescript developer toronto',
+        'react frontend lead vancouver remote',
+        'python data engineer remote montreal',
+        'devops engineer backend kubernetes canada',
+      ];
+
+      const companies = [
+        'Shopify',
+        'Wealthsimple',
+        'PointClickCare',
+        'RBC',
+        'TD',
+        'Shopify',
+        'Lighspeed',
+        'Wattpad',
+        'Drop',
+        'SkipTheDishes',
+      ];
+
+      // 10 sessions, 50 leads each = 500
+      for (let session = 1; session <= 10; session++) {
+        const sid = `autocareer-session-${session}`;
+        for (let lead = 1; lead <= 50; lead++) {
+          const title = jobTitles[lead % jobTitles.length];
+          const company = companies[lead % companies.length];
+          mem.store({
+            sessionId: sid,
+            turnId: lead,
+            role: 'tool',
+            toolName: 'read',
+            filePaths: ['leads.csv'],
+            content: `Lead #${lead} session ${session}: ${title} at ${company} — remote, full-time, posted May 2026`,
+            domainTags: ['autocareer', 'job-leads'],
+          });
+        }
+      }
+
+      // Search: 'python backend remote canada'
+      const results = mem.search('python backend remote canada', 100);
+      expect(results.length).toBeGreaterThan(0);
+      // All results should relate to python backend remote canada jobs
+      for (const r of results) {
+        expect(r.content.toLowerCase()).toMatch(/python|backend|remote|canada/);
+      }
+
+      // Should find leads from session 3 specifically
+      const s3Results = results.filter((r) => r.sessionId === 'autocareer-session-3');
+      expect(s3Results.length).toBeGreaterThan(0);
+    });
+
+    it('finds leads from specific session in cross-session search', () => {
+      if (!db) return;
+      const mem = new HolographicMemory(db);
+
+      // Only put python backend remote canada leads in session 3
+      for (let session = 1; session <= 10; session++) {
+        const sid = `autocareer-s-${session}`;
+        for (let lead = 1; lead <= 50; lead++) {
+          const content =
+            session === 3
+              ? `Lead ${lead}: python backend engineer remote canada — full-time`
+              : `Lead ${lead}: frontend developer on-site toronto`;
+          mem.store({
+            sessionId: sid,
+            turnId: lead,
+            role: 'tool',
+            toolName: 'read',
+            content,
+            domainTags: ['autocareer'],
+          });
+        }
+      }
+
+      const results = mem.search('python backend remote canada', 50);
+      expect(results.length).toBeGreaterThan(0);
+      // All results should come from session 3
+      for (const r of results) {
+        expect(r.sessionId).toBe('autocareer-s-3');
+      }
+    });
+  });
+
+  // ── Product scenario: wytOS ──────────────────────────────────────────
+
+  describe('wytOS scenario: audio analysis memory across sessions', () => {
+    it('stores 200 audio analyses and finds relevant ones via FTS5', () => {
+      if (!db) return;
+      const mem = new HolographicMemory(db);
+
+      const keys = ['C major', 'D minor', 'E minor', 'F major', 'G major', 'A minor', 'B diminished'];
+      const basses = ['Sub', 'Reese', '808', 'Operator', 'FM', 'Wavetable'];
+
+      // 200 analyses across 5 sessions
+      let count = 0;
+      for (let session = 1; session <= 5; session++) {
+        const sid = `wytos-session-${session}`;
+        for (let track = 1; track <= 40; track++) {
+          const key = keys[track % keys.length];
+          const bass = basses[track % basses.length];
+          count++;
+          mem.store({
+            sessionId: sid,
+            turnId: track,
+            role: 'tool',
+            toolName: 'analyse',
+            content: `Analysis #${count}: key=${key}, bass=${bass}, tempo=128, genre=electronic, peak at 1:23, dynamic range 12dB`,
+            domainTags: ['wytos', 'audio-analysis'],
+          });
+        }
+      }
+
+      // Verify count
+      const allCount = db.prepare('SELECT COUNT(*) as c FROM memory_fts').get() as { c: number };
+      expect(allCount.c).toBe(200);
+
+      // Search: 'D minor Operator bass'
+      const results = mem.search('D minor Operator bass', 20);
+      expect(results.length).toBeGreaterThan(0);
+      // All results should contain D minor AND Operator
+      for (const r of results) {
+        expect(r.content).toContain('D minor');
+        expect(r.content).toContain('Operator');
+      }
+
+      // Search across sessions
+      const sessionIds = new Set(results.map((r) => r.sessionId));
+      expect(sessionIds.size).toBeGreaterThanOrEqual(1);
+    });
+
+    it('searches with FTS5 snippet context', () => {
+      if (!db) return;
+      const mem = new HolographicMemory(db);
+
+      mem.store({
+        sessionId: 'wytos-s1',
+        turnId: 1,
+        role: 'tool',
+        content: 'Track "Dark Matter": key=D minor, bass=Operator, tempo=128, genre=techno',
+        domainTags: ['wytos'],
+      });
+      mem.store({
+        sessionId: 'wytos-s1',
+        turnId: 2,
+        role: 'tool',
+        content: 'Track "Starlight": key=D minor, bass=Sub, tempo=140, genre=trance',
+        domainTags: ['wytos'],
+      });
+
+      const snippetResults = mem.searchWithSnippets('D minor', 2);
+      expect(snippetResults.length).toBeGreaterThan(0);
+      expect(snippetResults[0].snippet).toBeDefined();
+      expect(snippetResults[0].snippet.toLowerCase()).toMatch(/d.*minor|minor/);
+    });
   });
 });
