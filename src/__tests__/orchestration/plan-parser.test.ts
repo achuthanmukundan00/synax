@@ -9,13 +9,13 @@ describe('plan-parser', () => {
           id: 'task-1',
           description: 'do the thing',
           fileScope: ['src/a.ts'],
-          dependencies: []
-        }
-      ]
+          dependencies: [],
+        },
+      ],
     });
-    
+
     const result = parseOrchestrationPlan(raw);
-    
+
     expect(result.success).toBe(true);
     if (result.success) {
       expect(result.plan.planId).toBe('plan-xyz');
@@ -25,9 +25,9 @@ describe('plan-parser', () => {
 
   it('parses safely back to inline for { inline: true }', () => {
     const raw = JSON.stringify({ inline: true });
-    
+
     const result = parseOrchestrationPlan(raw);
-    
+
     expect(result.success).toBe(false);
     if (!result.success && 'inline' in result) {
       expect(result.inline).toBe(true);
@@ -47,9 +47,9 @@ describe('plan-parser', () => {
           "description": "do the thing"
         }
     `;
-    
+
     const result = parseOrchestrationPlan(raw);
-    
+
     expect(result.success).toBe(true);
     if (result.success) {
       expect(result.plan.planId).toBe('plan-xyz');
@@ -58,9 +58,9 @@ describe('plan-parser', () => {
 
   it('falls back to inline for unrepairable garbage', () => {
     const raw = `I am completely ignoring your schema. I think you should just run this code.`;
-    
+
     const result = parseOrchestrationPlan(raw);
-    
+
     expect(result.success).toBe(false);
     if (!result.success && 'inline' in result) {
       expect(result.inline).toBe(true);
