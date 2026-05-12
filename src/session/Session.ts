@@ -604,6 +604,7 @@ export class Session {
                 tools,
                 temperature: 0,
                 maxTokens: 2048,
+                signal: this.abortSignal,
                 onDelta: (delta) => emitAssistantDelta(this, delta),
               });
             } else {
@@ -619,6 +620,7 @@ export class Session {
                 tools,
                 temperature: 0,
                 maxTokens: 2048,
+                signal: this.abortSignal,
                 onDelta: (delta) => emitAssistantDelta(this, delta),
               });
             }
@@ -627,6 +629,13 @@ export class Session {
               this.tracer.addEvent(modelSpan, 'error', { message: errorMessage(error) });
               this.tracer.endSpan(modelSpan);
             }
+
+            // Re-throw on user abort so the outer catch in handleUserMessage
+            // can convert it to a proper 'blocked' / 'turn aborted' result.
+            if (this.abortSignal?.aborted) {
+              throw error;
+            }
+
             const message = errorMessage(error);
             this.logger?.error('Model call failed', error instanceof Error ? error : new Error(message), {
               stepIndex: step,
