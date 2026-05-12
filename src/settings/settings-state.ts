@@ -334,13 +334,16 @@ function buildProviderRows(config: EffectiveSynaxConfig): SettingsRow[] {
 
     // Show models under provider
     for (const model of provider.models) {
+      const isModelActive = isActive && model.id === config.active.model;
+      const modelPrefix = isModelActive ? '→     ' : '      ';
       const ctxStr = model.contextWindow ? `ctx ${formatContext(model.contextWindow)}` : '';
       rows.push({
         id: `provider-${id}-model-${model.id}`,
-        label: `      ${model.id}`,
+        label: `${modelPrefix}${model.id}`,
         value: [model.displayName, ctxStr].filter(Boolean).join('  '),
-        kind: 'info',
-        dimmed: true,
+        kind: 'select',
+        options: [],
+        dimmed: !isModelActive,
       });
     }
   }
@@ -572,6 +575,18 @@ function handleSelect(state: SettingsState, row: SettingsRow): SettingsState {
   if (row.id.startsWith('model-')) {
     const modelId = row.id.slice('model-'.length);
     next.config = buildConfigUpdate(next.config, { activeModel: modelId });
+  }
+
+  if (row.id.startsWith('provider-') && row.id.includes('-model-')) {
+    const match = row.id.match(/^provider-([^]+)-model-([^]+)$/);
+    if (match) {
+      const providerId = match[1];
+      const modelId = match[2];
+      next.config = buildConfigUpdate(next.config, {
+        activeProvider: providerId,
+        activeModel: modelId,
+      });
+    }
   }
 
   if (row.id === 'active-thinking') {
