@@ -1012,30 +1012,31 @@ describe('shared bounded agent runner', () => {
 
   it('returns a clear tool error when total read calls exceed the per-turn limit', async () => {
     mkdirSync(join(TMP, 'src'), { recursive: true });
-    for (let index = 0; index < 25; index += 1) {
+    const NUM_READS = 65;
+    for (let index = 0; index < NUM_READS; index += 1) {
       writeFileSync(join(TMP, 'src', `file-${index}.ts`), `export const v${index} = ${index};\n`, 'utf-8');
     }
 
-    const toolCallResponses = Array.from({ length: 25 }, (_, index) => ({
+    const toolCallResponses = Array.from({ length: NUM_READS }, (_, index) => ({
       toolCalls: [{ id: String(index + 1), name: 'read', arguments: { path: `src/file-${index}.ts` } }],
     }));
     const client = fakeClient([...toolCallResponses, { content: 'should not be reached' }]);
 
-    const result = await runTurn({ repoRoot: TMP, task: 'inspect many files', client, maxSteps: 30 });
+    const result = await runTurn({ repoRoot: TMP, task: 'inspect many files', client, maxModelSteps: 70 });
 
     // Read-limit errors are recoverable: the model sees the error and can adapt.
     // The agent completes with the model's final answer rather than dying.
     expect(result.terminalState).toBe('completed');
     expect(result.finalAnswer).toBe('should not be reached');
-    expect(result.toolCalls).toHaveLength(25);
-    expect(result.toolCalls.slice(0, 24).every((call) => call.success === true)).toBe(true);
-    expect(result.toolCalls[24]).toEqual({
+    expect(result.toolCalls).toHaveLength(NUM_READS);
+    expect(result.toolCalls.slice(0, 64).every((call) => call.success === true)).toBe(true);
+    expect(result.toolCalls[64]).toEqual({
       name: 'read',
       success: false,
-      error: 'total read limit reached for this turn: 24',
+      error: 'total read limit reached for this turn: 64',
     });
     // One extra request: the final step where the model sees the limit error and answers
-    expect(client.requests).toHaveLength(26);
+    expect(client.requests).toHaveLength(NUM_READS + 1);
   });
 
   it('truncates large read outputs before they enter model history', async () => {

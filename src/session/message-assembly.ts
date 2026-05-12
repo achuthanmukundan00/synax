@@ -23,7 +23,7 @@ import type { AgentMessage, AgentConversation, AgentTurnResult } from './types';
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-export const MAX_TOTAL_READS_PER_TURN = 24;
+export const MAX_TOTAL_READS_PER_TURN = 64;
 
 // ─── Orientation injection ───────────────────────────────────────────────────
 

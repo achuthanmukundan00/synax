@@ -47,8 +47,8 @@ const DEFAULT_SETTINGS: ContextBudgetSettings = {
   contextWindowTokens: 131072,
   reservedOutputTokens: 8192,
   keepRecentTokens: 20000,
-  maxSingleReadResultTokens: 6000,
-  maxTotalReadResultTokensPerTurn: 40000,
+  maxSingleReadResultTokens: 12000,
+  maxTotalReadResultTokensPerTurn: 96000,
   keepRecentToolTurns: 3,
 };
 
