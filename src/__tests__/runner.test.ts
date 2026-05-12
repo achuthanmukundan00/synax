@@ -63,6 +63,7 @@ describe('shared bounded agent runner', () => {
       'edit',
       'bash',
       'search_memory',
+      'view_image',
     ]);
   });
 
@@ -90,7 +91,7 @@ describe('shared bounded agent runner', () => {
     await runTurn({ repoRoot: TMP, task: 'hello', client });
 
     const system = client.requests[0].messages[0].content as string;
-    expect(system).toContain('Tools: read, write, edit, bash, search_memory.');
+    expect(system).toContain('Tools: read, write, edit, bash, search_memory, view_image.');
     expect(system).not.toContain('GIT WORKFLOWS');
     expect(system).not.toContain('git tool');
   });
@@ -100,11 +101,13 @@ describe('shared bounded agent runner', () => {
       'read',
       'bash',
       'search_memory',
+      'view_image',
     ]);
     expect(Session.buildModelTools({ mode: 'verify', bashEnabled: true }).map((tool) => tool.name)).toEqual([
       'read',
       'bash',
       'search_memory',
+      'view_image',
     ]);
   });
 
@@ -114,6 +117,7 @@ describe('shared bounded agent runner', () => {
       'write',
       'edit',
       'search_memory',
+      'view_image',
     ]);
     expect(Session.buildModelTools({ bashEnabled: true }).map((tool) => tool.name)).toEqual([
       'read',
@@ -121,6 +125,7 @@ describe('shared bounded agent runner', () => {
       'edit',
       'bash',
       'search_memory',
+      'view_image',
     ]);
   });
 
@@ -135,6 +140,7 @@ describe('shared bounded agent runner', () => {
       'edit',
       'bash',
       'search_memory',
+      'view_image',
     ]);
   });
 
