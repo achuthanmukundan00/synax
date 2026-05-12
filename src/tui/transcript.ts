@@ -14,7 +14,9 @@ const BREATHING_GLYPHS = ['◌', '◓', '◑', '◒'];
 // ─── Tool-summary detection ───────────────────────────────
 
 /** Strip LaTeX math commands that terminals can't render.
- *  Converts common escapes to Unicode and removes remaining \commands. */
+ *  Converts common escapes to Unicode and removes remaining \commands.
+ *  Preserves newlines so markdown structure (headings, lists, code blocks)
+ *  survives into renderReviewOutput. */
 function stripLatexCommands(text: string): string {
   return text
     .replace(/\\pmod\{([^}]*)\}/gi, ' (mod $1)')
@@ -26,7 +28,7 @@ function stripLatexCommands(text: string): string {
     .replace(/\\cdots\b/gi, '⋯')
     .replace(/\\text\{([^}]*)\}/gi, '$1')
     .replace(/\\[a-zA-Z]+(\{[^}]*\})*/g, '')
-    .replace(/\s+/g, ' ')
+    .replace(/[ \t]+/g, ' ')
     .trim();
 }
 
