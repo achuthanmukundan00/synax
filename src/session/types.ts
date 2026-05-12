@@ -49,6 +49,7 @@ export interface AgentRunnerOptions {
   repoRoot: string;
   client: AgentClient;
   maxSteps?: number;
+  maxModelSteps?: number;
   maxToolCalls?: number;
   mode?: RunMode;
   tools?: ModelToolSurfaceOptions;
