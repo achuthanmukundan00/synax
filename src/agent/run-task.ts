@@ -20,6 +20,7 @@ import { VERIFICATION_CONTRACTS, type VerificationContract } from '../session/ve
 import {
   createSession as createStoreSession,
   upsertSessionMeta,
+  findSessionMeta,
   generateSessionId as generateStoreSessionId,
 } from '../sessions/session-store';
 
@@ -479,9 +480,10 @@ export async function runAgentTask(options: RunTaskOptions): Promise<RunTaskRepo
 
   // Finalize in session-store for /resume discoverability
   try {
+    const existing = findSessionMeta(sessionId);
     upsertSessionMeta({
       id: sessionId,
-      createdAt: new Date().toISOString(),
+      createdAt: existing?.createdAt ?? new Date().toISOString(),
       updatedAt: new Date().toISOString(),
       workspacePath: options.repoRoot,
       title: options.task.slice(0, 80),
