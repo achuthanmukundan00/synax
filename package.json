@@ -23,7 +23,8 @@
     "synax": "node dist/cli.js",
     "smoke:provider": "node scripts/smoke-provider.mjs",
     "deploy": "npm run docs:build && wrangler deploy",
-    "preview": "npm run docs:build && wrangler dev"
+    "preview": "npm run docs:build && wrangler dev",
+    "verify:pack": "bash scripts/verify-pack.sh"
   },
   "keywords": [],
   "author": "",
