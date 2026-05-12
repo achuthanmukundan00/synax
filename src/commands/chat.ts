@@ -170,8 +170,7 @@ export function createChatSession(options: {
   const getConfig = (): ProjectConfig => configRef.current;
 
   // ── Create shared observability components via factory (once per session) ──
-  const modelContextWindow =
-    options.config.contextWindowTokens ?? options.config.contextBudgetTokens ?? 131072;
+  const modelContextWindow = options.config.contextWindowTokens ?? options.config.contextBudgetTokens ?? 131072;
   const sessionId = options.resumeSessionId ?? generateSessionId();
 
   const components = createSessionComponents({
@@ -285,8 +284,6 @@ export function createChatSession(options: {
     conversation.assemblyStats = null;
     resetTokenLedger(conversation.tokenLedger);
   };
-
-
 
   /** Abort controller for the currently running turn. */
   let currentAbortController: AbortController | null = null;
