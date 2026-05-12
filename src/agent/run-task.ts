@@ -11,10 +11,7 @@ import { normalizeRunMode, type RunMode } from './task-policy';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 import { VERIFICATION_CONTRACTS, type VerificationContract } from '../session/verification-contracts';
-import {
-  upsertSessionMeta,
-  findSessionMeta,
-} from '../sessions/session-store';
+import { upsertSessionMeta, findSessionMeta } from '../sessions/session-store';
 
 export interface RunTaskOptions {
   repoRoot: string;

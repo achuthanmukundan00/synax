@@ -24,11 +24,7 @@ import { discoverSkills, buildSkillMessages } from '../skills/SkillLoader';
 import { loadSkills } from '../agent/skills';
 import { loadSynaxConfig } from '../config/load-config';
 import { eventNow, type AgentEvent } from '../agent/events';
-import {
-  createSession as createStoreSession,
-  generateSessionId,
-  type SessionEvent,
-} from '../sessions/session-store';
+import { createSession as createStoreSession, generateSessionId, type SessionEvent } from '../sessions/session-store';
 import { Session } from './Session';
 import type { AgentConversation } from './types';
 import type { HolographicMemory } from '../memory/HolographicMemory';
@@ -81,18 +77,14 @@ export interface CreateSessionComponentsOptions {
  * discovers skills, and resolves context strategy. Every session from
  * chat or run-task gets the same components.
  */
-export function createSessionComponents(
-  options: CreateSessionComponentsOptions,
-): SessionComponents {
+export function createSessionComponents(options: CreateSessionComponentsOptions): SessionComponents {
   const sessionId = options.sessionId ?? generateSessionId();
   const eventStore = createEventStore();
   const tracer = new SpanTracer({ sessionId, eventStore });
   const tokenCounter = new TokenCounter();
   const costTracker = new CostTracker(tokenCounter, options.modelId);
   const memory = eventStore?.memory ?? null;
-  const logger = eventStore
-    ? createLogger({ sessionId, eventStore })
-    : createLogger();
+  const logger = eventStore ? createLogger({ sessionId, eventStore }) : createLogger();
 
   // ── Skills: auto-discovered + config-based ────────────────
   let skillMessages: string[] | undefined;
@@ -128,8 +120,7 @@ export function createSessionComponents(
   }
 
   // ── Context strategy ─────────────────────────────────────
-  const modelContextWindow =
-    options.modelContextWindow ?? options.contextWindow ?? 131072;
+  const modelContextWindow = options.modelContextWindow ?? options.contextWindow ?? 131072;
   const strategy = options.strategyOverride
     ? (getStrategy(options.strategyOverride) ?? resolveStrategy(modelContextWindow))
     : resolveStrategy(modelContextWindow);
@@ -256,9 +247,7 @@ export function createAgentSession(options: CreateAgentSessionOptions): AgentSes
     contextBudget: {
       contextBudgetTokens: options.config.contextBudgetTokens,
       contextWindowTokens:
-        components.strategyWindowOverride ??
-        options.config.contextWindowTokens ??
-        options.config.contextBudgetTokens,
+        components.strategyWindowOverride ?? options.config.contextWindowTokens ?? options.config.contextBudgetTokens,
       reservedOutputTokens: options.config.reservedOutputTokens ?? components.strategyReserveTokens,
       keepRecentTokens: options.config.keepRecentTokens,
       maxSingleReadResultTokens: options.config.maxSingleReadResultTokens,
