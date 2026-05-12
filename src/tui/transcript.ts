@@ -421,7 +421,7 @@ function objectValue(value: Record<string, unknown> | undefined, key: string): R
   return item && typeof item === 'object' && !Array.isArray(item) ? (item as Record<string, unknown>) : undefined;
 }
 
-function extractReadOutput(detail: string, width: number, maxDisplayLines = 15): string[] {
+export function extractReadOutput(detail: string, width: number, maxDisplayLines = 15): string[] {
   const parsed = parseFirstJson(detail);
   const output = objectValue(parsed, 'output');
   const lines = output?.['lines'] as Array<{ lineNumber: number; text: string }> | undefined;
@@ -999,7 +999,7 @@ function renderToolGroup(group: Array<{ call: ParsedToolCall; result: string }>,
 // ─── Markdown-to-terminal rendering ─────────────────────────
 
 /** Render common Markdown constructs as styled terminal text. */
-function renderMarkdownBlock(md: string, width: number): string[] {
+export function renderMarkdownBlock(md: string, width: number): string[] {
   const rawLines = md.split('\n');
   const lines: string[] = [];
   let inCodeBlock = false;
@@ -1085,7 +1085,7 @@ function renderInlineMd(text: string, _maxWidth: number): string {
 
 /** Render the final model output — uses markdown formatting when applicable,
  *  otherwise renders as plain wrapped text. */
-function renderReviewOutput(body: string, width: number): string[] {
+export function renderReviewOutput(body: string, width: number): string[] {
   let clean = stripLatexCommands(
     body
       .replace(/<think>[\s\S]*?<\/think>/gi, '')
