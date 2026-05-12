@@ -399,7 +399,7 @@ function renderDirectivePanel(
   const promptColor = modePromptColor(coreMode, nowMs);
   const label = metadataLabel ? ` ${truncateMiddle(metadataLabel, Math.max(4, inner - 6))} ` : '';
   const topFill = Math.max(0, inner - label.length);
-  const helpText = 'Enter submit · Esc interrupt · Ctrl+D exit · Ctrl+C clear · /help · !cmd';
+  const helpText = 'Enter submit · Esc interrupt · Shift+↵ · Ctrl+D exit · Ctrl+C clear · /help · !cmd';
   const bottomFill = Math.max(0, inner - helpText.length - 2);
 
   const placeholder = hasInput ? '' : dimI('Ask Synax to inspect, edit, test, or commit…');
