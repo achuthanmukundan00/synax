@@ -128,6 +128,9 @@ const AGENT_EVENT_TYPES: Set<string> = new Set([
  * const result = await session.startTurnWithRecovery('fix the build');
  * ```
  */
+/**
+ * @public
+ */
 export class Session {
   readonly conversation: AgentConversation;
   readonly registry: ToolRegistry;

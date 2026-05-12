@@ -30,5 +30,13 @@ export type {
   HandoffManifest as MemoryHandoffManifest,
 } from './memory/HolographicMemory';
 
+export { RecoveryManager } from './recovery/RecoveryManager';
+export type { RecoveryManagerOptions } from './recovery/RecoveryManager';
+
+export { ActionExecutor } from './actions/ActionExecutor';
+export type { ActionExecutorOptions, ExecuteOptions, ActionResult } from './actions/ActionExecutor';
+
+export { SkillLoader } from './skills/SkillLoader';
+
 export type { ToolRegistry, ToolDefinition, ToolResult, ToolSafetyPolicy } from './tools/types';
 export type { AgentEvent, TerminalState } from './agent/events';
