@@ -47,6 +47,7 @@ export function renderLayout(state: InteractiveViewState, cols: number, rows: nu
   const width = Math.max(40, cols);
   const renderWidth = terminalWriteWidth(width);
   const height = Math.max(14, rows);
+  const steeringBarHeight = state.steeringMessage ? 1 : 0;
   const panel = renderInputDock(
     state.objectiveInput,
     renderWidth,
@@ -55,7 +56,7 @@ export function renderLayout(state: InteractiveViewState, cols: number, rows: nu
     locationLabel(state.cwdLabel, state.gitBranch),
     maxInputDockBodyLines(height),
   );
-  const bodyHeight = Math.max(1, height - panel.length);
+  const bodyHeight = Math.max(1, height - panel.length - steeringBarHeight);
   const lines = Array.from({ length: bodyHeight }, () => '');
   const hasTranscript =
     state.run.timeline.length > 0 ||
@@ -90,7 +91,9 @@ export function renderLayout(state: InteractiveViewState, cols: number, rows: nu
       state.steeringMessage.length > maxMsgWidth
         ? state.steeringMessage.slice(0, maxMsgWidth - 3) + '...'
         : state.steeringMessage;
-    clipped.push(pad(`\u001b[36m${steeringLabel}${truncated}\u001b[0m`, width));
+    // Steel blue (synax) + italic + dim
+    const steelBlue = '\u001b[38;2;67;76;88;3m';
+    clipped.push(pad(`${steelBlue}${steeringLabel}${truncated}\u001b[0m`, width));
   }
   clipped.push(...panel);
   return clipped.map((line) => pad(clip(line, width), width));

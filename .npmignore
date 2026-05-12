@@ -15,6 +15,7 @@ wrangler.jsonc
 .synax.toml
 .synax/
 AGENTS.md
+experiments
 
 dist/__tests__
 dist/**/*.test.js

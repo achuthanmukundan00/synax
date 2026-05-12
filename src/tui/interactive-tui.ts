@@ -782,6 +782,25 @@ export async function runInteractiveTui(
     const assistantMessages = events.filter((e) => e.type === 'assistant_message').length;
     const toolEvents = events.filter((e) => e.type === 'tool_call' || e.type === 'tool_result').length;
 
+    // Restore context window values from the last state snapshot
+    const lastSnapshot = events.filter((e) => e.type === 'state_snapshot').pop();
+    const snapData = (lastSnapshot?.snapshot ?? {}) as Record<string, unknown>;
+    if (typeof snapData.contextWindowTokens === 'number') {
+      state = applyEventToRunState(
+        state,
+        {
+          type: 'context_budget_updated',
+          timestamp: new Date().toISOString(),
+          estimatedInputTokens: (typeof snapData.contextUsedTokens === 'number' ? snapData.contextUsedTokens : 0),
+          inputLimit: (snapData.contextWindowTokens as number) - 8192,
+          contextWindowTokens: snapData.contextWindowTokens as number,
+          reservedOutputTokens: 8192,
+          step: 0,
+        },
+        Date.now(),
+      );
+    }
+
     const contentLines = [
       `Resumed session: ${title}`,
       `Branch: ${meta.branch ?? 'unknown'}  ·  Model: ${meta.activeModel ?? 'unknown'}`,
