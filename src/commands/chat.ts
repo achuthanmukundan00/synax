@@ -15,6 +15,7 @@ import {
 } from '../config/project';
 import { loadSynaxConfig } from '../config/load-config';
 import { loadSkills, type SkillDiagnostic } from '../agent/skills';
+import { discoverSkills, buildSkillMessages } from '../skills/SkillLoader';
 import { resetTokenLedger } from '../agent/context-budget';
 import pkg from '../../package.json';
 import { createLLMClient, describeLLMProvider } from '../llm/provider-factory';
@@ -768,175 +769,206 @@ export function chatCommand(program: Command): void {
     .option('--plain', 'Use plain line-mode chat instead of full-screen TUI')
     .option('--mouse', 'Enable SGR mouse tracking for app-managed wheel scrolling')
     .option('--no-alt-screen', 'Disable alternate screen buffer for better native scrollback/copy')
-    .action(async (options: { message?: string; plain?: boolean; mouse?: boolean; altScreen?: boolean }) => {
-      const repoRoot = process.cwd();
-      const loaded = loadProjectConfig(repoRoot);
-      if (loaded.errors.length > 0) {
-        console.error(`[synax] Config error:\n${loaded.errors.map((e) => `${e.path}: ${e.message}`).join('\n')}`);
-        process.exitCode = 1;
-        return;
-      }
-
-      const providerDescription = describeLLMProvider(toProviderFactoryInput(loaded.config));
-      const metadata = providerDescription.metadata;
-      const provider = providerDescription.normalizedConfig;
-      const blockedMessage = providerRuntimeBlockedMessage(metadata, provider);
-
-      // Extract thinking level and TUI config from the effective multi-provider config.
-      let thinkingLevel: import('../config/schema').ThinkingLevel = 'off';
-      let skillMessages: string[] | undefined;
-      let skillDiagnostics: SkillDiagnostic[] | undefined;
-      let enableMouse = false;
-      let alternateScreen = true;
-      try {
-        const effectiveConfig = loadSynaxConfig();
-        if (effectiveConfig.active.thinking && effectiveConfig.active.thinking !== 'off') {
-          thinkingLevel = effectiveConfig.active.thinking;
-        }
-        enableMouse = effectiveConfig.tui?.mouse ?? false;
-        alternateScreen = effectiveConfig.tui?.alternateScreen ?? true;
-        if (effectiveConfig.skills.enabled.length > 0) {
-          const result = loadSkills(effectiveConfig.skills, repoRoot);
-          skillMessages = result.systemMessages;
-          skillDiagnostics = result.diagnostics;
-        }
-      } catch {
-        // best-effort
-      }
-      // CLI flags override config.
-      if (options.mouse) enableMouse = true;
-      if (options.altScreen === false) alternateScreen = false;
-      const useTui = shouldUseInteractiveTui({
-        plain: Boolean(options.plain),
-        message: options.message,
-        stdinIsTTY: input.isTTY,
-        stdoutIsTTY: output.isTTY,
-      });
-
-      // Shared state so the TUI can observe model output in real time.
-      let lastModelOutput = '';
-
-      const modelLabel = metadata.modelId || undefined;
-      const cwdLabel = compactHome(repoRoot);
-      const gitBranch = await currentGitBranch(repoRoot);
-
-      const session = createChatSession({
-        repoRoot,
-        config: loaded.config,
-        thinkingLevel,
-        skillMessages,
-        skillDiagnostics,
-        onActivity: useTui
-          ? (activity) => {
-              if (activity.kind === 'model_response' && activity.modelOutput) {
-                lastModelOutput = activity.modelOutput;
-              }
-            }
-          : undefined,
-        tui: useTui,
-      });
-      if (options.message) {
-        if (blockedMessage) {
-          console.error(`[synax] Config error: ${blockedMessage}`);
+    .option('--no-skills', 'Disable auto-discovered skill injection (config-based persona skills are still loaded)')
+    .action(
+      async (options: {
+        message?: string;
+        plain?: boolean;
+        mouse?: boolean;
+        altScreen?: boolean;
+        skills?: boolean;
+      }) => {
+        const repoRoot = process.cwd();
+        const loaded = loadProjectConfig(repoRoot);
+        if (loaded.errors.length > 0) {
+          console.error(`[synax] Config error:\n${loaded.errors.map((e) => `${e.path}: ${e.message}`).join('\n')}`);
           process.exitCode = 1;
           return;
         }
-        const report = await session.handleUserMessage(options.message);
-        console.log(options.message);
-        if (report.finalAnswer) console.log(report.finalAnswer);
-        console.log(`[synax] terminal state: ${report.terminalState}`);
-        if (report.terminalState !== 'completed') process.exitCode = 1;
-        return;
-      }
 
-      if (useTui) {
-        await runInteractiveTui(session, {
-          enableMouse,
-          alternateScreen,
-          blockedMessage,
-          lastModelOutput: () => lastModelOutput,
-          resetLastModelOutput: () => {
-            lastModelOutput = '';
-          },
-          modelLabel,
-          thinkingEnabled: thinkingLevel !== 'off',
-          endpointLabel: metadata.baseUrl !== '(not set)' ? metadata.baseUrl : undefined,
-          providerName: metadata.displayName,
-          cwdLabel,
-          gitBranch,
-          contextWindowTokens: loaded.config.contextWindowTokens ?? loaded.config.contextBudgetTokens,
-          coreVisualProfile: loaded.config.coreVisualProfile,
-          coreLoaded: true,
-          activeSkills: skillDiagnostics?.filter((d) => d.loaded).map((d) => d.id),
-          inputPricePer1MTokens: metadata.inputPricePer1MTokens,
-          outputPricePer1MTokens: metadata.outputPricePer1MTokens,
-          onSettingsConfigChanged: (settingsConfig) => {
-            loaded.config = applyEffectiveSynaxConfigToProjectConfig(loaded.config, settingsConfig);
-            const nextThinkingLevel = settingsConfig.active.thinking ?? thinkingLevel;
-            // Keep the session's config reference and thinking level in sync.
-            session.refreshConfig?.(loaded.config, nextThinkingLevel);
-            const nextDescription = describeLLMProvider(toProviderFactoryInput(loaded.config));
-            const nextBlockedMessage = providerRuntimeBlockedMessage(
-              nextDescription.metadata,
-              nextDescription.normalizedConfig,
-            );
-            const activeProvider = settingsConfig.providers[settingsConfig.active.provider];
-            const activeModel = activeProvider?.models.find((model) => model.id === settingsConfig.active.model);
-            return {
-              modelLabel: nextDescription.normalizedConfig.model.trim() || undefined,
-              endpointLabel: nextDescription.normalizedConfig.baseUrl || undefined,
-              providerName:
-                activeProvider?.name ??
-                nextDescription.metadata.displayName ??
-                providerNameFromPreset(loaded.config.provider?.preset),
-              contextWindowTokens:
-                activeModel?.contextWindow ?? loaded.config.contextWindowTokens ?? loaded.config.contextBudgetTokens,
-              coreVisualProfile: loaded.config.coreVisualProfile,
-              thinkingEnabled: nextThinkingLevel !== 'off',
-              coreLoaded: true,
-              providerWarning: nextBlockedMessage,
-              inputPricePer1MTokens: nextDescription.metadata.inputPricePer1MTokens,
-              outputPricePer1MTokens: nextDescription.metadata.outputPricePer1MTokens,
-            };
-          },
-        });
-        return;
-      }
+        const providerDescription = describeLLMProvider(toProviderFactoryInput(loaded.config));
+        const metadata = providerDescription.metadata;
+        const provider = providerDescription.normalizedConfig;
+        const blockedMessage = providerRuntimeBlockedMessage(metadata, provider);
 
-      console.log('[synax] Chat initialized');
-      printBanner(repoRoot, provider.model);
-      try {
-        if (input.isTTY) {
-          await runInlinePasteChat(session);
-        } else {
-          const rl = createInterface({ input, output, terminal: false });
-          let exiting = false;
-          rl.on('SIGINT', () => {
-            exiting = true;
-            console.log('\n[synax] exiting');
-            rl.close();
-          });
-          for await (const line of rl) {
-            const trimmed = line.trim();
-            if (!trimmed) continue;
-            if (trimmed.startsWith('/')) {
-              const report = await session.handleSlashCommand(trimmed);
-              if (report.output) console.log(report.output);
-              if (report.newSession) {
-                session.resetConversation?.();
-              }
-              if (report.exit) break;
-              continue;
-            }
-            const report = await session.handleUserMessage(trimmed);
-            printTurnReport(report);
+        // Extract thinking level and TUI config from the effective multi-provider config.
+        let thinkingLevel: import('../config/schema').ThinkingLevel = 'off';
+        let skillMessages: string[] | undefined;
+        let skillDiagnostics: SkillDiagnostic[] | undefined;
+        let enableMouse = false;
+        let alternateScreen = true;
+        try {
+          const effectiveConfig = loadSynaxConfig();
+          if (effectiveConfig.active.thinking && effectiveConfig.active.thinking !== 'off') {
+            thinkingLevel = effectiveConfig.active.thinking;
           }
-          if (!exiting) rl.close();
+          enableMouse = effectiveConfig.tui?.mouse ?? false;
+          alternateScreen = effectiveConfig.tui?.alternateScreen ?? true;
+
+          // Config-based skills (personas) — always loaded regardless of --no-skills.
+          const configMessages: string[] = [];
+          let configDiagnostics: SkillDiagnostic[] = [];
+          if (effectiveConfig.skills.enabled.length > 0) {
+            const result = loadSkills(effectiveConfig.skills, repoRoot);
+            configMessages.push(...result.systemMessages);
+            configDiagnostics = result.diagnostics;
+          }
+
+          // Auto-discovered skills — skippable via --no-skills.
+          const autoMessages: string[] = [];
+          if (options.skills !== false) {
+            try {
+              const discovery = discoverSkills(repoRoot);
+              if (discovery.loaded.length > 0) {
+                autoMessages.push(...buildSkillMessages(discovery.loaded));
+              }
+            } catch {
+              // Auto-discovery is best-effort
+            }
+          }
+
+          // Merge: config-based (persona) first, then auto-discovered domain skills.
+          skillMessages = [...configMessages, ...autoMessages];
+          if (skillMessages.length === 0) skillMessages = undefined;
+          skillDiagnostics = configDiagnostics;
+        } catch {
+          // best-effort
         }
-      } finally {
-        // no-op
-      }
-    });
+        // CLI flags override config.
+        if (options.mouse) enableMouse = true;
+        if (options.altScreen === false) alternateScreen = false;
+        const useTui = shouldUseInteractiveTui({
+          plain: Boolean(options.plain),
+          message: options.message,
+          stdinIsTTY: input.isTTY,
+          stdoutIsTTY: output.isTTY,
+        });
+
+        // Shared state so the TUI can observe model output in real time.
+        let lastModelOutput = '';
+
+        const modelLabel = metadata.modelId || undefined;
+        const cwdLabel = compactHome(repoRoot);
+        const gitBranch = await currentGitBranch(repoRoot);
+
+        const session = createChatSession({
+          repoRoot,
+          config: loaded.config,
+          thinkingLevel,
+          skillMessages,
+          skillDiagnostics,
+          onActivity: useTui
+            ? (activity) => {
+                if (activity.kind === 'model_response' && activity.modelOutput) {
+                  lastModelOutput = activity.modelOutput;
+                }
+              }
+            : undefined,
+          tui: useTui,
+        });
+        if (options.message) {
+          if (blockedMessage) {
+            console.error(`[synax] Config error: ${blockedMessage}`);
+            process.exitCode = 1;
+            return;
+          }
+          const report = await session.handleUserMessage(options.message);
+          console.log(options.message);
+          if (report.finalAnswer) console.log(report.finalAnswer);
+          console.log(`[synax] terminal state: ${report.terminalState}`);
+          if (report.terminalState !== 'completed') process.exitCode = 1;
+          return;
+        }
+
+        if (useTui) {
+          await runInteractiveTui(session, {
+            enableMouse,
+            alternateScreen,
+            blockedMessage,
+            lastModelOutput: () => lastModelOutput,
+            resetLastModelOutput: () => {
+              lastModelOutput = '';
+            },
+            modelLabel,
+            thinkingEnabled: thinkingLevel !== 'off',
+            endpointLabel: metadata.baseUrl !== '(not set)' ? metadata.baseUrl : undefined,
+            providerName: metadata.displayName,
+            cwdLabel,
+            gitBranch,
+            contextWindowTokens: loaded.config.contextWindowTokens ?? loaded.config.contextBudgetTokens,
+            coreVisualProfile: loaded.config.coreVisualProfile,
+            coreLoaded: true,
+            activeSkills: skillDiagnostics?.filter((d) => d.loaded).map((d) => d.id),
+            inputPricePer1MTokens: metadata.inputPricePer1MTokens,
+            outputPricePer1MTokens: metadata.outputPricePer1MTokens,
+            onSettingsConfigChanged: (settingsConfig) => {
+              loaded.config = applyEffectiveSynaxConfigToProjectConfig(loaded.config, settingsConfig);
+              const nextThinkingLevel = settingsConfig.active.thinking ?? thinkingLevel;
+              // Keep the session's config reference and thinking level in sync.
+              session.refreshConfig?.(loaded.config, nextThinkingLevel);
+              const nextDescription = describeLLMProvider(toProviderFactoryInput(loaded.config));
+              const nextBlockedMessage = providerRuntimeBlockedMessage(
+                nextDescription.metadata,
+                nextDescription.normalizedConfig,
+              );
+              const activeProvider = settingsConfig.providers[settingsConfig.active.provider];
+              const activeModel = activeProvider?.models.find((model) => model.id === settingsConfig.active.model);
+              return {
+                modelLabel: nextDescription.normalizedConfig.model.trim() || undefined,
+                endpointLabel: nextDescription.normalizedConfig.baseUrl || undefined,
+                providerName:
+                  activeProvider?.name ??
+                  nextDescription.metadata.displayName ??
+                  providerNameFromPreset(loaded.config.provider?.preset),
+                contextWindowTokens:
+                  activeModel?.contextWindow ?? loaded.config.contextWindowTokens ?? loaded.config.contextBudgetTokens,
+                coreVisualProfile: loaded.config.coreVisualProfile,
+                thinkingEnabled: nextThinkingLevel !== 'off',
+                coreLoaded: true,
+                providerWarning: nextBlockedMessage,
+                inputPricePer1MTokens: nextDescription.metadata.inputPricePer1MTokens,
+                outputPricePer1MTokens: nextDescription.metadata.outputPricePer1MTokens,
+              };
+            },
+          });
+          return;
+        }
+
+        console.log('[synax] Chat initialized');
+        printBanner(repoRoot, provider.model);
+        try {
+          if (input.isTTY) {
+            await runInlinePasteChat(session);
+          } else {
+            const rl = createInterface({ input, output, terminal: false });
+            let exiting = false;
+            rl.on('SIGINT', () => {
+              exiting = true;
+              console.log('\n[synax] exiting');
+              rl.close();
+            });
+            for await (const line of rl) {
+              const trimmed = line.trim();
+              if (!trimmed) continue;
+              if (trimmed.startsWith('/')) {
+                const report = await session.handleSlashCommand(trimmed);
+                if (report.output) console.log(report.output);
+                if (report.newSession) {
+                  session.resetConversation?.();
+                }
+                if (report.exit) break;
+                continue;
+              }
+              const report = await session.handleUserMessage(trimmed);
+              printTurnReport(report);
+            }
+            if (!exiting) rl.close();
+          }
+        } finally {
+          // no-op
+        }
+      },
+    );
   program.addCommand(chat);
 }
 

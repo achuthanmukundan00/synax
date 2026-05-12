@@ -186,7 +186,16 @@ export async function runAgentTask(options: RunTaskOptions): Promise<RunTaskRepo
     inputPricePer1MTokens: metadata.inputPricePer1MTokens,
     outputPricePer1MTokens: metadata.outputPricePer1MTokens,
   });
-  // Load skills: auto-discovered + config-based
+  // Load config-based skills (personas) — always loaded regardless of --no-skills.
+  // Persona skills are product-specific (e.g. AutoCareer job buddy persona.md, wytOS
+  // creative partner persona.md) and are NOT ambient auto-discovered skills.
+  const configMessages: string[] = [];
+  if (effectiveConfig?.skills.enabled.length) {
+    const result = loadSkills(effectiveConfig.skills, options.repoRoot);
+    configMessages.push(...result.systemMessages);
+  }
+
+  // Load auto-discovered skills — skippable via --no-skills (for pure persona runs).
   let skillMessages: string[] | undefined;
   if (!options.noSkills) {
     const autoMessages: string[] = [];
@@ -208,15 +217,14 @@ export async function runAgentTask(options: RunTaskOptions): Promise<RunTaskRepo
       // Auto-discovery is best-effort
     }
 
-    const configMessages: string[] = [];
-    if (effectiveConfig?.skills.enabled.length) {
-      const result = loadSkills(effectiveConfig.skills, options.repoRoot);
-      configMessages.push(...result.systemMessages);
-    }
-
-    // Merge: auto-discovered first, then config-based (config-based override by convention)
-    skillMessages = [...autoMessages, ...configMessages];
+    // Merge: config-based (persona) first, then auto-discovered domain skills.
+    // Persona must precede domain skills so the model internalizes the core
+    // identity before applying project-specific conventions.
+    skillMessages = [...configMessages, ...autoMessages];
     if (skillMessages.length === 0) skillMessages = undefined;
+  } else {
+    // --no-skills: only config-based persona skills (no ambient auto-discovery)
+    skillMessages = configMessages.length > 0 ? configMessages : undefined;
   }
 
   // Resolve context strategy from model's context window (or explicit override)
