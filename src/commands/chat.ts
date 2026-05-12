@@ -24,6 +24,7 @@ import {
   type AgentTerminalState,
   type AgentBudgetSnapshot,
   type AgentActivity,
+  type AgentTurnResult,
 } from '../session/Session';
 import { runVerification, type VerificationResult } from '../agent/verification';
 import { buildProjectProfile, formatTextProfile } from '../config/profile';
@@ -48,6 +49,18 @@ export interface ChatSession {
   refreshConfig?: (config: ProjectConfig, thinkingLevel?: import('../config/schema').ThinkingLevel) => void;
   /** Reset the conversation to a fresh state (for /new). Preserves skill messages. */
   resetConversation?: () => void;
+  /** Abort the currently running turn. Safe to call when no turn is active. */
+  abortCurrentTurn?: () => void;
+  /**
+   * Set a steering message to be injected after the next tool call result.
+   * The message is consumed (cleared) once injected.
+   */
+  setSteeringMessage?: (message: string) => void;
+  /**
+   * Get and consume the currently pending steering message.
+   * Returns undefined if none is pending.
+   */
+  consumeSteeringMessage?: () => string | undefined;
 }
 
 export interface ChatTurnReport {
@@ -131,8 +144,24 @@ export function createChatSession(options: {
 
   const getConfig = (): ProjectConfig => configRef.current;
 
+  /** Abort controller for the currently running turn. */
+  let currentAbortController: AbortController | null = null;
+  /** Steering message pending injection after next tool call result. */
+  let pendingSteeringMessage = '';
+
   return {
     conversation,
+    abortCurrentTurn: () => {
+      currentAbortController?.abort();
+    },
+    setSteeringMessage: (message: string) => {
+      pendingSteeringMessage = message;
+    },
+    consumeSteeringMessage: () => {
+      const msg = pendingSteeringMessage;
+      pendingSteeringMessage = '';
+      return msg || undefined;
+    },
     setEventSink: (sink) => {
       eventSink = sink;
     },
@@ -211,8 +240,38 @@ export function createChatSession(options: {
             console.log(formatBudgetSnapshot(snapshot));
           }
         },
+        abortSignal: (() => {
+          // Create a fresh AbortController per turn.
+          currentAbortController = new AbortController();
+          return currentAbortController.signal;
+        })(),
+        onSteeringCheck: () => {
+          const msg = pendingSteeringMessage;
+          if (msg) {
+            pendingSteeringMessage = '';
+            return msg;
+          }
+          return undefined;
+        },
       });
-      const result = await turnSession.startTurn(message);
+      let result: AgentTurnResult;
+      try {
+        result = await turnSession.startTurn(message);
+      } catch (error) {
+        if (currentAbortController?.signal.aborted) {
+          return {
+            terminalState: 'blocked',
+            finalAnswer: '',
+            changedFiles: [],
+            steps: 0,
+            toolCalls: 0,
+            error: 'turn aborted by user',
+          };
+        }
+        throw error;
+      } finally {
+        currentAbortController = null;
+      }
       const afterHead = await gitHead(options.repoRoot);
       const changedByCommit =
         beforeHead && afterHead && beforeHead !== afterHead

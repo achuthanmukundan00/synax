@@ -605,7 +605,7 @@ describe('interactive layout visual agreements', () => {
       .map(stripAnsi)
       .join('\n');
 
-    expect(plain).toContain('Synax v0.0.22-alpha  Ready  0:25');
+    expect(plain).toContain('Synax v0.1.0-alpha.0  Ready  0:25');
   });
 
   it('renders terminal-state status bars in the header without redundant final summary blocks', () => {
@@ -1156,7 +1156,7 @@ describe('interactive layout visual agreements', () => {
     expect(dock[0]).toMatch(/^┌─+ ~\/workspace\/git\/\.worktrees\/synax-tui {2}dev\/tui ┐\s*$/);
     expect(dock[1]).toMatch(/^│ Implement fixed-footprint reactor core rendering\s+│\s*$/);
     expect(dock[2]).toMatch(/^│\s+│\s*$/);
-    expect(dock[3]).toMatch(/Enter submit.*Ctrl\+D exit.*Shift.*newline.*Ctrl\+C clear.*\/help.*!cmd/);
+    expect(dock[3]).toMatch(/Enter submit.*Esc interrupt.*Ctrl\+D exit.*Ctrl\+C clear.*\/help.*!cmd/);
   });
 
   it('keeps the input dock inside the terminal write-safe column', () => {

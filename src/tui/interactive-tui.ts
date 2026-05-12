@@ -143,6 +143,11 @@ export async function runInteractiveTui(
   let ctrlCClearedInput = false;
   // Active provider warning — only surfaced when user tries to submit.
   let providerWarning = options?.blockedMessage;
+  // ── Steering state ───────────────────────────────────────────────
+  /** Message queued to inject after the next tool-call result. */
+  let steeringMessage = '';
+  /** Whether we're in steering-input mode (user typed while bot is working). */
+  let steeringActive = false;
   const diff = new DiffRenderer();
 
   // Adaptive render loop — 60 FPS when active, 0 when idle.
@@ -188,6 +193,11 @@ export async function runInteractiveTui(
   // This ensures the TUI reflects REAL runtime state, not fake animation.
   session.setEventSink?.((event) => {
     if (exiting) return;
+    // Clear steering state when the session auto-injects the steering message.
+    if (event.type === 'command_output' && event.command === 'steering') {
+      steeringMessage = '';
+      steeringActive = false;
+    }
     state = applyEventToRunState(state, event, Date.now());
     startRenderLoop();
     paint(true);
@@ -218,6 +228,7 @@ export async function runInteractiveTui(
     gitBranch: options?.gitBranch,
     coreVisualProfile: runtimeLabels.coreVisualProfile,
     historyScrollOffset,
+    steeringMessage: steeringActive ? steeringMessage : undefined,
   });
 
   const clampHistoryScroll = (): void => {
@@ -262,7 +273,13 @@ export async function runInteractiveTui(
     terminal.synchronizedWrite(out || '');
 
     // Position and show cursor beam in the input box.
-    const cursor = inputCursorPosition(viewState().objectiveInput, terminal.columns, terminal.rows);
+    const cursor = inputCursorPosition(
+      viewState().objectiveInput,
+      terminal.columns,
+      terminal.rows,
+      undefined,
+      steeringActive,
+    );
     // Terminal cursor positions are 1-indexed. Use beam cursor style to avoid
     // overwriting the first character of placeholder text.
     terminal.write(`\u001b[${cursor.row + 1};${cursor.col + 1}H\u001b[5 q\u001b[?25h`);
@@ -270,6 +287,10 @@ export async function runInteractiveTui(
 
   const finish = (): void => {
     exiting = true;
+    // Abort any running turn before tearing down.
+    session.abortCurrentTurn?.();
+    steeringMessage = '';
+    steeringActive = false;
     // Disconnect the event sink immediately so no further state updates
     // trigger paint() after terminal cleanup.
     session.setEventSink?.(null);
@@ -443,6 +464,11 @@ export async function runInteractiveTui(
       paint(true);
       return;
     }
+
+    // Clear any lingering steering state when starting a fresh turn.
+    steeringMessage = '';
+    steeringActive = false;
+    session.setSteeringMessage?.('');
 
     state = applyEventToRunState(
       state,
@@ -798,6 +824,7 @@ export async function runInteractiveTui(
       }
 
       // Ctrl+C: first press clears input, second press within 800ms exits.
+      // During active generation: abort turn and clear steering.
       if (event.type === 'ctrl_c') {
         if (settingsState?.active) {
           closeSettingsModal();
@@ -807,6 +834,13 @@ export async function runInteractiveTui(
         if (resumeState?.active) {
           closeResumePicker();
           paint(true);
+          continue;
+        }
+        if (busy) {
+          session.abortCurrentTurn?.();
+          session.setSteeringMessage?.('');
+          steeringMessage = '';
+          steeringActive = false;
           continue;
         }
         const now = Date.now();
@@ -836,9 +870,73 @@ export async function runInteractiveTui(
         continue;
       }
 
-      // Normal input routing
-      // TODO: Esc does not currently interrupt an active run. When implemented,
-      // add `Esc interrupt` to the footer help text in layout.ts.
+      // ── Steering input routing (model actively generating) ──────
+      if (busy) {
+        if (event.type === 'escape') {
+          // Escape interrupts bot and stops the session.
+          session.abortCurrentTurn?.();
+          session.setSteeringMessage?.('');
+          steeringMessage = '';
+          steeringActive = false;
+          finish();
+          break;
+        }
+        if (event.type === 'submit') {
+          if (steeringMessage.trim()) {
+            // Enter with queued steering: interrupt bot, submit steering.
+            session.abortCurrentTurn?.();
+            const msg = session.consumeSteeringMessage?.() ?? steeringMessage.trim();
+            steeringMessage = '';
+            steeringActive = false;
+            // busy will be cleared when the aborted turn resolves.
+            // Schedule the steering message submission after a brief tick.
+            setTimeout(() => {
+              void (async () => {
+                // Wait for the aborted turn to settle.
+                while (busy) {
+                  await new Promise((r) => setTimeout(r, 25));
+                }
+                // Submit the steering message.
+                inputDraft = createInlinePasteInputSession();
+                inputDraft.handleText(msg);
+                void submit();
+              })();
+            }, 0);
+            continue;
+          }
+          // Enter with empty steering during busy: ignore.
+          continue;
+        }
+        if (event.type === 'backspace') {
+          if (steeringMessage.length > 0) {
+            steeringMessage = steeringMessage.slice(0, -1);
+            session.setSteeringMessage?.(steeringMessage);
+          }
+          continue;
+        }
+        if (event.type === 'text' && event.value) {
+          if (steeringMessage.length < MAX_INPUT_CHARS) {
+            steeringMessage += event.value;
+            steeringActive = true;
+            session.setSteeringMessage?.(steeringMessage);
+          }
+          continue;
+        }
+        // Arrow keys during busy: scroll history normally.
+        if (event.type === 'arrow_up' || event.type === 'scroll_history_up') {
+          historyScrollOffset += 3;
+          clampHistoryScroll();
+          continue;
+        }
+        if (event.type === 'arrow_down' || event.type === 'scroll_history_down') {
+          historyScrollOffset = Math.max(0, historyScrollOffset - 3);
+          clampHistoryScroll();
+          continue;
+        }
+        continue;
+      }
+
+      // ── Normal input routing (model idle) ──────────────────────
       if (event.type === 'arrow_up' || event.type === 'scroll_history_up') {
         if (autocomplete.visible) {
           autocomplete.selection = Math.max(0, autocomplete.selection - 1);

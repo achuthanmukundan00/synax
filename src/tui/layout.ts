@@ -35,6 +35,8 @@ export interface InteractiveViewState {
   coreVisualProfile?: string;
   /** Number of wrapped history lines hidden below the viewport. */
   historyScrollOffset?: number;
+  /** Steering message queued while the model is generating (displayed above prompt box). */
+  steeringMessage?: string;
 }
 
 export function renderLayout(state: InteractiveViewState, cols: number, rows: number): string[] {
@@ -76,6 +78,16 @@ export function renderLayout(state: InteractiveViewState, cols: number, rows: nu
   }
 
   const clipped = lines.slice(0, bodyHeight).map((line) => pad(clip(line, renderWidth), width));
+  // ── Steering message bar (shown above prompt box while bot is generating) ──
+  if (state.steeringMessage) {
+    const steeringLabel = '  steering> ';
+    const maxMsgWidth = width - steeringLabel.length - 4;
+    const truncated =
+      state.steeringMessage.length > maxMsgWidth
+        ? state.steeringMessage.slice(0, maxMsgWidth - 1) + '…'
+        : state.steeringMessage;
+    clipped.push(pad(`\u001b[36m${steeringLabel}${truncated}\u001b[0m`, width));
+  }
   clipped.push(...panel);
   return clipped.map((line) => pad(clip(line, width), width));
 }
@@ -85,7 +97,7 @@ export function maxHistoryScrollOffset(state: InteractiveViewState, _cols: numbe
   const renderWidth = terminalWriteWidth(width);
   const height = Math.max(14, rows);
   const panelHeight = inputDockHeight(state.objectiveInput, renderWidth, maxInputDockBodyLines(height));
-  const bodyHeight = Math.max(1, height - panelHeight);
+  const bodyHeight = Math.max(1, height - panelHeight - (state.steeringMessage ? 1 : 0));
   const visibleRows = Math.max(1, bodyHeight - 3);
   const sideWidth = operationalSideWidth(renderWidth, bodyHeight);
   const transcriptWidth = sideWidth > 0 ? renderWidth - sideWidth - 5 : renderWidth - 4;
@@ -297,6 +309,7 @@ export function inputCursorPosition(
   cols: number,
   rows: number,
   maxBodyLines?: number,
+  hasSteering?: boolean,
 ): InputCursorPosition {
   const width = Math.max(40, cols);
   const renderWidth = terminalWriteWidth(width);
@@ -312,7 +325,7 @@ export function inputCursorPosition(
     : 1;
   const visibleInputLineCount = hasInput ? Math.min(renderedBodyLineCount, wrapped.length) : 1;
   const lastBodyLine = wrapped[wrapped.length - 1] ?? '';
-  const dockStartRow = bodyHeight;
+  const dockStartRow = bodyHeight + (hasSteering ? 1 : 0);
   // dock layout: ['', '', topBorder, bodyLine0, bodyLine1, ..., bottomBorder]
   // first input body line is at dockStartRow + 1 (empty) + 1 (empty) + 1 (topBorder) = dockStartRow + 3
   // padded body rows may follow short non-empty input; keep the cursor on the actual text line.
@@ -345,7 +358,7 @@ function renderDirectivePanel(
   const promptColor = modePromptColor(coreMode, nowMs);
   const label = metadataLabel ? ` ${truncateMiddle(metadataLabel, Math.max(4, inner - 6))} ` : '';
   const topFill = Math.max(0, inner - label.length);
-  const helpText = 'Enter submit · Ctrl+D exit · Shift+↵ newline · Ctrl+C clear · /help · !cmd';
+  const helpText = 'Enter submit · Esc interrupt · Ctrl+D exit · Ctrl+C clear · /help · !cmd';
   const bottomFill = Math.max(0, inner - helpText.length - 2);
 
   const placeholder = hasInput ? '' : dimI('Ask Synax to inspect, edit, test, or commit…');
