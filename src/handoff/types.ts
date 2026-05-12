@@ -41,6 +41,13 @@ export interface HandoffManifest {
   depth: number;
   /** ISO 8601 timestamp of handoff creation. */
   createdAt: string;
+
+  /** Which sub-task this child is executing (orchestration). */
+  subtaskId?: string;
+  /** Which plan this child belongs to (orchestration). */
+  orchestrationPlanId?: string;
+  /** Summary of parent progress and sibling results so far. */
+  orchestrationContext?: string;
 }
 
 // ─── Handoff result ──────────────────────────────────────────────────────────
