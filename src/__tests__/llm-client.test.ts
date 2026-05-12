@@ -800,9 +800,7 @@ describe('LLM client — image content blocks', () => {
         ],
       });
 
-      expect(stderrSpy).toHaveBeenCalledWith(
-        expect.stringContaining('does not match known vision-capable patterns'),
-      );
+      expect(stderrSpy).toHaveBeenCalledWith(expect.stringContaining('does not match known vision-capable patterns'));
     } finally {
       stderrSpy.mockRestore();
     }
@@ -818,8 +816,8 @@ describe('LLM client — image content blocks', () => {
         messages: [{ role: 'user', content: 'plain text' }],
       });
 
-      const visionWarnings = stderrSpy.mock.calls.filter((call) =>
-        typeof call[0] === 'string' && call[0].includes('vision'),
+      const visionWarnings = stderrSpy.mock.calls.filter(
+        (call) => typeof call[0] === 'string' && call[0].includes('vision'),
       );
       expect(visionWarnings).toHaveLength(0);
     } finally {

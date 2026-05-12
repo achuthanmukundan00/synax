@@ -1224,7 +1224,9 @@ describe('shared bounded agent runner', () => {
     });
     expect(finalRequest.messages.at(-1)).toMatchObject({ role: 'tool' });
     expect(
-      finalRequest.messages.some((message) => typeof message.content === 'string' && message.content.includes('Final step: answer now')),
+      finalRequest.messages.some(
+        (message) => typeof message.content === 'string' && message.content.includes('Final step: answer now'),
+      ),
     ).toBe(false);
   });
 
