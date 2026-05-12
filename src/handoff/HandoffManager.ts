@@ -31,6 +31,9 @@ const MAX_HANDOFF_DEPTH = 3;
 
 // ─── HandoffManager ──────────────────────────────────────────────────────────
 
+/**
+ * @public
+ */
 export class HandoffManager {
   private maxDepth: number;
   private currentDepth: number;

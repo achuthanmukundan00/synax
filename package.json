@@ -9,6 +9,11 @@
       "require": "./dist/index.js",
       "default": "./dist/index.js"
     },
+    "./events": {
+      "types": "./dist/events/index.d.ts",
+      "require": "./dist/events/index.js",
+      "default": "./dist/events/index.js"
+    },
     "./skills": {
       "types": "./dist/skills/index.d.ts",
       "require": "./dist/skills/index.js",

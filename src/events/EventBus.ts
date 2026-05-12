@@ -33,6 +33,9 @@ export type ControlHookHandler<H extends PreToolUseEvent | PostToolUseFailureEve
 
 // ─── EventBus ────────────────────────────────────────────────────────────────
 
+/**
+ * @public
+ */
 export class EventBus {
   private lifecycleHandlers = new Map<string, Set<LifecycleHandler<AgentEvent | LifecycleEvent>>>();
   private controlHandlers = new Map<string, Set<ControlHookHandler<PreToolUseEvent | PostToolUseFailureEvent>>>();

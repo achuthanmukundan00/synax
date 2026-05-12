@@ -54,6 +54,9 @@ export function createDefaultHandlerMap(): HandlerMap {
  * turn-loop integration. Handles argument coercion, bash repetition detection,
  * and fallback to the ToolRegistry for custom tools.
  */
+/**
+ * @public
+ */
 export class ActionExecutor {
   private handlers: HandlerMap;
   private registry: ToolRegistry;

@@ -21,6 +21,9 @@ const MAX_INFINITE_LOOP_ATTEMPTS = 1;
 
 // ─── RecoveryManager ─────────────────────────────────────
 
+/**
+ * @public
+ */
 export class RecoveryManager {
   private recipes: Map<FailureScenario, RecoveryAction>;
   private totalRecoveryAttempts = 0;
