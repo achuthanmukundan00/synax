@@ -582,8 +582,8 @@ function stripTerminalControl(input: string): string {
       .replace(/\u001b[@-Z\\-_]/g, '')
       // eslint-disable-next-line no-control-regex
       .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/g, '')
-      // Orphaned CSI remnants after ESC stripping — e.g. "[1;37m" left over
-      // when \u001b was removed from "\u001b[1;37m" by the control-character pass.
+      // Orphaned CSI remnants — e.g. "[1;37m" left over when \u001b was
+      // stripped upstream or by the control-character pass below.
       // Only strip orphaned SGR (Select Graphic Rendition) codes which are the
       // visually noisy ones; other CSI orphans (e.g. cursor moves) are rare.
       // eslint-disable-next-line no-control-regex
