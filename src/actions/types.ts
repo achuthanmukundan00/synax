@@ -50,7 +50,12 @@ export interface SearchMemoryAction {
   maxResults?: number;
 }
 
-export type AgentAction = ReadAction | EditAction | WriteAction | BashAction | SearchMemoryAction;
+export interface ViewImageAction {
+  kind: 'view_image';
+  path: string;
+}
+
+export type AgentAction = ReadAction | EditAction | WriteAction | BashAction | SearchMemoryAction | ViewImageAction;
 
 // ─── Execution context ────────────────────────────────────
 
@@ -146,6 +151,11 @@ export function toAgentAction(call: ParsedToolCall): AgentAction | null {
         query: args.query.trim(),
         maxResults: typeof args.maxResults === 'number' ? args.maxResults : undefined,
       };
+    case 'view_image':
+      if (typeof args.path !== 'string' || args.path.trim().length === 0) {
+        return null;
+      }
+      return { kind: 'view_image', path: args.path.trim() };
     default:
       // Unknown tool — let the registry handle it
       return null;

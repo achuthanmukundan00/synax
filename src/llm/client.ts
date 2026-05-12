@@ -18,6 +18,7 @@ import {
 import { repairJson } from './repair/json-repair';
 import { repairXml } from './repair/xml-repair';
 import { sanitizeReasoning } from './repair/reasoning-sanitizer';
+import { isVisionCapableModel } from './image-utils';
 
 // ---------------------------------------------------------------------------
 // Error helpers
@@ -563,6 +564,23 @@ export function createOpenAICompatibleClient(
           : {}),
         ...(isDeepSeek ? deepSeekThinkingParams(cfg.thinkingLevel) : {}),
       };
+
+      // Vision capability check: warn when image content is sent to a
+      // model that doesn't appear to support vision inputs.
+      if (!isVisionCapableModel(model)) {
+        for (const msg of opts.messages) {
+          if (Array.isArray(msg.content)) {
+            const hasImage = msg.content.some((part) => part.type === 'image_url');
+            if (hasImage) {
+              process.stderr.write(
+                `[synax] ⚠️ Image content detected in request, but model "${model}" does not match known vision-capable patterns.\n` +
+                  `[synax] The provider may reject the request or ignore the image.\n`,
+              );
+              break;
+            }
+          }
+        }
+      }
 
       const result = opts.onDelta
         ? await dispatchStreamingRequest(endpoint, body, headers, timeoutMs, opts.onDelta, opts.signal)
