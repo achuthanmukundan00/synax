@@ -158,7 +158,7 @@ describe('chat session', () => {
     expect(classifyInlineSubmission(plain.getDraft())).toBe('slash');
   });
 
-  it('merges multiple paste attachments into one deterministic block', async () => {
+  it('preserves order of interleaved paste and typed text', async () => {
     const session = createInlinePasteInputSession();
     session.handleText('before ');
     session.handlePasteStart();
@@ -170,14 +170,41 @@ describe('chat session', () => {
     session.handlePasteEnd();
     session.handleText(' after');
 
-    expect(session.getPreview()).toBe('before [pasted: 2 lines, 12 chars] middle  after');
+    expect(session.getPreview()).toBe('before [pasted: 1 lines, 5 chars] middle [pasted: 1 lines, 6 chars] after');
     const flattened = flattenInlinePasteDraft(session.getDraft());
-    expect(flattened).toContain('--- BEGIN PASTED CONTENT 1: 2 lines, 12 chars ---');
+    expect(flattened).toContain('--- BEGIN PASTED CONTENT 1:');
+    expect(flattened).toContain('--- BEGIN PASTED CONTENT 2:');
     expect(flattened).toContain('first');
     expect(flattened).toContain('second');
     expect(flattened).toContain('before');
     expect(flattened).toContain('middle');
     expect(flattened).toContain('after');
+    // Verify order: before → paste1 → middle → paste2 → after
+    const beforeIdx = flattened.indexOf('before');
+    const firstIdx = flattened.indexOf('first');
+    const middleIdx = flattened.indexOf('middle');
+    const secondIdx = flattened.indexOf('second');
+    const afterIdx = flattened.indexOf('after');
+    expect(beforeIdx).toBeLessThan(firstIdx);
+    expect(firstIdx).toBeLessThan(middleIdx);
+    expect(middleIdx).toBeLessThan(secondIdx);
+    expect(secondIdx).toBeLessThan(afterIdx);
+  });
+
+  it('merges consecutive pastes with no text between them', async () => {
+    const session = createInlinePasteInputSession();
+    session.handlePasteStart();
+    session.handlePasteChunk('first');
+    session.handlePasteEnd();
+    session.handlePasteStart();
+    session.handlePasteChunk('second');
+    session.handlePasteEnd();
+
+    expect(session.getPreview()).toBe('[pasted: 2 lines, 12 chars]');
+    const flattened = flattenInlinePasteDraft(session.getDraft());
+    expect(flattened).toContain('--- BEGIN PASTED CONTENT 1: 2 lines, 12 chars ---');
+    expect(flattened).toContain('first');
+    expect(flattened).toContain('second');
   });
 
   it('truncates large pasted content in the canonical submission text', async () => {

@@ -716,3 +716,112 @@ describe('LLM client — budget policy enforcement', () => {
     await expect(client.chat({ messages: [{ role: 'user', content: 'hi' }] })).rejects.toThrow();
   });
 });
+
+// Test 10: Image content blocks in chat requests
+describe('LLM client — image content blocks', () => {
+  let srv: Server;
+  let captured: MockRequest | null = null;
+
+  beforeEach(async () => {
+    srv = await createMockServer((_req, res) => {
+      captured = _req;
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(
+        JSON.stringify({
+          model: 'gpt-4o',
+          choices: [{ message: { role: 'assistant', content: 'I see an image' }, finish_reason: 'stop' }],
+        }),
+      );
+    });
+  });
+
+  afterEach(() => {
+    srv.close();
+    captured = null;
+  });
+
+  test('sends image content blocks in OpenAI vision format', async () => {
+    const client = createOpenAICompatibleClient(makeConfig({ baseUrl: getServerUrl(srv), model: 'gpt-4o' }));
+
+    await client.chat({
+      messages: [
+        {
+          role: 'user',
+          content: [
+            { type: 'text', text: 'What is in this image?' },
+            {
+              type: 'image_url',
+              image_url: { url: 'data:image/png;base64,iVBORw0KGgo=', detail: 'auto' },
+            },
+          ],
+        },
+      ],
+    });
+
+    if (!captured) throw new Error('No request captured');
+    const body = JSON.parse(captured.body) as { messages: Array<{ role: string; content: unknown }> };
+    expect(body.messages[0].role).toBe('user');
+    expect(Array.isArray(body.messages[0].content)).toBe(true);
+    const content = body.messages[0].content as Array<Record<string, unknown>>;
+    expect(content[0]).toEqual({ type: 'text', text: 'What is in this image?' });
+    expect(content[1]).toEqual({
+      type: 'image_url',
+      image_url: { url: 'data:image/png;base64,iVBORw0KGgo=', detail: 'auto' },
+    });
+  });
+
+  test('passes plain text content through unchanged', async () => {
+    const client = createOpenAICompatibleClient(makeConfig({ baseUrl: getServerUrl(srv) }));
+
+    await client.chat({
+      messages: [{ role: 'user', content: 'plain text message' }],
+    });
+
+    if (!captured) throw new Error('No request captured');
+    const body = JSON.parse(captured.body) as { messages: Array<{ role: string; content: unknown }> };
+    expect(body.messages[0].content).toBe('plain text message');
+  });
+
+  test('warns on stderr when image content sent to non-vision model', async () => {
+    const stderrSpy = jest.spyOn(process.stderr, 'write').mockImplementation(() => true);
+
+    try {
+      const client = createOpenAICompatibleClient(makeConfig({ baseUrl: getServerUrl(srv), model: 'codestral' }));
+
+      await client.chat({
+        messages: [
+          {
+            role: 'user',
+            content: [
+              { type: 'text', text: 'What is in this image?' },
+              { type: 'image_url', image_url: { url: 'data:image/png;base64,iVBORw0KGgo=' } },
+            ],
+          },
+        ],
+      });
+
+      expect(stderrSpy).toHaveBeenCalledWith(expect.stringContaining('does not match known vision-capable patterns'));
+    } finally {
+      stderrSpy.mockRestore();
+    }
+  });
+
+  test('does not warn for text-only messages on non-vision model', async () => {
+    const stderrSpy = jest.spyOn(process.stderr, 'write').mockImplementation(() => true);
+
+    try {
+      const client = createOpenAICompatibleClient(makeConfig({ baseUrl: getServerUrl(srv), model: 'codestral' }));
+
+      await client.chat({
+        messages: [{ role: 'user', content: 'plain text' }],
+      });
+
+      const visionWarnings = stderrSpy.mock.calls.filter(
+        (call) => typeof call[0] === 'string' && call[0].includes('vision'),
+      );
+      expect(visionWarnings).toHaveLength(0);
+    } finally {
+      stderrSpy.mockRestore();
+    }
+  });
+});

@@ -345,6 +345,7 @@ describe('CLI', () => {
           'edit',
           'bash',
           'search_memory',
+          'view_image',
         ]);
         expect(parsed.messages[0].content).not.toContain('sk-context-secret');
       } finally {
@@ -431,6 +432,7 @@ describe('CLI', () => {
           'edit',
           'bash',
           'search_memory',
+          'view_image',
         ]);
       } finally {
         await closeServer(srv);

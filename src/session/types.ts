@@ -7,7 +7,14 @@ import type { ChatOptions, ChatResponse } from '../llm/types';
 import type { InspectionLedger } from '../tools';
 import type { ToolRegistry } from '../tools/types';
 import type { PatchPreview } from '../agent/patch';
-import type { AssemblyStats, CompactionRecord, ContextBudgetSettings, TokenLedger } from '../agent/context-budget';
+import type {
+  AssemblyStats,
+  CompactionRecord,
+  ContextBudgetSettings,
+  TokenLedger,
+  RepoMetadata,
+  BudgetStrategy,
+} from '../agent/context-budget';
 import type { AgentEvent, TerminalState } from '../agent/events';
 import type { RunMode } from '../agent/task-policy';
 import type { Logger } from '../logging/index.js';
@@ -16,6 +23,7 @@ import type { TokenCounter } from '../metrics/TokenCounter';
 import type { CostTracker } from '../metrics/CostTracker';
 import type { ExecutionEnv } from '../env/ExecutionEnv';
 import type { HolographicMemory } from '../memory/HolographicMemory';
+import type { VerificationContract } from './verification-contracts';
 
 // Re-export TerminalState as AgentTerminalState for backward compat.
 export type AgentTerminalState = TerminalState;
@@ -138,4 +146,83 @@ export interface TurnContext {
   costTracker?: CostTracker;
   maxBudget?: number;
   _sessionStarted: boolean;
+}
+
+// ─── Orchestration types (spec 021 phase 1) ───────────────────────────────────
+
+/**
+ * A single sub-task in an orchestration plan.
+ *
+ * Each SubTask carries a typed budget that the orchestration runtime enforces,
+ * following the Codex CLI GoalRuntimeState pattern.
+ */
+export interface SubTask {
+  /** Unique identifier within the orchestration plan. */
+  id: string;
+  /** Human-readable description of what this sub-task accomplishes. */
+  description: string;
+  /** Estimated token budget for this sub-task. */
+  estimatedBudget: number;
+  /** File paths this sub-task is expected to operate on. */
+  fileScope: string[];
+  /** IDs of sub-tasks that must complete before this one can start. */
+  dependencies: string[];
+  /** Verification contract — the system checks completion, not the child self-declaring. */
+  verification: VerificationContract;
+}
+
+/**
+ * Result from a single sub-agent execution.
+ *
+ * Reuses the existing AgentTerminalState enum for consistency
+ * with the main turn loop's terminal state taxonomy.
+ */
+export interface SubAgentResult {
+  /** Matches the SubTask.id this result corresponds to. */
+  subTaskId: string;
+  /** Terminal state of this sub-agent (completed, blocked, budget_exhausted, etc.). */
+  terminalState: AgentTerminalState;
+  /** Files modified by this sub-agent. */
+  changedFiles: string[];
+  /** Number of tool calls made by this sub-agent (for observability). */
+  toolCalls: number;
+  /** Error message if the sub-agent did not complete successfully. */
+  error?: string;
+}
+
+/**
+ * An orchestration plan produced by budget estimation.
+ *
+ * This is the output of the planning phase — a decomposition of the task
+ * into sub-tasks, each with a typed budget and verification contract.
+ */
+export interface OrchestrationPlan {
+  /** Decomposed sub-tasks in dependency order. */
+  subTasks: SubTask[];
+  /** Strategy used to produce this plan. */
+  strategy: BudgetStrategy;
+  /** Total estimated token budget across all sub-tasks. */
+  estimatedTotalTokens: number;
+  /** Repository metadata used for estimation. */
+  repoMetadata: RepoMetadata;
+  /** Context window tokens of the model this plan targets. */
+  contextWindowTokens: number;
+}
+
+/**
+ * Aggregate result of executing an orchestration plan.
+ */
+export interface OrchestrationResult {
+  /** The plan that was executed. */
+  plan: OrchestrationPlan;
+  /** Results for each sub-task, in execution order. */
+  results: SubAgentResult[];
+  /** Aggregate terminal state (worst of all sub-results). */
+  terminalState: AgentTerminalState;
+  /** Union of all files changed across sub-agents (deduplicated). */
+  changedFiles: string[];
+  /** Total tool calls across all sub-agents. */
+  toolCalls: number;
+  /** Aggregate error if any sub-agent failed. */
+  error?: string;
 }

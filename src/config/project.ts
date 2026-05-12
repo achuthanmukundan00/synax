@@ -852,28 +852,48 @@ export function loadProjectConfig(baseDir?: string): LoadProjectConfigResult {
       },
     };
   }
+
   const activeProviderPreset =
     config.provider?.preset ?? userConfig.provider?.preset ?? DEFAULTS.provider?.preset ?? 'relay';
-  const provider = {
-    ...DEFAULTS.provider,
-    ...providerPresetDefaults(activeProviderPreset),
-    ...userConfig.provider,
-    ...config.provider,
-    model:
-      config.provider?.model ??
-      userConfig.provider?.model ??
-      config.model ??
-      userConfig.model ??
-      DEFAULTS.provider?.model,
-    baseUrl:
-      config.provider?.baseUrl ??
-      config.provider?.base_url ??
-      userConfig.provider?.baseUrl ??
-      userConfig.provider?.base_url ??
-      config.baseUrl ??
-      userConfig.baseUrl ??
-      DEFAULTS.provider?.baseUrl,
-  };
+  let provider: ProviderConfig;
+  if (hasExtendedSettings) {
+    // When using new multi-provider format, provider is already resolved by loadSynaxConfig.
+    // Apply only user-level overrides and env overrides, but don't rebuild from preset defaults.
+    provider = {
+      ...config.provider,
+      ...userConfig.provider,
+      model: config.provider?.model ?? userConfig.provider?.model ?? config.model ?? userConfig.model,
+      baseUrl:
+        config.provider?.baseUrl ??
+        config.provider?.base_url ??
+        userConfig.provider?.baseUrl ??
+        userConfig.provider?.base_url ??
+        config.baseUrl ??
+        userConfig.baseUrl,
+    };
+  } else {
+    // Legacy path: build provider from preset defaults.
+    provider = {
+      ...DEFAULTS.provider,
+      ...providerPresetDefaults(activeProviderPreset),
+      ...userConfig.provider,
+      ...config.provider,
+      model:
+        config.provider?.model ??
+        userConfig.provider?.model ??
+        config.model ??
+        userConfig.model ??
+        DEFAULTS.provider?.model,
+      baseUrl:
+        config.provider?.baseUrl ??
+        config.provider?.base_url ??
+        userConfig.provider?.baseUrl ??
+        userConfig.provider?.base_url ??
+        config.baseUrl ??
+        userConfig.baseUrl ??
+        DEFAULTS.provider?.baseUrl,
+    };
+  }
   const mergedConfig = applyEnvOverrides(
     {
       ...DEFAULTS,

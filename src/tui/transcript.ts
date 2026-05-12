@@ -14,7 +14,9 @@ const BREATHING_GLYPHS = ['◌', '◓', '◑', '◒'];
 // ─── Tool-summary detection ───────────────────────────────
 
 /** Strip LaTeX math commands that terminals can't render.
- *  Converts common escapes to Unicode and removes remaining \commands. */
+ *  Converts common escapes to Unicode and removes remaining \commands.
+ *  Preserves newlines so markdown structure (headings, lists, code blocks)
+ *  survives into renderReviewOutput. */
 function stripLatexCommands(text: string): string {
   return text
     .replace(/\\pmod\{([^}]*)\}/gi, ' (mod $1)')
@@ -26,7 +28,7 @@ function stripLatexCommands(text: string): string {
     .replace(/\\cdots\b/gi, '⋯')
     .replace(/\\text\{([^}]*)\}/gi, '$1')
     .replace(/\\[a-zA-Z]+(\{[^}]*\})*/g, '')
-    .replace(/\s+/g, ' ')
+    .replace(/[ \t]+/g, ' ')
     .trim();
 }
 
@@ -229,11 +231,13 @@ function renderToolEvent(
 ): string[] {
   if (call.name === 'read') {
     const path = call.path || '—';
-    const preview = result ? summarizeOutput(result.detail).split('\n')[0] : '';
     const block = [eventHeader('read', path, width)];
     if (call.startLine || call.endLine)
       block.push(detailRow('lines', `${call.startLine ?? '?'}–${call.endLine ?? '?'}`, width));
-    if (preview) block.push(detailRow('output', preview, width));
+    if (result) {
+      const readOut = extractReadOutput(result.detail, width);
+      if (readOut.length > 0) block.push(...readOut);
+    }
     return block;
   }
 
@@ -415,6 +419,35 @@ function stringValue(value: Record<string, unknown> | undefined, key: string): s
 function objectValue(value: Record<string, unknown> | undefined, key: string): Record<string, unknown> | undefined {
   const item = value?.[key];
   return item && typeof item === 'object' && !Array.isArray(item) ? (item as Record<string, unknown>) : undefined;
+}
+
+export function extractReadOutput(detail: string, width: number, maxDisplayLines = 15): string[] {
+  const parsed = parseFirstJson(detail);
+  const output = objectValue(parsed, 'output');
+  const lines = output?.['lines'] as Array<{ lineNumber: number; text: string }> | undefined;
+  if (!lines || lines.length === 0) return [];
+
+  const displayLines = lines.slice(0, maxDisplayLines);
+  const result: string[] = [];
+
+  for (const line of displayLines) {
+    const lineNo = String(line.lineNumber).padStart(4, ' ');
+    const content = line.text.trimEnd();
+    const maxContentWidth = Math.max(10, width - 21);
+    const clipped = content.length > maxContentWidth ? content.slice(0, maxContentWidth - 1) + '…' : content;
+    result.push(detailRow(`${lineNo}`, dim(clipped), width));
+  }
+
+  if (lines.length > maxDisplayLines) {
+    const remaining = lines.length - maxDisplayLines;
+    const firstLine = lines[0]?.lineNumber ?? 1;
+    const lastLine = lines[lines.length - 1]?.lineNumber ?? '?';
+    result.push(
+      detailRow('', dimI(`… ${remaining} more line${remaining === 1 ? '' : 's'} (${firstLine}–${lastLine})`), width),
+    );
+  }
+
+  return result;
 }
 
 function extractToolResultDiff(detail: string): string | undefined {
@@ -613,8 +646,34 @@ function hasAnsi(input: string): boolean {
   return /\u001b\[[0-9;]*m/.test(input);
 }
 
+/**
+ * Calculate the visual length of a string in a terminal.
+ * Correctly accounts for multi-width characters (e.g. emojis).
+ */
 function visibleLength(input: string): number {
-  return stripAnsi(input).length;
+  const stripped = stripAnsi(input);
+  let len = 0;
+  for (let i = 0; i < stripped.length; i++) {
+    const code = stripped.charCodeAt(i);
+    // Rough approximation for multi-column characters.
+    // In a real application, consider 'string-width' library.
+    if (code > 0x1f000) {
+      len += 2;
+      // Handle surrogate pairs
+      if (
+        code >= 0xd800 &&
+        code <= 0xdbff &&
+        i + 1 < stripped.length &&
+        stripped.charCodeAt(i + 1) >= 0xdc00 &&
+        stripped.charCodeAt(i + 1) <= 0xdfff
+      ) {
+        i++;
+      }
+    } else {
+      len++;
+    }
+  }
+  return len;
 }
 
 function closeAnsi(input: string): string {
@@ -966,7 +1025,7 @@ function renderToolGroup(group: Array<{ call: ParsedToolCall; result: string }>,
 // ─── Markdown-to-terminal rendering ─────────────────────────
 
 /** Render common Markdown constructs as styled terminal text. */
-function renderMarkdownBlock(md: string, width: number): string[] {
+export function renderMarkdownBlock(md: string, width: number): string[] {
   const rawLines = md.split('\n');
   const lines: string[] = [];
   let inCodeBlock = false;
@@ -1052,7 +1111,7 @@ function renderInlineMd(text: string, _maxWidth: number): string {
 
 /** Render the final model output — uses markdown formatting when applicable,
  *  otherwise renders as plain wrapped text. */
-function renderReviewOutput(body: string, width: number): string[] {
+export function renderReviewOutput(body: string, width: number): string[] {
   let clean = stripLatexCommands(
     body
       .replace(/<think>[\s\S]*?<\/think>/gi, '')

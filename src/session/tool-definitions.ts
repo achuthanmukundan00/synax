@@ -193,6 +193,39 @@ export function buildModelFacingTools(options: ModelToolSurfaceOptions = {}): To
     },
   });
 
+  // view_image: always available (read-only, returns base64 for vision models)
+  tools.push({
+    name: 'view_image',
+    description:
+      'Read an image file and return base64-encoded data for vision-model analysis. ' +
+      'Use this to inspect screenshots, diagrams, photos, and other visual content. ' +
+      'Supported formats: png, jpg, jpeg, gif, webp, bmp. Max size: 20MB.',
+    inputSchema: {
+      type: 'object',
+      required: ['path'],
+      properties: {
+        path: {
+          type: 'string',
+          description: 'Repo-relative path to the image file.',
+        },
+      },
+      additionalProperties: false,
+    },
+    safetyPolicy: {
+      readOnly: true,
+      rejectsUnsafePaths: true,
+      boundedOutput: true,
+    },
+    ledgerBehavior: 'none',
+    async execute() {
+      return {
+        success: false,
+        toolName: 'view_image',
+        error: 'handled by the agent runner',
+      };
+    },
+  });
+
   return tools.filter((tool) => allowedNames.includes(tool.name));
 }
 
@@ -202,9 +235,10 @@ export function buildModelFacingTools(options: ModelToolSurfaceOptions = {}): To
 export function systemPrompt(): string {
   return [
     'You are Synax, a disciplined local coding agent.',
-    'Tools: read, write, edit, bash, search_memory.',
+    'Tools: read, write, edit, bash, search_memory, view_image.',
     'Use bash for terminal commands, including git and verification.',
     'Use read for local file inspection: list files, search text, or read bounded line ranges.',
+    'Use view_image to inspect image files (screenshots, photos, diagrams). Returns base64 data for vision-capable models.',
     'Use write for new text files and edit for exact replacements in files you have already read.',
     'Use search_memory to recall past tool outputs, errors, file changes, and findings from earlier turns in this session. Memory is stored automatically — you do not need to save anything yourself.',
     'If search_memory returns nothing, the session is fresh and there is no history yet; proceed from scratch.',

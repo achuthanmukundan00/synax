@@ -15,6 +15,7 @@ import {
 } from '../config/project';
 import { loadSynaxConfig } from '../config/load-config';
 import { loadSkills, type SkillDiagnostic } from '../agent/skills';
+import { discoverSkills, buildSkillMessages } from '../skills/SkillLoader';
 import { resetTokenLedger } from '../agent/context-budget';
 import pkg from '../../package.json';
 import { createLLMClient, describeLLMProvider } from '../llm/provider-factory';
@@ -26,6 +27,7 @@ import {
   type AgentActivity,
   type AgentTurnResult,
 } from '../session/Session';
+import { createSessionComponents, createAgentSession } from '../session/SessionFactory';
 import { runVerification, type VerificationResult } from '../agent/verification';
 import { buildProjectProfile, formatTextProfile } from '../config/profile';
 import { buildInspectConfigProfile } from './inspect';
@@ -158,9 +160,6 @@ export function createChatSession(options: {
   /** Optional session ID to resume. When set, the session store entry for that ID is reused. */
   resumeSessionId?: string;
 }): ChatSession {
-  const conversation = Session.createConversation({
-    skillMessages: options.skillMessages,
-  });
   let eventSink: ((event: import('../agent/events').AgentEvent) => void) | null = null;
 
   /** Config wrapper: the TUI updates this reference when settings change. */
@@ -170,25 +169,50 @@ export function createChatSession(options: {
 
   const getConfig = (): ProjectConfig => configRef.current;
 
-  // ── Session persistence ────────────────────────────────────────────
-  let sessionId = options.resumeSessionId ?? generateSessionId();
-  const createSessionRecord = (id: string): void => {
-    try {
-      createSession({
-        id,
-        workspacePath: options.repoRoot,
-        title: 'New session',
-        activeModel: configRef.current.provider?.model ?? undefined,
-      });
-    } catch {
-      // Best-effort: session persistence is non-critical
-    }
-  };
-  createSessionRecord(sessionId);
+  // ── Create shared observability components via factory (once per session) ──
+  const modelContextWindow = options.config.contextWindowTokens ?? options.config.contextBudgetTokens ?? 131072;
+  const sessionId = options.resumeSessionId ?? generateSessionId();
+
+  const components = createSessionComponents({
+    repoRoot: options.repoRoot,
+    modelId: configRef.current.provider?.model ?? '',
+    contextWindow: modelContextWindow,
+    modelContextWindow,
+    sessionId,
+  });
+
+  // Register in EventStore
+  if (components.eventStore) {
+    components.eventStore.startSession({
+      id: sessionId,
+      repoRoot: options.repoRoot,
+      mode: 'patch',
+      model: configRef.current.provider?.model ?? '',
+      createdAt: new Date().toISOString(),
+    });
+  }
+
+  // ── Conversation + session persistence ───────────────────────────
+  const conversation = Session.createConversation({
+    skillMessages: components.skillMessages,
+  });
+
+  try {
+    createSession({
+      id: sessionId,
+      workspacePath: options.repoRoot,
+      title: 'New session',
+      activeModel: configRef.current.provider?.model ?? undefined,
+    });
+  } catch {
+    // Best-effort: session persistence is non-critical
+  }
+
+  const sessionIdRef: { current: string } = { current: sessionId };
 
   const appendSessionEventFn = (event: SessionEvent): void => {
     try {
-      appendSessionEvent(sessionId, event);
+      appendSessionEvent(sessionIdRef.current, event);
     } catch {
       // Best-effort
     }
@@ -196,10 +220,10 @@ export function createChatSession(options: {
 
   const updateSessionTitle = (): void => {
     try {
-      const events = readSessionEvents(sessionId);
+      const events = readSessionEvents(sessionIdRef.current);
       const title = generateSessionTitle(events);
       const summary = generateSessionSummary(events);
-      const meta = findSessionMeta(sessionId);
+      const meta = findSessionMeta(sessionIdRef.current);
       if (meta) {
         upsertSessionMeta({ ...meta, title, summary });
       }
@@ -210,7 +234,7 @@ export function createChatSession(options: {
 
   const finalizeCurrentSession = (status: 'completed' | 'cancelled' | 'failed'): void => {
     try {
-      const meta = findSessionMeta(sessionId);
+      const meta = findSessionMeta(sessionIdRef.current);
       if (meta && meta.status === 'active') {
         upsertSessionMeta({ ...meta, status, updatedAt: new Date().toISOString() });
       }
@@ -221,15 +245,38 @@ export function createChatSession(options: {
 
   const startNewSessionId = (): string => {
     finalizeCurrentSession('cancelled');
-    sessionId = generateSessionId();
-    createSessionRecord(sessionId);
-    return sessionId;
+    const newId = generateSessionId();
+    // Update the shared component's sessionId
+    (components as { sessionId: string }).sessionId = newId;
+    // Register new session in EventStore
+    if (components.eventStore) {
+      components.eventStore.startSession({
+        id: newId,
+        repoRoot: options.repoRoot,
+        mode: 'patch',
+        model: configRef.current.provider?.model ?? '',
+        createdAt: new Date().toISOString(),
+      });
+    }
+    try {
+      createSession({
+        id: newId,
+        workspacePath: options.repoRoot,
+        title: 'New session',
+        activeModel: configRef.current.provider?.model ?? undefined,
+      });
+    } catch {
+      // Best-effort
+    }
+    return newId;
   };
 
   const doResetConversation = (): void => {
-    startNewSessionId();
+    const newSessionId = startNewSessionId();
+    // Update closure-mutable sessionId for subsequent appendSessionEvent calls
+    (sessionIdRef as { current: string }).current = newSessionId;
     const fresh = Session.createConversation({
-      skillMessages: options.skillMessages,
+      skillMessages: components.skillMessages,
     });
     conversation.messages.splice(0, conversation.messages.length, ...fresh.messages);
     conversation.inspectionLedger = fresh.inspectionLedger;
@@ -283,20 +330,18 @@ export function createChatSession(options: {
       const factoryResult = createLLMClient(factoryInput);
       const client = factoryResult.client;
       const beforeHead = await gitHead(options.repoRoot);
-      const turnSession = new Session({
+      // Create a fresh AbortController per turn.
+      currentAbortController = new AbortController();
+
+      const { session: turnSession } = createAgentSession({
         repoRoot: options.repoRoot,
         client,
-        maxToolCalls: config.maxToolCalls,
-        bashEnabled: config.tools?.bash?.enabled,
+        config,
+        components,
+        mode: 'patch',
         conversation,
-        contextBudget: {
-          contextBudgetTokens: config.contextBudgetTokens,
-          contextWindowTokens: config.contextWindowTokens,
-          reservedOutputTokens: config.reservedOutputTokens,
-          keepRecentTokens: config.keepRecentTokens,
-          maxSingleReadResultTokens: config.maxSingleReadResultTokens,
-          maxTotalReadResultTokensPerTurn: config.maxTotalReadResultTokensPerTurn,
-        },
+        skipStoreRegistration: true,
+        onSessionEvent: (event) => appendSessionEventFn(event),
         onActivity(activity) {
           options.onActivity?.(activity);
           if (options.tui && activity.kind === 'model_response') {
@@ -322,25 +367,7 @@ export function createChatSession(options: {
           }
         },
         onEvent: (event) => eventSink?.(event),
-        onBudget(snapshot) {
-          eventSink?.({
-            type: 'context_budget_updated',
-            timestamp: new Date().toISOString(),
-            estimatedInputTokens: snapshot.estimatedInputTokens,
-            inputLimit: snapshot.inputLimit,
-            contextWindowTokens: snapshot.contextWindowTokens,
-            reservedOutputTokens: snapshot.reservedOutputTokens,
-            step: snapshot.step,
-          });
-          if (!options.tui) {
-            console.log(formatBudgetSnapshot(snapshot));
-          }
-        },
-        abortSignal: (() => {
-          // Create a fresh AbortController per turn.
-          currentAbortController = new AbortController();
-          return currentAbortController.signal;
-        })(),
+        abortSignal: currentAbortController.signal,
         onSteeringCheck: () => {
           const msg = pendingSteeringMessage;
           if (msg) {
@@ -350,9 +377,22 @@ export function createChatSession(options: {
           return undefined;
         },
       });
+
+      // Extend onBudget with chat-specific console logging for non-TUI mode.
+      // The factory's default onBudget already fires wrappedOnEvent for
+      // EventStore persistence and JSONL session logging. We compose the
+      // factory default with chat's own CLI budget display.
+      const factoryOnBudget = turnSession.onBudget;
+      turnSession.onBudget = (snapshot) => {
+        factoryOnBudget?.(snapshot);
+        if (!options.tui) {
+          console.log(formatBudgetSnapshot(snapshot));
+        }
+      };
+
       let result: AgentTurnResult;
       try {
-        result = await turnSession.startTurn(message);
+        result = await turnSession.startTurnWithRecovery(message);
       } catch (error) {
         if (currentAbortController?.signal.aborted) {
           return {
@@ -404,7 +444,7 @@ export function createChatSession(options: {
         finalizeCurrentSession(result.terminalState === 'completed' ? 'completed' : 'failed');
       }
       // Only refresh title/summary on first turn to avoid O(n) disk reads every turn
-      const meta = findSessionMeta(sessionId);
+      const meta = findSessionMeta(sessionIdRef.current);
       if (!meta || meta.messageCount <= 1) {
         updateSessionTitle();
       }
@@ -423,7 +463,7 @@ export function createChatSession(options: {
         repoRoot: options.repoRoot,
         config: getConfig(),
         conversation,
-        skillMessages: options.skillMessages,
+        skillMessages: components.skillMessages,
       });
     },
     async handleShellCommand(command: string): Promise<ShellCommandReport> {
@@ -768,175 +808,206 @@ export function chatCommand(program: Command): void {
     .option('--plain', 'Use plain line-mode chat instead of full-screen TUI')
     .option('--mouse', 'Enable SGR mouse tracking for app-managed wheel scrolling')
     .option('--no-alt-screen', 'Disable alternate screen buffer for better native scrollback/copy')
-    .action(async (options: { message?: string; plain?: boolean; mouse?: boolean; altScreen?: boolean }) => {
-      const repoRoot = process.cwd();
-      const loaded = loadProjectConfig(repoRoot);
-      if (loaded.errors.length > 0) {
-        console.error(`[synax] Config error:\n${loaded.errors.map((e) => `${e.path}: ${e.message}`).join('\n')}`);
-        process.exitCode = 1;
-        return;
-      }
-
-      const providerDescription = describeLLMProvider(toProviderFactoryInput(loaded.config));
-      const metadata = providerDescription.metadata;
-      const provider = providerDescription.normalizedConfig;
-      const blockedMessage = providerRuntimeBlockedMessage(metadata, provider);
-
-      // Extract thinking level and TUI config from the effective multi-provider config.
-      let thinkingLevel: import('../config/schema').ThinkingLevel = 'off';
-      let skillMessages: string[] | undefined;
-      let skillDiagnostics: SkillDiagnostic[] | undefined;
-      let enableMouse = false;
-      let alternateScreen = true;
-      try {
-        const effectiveConfig = loadSynaxConfig();
-        if (effectiveConfig.active.thinking && effectiveConfig.active.thinking !== 'off') {
-          thinkingLevel = effectiveConfig.active.thinking;
-        }
-        enableMouse = effectiveConfig.tui?.mouse ?? false;
-        alternateScreen = effectiveConfig.tui?.alternateScreen ?? true;
-        if (effectiveConfig.skills.enabled.length > 0) {
-          const result = loadSkills(effectiveConfig.skills, repoRoot);
-          skillMessages = result.systemMessages;
-          skillDiagnostics = result.diagnostics;
-        }
-      } catch {
-        // best-effort
-      }
-      // CLI flags override config.
-      if (options.mouse) enableMouse = true;
-      if (options.altScreen === false) alternateScreen = false;
-      const useTui = shouldUseInteractiveTui({
-        plain: Boolean(options.plain),
-        message: options.message,
-        stdinIsTTY: input.isTTY,
-        stdoutIsTTY: output.isTTY,
-      });
-
-      // Shared state so the TUI can observe model output in real time.
-      let lastModelOutput = '';
-
-      const modelLabel = metadata.modelId || undefined;
-      const cwdLabel = compactHome(repoRoot);
-      const gitBranch = await currentGitBranch(repoRoot);
-
-      const session = createChatSession({
-        repoRoot,
-        config: loaded.config,
-        thinkingLevel,
-        skillMessages,
-        skillDiagnostics,
-        onActivity: useTui
-          ? (activity) => {
-              if (activity.kind === 'model_response' && activity.modelOutput) {
-                lastModelOutput = activity.modelOutput;
-              }
-            }
-          : undefined,
-        tui: useTui,
-      });
-      if (options.message) {
-        if (blockedMessage) {
-          console.error(`[synax] Config error: ${blockedMessage}`);
+    .option('--no-skills', 'Disable auto-discovered skill injection (config-based persona skills are still loaded)')
+    .action(
+      async (options: {
+        message?: string;
+        plain?: boolean;
+        mouse?: boolean;
+        altScreen?: boolean;
+        skills?: boolean;
+      }) => {
+        const repoRoot = process.cwd();
+        const loaded = loadProjectConfig(repoRoot);
+        if (loaded.errors.length > 0) {
+          console.error(`[synax] Config error:\n${loaded.errors.map((e) => `${e.path}: ${e.message}`).join('\n')}`);
           process.exitCode = 1;
           return;
         }
-        const report = await session.handleUserMessage(options.message);
-        console.log(options.message);
-        if (report.finalAnswer) console.log(report.finalAnswer);
-        console.log(`[synax] terminal state: ${report.terminalState}`);
-        if (report.terminalState !== 'completed') process.exitCode = 1;
-        return;
-      }
 
-      if (useTui) {
-        await runInteractiveTui(session, {
-          enableMouse,
-          alternateScreen,
-          blockedMessage,
-          lastModelOutput: () => lastModelOutput,
-          resetLastModelOutput: () => {
-            lastModelOutput = '';
-          },
-          modelLabel,
-          thinkingEnabled: thinkingLevel !== 'off',
-          endpointLabel: metadata.baseUrl !== '(not set)' ? metadata.baseUrl : undefined,
-          providerName: metadata.displayName,
-          cwdLabel,
-          gitBranch,
-          contextWindowTokens: loaded.config.contextWindowTokens ?? loaded.config.contextBudgetTokens,
-          coreVisualProfile: loaded.config.coreVisualProfile,
-          coreLoaded: true,
-          activeSkills: skillDiagnostics?.filter((d) => d.loaded).map((d) => d.id),
-          inputPricePer1MTokens: metadata.inputPricePer1MTokens,
-          outputPricePer1MTokens: metadata.outputPricePer1MTokens,
-          onSettingsConfigChanged: (settingsConfig) => {
-            loaded.config = applyEffectiveSynaxConfigToProjectConfig(loaded.config, settingsConfig);
-            const nextThinkingLevel = settingsConfig.active.thinking ?? thinkingLevel;
-            // Keep the session's config reference and thinking level in sync.
-            session.refreshConfig?.(loaded.config, nextThinkingLevel);
-            const nextDescription = describeLLMProvider(toProviderFactoryInput(loaded.config));
-            const nextBlockedMessage = providerRuntimeBlockedMessage(
-              nextDescription.metadata,
-              nextDescription.normalizedConfig,
-            );
-            const activeProvider = settingsConfig.providers[settingsConfig.active.provider];
-            const activeModel = activeProvider?.models.find((model) => model.id === settingsConfig.active.model);
-            return {
-              modelLabel: nextDescription.normalizedConfig.model.trim() || undefined,
-              endpointLabel: nextDescription.normalizedConfig.baseUrl || undefined,
-              providerName:
-                activeProvider?.name ??
-                nextDescription.metadata.displayName ??
-                providerNameFromPreset(loaded.config.provider?.preset),
-              contextWindowTokens:
-                activeModel?.contextWindow ?? loaded.config.contextWindowTokens ?? loaded.config.contextBudgetTokens,
-              coreVisualProfile: loaded.config.coreVisualProfile,
-              thinkingEnabled: nextThinkingLevel !== 'off',
-              coreLoaded: true,
-              providerWarning: nextBlockedMessage,
-              inputPricePer1MTokens: nextDescription.metadata.inputPricePer1MTokens,
-              outputPricePer1MTokens: nextDescription.metadata.outputPricePer1MTokens,
-            };
-          },
-        });
-        return;
-      }
+        const providerDescription = describeLLMProvider(toProviderFactoryInput(loaded.config));
+        const metadata = providerDescription.metadata;
+        const provider = providerDescription.normalizedConfig;
+        const blockedMessage = providerRuntimeBlockedMessage(metadata, provider);
 
-      console.log('[synax] Chat initialized');
-      printBanner(repoRoot, provider.model);
-      try {
-        if (input.isTTY) {
-          await runInlinePasteChat(session);
-        } else {
-          const rl = createInterface({ input, output, terminal: false });
-          let exiting = false;
-          rl.on('SIGINT', () => {
-            exiting = true;
-            console.log('\n[synax] exiting');
-            rl.close();
-          });
-          for await (const line of rl) {
-            const trimmed = line.trim();
-            if (!trimmed) continue;
-            if (trimmed.startsWith('/')) {
-              const report = await session.handleSlashCommand(trimmed);
-              if (report.output) console.log(report.output);
-              if (report.newSession) {
-                session.resetConversation?.();
-              }
-              if (report.exit) break;
-              continue;
-            }
-            const report = await session.handleUserMessage(trimmed);
-            printTurnReport(report);
+        // Extract thinking level and TUI config from the effective multi-provider config.
+        let thinkingLevel: import('../config/schema').ThinkingLevel = 'off';
+        let skillMessages: string[] | undefined;
+        let skillDiagnostics: SkillDiagnostic[] | undefined;
+        let enableMouse = false;
+        let alternateScreen = true;
+        try {
+          const effectiveConfig = loadSynaxConfig();
+          if (effectiveConfig.active.thinking && effectiveConfig.active.thinking !== 'off') {
+            thinkingLevel = effectiveConfig.active.thinking;
           }
-          if (!exiting) rl.close();
+          enableMouse = effectiveConfig.tui?.mouse ?? false;
+          alternateScreen = effectiveConfig.tui?.alternateScreen ?? true;
+
+          // Config-based skills (personas) — always loaded regardless of --no-skills.
+          const configMessages: string[] = [];
+          let configDiagnostics: SkillDiagnostic[] = [];
+          if (effectiveConfig.skills.enabled.length > 0) {
+            const result = loadSkills(effectiveConfig.skills, repoRoot);
+            configMessages.push(...result.systemMessages);
+            configDiagnostics = result.diagnostics;
+          }
+
+          // Auto-discovered skills — skippable via --no-skills.
+          const autoMessages: string[] = [];
+          if (options.skills !== false) {
+            try {
+              const discovery = discoverSkills(repoRoot);
+              if (discovery.loaded.length > 0) {
+                autoMessages.push(...buildSkillMessages(discovery.loaded));
+              }
+            } catch {
+              // Auto-discovery is best-effort
+            }
+          }
+
+          // Merge: config-based (persona) first, then auto-discovered domain skills.
+          skillMessages = [...configMessages, ...autoMessages];
+          if (skillMessages.length === 0) skillMessages = undefined;
+          skillDiagnostics = configDiagnostics;
+        } catch {
+          // best-effort
         }
-      } finally {
-        // no-op
-      }
-    });
+        // CLI flags override config.
+        if (options.mouse) enableMouse = true;
+        if (options.altScreen === false) alternateScreen = false;
+        const useTui = shouldUseInteractiveTui({
+          plain: Boolean(options.plain),
+          message: options.message,
+          stdinIsTTY: input.isTTY,
+          stdoutIsTTY: output.isTTY,
+        });
+
+        // Shared state so the TUI can observe model output in real time.
+        let lastModelOutput = '';
+
+        const modelLabel = metadata.modelId || undefined;
+        const cwdLabel = compactHome(repoRoot);
+        const gitBranch = await currentGitBranch(repoRoot);
+
+        const session = createChatSession({
+          repoRoot,
+          config: loaded.config,
+          thinkingLevel,
+          skillMessages,
+          skillDiagnostics,
+          onActivity: useTui
+            ? (activity) => {
+                if (activity.kind === 'model_response' && activity.modelOutput) {
+                  lastModelOutput = activity.modelOutput;
+                }
+              }
+            : undefined,
+          tui: useTui,
+        });
+        if (options.message) {
+          if (blockedMessage) {
+            console.error(`[synax] Config error: ${blockedMessage}`);
+            process.exitCode = 1;
+            return;
+          }
+          const report = await session.handleUserMessage(options.message);
+          console.log(options.message);
+          if (report.finalAnswer) console.log(report.finalAnswer);
+          console.log(`[synax] terminal state: ${report.terminalState}`);
+          if (report.terminalState !== 'completed') process.exitCode = 1;
+          return;
+        }
+
+        if (useTui) {
+          await runInteractiveTui(session, {
+            enableMouse,
+            alternateScreen,
+            blockedMessage,
+            lastModelOutput: () => lastModelOutput,
+            resetLastModelOutput: () => {
+              lastModelOutput = '';
+            },
+            modelLabel,
+            thinkingEnabled: thinkingLevel !== 'off',
+            endpointLabel: metadata.baseUrl !== '(not set)' ? metadata.baseUrl : undefined,
+            providerName: metadata.displayName,
+            cwdLabel,
+            gitBranch,
+            contextWindowTokens: loaded.config.contextWindowTokens ?? loaded.config.contextBudgetTokens,
+            coreVisualProfile: loaded.config.coreVisualProfile,
+            coreLoaded: true,
+            activeSkills: skillDiagnostics?.filter((d) => d.loaded).map((d) => d.id),
+            inputPricePer1MTokens: metadata.inputPricePer1MTokens,
+            outputPricePer1MTokens: metadata.outputPricePer1MTokens,
+            onSettingsConfigChanged: (settingsConfig) => {
+              loaded.config = applyEffectiveSynaxConfigToProjectConfig(loaded.config, settingsConfig);
+              const nextThinkingLevel = settingsConfig.active.thinking ?? thinkingLevel;
+              // Keep the session's config reference and thinking level in sync.
+              session.refreshConfig?.(loaded.config, nextThinkingLevel);
+              const nextDescription = describeLLMProvider(toProviderFactoryInput(loaded.config));
+              const nextBlockedMessage = providerRuntimeBlockedMessage(
+                nextDescription.metadata,
+                nextDescription.normalizedConfig,
+              );
+              const activeProvider = settingsConfig.providers[settingsConfig.active.provider];
+              const activeModel = activeProvider?.models.find((model) => model.id === settingsConfig.active.model);
+              return {
+                modelLabel: nextDescription.normalizedConfig.model.trim() || undefined,
+                endpointLabel: nextDescription.normalizedConfig.baseUrl || undefined,
+                providerName:
+                  activeProvider?.name ??
+                  nextDescription.metadata.displayName ??
+                  providerNameFromPreset(loaded.config.provider?.preset),
+                contextWindowTokens:
+                  activeModel?.contextWindow ?? loaded.config.contextWindowTokens ?? loaded.config.contextBudgetTokens,
+                coreVisualProfile: loaded.config.coreVisualProfile,
+                thinkingEnabled: nextThinkingLevel !== 'off',
+                coreLoaded: true,
+                providerWarning: nextBlockedMessage,
+                inputPricePer1MTokens: nextDescription.metadata.inputPricePer1MTokens,
+                outputPricePer1MTokens: nextDescription.metadata.outputPricePer1MTokens,
+              };
+            },
+          });
+          return;
+        }
+
+        console.log('[synax] Chat initialized');
+        printBanner(repoRoot, provider.model);
+        try {
+          if (input.isTTY) {
+            await runInlinePasteChat(session);
+          } else {
+            const rl = createInterface({ input, output, terminal: false });
+            let exiting = false;
+            rl.on('SIGINT', () => {
+              exiting = true;
+              console.log('\n[synax] exiting');
+              rl.close();
+            });
+            for await (const line of rl) {
+              const trimmed = line.trim();
+              if (!trimmed) continue;
+              if (trimmed.startsWith('/')) {
+                const report = await session.handleSlashCommand(trimmed);
+                if (report.output) console.log(report.output);
+                if (report.newSession) {
+                  session.resetConversation?.();
+                }
+                if (report.exit) break;
+                continue;
+              }
+              const report = await session.handleUserMessage(trimmed);
+              printTurnReport(report);
+            }
+            if (!exiting) rl.close();
+          }
+        } finally {
+          // no-op
+        }
+      },
+    );
   program.addCommand(chat);
 }
 
@@ -1014,21 +1085,33 @@ function renderInlinePastePreview(draft: InlinePasteDraft): string {
 }
 
 function mergePasteAttachment(draft: InlinePasteDraft, attachment: InlinePasteAttachment): void {
+  // Only merge with the immediately preceding paste segment if there is no
+  // non-empty text between them — this preserves the order of interleaved
+  // paste and typed text.
   for (let index = draft.segments.length - 1; index >= 0; index -= 1) {
     const segment = draft.segments[index];
-    if (segment.kind !== 'paste') continue;
-    const text =
-      segment.text.length > 0 && attachment.text.length > 0
-        ? `${segment.text}\n${attachment.text}`
-        : segment.text + attachment.text;
-    draft.segments[index] = {
-      kind: 'paste',
-      text,
-      lines: countLines(text),
-      chars: text.length,
-    };
-    return;
+    if (segment.kind === 'text') {
+      // If we hit a non-empty text segment before finding a paste, stop
+      // looking — we must not merge across typed content.
+      if (segment.text.length > 0) break;
+      continue;
+    }
+    if (segment.kind === 'paste') {
+      const text =
+        segment.text.length > 0 && attachment.text.length > 0
+          ? `${segment.text}\n${attachment.text}`
+          : segment.text + attachment.text;
+      draft.segments[index] = {
+        kind: 'paste',
+        text,
+        lines: countLines(text),
+        chars: text.length,
+      };
+      return;
+    }
   }
+  // No adjacent paste found — insert before the last text segment (which
+  // handlePasteStart added as an empty trailing segment for post-paste typing).
   draft.segments.splice(draft.segments.length - 1, 0, attachment);
 }
 

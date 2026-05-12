@@ -1,28 +1,17 @@
 import { loadProjectConfig, toProviderFactoryInput } from '../config/project';
 import { loadSynaxConfig } from '../config/load-config';
-import { loadSkills } from './skills';
-import { discoverSkills, buildSkillMessages } from '../skills/SkillLoader';
 import { createLLMClient } from '../llm/provider-factory';
 import { Session, type AgentActivity, type AgentTerminalState } from '../session/Session';
+import { createSessionComponents, createAgentSession } from '../session/SessionFactory';
+import type { Logger } from '../logging/Logger';
 import { runVerification, type VerificationResult } from './verification';
 import { eventNow, type AgentEvent } from './events';
 import { createSafetyCheckpoint, detectDirtyTree, writeRunLog } from './safety';
 import { normalizeRunMode, type RunMode } from './task-policy';
-import { type Logger, createLogger } from '../logging/index';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
-import { createEventStore } from '../store/EventStore';
-import { SpanTracer } from '../telemetry/SpanTracer';
-import { TokenCounter } from '../metrics/TokenCounter';
-import { CostTracker } from '../metrics/CostTracker';
-import { resolveStrategy, getStrategy } from '../context/ContextStrategy';
 import { VERIFICATION_CONTRACTS, type VerificationContract } from '../session/verification-contracts';
-import {
-  createSession as createStoreSession,
-  upsertSessionMeta,
-  findSessionMeta,
-  generateSessionId as generateStoreSessionId,
-} from '../sessions/session-store';
+import { upsertSessionMeta, findSessionMeta } from '../sessions/session-store';
 
 export interface RunTaskOptions {
   repoRoot: string;
@@ -125,47 +114,46 @@ export async function runAgentTask(options: RunTaskOptions): Promise<RunTaskRepo
 
   const { client, metadata } = factoryResult;
 
-  // ─── Observability: event store + span tracer ───
-  const sessionId = generateSessionId();
-  const eventStore = createEventStore();
-  const tracer = new SpanTracer({ sessionId, eventStore });
+  // ── Create shared observability components via factory ──
+  const modelContextWindow =
+    metadata.contextWindow ??
+    projectConfig.config.contextWindowTokens ??
+    projectConfig.config.contextBudgetTokens ??
+    131072;
 
-  if (eventStore) {
-    eventStore.startSession({
-      id: sessionId,
-      repoRoot: options.repoRoot,
-      mode,
-      model: metadata.modelId,
-      createdAt: new Date().toISOString(),
-    });
-  }
+  const components = createSessionComponents({
+    repoRoot: options.repoRoot,
+    modelId: metadata.modelId ?? '',
+    contextWindow: modelContextWindow,
+    modelContextWindow,
+    noSkills: options.noSkills,
+    strategyOverride: options.strategy,
+    title: options.task.slice(0, 80),
+  });
 
-  // Also register in session-store for /resume discoverability
-  try {
-    createStoreSession({
-      id: sessionId,
-      workspacePath: options.repoRoot,
-      title: options.task.slice(0, 80),
-      activeModel: metadata.modelId,
-    });
-  } catch {
-    // Best-effort
-  }
-
-  // Wrap user's onEvent to also write to the event store
-  const userOnEvent = options.onEvent;
-  let eventSequence = 0;
-  const wrappedOnEvent = (event: AgentEvent): void => {
-    userOnEvent?.(event);
-    if (eventStore) {
-      eventSequence += 1;
-      eventStore.appendEvent(sessionId, event, eventSequence);
-    }
-  };
+  const { session, wrappedOnEvent } = createAgentSession({
+    repoRoot: options.repoRoot,
+    client,
+    config: projectConfig.config,
+    components,
+    mode,
+    onActivity: options.onActivity,
+    onEvent: options.onEvent,
+    maxBudget: options.maxBudget,
+    approvePatch: () => (options.yes ? 'accept' : 'reject'),
+    ensureCheckpoint: async () => {
+      if (options.recordRunArtifacts === false) return null;
+      if (checkpoint) return checkpoint;
+      checkpoint = await createSafetyCheckpoint(options.repoRoot);
+      return checkpoint;
+    },
+  });
 
   const dirtyTree = await detectDirtyTree(options.repoRoot);
   const beforeHead = await gitHead(options.repoRoot);
   let checkpoint: { id: string; statusPath: string; diffPath: string } | null = null;
+
+  // Emit task_started event
   const tools = Session.buildModelTools({ bashEnabled: projectConfig.config.tools?.bash?.enabled, mode }).map(
     (tool) => tool.name,
   );
@@ -185,97 +173,6 @@ export async function runAgentTask(options: RunTaskOptions): Promise<RunTaskRepo
     task: options.task,
     inputPricePer1MTokens: metadata.inputPricePer1MTokens,
     outputPricePer1MTokens: metadata.outputPricePer1MTokens,
-  });
-  // Load skills: auto-discovered + config-based
-  let skillMessages: string[] | undefined;
-  if (!options.noSkills) {
-    const autoMessages: string[] = [];
-    try {
-      const discovery = discoverSkills(options.repoRoot);
-      if (discovery.loaded.length > 0) {
-        autoMessages.push(...buildSkillMessages(discovery.loaded));
-      }
-      if (discovery.errors.length > 0) {
-        for (const err of discovery.errors) {
-          // Skill discovery errors are logged but non-fatal
-          if (eventStore) {
-            const logger = createLogger({ sessionId, eventStore });
-            logger.warn('Skill discovery error', { error: err });
-          }
-        }
-      }
-    } catch {
-      // Auto-discovery is best-effort
-    }
-
-    const configMessages: string[] = [];
-    if (effectiveConfig?.skills.enabled.length) {
-      const result = loadSkills(effectiveConfig.skills, options.repoRoot);
-      configMessages.push(...result.systemMessages);
-    }
-
-    // Merge: auto-discovered first, then config-based (config-based override by convention)
-    skillMessages = [...autoMessages, ...configMessages];
-    if (skillMessages.length === 0) skillMessages = undefined;
-  }
-
-  // Resolve context strategy from model's context window (or explicit override)
-  const modelContextWindow =
-    metadata.contextWindow ??
-    projectConfig.config.contextWindowTokens ??
-    projectConfig.config.contextBudgetTokens ??
-    131072;
-  const strategy = options.strategy
-    ? (getStrategy(options.strategy) ?? resolveStrategy(modelContextWindow))
-    : resolveStrategy(modelContextWindow);
-
-  const session = new Session({
-    repoRoot: options.repoRoot,
-    client,
-    mode,
-    sessionId,
-    memory: eventStore?.memory,
-    maxToolCalls: projectConfig.config.maxToolCalls,
-    bashEnabled: projectConfig.config.tools?.bash?.enabled,
-    skillMessages,
-    logger: eventStore ? createLogger({ sessionId, eventStore }) : options.logger,
-    tokenCounter: new TokenCounter(),
-    costTracker: new CostTracker(new TokenCounter(), metadata.modelId),
-    maxBudget: options.maxBudget,
-    contextBudget: {
-      contextBudgetTokens: projectConfig.config.contextBudgetTokens,
-      contextWindowTokens:
-        strategy.contextWindowOverride ??
-        projectConfig.config.contextWindowTokens ??
-        projectConfig.config.contextBudgetTokens,
-      reservedOutputTokens: projectConfig.config.reservedOutputTokens ?? strategy.reserveTokens,
-      keepRecentTokens: projectConfig.config.keepRecentTokens,
-      maxSingleReadResultTokens: projectConfig.config.maxSingleReadResultTokens,
-      maxTotalReadResultTokensPerTurn: projectConfig.config.maxTotalReadResultTokensPerTurn,
-      strategyReserveTokens: strategy.reserveTokens,
-      strategyWindowOverride: strategy.contextWindowOverride,
-    },
-    onActivity: options.onActivity,
-    onEvent: wrappedOnEvent,
-    tracer,
-    onBudget(snapshot) {
-      wrappedOnEvent({
-        type: 'context_budget_updated',
-        timestamp: eventNow(),
-        estimatedInputTokens: snapshot.estimatedInputTokens,
-        inputLimit: snapshot.inputLimit,
-        contextWindowTokens: snapshot.contextWindowTokens,
-        reservedOutputTokens: snapshot.reservedOutputTokens,
-        step: snapshot.step,
-      });
-    },
-    approvePatch: () => (options.yes ? 'accept' : 'reject'),
-    ensureCheckpoint: async () => {
-      if (options.recordRunArtifacts === false) return null;
-      if (checkpoint) return checkpoint;
-      checkpoint = await createSafetyCheckpoint(options.repoRoot);
-      return checkpoint;
-    },
   });
 
   // Apply --verify override if specified
@@ -367,12 +264,12 @@ export async function runAgentTask(options: RunTaskOptions): Promise<RunTaskRepo
         repoRoot: options.repoRoot,
         client,
         mode,
-        sessionId,
-        memory: eventStore?.memory,
+        sessionId: components.sessionId,
+        memory: components.memory,
         maxToolCalls: Math.max(8, Math.floor((projectConfig.config.maxToolCalls ?? 192) / 2)),
         bashEnabled: projectConfig.config.tools?.bash?.enabled,
-        skillMessages,
-        logger: eventStore ? createLogger({ sessionId, eventStore }) : options.logger,
+        skillMessages: components.skillMessages,
+        logger: components.logger,
         contextBudget: {
           contextBudgetTokens: projectConfig.config.contextBudgetTokens,
           contextWindowTokens: projectConfig.config.contextWindowTokens,
@@ -470,8 +367,8 @@ export async function runAgentTask(options: RunTaskOptions): Promise<RunTaskRepo
   });
 
   // ─── Close observability session ───
-  if (eventStore) {
-    eventStore.closeSession(sessionId, terminalState, {
+  if (components.eventStore) {
+    components.eventStore.closeSession(components.sessionId, terminalState, {
       steps: turn.steps + (repairedTurn === turn ? 0 : repairedTurn.steps),
       toolCalls: turn.toolCalls.length + (repairedTurn === turn ? 0 : repairedTurn.toolCalls.length),
       changedFiles: filesChanged,
@@ -480,9 +377,9 @@ export async function runAgentTask(options: RunTaskOptions): Promise<RunTaskRepo
 
   // Finalize in session-store for /resume discoverability
   try {
-    const existing = findSessionMeta(sessionId);
+    const existing = findSessionMeta(components.sessionId);
     upsertSessionMeta({
-      id: sessionId,
+      id: components.sessionId,
       createdAt: existing?.createdAt ?? new Date().toISOString(),
       updatedAt: new Date().toISOString(),
       workspacePath: options.repoRoot,
@@ -540,10 +437,6 @@ export async function runAgentTask(options: RunTaskOptions): Promise<RunTaskRepo
 
 function unique(values: string[]): string[] {
   return [...new Set(values)];
-}
-
-function generateSessionId(): string {
-  return generateStoreSessionId();
 }
 
 async function gitHead(repoRoot: string): Promise<string | null> {

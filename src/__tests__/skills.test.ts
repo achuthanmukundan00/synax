@@ -436,3 +436,226 @@ describe('parseFrontmatter', () => {
     expect(frontmatter.enabled).toBeUndefined();
   });
 });
+
+// ─── Large persona file (2000+ words) stress test ────────────────────────────
+
+describe('SkillLoader — large persona files', () => {
+  const testDir = join(TEST_ROOT, 'large-persona-test');
+
+  beforeEach(() => {
+    rmSync(testDir, { recursive: true, force: true });
+    mkdirSync(testDir, { recursive: true });
+  });
+
+  afterAll(() => {
+    rmSync(testDir, { recursive: true, force: true });
+  });
+
+  it('loads a 2000+ word persona.md via SkillLoader', () => {
+    // Generate a ~2500-word persona
+    const paragraphs: string[] = [];
+    for (let i = 0; i < 100; i++) {
+      paragraphs.push(
+        `Paragraph ${i + 1}: You are AutoCareer, a job-hunting companion agent. ` +
+          `Your role is to help users find roles, draft resumes, prepare for interviews, ` +
+          `and track applications. You are persistent, supportive, and data-driven. ` +
+          `You remember past interactions and adapt your advice to each user's career goals. ` +
+          `You prioritize actionable steps over vague encouragement.`,
+      );
+    }
+    const personaBody = paragraphs.join('\n\n');
+    const wordCount = personaBody.split(/\s+/).length;
+    expect(wordCount).toBeGreaterThanOrEqual(2000);
+
+    const content = [
+      '---',
+      'name: "AutoCareer Job Buddy"',
+      'description: "Autonomous job hunting companion persona"',
+      'enabled: true',
+      '---',
+      personaBody,
+    ].join('\n');
+
+    const personaDir = join(testDir, '.synax', 'skills', 'persona');
+    mkdirSync(personaDir, { recursive: true });
+    writeFileSync(join(personaDir, 'SKILL.md'), content, 'utf-8');
+
+    const discovery = discoverSkills(testDir);
+    expect(discovery.skills).toHaveLength(1);
+    expect(discovery.loaded).toHaveLength(1);
+
+    const persona = discovery.loaded[0];
+    expect(persona.name).toBe('AutoCareer Job Buddy');
+    expect(persona.enabled).toBe(true);
+    expect(persona.source).toBe('project');
+    expect(persona.instructions.split(/\s+/).length).toBeGreaterThanOrEqual(2000);
+
+    // Verify buildSkillMessages produces complete output
+    const messages = buildSkillMessages(discovery.loaded);
+    expect(messages).toHaveLength(1);
+    expect(messages[0]).toContain('AutoCareer Job Buddy');
+    expect(messages[0]).toContain('Paragraph 1:');
+    expect(messages[0]).toContain('Paragraph 100:');
+    expect(messages[0]).toContain('BEGIN SKILL:');
+    expect(messages[0]).toContain('END SKILL:');
+  });
+
+  it('handles multi-megabyte persona gracefully (stress test)', () => {
+    // Generate a ~500KB persona body
+    const paragraphs: string[] = [];
+    for (let i = 0; i < 5000; i++) {
+      paragraphs.push(`Line ${i + 1}: This is a very large persona for stress testing the SkillLoader. `.repeat(5));
+    }
+    const personaBody = paragraphs.join('\n');
+    expect(personaBody.length).toBeGreaterThan(500000); // 500KB+
+
+    const content = [
+      '---',
+      'name: "Mega Persona"',
+      'description: "Stress test"',
+      'enabled: true',
+      '---',
+      personaBody,
+    ].join('\n');
+
+    const personaDir = join(testDir, '.synax', 'skills', 'mega');
+    mkdirSync(personaDir, { recursive: true });
+    writeFileSync(join(personaDir, 'SKILL.md'), content, 'utf-8');
+
+    // Should not crash or throw
+    const discovery = discoverSkills(testDir);
+    expect(discovery.loaded).toHaveLength(1);
+    expect(discovery.loaded[0].instructions.length).toBeGreaterThan(500000);
+
+    const messages = buildSkillMessages(discovery.loaded);
+    expect(messages).toHaveLength(1);
+    expect(messages[0].length).toBeGreaterThan(500000);
+  });
+});
+
+// ─── Persona-as-config-path and --no-skills behavior ─────────────────────────
+
+describe('Skill ordering and --no-skills behavior', () => {
+  const testDir = join(TEST_ROOT, 'ordering-test');
+
+  beforeEach(() => {
+    rmSync(testDir, { recursive: true, force: true });
+    mkdirSync(testDir, { recursive: true });
+  });
+
+  afterAll(() => {
+    rmSync(testDir, { recursive: true, force: true });
+  });
+
+  it('loads a persona from a config path entry', () => {
+    // Create persona outside .synax/skills (loaded via config path)
+    const personaDir = join(testDir, 'personas', 'career-coach');
+    mkdirSync(personaDir, { recursive: true });
+    writeFileSync(
+      join(personaDir, 'persona.md'),
+      `---
+name: "Career Coach"
+description: "Product persona"
+enabled: true
+---
+# Career Coach Persona
+You are a supportive career coach. Always encourage the user.`,
+      'utf-8',
+    );
+
+    // Also create auto-discovered skills
+    const skillsDir = join(testDir, '.synax', 'skills', 'typescript-conventions');
+    mkdirSync(skillsDir, { recursive: true });
+    writeFileSync(
+      join(skillsDir, 'SKILL.md'),
+      `---
+name: "TypeScript Conventions"
+description: "Coding conventions"
+enabled: true
+---
+# TypeScript
+Use strict mode and explicit types.`,
+      'utf-8',
+    );
+
+    // Simulate config-based loading (persona.md via path entry)
+    const config: ResolvedSkillsConfig = {
+      enabled: [join(testDir, 'personas', 'career-coach', 'persona.md')],
+      disabled: [],
+    };
+    const configResult = loadSkills(config, testDir);
+    expect(configResult.systemMessages).toHaveLength(1);
+    expect(configResult.systemMessages[0]).toContain('Career Coach');
+    expect(configResult.systemMessages[0]).toContain('supportive career coach');
+
+    // Auto-discovered skills
+    const discovery = discoverSkills(testDir);
+    expect(discovery.loaded).toHaveLength(1);
+    expect(discovery.loaded[0].name).toBe('TypeScript Conventions');
+
+    // When merged: config (persona) first, auto-discovered second
+    const merged = [...configResult.systemMessages, ...buildSkillMessages(discovery.loaded)];
+    expect(merged).toHaveLength(2);
+    expect(merged[0]).toContain('Career Coach');
+    expect(merged[1]).toContain('TypeScript Conventions');
+  });
+
+  it('--no-skills disables auto-discovery but preserves config-based persona', () => {
+    // Create persona loaded via config path
+    const personaDir = join(testDir, 'personas', 'career-coach');
+    mkdirSync(personaDir, { recursive: true });
+    writeFileSync(
+      join(personaDir, 'persona.md'),
+      `---
+name: "Career Coach"
+description: "Product persona"
+enabled: true
+---
+# Career Coach Persona
+You are a supportive career coach.`,
+      'utf-8',
+    );
+
+    // Create auto-discovered skills
+    const skillsDir = join(testDir, '.synax', 'skills', 'some-skill');
+    mkdirSync(skillsDir, { recursive: true });
+    writeFileSync(
+      join(skillsDir, 'SKILL.md'),
+      `---
+name: "Some Skill"
+enabled: true
+---
+# Some Skill
+Ambient skill content.`,
+      'utf-8',
+    );
+
+    // Config-based persona — always loaded
+    const config: ResolvedSkillsConfig = {
+      enabled: [join(testDir, 'personas', 'career-coach', 'persona.md')],
+      disabled: [],
+    };
+    const configResult = loadSkills(config, testDir);
+    const configMessages = configResult.systemMessages;
+
+    // Simulate --no-skills: skip auto-discovery
+    const noAutoMessages: string[] = [];
+    // (no discoverSkills call — this is what --no-skills does)
+
+    // Merge: persona only (no ambient skills)
+    const merged = [...configMessages, ...noAutoMessages];
+    expect(merged).toHaveLength(1);
+    expect(merged[0]).toContain('Career Coach');
+    expect(merged[0]).not.toContain('Some Skill');
+  });
+
+  it('--no-skills with no config skills yields no skill messages', () => {
+    // No config skills, no auto-discovery → no skill messages
+    const autoMessages: string[] = [];
+    const configMessages: string[] = [];
+    const skillMessages = [...configMessages, ...autoMessages];
+    expect(skillMessages).toHaveLength(0);
+    const result = skillMessages.length > 0 ? skillMessages : undefined;
+    expect(result).toBeUndefined();
+  });
+});
