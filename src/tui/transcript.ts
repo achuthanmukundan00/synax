@@ -231,11 +231,13 @@ function renderToolEvent(
 ): string[] {
   if (call.name === 'read') {
     const path = call.path || '—';
-    const preview = result ? summarizeOutput(result.detail).split('\n')[0] : '';
     const block = [eventHeader('read', path, width)];
     if (call.startLine || call.endLine)
       block.push(detailRow('lines', `${call.startLine ?? '?'}–${call.endLine ?? '?'}`, width));
-    if (preview) block.push(detailRow('output', preview, width));
+    if (result) {
+      const readOut = extractReadOutput(result.detail, width);
+      if (readOut.length > 0) block.push(...readOut);
+    }
     return block;
   }
 
@@ -417,6 +419,35 @@ function stringValue(value: Record<string, unknown> | undefined, key: string): s
 function objectValue(value: Record<string, unknown> | undefined, key: string): Record<string, unknown> | undefined {
   const item = value?.[key];
   return item && typeof item === 'object' && !Array.isArray(item) ? (item as Record<string, unknown>) : undefined;
+}
+
+function extractReadOutput(detail: string, width: number, maxDisplayLines = 15): string[] {
+  const parsed = parseFirstJson(detail);
+  const output = objectValue(parsed, 'output');
+  const lines = output?.['lines'] as Array<{ lineNumber: number; text: string }> | undefined;
+  if (!lines || lines.length === 0) return [];
+
+  const displayLines = lines.slice(0, maxDisplayLines);
+  const result: string[] = [];
+
+  for (const line of displayLines) {
+    const lineNo = String(line.lineNumber).padStart(4, ' ');
+    const content = line.text.trimEnd();
+    const maxContentWidth = Math.max(10, width - 21);
+    const clipped = content.length > maxContentWidth ? content.slice(0, maxContentWidth - 1) + '…' : content;
+    result.push(detailRow(`${lineNo}`, dim(clipped), width));
+  }
+
+  if (lines.length > maxDisplayLines) {
+    const remaining = lines.length - maxDisplayLines;
+    const firstLine = lines[0]?.lineNumber ?? 1;
+    const lastLine = lines[lines.length - 1]?.lineNumber ?? '?';
+    result.push(
+      detailRow('', dimI(`… ${remaining} more line${remaining === 1 ? '' : 's'} (${firstLine}–${lastLine})`), width),
+    );
+  }
+
+  return result;
 }
 
 function extractToolResultDiff(detail: string): string | undefined {
