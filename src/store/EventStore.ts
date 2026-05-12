@@ -28,6 +28,9 @@ export interface SessionStats {
 }
 
 function defaultDbPath(): string {
+  if (process.env.SYNAX_EVENT_STORE_PATH) {
+    return process.env.SYNAX_EVENT_STORE_PATH;
+  }
   const home = process.env.HOME || process.env.USERPROFILE || '/tmp';
   return join(home, '.local', 'share', 'synax', 'history.db');
 }
