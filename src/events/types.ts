@@ -114,6 +114,34 @@ export interface PostToolUseFailureEvent extends AgentEventBase {
   attemptCount: number;
 }
 
+// ─── Child session lifecycle events (orchestration) ──────────────────────────
+
+export interface ChildSessionSpawnedEvent extends AgentEventBase {
+  type: 'child_session_spawned';
+  parentSessionId: string;
+  childSessionId: string;
+  subtaskId?: string;
+}
+
+import type { SubAgentResult } from '../session/types';
+
+export interface ChildSessionCompletedEvent extends AgentEventBase {
+  type: 'child_session_completed';
+  parentSessionId: string;
+  childSessionId: string;
+  subtaskId?: string;
+  result: SubAgentResult;
+}
+
+export interface ChildSessionFailedEvent extends AgentEventBase {
+  type: 'child_session_failed';
+  parentSessionId: string;
+  childSessionId: string;
+  subtaskId?: string;
+  error: string;
+  partialResult: SubAgentResult;
+}
+
 // ─── Union types ─────────────────────────────────────────────────────────────
 
 export type LifecycleEvent =
@@ -124,7 +152,10 @@ export type LifecycleEvent =
   | ToolExecutionStartEvent
   | ToolExecutionEndEvent
   | BeforeCompactEvent
-  | SessionCompactEvent;
+  | SessionCompactEvent
+  | ChildSessionSpawnedEvent
+  | ChildSessionCompletedEvent
+  | ChildSessionFailedEvent;
 
 export type ControlHookEvent = PreToolUseEvent | PostToolUseFailureEvent;
 
