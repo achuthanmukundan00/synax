@@ -3,6 +3,38 @@
   "version": "0.1.0-alpha.1",
   "description": "A local-first coding agent for consumer-GPU developers",
   "main": "dist/index.js",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "require": "./dist/index.js",
+      "default": "./dist/index.js"
+    },
+    "./skills": {
+      "types": "./dist/skills/index.d.ts",
+      "require": "./dist/skills/index.js",
+      "default": "./dist/skills/index.js"
+    },
+    "./tools": {
+      "types": "./dist/tools/index.d.ts",
+      "require": "./dist/tools/index.js",
+      "default": "./dist/tools/index.js"
+    },
+    "./llm": {
+      "types": "./dist/llm/index.d.ts",
+      "require": "./dist/llm/index.js",
+      "default": "./dist/llm/index.js"
+    },
+    "./memory": {
+      "types": "./dist/memory/index.d.ts",
+      "require": "./dist/memory/index.js",
+      "default": "./dist/memory/index.js"
+    },
+    "./session": {
+      "types": "./dist/session/index.d.ts",
+      "require": "./dist/session/index.js",
+      "default": "./dist/session/index.js"
+    }
+  },
   "bin": {
     "synax": "dist/cli.js"
   },
