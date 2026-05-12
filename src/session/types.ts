@@ -238,6 +238,8 @@ export interface OrchestrationResult {
   changedFiles: string[];
   /** Total tool calls across all sub-agents. */
   toolCalls: number;
+  /** Human-readable conclusion summarizing all sub-task results. */
+  conclusion: string;
   /** Aggregate error if any sub-agent failed. */
   error?: string;
 }
