@@ -1,5 +1,7 @@
 # Synax
 
+[![CI](https://github.com/achuthanmukundan00/synax/actions/workflows/ci.yml/badge.svg)](https://github.com/achuthanmukundan00/synax/actions/workflows/ci.yml)
+
 Synax is a TypeScript-first local coding agent for developers running local LLMs through Relay or another OpenAI-compatible gateway.
 
 It is CLI-first, local-first, and built for constrained local models. Synax keeps model-visible context, tool calls, command output, and file edits bounded and inspectable.
