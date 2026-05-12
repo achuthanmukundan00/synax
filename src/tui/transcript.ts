@@ -646,8 +646,34 @@ function hasAnsi(input: string): boolean {
   return /\u001b\[[0-9;]*m/.test(input);
 }
 
+/**
+ * Calculate the visual length of a string in a terminal.
+ * Correctly accounts for multi-width characters (e.g. emojis).
+ */
 function visibleLength(input: string): number {
-  return stripAnsi(input).length;
+  const stripped = stripAnsi(input);
+  let len = 0;
+  for (let i = 0; i < stripped.length; i++) {
+    const code = stripped.charCodeAt(i);
+    // Rough approximation for multi-column characters.
+    // In a real application, consider 'string-width' library.
+    if (code > 0x1f000) {
+      len += 2;
+      // Handle surrogate pairs
+      if (
+        code >= 0xd800 &&
+        code <= 0xdbff &&
+        i + 1 < stripped.length &&
+        stripped.charCodeAt(i + 1) >= 0xdc00 &&
+        stripped.charCodeAt(i + 1) <= 0xdfff
+      ) {
+        i++;
+      }
+    } else {
+      len++;
+    }
+  }
+  return len;
 }
 
 function closeAnsi(input: string): string {
