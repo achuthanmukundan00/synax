@@ -509,7 +509,10 @@ export class Session {
 
             // Preflight budget guard
             const effectiveInputLimit = contextBudget.contextWindowTokens - contextBudget.reservedOutputTokens;
-            const estimatedInputTokens = estimateIncrementalTokens(conversation.messages, conversation.tokenLedger);
+            const estimatedInputTokens = estimateRequestTokens(conversation.messages);
+            // Keep the token ledger in sync with raw conversation messages
+            resetTokenLedger(conversation.tokenLedger);
+            estimateIncrementalTokens(conversation.messages, conversation.tokenLedger);
 
             this.onBudget?.({
               estimatedInputTokens,

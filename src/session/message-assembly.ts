@@ -12,10 +12,8 @@ import type { InspectionLedger } from '../tools';
 import {
   assembleModelMessages,
   compactMessagesMultiStage,
-  estimateIncrementalTokens,
   estimateRequestTokens,
   formatContextBudgetError,
-  resetTokenLedger,
   summarizeLargestContributors,
   type AssemblyStats,
   type CompactionRecord,
@@ -128,15 +126,11 @@ export function buildModelRequest(
     const finalMessages = [...withMemory, warning];
     stats.totalMessagesOut = finalMessages.length;
     stats.estimatedTokensOut = estimateRequestTokens(finalMessages);
-    resetTokenLedger(conversation.tokenLedger);
-    estimateIncrementalTokens(finalMessages, conversation.tokenLedger);
     return finalMessages;
   }
 
   stats.totalMessagesOut = withMemory.length;
   stats.estimatedTokensOut = estimateRequestTokens(withMemory);
-  resetTokenLedger(conversation.tokenLedger);
-  estimateIncrementalTokens(withMemory, conversation.tokenLedger);
   return withMemory;
 }
 
