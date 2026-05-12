@@ -28,7 +28,13 @@ import {
   renderResumePicker,
   type ResumePickerState,
 } from '../sessions/resume-renderer';
-import { listSessionsSorted, type SessionMetadata } from '../sessions/session-store';
+import {
+  listSessionsSorted,
+  readSessionEvents,
+  generateSessionSummary,
+  generateSessionTitle,
+  type SessionMetadata,
+} from '../sessions/session-store';
 import { loadSynaxConfig, persistConfig } from '../config/load-config';
 import type { EffectiveSynaxConfig } from '../config/schema';
 
@@ -746,13 +752,31 @@ export async function runInteractiveTui(
 
   const resumeSelectedSession = async (meta: SessionMetadata): Promise<void> => {
     closeResumePicker();
+
+    // Load actual session events to build a rich resume summary.
+    const events = readSessionEvents(meta.id);
+    const title = events.length > 0 ? generateSessionTitle(events) : (meta.title ?? 'Untitled');
+    const summary = events.length > 0 ? generateSessionSummary(events, 200) : (meta.summary ?? 'No messages');
+    const userMessages = events.filter((e) => e.type === 'user_message').length;
+    const assistantMessages = events.filter((e) => e.type === 'assistant_message').length;
+    const toolEvents = events.filter((e) => e.type === 'tool_call' || e.type === 'tool_result').length;
+
+    const contentLines = [
+      `Resumed session: ${title}`,
+      `Branch: ${meta.branch ?? 'unknown'}  ·  Model: ${meta.activeModel ?? 'unknown'}`,
+      `Updated: ${meta.updatedAt}`,
+      `Messages: ${userMessages} user, ${assistantMessages} assistant, ${toolEvents} tool events`,
+      '',
+      `Summary: ${summary}`,
+    ];
+
     state = applyEventToRunState(
       state,
       {
         type: 'command_output',
         timestamp: new Date().toISOString(),
         command: '/resume',
-        content: `Resumed session from ${meta.branch ?? 'unknown'} · updated ${meta.updatedAt}\nModel: ${meta.activeModel ?? 'unknown'}`,
+        content: contentLines.join('\n'),
       },
       Date.now(),
     );
