@@ -12,6 +12,11 @@ import { execFile } from 'child_process';
 import { promisify } from 'util';
 import { VERIFICATION_CONTRACTS, type VerificationContract } from '../session/verification-contracts';
 import { upsertSessionMeta, findSessionMeta } from '../sessions/session-store';
+import { OrchestrationManager } from '../orchestration/OrchestrationManager';
+import { HandoffManager } from '../handoff/HandoffManager';
+import { createTokenLedger } from '../agent/context-budget';
+import { createInspectionLedger as createInspLedger } from '../tools';
+import type { AgentTurnResult } from '../session/types';
 
 export interface RunTaskOptions {
   repoRoot: string;
@@ -183,7 +188,60 @@ export async function runAgentTask(options: RunTaskOptions): Promise<RunTaskRepo
     }
   }
 
-  const turn = await session.startTurnWithRecovery(options.task);
+  // ── Orchestration: estimate budget, plan decomposition, execute if needed ──
+  let turn: AgentTurnResult;
+  let orchestrationUsed = false;
+
+  const estimate = await session.estimateTaskBudget(options.task);
+  const strategy = estimate.strategy as string;
+
+  if (strategy === 'orchestrate' || strategy === 'decompose') {
+    const planResult = await session.planOrchestratedTurn(options.task);
+
+    if (planResult.success && planResult.plan.subTasks && planResult.plan.subTasks.length > 0) {
+      const handoffManager = new HandoffManager();
+      session.setHandoffManager(handoffManager);
+
+      wrappedOnEvent({
+        type: 'assistant_message',
+        timestamp: eventNow(),
+        content: `Orchestrating task across ${planResult.plan.subTasks.length} sub-tasks (strategy: ${strategy})...`,
+      });
+
+      const orchestrationResult = await OrchestrationManager.execute(planResult.plan, session, handoffManager);
+
+      orchestrationUsed = true;
+
+      // Convert orchestration result to AgentTurnResult for downstream compatibility
+      turn = {
+        terminalState: orchestrationResult.terminalState as AgentTerminalState,
+        finalAnswer: orchestrationResult.conclusion,
+        steps: orchestrationResult.results.length,
+        toolCalls: orchestrationResult.results.flatMap((r) =>
+          Array.from({ length: r.toolCalls }, () => ({
+            name: `subagent:${r.subTaskId}`,
+            success: r.terminalState === 'completed',
+            error: r.error,
+          })),
+        ),
+        changedFiles: orchestrationResult.changedFiles,
+        conversation: {
+          messages: [],
+          inspectionLedger: createInspLedger(),
+          latestCompaction: null,
+          tokenLedger: createTokenLedger(),
+          assemblyStats: null,
+        },
+        error: orchestrationResult.error,
+      };
+    } else {
+      // Plan failed or returned inline — fall through to inline execution
+      turn = await session.startTurnWithRecovery(options.task);
+    }
+  } else {
+    // Strategy is 'inline' — normal execution
+    turn = await session.startTurnWithRecovery(options.task);
+  }
   const checkpointRecord = checkpoint as { id: string; statusPath: string; diffPath: string } | null;
 
   const verificationCommand = projectConfig.config.verification?.defaultCommand;
@@ -418,6 +476,7 @@ export async function runAgentTask(options: RunTaskOptions): Promise<RunTaskRepo
     steps: turn.steps + (repairedTurn === turn ? 0 : repairedTurn.steps),
     toolCalls: [...turn.toolCalls, ...(repairedTurn === turn ? [] : repairedTurn.toolCalls)],
     messages: [
+      ...(orchestrationUsed ? [`orchestrated: task decomposed across sub-agents`] : []),
       ...(dirtyTree.dirty ? ['working tree was dirty before run', ...dirtyTree.summary] : []),
       ...(checkpointRecord ? [`checkpoint: ${checkpointRecord.id}`] : []),
     ],
