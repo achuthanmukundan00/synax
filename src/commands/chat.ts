@@ -24,6 +24,7 @@ import {
   type AgentTerminalState,
   type AgentBudgetSnapshot,
   type AgentActivity,
+  type AgentTurnResult,
 } from '../session/Session';
 import { runVerification, type VerificationResult } from '../agent/verification';
 import { buildProjectProfile, formatTextProfile } from '../config/profile';
@@ -34,11 +35,24 @@ import type { NormalizedProviderConfig, ProviderMetadata } from '../llm/types';
 import { detectDirtyTree, readLatestCheckpoint, undoLastEdit } from '../agent/safety';
 import { runInteractiveTui } from '../tui/interactive-tui';
 import { isSecretTrigger } from '../backrooms/trigger';
+import {
+  createSession,
+  appendSessionEvent,
+  upsertSessionMeta,
+  generateSessionId,
+  findSessionMeta,
+  readSessionEvents,
+  generateSessionTitle,
+  generateSessionSummary,
+  type SessionEvent,
+} from '../sessions/session-store';
 
 const execFileAsync = promisify(execFile);
 
 export interface ChatSession {
   conversation: AgentConversation;
+  /** Persistent session ID for cross-session resume. */
+  sessionId: string;
   handleUserMessage(message: string): Promise<ChatTurnReport>;
   handleSlashCommand(command: string): Promise<SlashCommandReport>;
   handleShellCommand?(command: string): Promise<ShellCommandReport>;
@@ -48,6 +62,22 @@ export interface ChatSession {
   refreshConfig?: (config: ProjectConfig, thinkingLevel?: import('../config/schema').ThinkingLevel) => void;
   /** Reset the conversation to a fresh state (for /new). Preserves skill messages. */
   resetConversation?: () => void;
+  /** Finalize the current session (mark as completed/cancelled) and start a new one. */
+  startNewSession?: () => void;
+  /** Append a session event for persistence. */
+  appendSessionEvent?: (event: SessionEvent) => void;
+  /** Abort the currently running turn. Safe to call when no turn is active. */
+  abortCurrentTurn?: () => void;
+  /**
+   * Set a steering message to be injected after the next tool call result.
+   * The message is consumed (cleared) once injected.
+   */
+  setSteeringMessage?: (message: string) => void;
+  /**
+   * Get and consume the currently pending steering message.
+   * Returns undefined if none is pending.
+   */
+  consumeSteeringMessage?: () => string | undefined;
 }
 
 export interface ChatTurnReport {
@@ -100,9 +130,16 @@ export interface InlinePasteInputSession {
   handlePasteStart(): void;
   handlePasteChunk(text: string): void;
   handlePasteEnd(): void;
+  handleCursorLeft(): void;
+  handleCursorRight(): void;
+  handleCursorUp(): void;
+  handleCursorDown(): void;
+  handleHome(): void;
+  handleEnd(): void;
   getDraft(): InlinePasteDraft;
   getPreview(): string;
   getVisibleBody(): string;
+  getCursorOffset(): number;
   hasPaste(): boolean;
 }
 
@@ -118,6 +155,8 @@ export function createChatSession(options: {
   skillMessages?: string[];
   /** Skill diagnostics for display/debug. */
   skillDiagnostics?: SkillDiagnostic[];
+  /** Optional session ID to resume. When set, the session store entry for that ID is reused. */
+  resumeSessionId?: string;
 }): ChatSession {
   const conversation = Session.createConversation({
     skillMessages: options.skillMessages,
@@ -131,8 +170,93 @@ export function createChatSession(options: {
 
   const getConfig = (): ProjectConfig => configRef.current;
 
+  // ── Session persistence ────────────────────────────────────────────
+  let sessionId = options.resumeSessionId ?? generateSessionId();
+  const createSessionRecord = (id: string): void => {
+    try {
+      createSession({
+        id,
+        workspacePath: options.repoRoot,
+        title: 'New session',
+        activeModel: configRef.current.provider?.model ?? undefined,
+      });
+    } catch {
+      // Best-effort: session persistence is non-critical
+    }
+  };
+  createSessionRecord(sessionId);
+
+  const appendSessionEventFn = (event: SessionEvent): void => {
+    try {
+      appendSessionEvent(sessionId, event);
+    } catch {
+      // Best-effort
+    }
+  };
+
+  const updateSessionTitle = (): void => {
+    try {
+      const events = readSessionEvents(sessionId);
+      const title = generateSessionTitle(events);
+      const summary = generateSessionSummary(events);
+      const meta = findSessionMeta(sessionId);
+      if (meta) {
+        upsertSessionMeta({ ...meta, title, summary });
+      }
+    } catch {
+      // Best-effort
+    }
+  };
+
+  const finalizeCurrentSession = (status: 'completed' | 'cancelled' | 'failed'): void => {
+    try {
+      const meta = findSessionMeta(sessionId);
+      if (meta && meta.status === 'active') {
+        upsertSessionMeta({ ...meta, status, updatedAt: new Date().toISOString() });
+      }
+    } catch {
+      // Best-effort
+    }
+  };
+
+  const startNewSessionId = (): string => {
+    finalizeCurrentSession('cancelled');
+    sessionId = generateSessionId();
+    createSessionRecord(sessionId);
+    return sessionId;
+  };
+
+  const doResetConversation = (): void => {
+    startNewSessionId();
+    const fresh = Session.createConversation({
+      skillMessages: options.skillMessages,
+    });
+    conversation.messages.splice(0, conversation.messages.length, ...fresh.messages);
+    conversation.inspectionLedger = fresh.inspectionLedger;
+    conversation.latestCompaction = null;
+    conversation.assemblyStats = null;
+    resetTokenLedger(conversation.tokenLedger);
+  };
+
+  /** Abort controller for the currently running turn. */
+  let currentAbortController: AbortController | null = null;
+  /** Steering message pending injection after next tool call result. */
+  let pendingSteeringMessage = '';
+
   return {
     conversation,
+    sessionId,
+    abortCurrentTurn: () => {
+      currentAbortController?.abort();
+    },
+    setSteeringMessage: (message: string) => {
+      pendingSteeringMessage = message;
+    },
+    consumeSteeringMessage: () => {
+      const msg = pendingSteeringMessage;
+      pendingSteeringMessage = '';
+      return msg || undefined;
+    },
     setEventSink: (sink) => {
       eventSink = sink;
     },
@@ -141,17 +265,18 @@ export function createChatSession(options: {
       if (thinkingLevel !== undefined) thinkingLevelRef = thinkingLevel;
     },
     resetConversation: () => {
-      // Reset the shared conversation in-place to a clean slate
-      const fresh = Session.createConversation({
-        skillMessages: options.skillMessages,
-      });
-      conversation.messages.splice(0, conversation.messages.length, ...fresh.messages);
-      conversation.inspectionLedger = fresh.inspectionLedger;
-      conversation.latestCompaction = null;
-      conversation.assemblyStats = null;
-      resetTokenLedger(conversation.tokenLedger);
+      doResetConversation();
     },
+    startNewSession: () => {
+      doResetConversation();
+    },
+    appendSessionEvent: appendSessionEventFn,
     async handleUserMessage(message: string): Promise<ChatTurnReport> {
+      appendSessionEventFn({
+        type: 'user_message',
+        at: new Date().toISOString(),
+        content: message,
+      });
       const config = getConfig();
       const factoryInput = toProviderFactoryInput(config);
       if (thinkingLevelRef) factoryInput.thinkingLevel = thinkingLevelRef;
@@ -211,8 +336,38 @@ export function createChatSession(options: {
             console.log(formatBudgetSnapshot(snapshot));
           }
         },
+        abortSignal: (() => {
+          // Create a fresh AbortController per turn.
+          currentAbortController = new AbortController();
+          return currentAbortController.signal;
+        })(),
+        onSteeringCheck: () => {
+          const msg = pendingSteeringMessage;
+          if (msg) {
+            pendingSteeringMessage = '';
+            return msg;
+          }
+          return undefined;
+        },
       });
-      const result = await turnSession.startTurn(message);
+      let result: AgentTurnResult;
+      try {
+        result = await turnSession.startTurn(message);
+      } catch (error) {
+        if (currentAbortController?.signal.aborted) {
+          return {
+            terminalState: 'blocked',
+            finalAnswer: '',
+            changedFiles: [],
+            steps: 0,
+            toolCalls: 0,
+            error: 'turn aborted by user',
+          };
+        }
+        throw error;
+      } finally {
+        currentAbortController = null;
+      }
       const afterHead = await gitHead(options.repoRoot);
       const changedByCommit =
         beforeHead && afterHead && beforeHead !== afterHead
@@ -220,6 +375,37 @@ export function createChatSession(options: {
           : [];
       const finalDirtyTree = await detectDirtyTree(options.repoRoot);
       saveContextState(options.repoRoot, result.conversation);
+      appendSessionEventFn({
+        type: 'assistant_message',
+        at: new Date().toISOString(),
+        content: result.finalAnswer || result.error || result.terminalState,
+      });
+      appendSessionEventFn({
+        type: 'state_snapshot',
+        at: new Date().toISOString(),
+        snapshot: {
+          terminalState: result.terminalState,
+          steps: result.steps,
+          toolCalls: result.toolCalls.length,
+          changedFiles: result.changedFiles,
+        },
+      });
+      // Finalize session on terminal states
+      if (
+        result.terminalState === 'completed' ||
+        result.terminalState === 'blocked' ||
+        result.terminalState === 'budget_exhausted' ||
+        result.terminalState === 'model_error' ||
+        result.terminalState === 'tool_error' ||
+        result.terminalState === 'failed_verification'
+      ) {
+        finalizeCurrentSession(result.terminalState === 'completed' ? 'completed' : 'failed');
+      }
+      // Only refresh title/summary on first turn to avoid O(n) disk reads every turn
+      const meta = findSessionMeta(sessionId);
+      if (!meta || meta.messageCount <= 1) {
+        updateSessionTitle();
+      }
       return {
         terminalState: result.terminalState,
         finalAnswer: result.finalAnswer,
@@ -252,45 +438,289 @@ export function createInlinePasteInputSession(): InlinePasteInputSession {
   let current = draft.segments[0] as InlineTextSegment;
   let pasteText = '';
   let pasteActive = false;
+  /** 0-indexed character offset within the current text segment. */
+  let cursorCharOffset = 0;
+
+  /** Find the last text segment in the draft, or create one. */
+  const ensureTextSegment = (): InlineTextSegment => {
+    const last = draft.segments[draft.segments.length - 1];
+    if (last?.kind === 'text') return last;
+    const seg: InlineTextSegment = { kind: 'text', text: '' };
+    draft.segments.push(seg);
+    return seg;
+  };
+
+  /** Map cursor to (segment index, char offset) into draft.segments. */
+  const cursorToSegOffset = (): { segIdx: number; charOff: number } => {
+    const currentIdx = draft.segments.lastIndexOf(current);
+    if (currentIdx < 0) return { segIdx: draft.segments.length - 1, charOff: 0 };
+    return { segIdx: currentIdx, charOff: Math.min(cursorCharOffset, current.text.length) };
+  };
+
+  /** Re-locate cursor to (segIdx, charOff). */
+  const setCursorSeg = (segIdx: number, charOff: number): void => {
+    const seg = draft.segments[segIdx];
+    if (!seg || seg.kind !== 'text') {
+      // Land on the nearest text segment.
+      for (let i = segIdx; i >= 0; i -= 1) {
+        if (draft.segments[i]?.kind === 'text') {
+          current = draft.segments[i] as InlineTextSegment;
+          cursorCharOffset = current.text.length;
+          return;
+        }
+      }
+      for (let i = segIdx + 1; i < draft.segments.length; i += 1) {
+        if (draft.segments[i]?.kind === 'text') {
+          current = draft.segments[i] as InlineTextSegment;
+          cursorCharOffset = 0;
+          return;
+        }
+      }
+      current = ensureTextSegment();
+      cursorCharOffset = 0;
+      return;
+    }
+    current = seg as InlineTextSegment;
+    cursorCharOffset = Math.max(0, Math.min(charOff, current.text.length));
+  };
+
+  /** Compute the flat visible-body offset from segment-level cursor. */
+  const computeVisibleOffset = (): number => {
+    let offset = 0;
+    for (let i = 0; i < draft.segments.length; i += 1) {
+      const seg = draft.segments[i];
+      if (seg === current) {
+        return offset + cursorCharOffset;
+      }
+      if (seg.kind === 'text') {
+        offset += seg.text.length;
+      } else {
+        offset += `[pasted: ${seg.lines} lines, ${seg.chars} chars]`.length;
+      }
+    }
+    return offset;
+  };
+
+  /** Given a flat visible-body offset, position the cursor. */
+  const setCursorFromVisibleOffset = (target: number): void => {
+    let offset = 0;
+    for (let i = 0; i < draft.segments.length; i += 1) {
+      const seg = draft.segments[i];
+      let segLen = 0;
+      if (seg.kind === 'text') {
+        segLen = seg.text.length;
+        if (offset + segLen >= target) {
+          setCursorSeg(i, target - offset);
+          return;
+        }
+      } else {
+        segLen =
+          `[pasted: ${(seg as InlinePasteAttachment).lines} lines, ${(seg as InlinePasteAttachment).chars} chars]`
+            .length;
+        if (offset + segLen >= target) {
+          // Target falls in a paste segment; snap to nearest text boundary.
+          // Try the next text segment.
+          for (let j = i + 1; j < draft.segments.length; j += 1) {
+            if (draft.segments[j]?.kind === 'text') {
+              setCursorSeg(j, 0);
+              return;
+            }
+          }
+          // Try the previous text segment.
+          for (let j = i - 1; j >= 0; j -= 1) {
+            if (draft.segments[j]?.kind === 'text') {
+              setCursorSeg(j, draft.segments[j].text.length);
+              return;
+            }
+          }
+          setCursorSeg(0, 0);
+          return;
+        }
+      }
+      offset += segLen;
+    }
+    // Past end: move to end of last text segment.
+    for (let i = draft.segments.length - 1; i >= 0; i -= 1) {
+      if (draft.segments[i]?.kind === 'text') {
+        setCursorSeg(i, draft.segments[i].text.length);
+        return;
+      }
+    }
+    // No text segments at all: create one.
+    const seg = ensureTextSegment();
+    setCursorSeg(draft.segments.indexOf(seg), 0);
+  };
 
   return {
     handleText(text: string): void {
       if (!text) return;
-      current.text += text;
-    },
-    handleBackspace(): void {
-      if (current.text.length > 0) {
-        current.text = current.text.slice(0, -1);
+      const { segIdx, charOff } = cursorToSegOffset();
+      const seg = draft.segments[segIdx];
+      if (!seg || seg.kind !== 'text') {
+        current.text += text;
+        cursorCharOffset = current.text.length;
         return;
       }
-
-      const currentIndex = draft.segments.lastIndexOf(current);
-      if (currentIndex > 0) {
-        const previous = draft.segments[currentIndex - 1];
-        if (previous.kind === 'paste') {
-          draft.segments.splice(currentIndex - 1, 1);
+      seg.text = seg.text.slice(0, charOff) + text + seg.text.slice(charOff);
+      cursorCharOffset = charOff + text.length;
+    },
+    handleBackspace(): void {
+      const { segIdx, charOff } = cursorToSegOffset();
+      if (charOff > 0) {
+        const seg = draft.segments[segIdx];
+        if (seg && seg.kind === 'text') {
+          seg.text = seg.text.slice(0, charOff - 1) + seg.text.slice(charOff);
+          cursorCharOffset = charOff - 1;
+          // If the segment is now empty and it's not the only text segment, prune it.
+          if (seg.text.length === 0) {
+            const textSegs = draft.segments.filter((s) => s.kind === 'text');
+            if (textSegs.length > 1) {
+              const idx = draft.segments.indexOf(seg);
+              draft.segments.splice(idx, 1);
+              // Move to the end of the previous segment.
+              for (let i = idx - 1; i >= 0; i -= 1) {
+                if (draft.segments[i]?.kind === 'text') {
+                  current = draft.segments[i] as InlineTextSegment;
+                  cursorCharOffset = current.text.length;
+                  return;
+                }
+              }
+              current = ensureTextSegment();
+              cursorCharOffset = 0;
+            }
+          }
           return;
         }
       }
 
-      for (let index = draft.segments.length - 2; index >= 0; index -= 1) {
+      // At start of segment: try to remove previous segment.
+      if (segIdx > 0) {
+        const previous = draft.segments[segIdx - 1];
+        if (previous.kind === 'paste') {
+          draft.segments.splice(segIdx - 1, 1);
+          // Cursor stays at the same position in current segment.
+          return;
+        }
+        if (previous.kind === 'text' && previous.text.length > 0) {
+          previous.text = previous.text.slice(0, -1);
+          current = previous;
+          cursorCharOffset = previous.text.length;
+          return;
+        }
+      }
+
+      // Try any previous text segment.
+      for (let index = segIdx - 1; index >= 0; index -= 1) {
         const segment = draft.segments[index];
         if (segment.kind !== 'text' || segment.text.length === 0) continue;
         segment.text = segment.text.slice(0, -1);
         current = segment;
+        cursorCharOffset = current.text.length;
         return;
       }
+    },
+    handleCursorLeft(): void {
+      const { segIdx, charOff } = cursorToSegOffset();
+      if (charOff > 0) {
+        setCursorSeg(segIdx, charOff - 1);
+        return;
+      }
+      // At start of segment: move to end of previous text segment.
+      for (let i = segIdx - 1; i >= 0; i -= 1) {
+        if (draft.segments[i]?.kind === 'text') {
+          setCursorSeg(i, draft.segments[i].text.length);
+          return;
+        }
+      }
+    },
+    handleCursorRight(): void {
+      const { segIdx, charOff } = cursorToSegOffset();
+      const seg = draft.segments[segIdx];
+      if (seg && seg.kind === 'text' && charOff < seg.text.length) {
+        setCursorSeg(segIdx, charOff + 1);
+        return;
+      }
+      // At end of segment: move to start of next text segment.
+      for (let i = segIdx + 1; i < draft.segments.length; i += 1) {
+        if (draft.segments[i]?.kind === 'text') {
+          setCursorSeg(i, 0);
+          return;
+        }
+      }
+    },
+    handleCursorUp(): void {
+      const body = renderInlinePastePreview(draft);
+      const cursorOffset = computeVisibleOffset();
+      const lines = body.split('\n');
+      // Find which line the cursor is on.
+      let lineStart = 0;
+      let currentLineIdx = 0;
+      for (let i = 0; i < lines.length; i += 1) {
+        const lineLen = lines[i].length + 1; // +1 for the \n separator
+        if (cursorOffset < lineStart + lineLen || i === lines.length - 1) {
+          currentLineIdx = i;
+          break;
+        }
+        lineStart += lineLen;
+      }
+      if (currentLineIdx === 0) return;
+      const prevLineLen = lines[currentLineIdx - 1].length;
+      const colInLine = cursorOffset - lineStart;
+      const newCol = Math.min(colInLine, prevLineLen);
+      let newOffset = 0;
+      for (let i = 0; i < currentLineIdx - 1; i += 1) {
+        newOffset += lines[i].length + 1;
+      }
+      newOffset += newCol;
+      setCursorFromVisibleOffset(newOffset);
+    },
+    handleCursorDown(): void {
+      const body = renderInlinePastePreview(draft);
+      const cursorOffset = computeVisibleOffset();
+      const lines = body.split('\n');
+      let lineStart = 0;
+      let currentLineIdx = 0;
+      for (let i = 0; i < lines.length; i += 1) {
+        const lineLen = lines[i].length + 1;
+        if (cursorOffset < lineStart + lineLen || i === lines.length - 1) {
+          currentLineIdx = i;
+          break;
+        }
+        lineStart += lineLen;
+      }
+      if (currentLineIdx >= lines.length - 1) return;
+      const nextLineLen = lines[currentLineIdx + 1].length;
+      const colInLine = cursorOffset - lineStart;
+      const newCol = Math.min(colInLine, nextLineLen);
+      let newOffset = 0;
+      for (let i = 0; i <= currentLineIdx; i += 1) {
+        newOffset += lines[i].length + 1;
+      }
+      newOffset += newCol;
+      setCursorFromVisibleOffset(newOffset);
+    },
+    handleHome(): void {
+      setCursorFromVisibleOffset(0);
+    },
+    handleEnd(): void {
+      const body = renderInlinePastePreview(draft);
+      setCursorFromVisibleOffset(body.length);
     },
     handlePasteStart(): void {
       if (pasteActive) return;
       pasteActive = true;
       pasteText = '';
+      // Move cursor to end before starting paste.
+      current = ensureTextSegment();
+      cursorCharOffset = current.text.length;
       current = { kind: 'text', text: '' };
       draft.segments.push(current);
+      cursorCharOffset = 0;
     },
     handlePasteChunk(text: string): void {
       if (!pasteActive) {
-        current.text += text;
+        // Fallback: regular text insertion at cursor
+        this.handleText(text);
         return;
       }
       pasteText += text;
@@ -306,6 +736,9 @@ export function createInlinePasteInputSession(): InlinePasteInputSession {
       };
       mergePasteAttachment(draft, attachment);
       pasteText = '';
+      // Cursor stays at the end of the last text segment.
+      current = ensureTextSegment();
+      cursorCharOffset = current.text.length;
     },
     getDraft(): InlinePasteDraft {
       return draft;
@@ -315,6 +748,9 @@ export function createInlinePasteInputSession(): InlinePasteInputSession {
     },
     getVisibleBody(): string {
       return renderInlinePastePreview(draft);
+    },
+    getCursorOffset(): number {
+      return computeVisibleOffset();
     },
     hasPaste(): boolean {
       return draft.segments.some((segment) => segment.kind === 'paste');
