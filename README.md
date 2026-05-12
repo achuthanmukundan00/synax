@@ -9,14 +9,33 @@ It is CLI-first, local-first, and built for constrained local models. Synax keep
 ## What Synax Is
 
 - A local-first CLI coding agent with multi-provider routing.
-- A Relay-compatible OpenAI-style chat client with Anthropic Messages support.
-- A bounded file inspection, edit, and verification loop.
+- A modular pipeline: **Session** orchestrator → **EventBus** pub/sub → **ActionExecutor** tools.
 - Native tool-call parsers for 26 model families — no vLLM normalization needed.
+- **Holographic Memory**: SQLite FTS5 semantic memory with zero token overhead.
+- **Recovery Recipes**: pre-programmed failure survival for empty responses, bash failures, context exhaustion, and infinite loops.
+- **Skills**: drop `SKILL.md` files into `.synax/skills/` to inject domain behavior.
+- **Extensions**: typed EventBus, custom tools, custom parsers, custom repairers.
 - A small TypeScript project intended to stay understandable.
 
 ## What Synax Is Not
 
 Synax is not a cloud agent platform, SaaS product, IDE, web dashboard, daemon, database-backed memory system, or parallel-agent framework.
+
+## Features
+
+| Feature | Description |
+|---------|-------------|
+| Adaptive Context | Token estimation, deterministic compaction at ~60% budget, progressive loop resistance |
+| Holographic Memory | SQLite FTS5 — zero tokens burned, agent queries what it needs |
+| Recovery Recipes | Empty response, bash failure, context exhaustion, infinite loop survival |
+| Handoff Manager | Context exhaustion → clean child session with FTS5 inheritance (depth-capped at 3) |
+| Skills | Auto-discovered `SKILL.md` files from global and project directories |
+| Typed EventBus | Lifecycle events + `pre_tool_use` control hooks with allow/block decisions |
+| Native Parsers | 26 model families — Qwen XML, Hermes, Llama 3, Mistral, Pythonic, JSON-in-tags |
+| Edit Safety | Exact-text edits require prior complete read; verification profiles |
+| MCP Bridge | Guarded Model Context Protocol export/import scaffold |
+
+See the [Architecture Guide](/docs/guide/architecture) for module diagrams and data flow.
 
 ## Requirements
 
@@ -254,6 +273,24 @@ The model loop stops when the model returns a final answer, hits the configured 
 
 `synax run --plan plan.md` is currently a placeholder. Native Anthropic protocol support, browser UI, IDE integration, databases, Docker infrastructure, and parallel agents are out of scope.
 
+## Examples
+
+| Example | Description |
+|---------|-------------|
+| [hello-world-extension](examples/hello-world-extension/) | SKILL.md + EventBus subscriber demonstrating the extension system |
+
+## Docs
+
+- [Getting Started](docs/guide/getting-started.md) — installation and first run
+- [Architecture](docs/guide/architecture.md) — module diagram, responsibilities, data flow
+- [Extensions](docs/guide/extensions.md) — EventBus, custom tools, parsers, repairers, recovery recipes
+- [Configuration](docs/guide/configuration.md) — config files, environment variables
+- [Commands](docs/guide/commands.md) — CLI command reference
+- [Agent Loop & Tools](docs/guide/agent-loop.md) — tool surface and loop behavior
+- [Tool-Call Parsing](docs/guide/tool-call-parsing.md) — parser configuration and model support
+- [MCP](docs/guide/mcp.md) — Model Context Protocol bridge
+- [Skills](docs/guide/skills.md) — SKILL.md format and discovery
+
 ## Docs Site
 
 The formatted documentation lives in `docs/` and is built with VitePress:
@@ -265,6 +302,20 @@ npm run docs:preview
 ```
 
 GitHub Pages deployment is configured in `.github/workflows/pages.yml`. In the GitHub repository settings, set Pages source to GitHub Actions.
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, project structure, how to add handlers/parsers/recipes, and the PR checklist.
+
+Quick start:
+
+```sh
+git clone git@github.com:achuthanmukundan00/synax.git
+cd synax
+npm ci
+npm run build
+npm test
+```
 
 ## Development
 
@@ -298,4 +349,4 @@ npm run synax -- doctor --full
 
 ## License
 
-Apache 2.0
+Apache 2.0 — see [LICENSE](LICENSE) for details.
