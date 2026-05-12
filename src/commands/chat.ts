@@ -1085,21 +1085,33 @@ function renderInlinePastePreview(draft: InlinePasteDraft): string {
 }
 
 function mergePasteAttachment(draft: InlinePasteDraft, attachment: InlinePasteAttachment): void {
+  // Only merge with the immediately preceding paste segment if there is no
+  // non-empty text between them — this preserves the order of interleaved
+  // paste and typed text.
   for (let index = draft.segments.length - 1; index >= 0; index -= 1) {
     const segment = draft.segments[index];
-    if (segment.kind !== 'paste') continue;
-    const text =
-      segment.text.length > 0 && attachment.text.length > 0
-        ? `${segment.text}\n${attachment.text}`
-        : segment.text + attachment.text;
-    draft.segments[index] = {
-      kind: 'paste',
-      text,
-      lines: countLines(text),
-      chars: text.length,
-    };
-    return;
+    if (segment.kind === 'text') {
+      // If we hit a non-empty text segment before finding a paste, stop
+      // looking — we must not merge across typed content.
+      if (segment.text.length > 0) break;
+      continue;
+    }
+    if (segment.kind === 'paste') {
+      const text =
+        segment.text.length > 0 && attachment.text.length > 0
+          ? `${segment.text}\n${attachment.text}`
+          : segment.text + attachment.text;
+      draft.segments[index] = {
+        kind: 'paste',
+        text,
+        lines: countLines(text),
+        chars: text.length,
+      };
+      return;
+    }
   }
+  // No adjacent paste found — insert before the last text segment (which
+  // handlePasteStart added as an empty trailing segment for post-paste typing).
   draft.segments.splice(draft.segments.length - 1, 0, attachment);
 }
 

@@ -680,6 +680,11 @@ function normalizeMessagesForProvider(
     // and cause 400 errors with strict providers (OpenRouter, Relay, DeepSeek).
     delete (normalized as Record<string, unknown>)._tool_call_ids;
     delete (normalized as Record<string, unknown>)._tool_result_ids;
+
+    // Ensure tool messages have the required tool_call_id
+    if (normalized.role === 'tool' && !('tool_call_id' in normalized)) {
+      (normalized as Record<string, unknown>).tool_call_id = 'unknown';
+    }
     if (Array.isArray(normalized.tool_calls) && normalized.tool_calls.length === 0) {
       delete normalized.tool_calls;
     }
