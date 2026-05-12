@@ -116,7 +116,11 @@ describe('SpanTracer', () => {
     tracer.endSpan(span);
 
     // Verify span was written to the database
-    const db = (eventStore as unknown as { db: { prepare: (sql: string) => { get: (...args: unknown[]) => Record<string, unknown> | undefined } } }).db;
+    const db = (
+      eventStore as unknown as {
+        db: { prepare: (sql: string) => { get: (...args: unknown[]) => Record<string, unknown> | undefined } };
+      }
+    ).db;
     const row = db.prepare('SELECT * FROM spans WHERE id = ?').get(span.id);
     expect(row).toBeTruthy();
     if (!row) throw new Error('expected row');
