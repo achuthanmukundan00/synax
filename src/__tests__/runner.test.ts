@@ -5,6 +5,7 @@ import { join } from 'path';
 
 import { type AgentEvent } from '../agent/events';
 import { Session, type AgentClient, type AgentRunnerOptions } from '../session/Session';
+import type { ChatOptions, ChatResponse } from '../llm/types';
 
 const TMP = join(process.cwd(), 'tmp', 'synax-runner-tests');
 
@@ -24,10 +25,10 @@ function fakeClient(
     content?: string;
     reasoningContent?: string;
     toolCallFormat?: 'openai' | 'content_xml' | 'none';
-    toolCalls?: any[];
+    toolCalls?: ChatResponse['toolCalls'];
   }>,
-): AgentClient & { requests: any[] } {
-  const requests: any[] = [];
+): AgentClient & { requests: ChatOptions[] } {
+  const requests: ChatOptions[] = [];
   return {
     requests,
     async chat(options) {
@@ -56,7 +57,7 @@ describe('shared bounded agent runner', () => {
     const result = await runTurn({ repoRoot: TMP, task: 'hello', client });
 
     expect(result.terminalState).toBe('completed');
-    expect(client.requests[0].tools.map((tool: { name: string }) => tool.name)).toEqual([
+    expect((client.requests[0].tools ?? []).map((tool: { name: string }) => tool.name)).toEqual([
       'read',
       'write',
       'edit',
@@ -128,7 +129,7 @@ describe('shared bounded agent runner', () => {
 
     await runTurn({ repoRoot: TMP, task: 'hello', client, tools: { bashEnabled: true } });
 
-    expect(client.requests[0].tools.map((tool: { name: string }) => tool.name)).toEqual([
+    expect((client.requests[0].tools ?? []).map((tool: { name: string }) => tool.name)).toEqual([
       'read',
       'write',
       'edit',
@@ -546,7 +547,7 @@ describe('shared bounded agent runner', () => {
     expect(client.requests[1].messages).not.toEqual(
       expect.arrayContaining([expect.objectContaining({ role: 'tool', tool_call_id: 'call_1' })]),
     );
-    expect(client.requests[1].messages.at(-1).content).toContain('"path":"a.txt"');
+    expect(client.requests[1].messages.at(-1)?.content).toContain('"path":"a.txt"');
   });
 
   it('groups multiple content-parsed tool results into one Qwen-style response message', async () => {
@@ -943,7 +944,8 @@ describe('shared bounded agent runner', () => {
     );
     const loopErrorMsg = allToolMessages.find((m) => m.content.includes('Read loop detected'));
     expect(loopErrorMsg).toBeDefined();
-    expect(loopErrorMsg!.content).toContain('WORKING CONTEXT');
+    const msg = loopErrorMsg as NonNullable<typeof loopErrorMsg>;
+    expect(msg.content).toContain('WORKING CONTEXT');
   });
 
   it('allows absolute read paths', async () => {
@@ -982,8 +984,9 @@ describe('shared bounded agent runner', () => {
     // The third read (tool_call_id '3') result should contain guidance.
     const read3 = toolMsgs.find((m) => (m as { tool_call_id?: string }).tool_call_id === '3');
     expect(read3).toBeDefined();
-    expect(read3!.content).toContain('guidance');
-    expect(read3!.content).toContain('search');
+    const r3 = read3 as NonNullable<typeof read3>;
+    expect(r3.content).toContain('guidance');
+    expect(r3.content).toContain('search');
   });
 
   it('treats different line ranges as distinct reads, not repetitions', async () => {
@@ -1012,30 +1015,31 @@ describe('shared bounded agent runner', () => {
 
   it('returns a clear tool error when total read calls exceed the per-turn limit', async () => {
     mkdirSync(join(TMP, 'src'), { recursive: true });
-    for (let index = 0; index < 25; index += 1) {
+    const NUM_READS = 65;
+    for (let index = 0; index < NUM_READS; index += 1) {
       writeFileSync(join(TMP, 'src', `file-${index}.ts`), `export const v${index} = ${index};\n`, 'utf-8');
     }
 
-    const toolCallResponses = Array.from({ length: 25 }, (_, index) => ({
+    const toolCallResponses = Array.from({ length: NUM_READS }, (_, index) => ({
       toolCalls: [{ id: String(index + 1), name: 'read', arguments: { path: `src/file-${index}.ts` } }],
     }));
     const client = fakeClient([...toolCallResponses, { content: 'should not be reached' }]);
 
-    const result = await runTurn({ repoRoot: TMP, task: 'inspect many files', client, maxSteps: 30 });
+    const result = await runTurn({ repoRoot: TMP, task: 'inspect many files', client, maxModelSteps: 70 });
 
     // Read-limit errors are recoverable: the model sees the error and can adapt.
     // The agent completes with the model's final answer rather than dying.
     expect(result.terminalState).toBe('completed');
     expect(result.finalAnswer).toBe('should not be reached');
-    expect(result.toolCalls).toHaveLength(25);
-    expect(result.toolCalls.slice(0, 24).every((call) => call.success === true)).toBe(true);
-    expect(result.toolCalls[24]).toEqual({
+    expect(result.toolCalls).toHaveLength(NUM_READS);
+    expect(result.toolCalls.slice(0, 64).every((call) => call.success === true)).toBe(true);
+    expect(result.toolCalls[64]).toEqual({
       name: 'read',
       success: false,
-      error: 'total read limit reached for this turn: 24',
+      error: 'total read limit reached for this turn: 64',
     });
     // One extra request: the final step where the model sees the limit error and answers
-    expect(client.requests).toHaveLength(26);
+    expect(client.requests).toHaveLength(NUM_READS + 1);
   });
 
   it('truncates large read outputs before they enter model history', async () => {

@@ -31,22 +31,25 @@ describe('repairJson', () => {
     const raw = '{"name":"read","arguments":{"path":"x",}}';
     const result = repairJson(raw);
     expect(result).not.toBeNull();
-    expect(result!.repaired).not.toContain(',}');
+    const r = result as NonNullable<typeof result>;
+    expect(r.repaired).not.toContain(',}');
   });
 
   it('repairs trailing commas in arrays', () => {
     const raw = '{"name":"read","arguments":{"paths":["a",]}}';
     const result = repairJson(raw);
     expect(result).not.toBeNull();
-    expect(result!.repaired).not.toContain(',]');
+    const r = result as NonNullable<typeof result>;
+    expect(r.repaired).not.toContain(',]');
   });
 
   it('balances missing closing braces', () => {
     const raw = '{"name":"edit","arguments":{"path":"x","oldStr":"y"';
     const result = repairJson(raw);
     expect(result).not.toBeNull();
+    const r = result as NonNullable<typeof result>;
     // Should add closing braces to balance
-    const parsed = JSON.parse(result!.repaired);
+    const parsed = JSON.parse(r.repaired);
     expect(parsed.name).toBe('edit');
     expect(parsed.arguments.path).toBe('x');
   });
@@ -56,8 +59,9 @@ describe('repairJson', () => {
     const raw = '{"name":"bash","arguments":{"command":"npm test"';
     const result = repairJson(raw);
     expect(result).not.toBeNull();
-    expect(result!.fixes.length).toBeGreaterThan(0);
-    const parsed = JSON.parse(result!.repaired);
+    const r = result as NonNullable<typeof result>;
+    expect(r.fixes.length).toBeGreaterThan(0);
+    const parsed = JSON.parse(r.repaired);
     expect(parsed.name).toBe('bash');
     expect(parsed.arguments.command).toBe('npm test');
   });
@@ -81,17 +85,19 @@ describe('repairJson', () => {
     const raw = 'Here is the call: {"name":"read","arguments":{"path":"README.md"}} end of text';
     const result = repairJson(raw);
     expect(result).not.toBeNull();
-    const parsed = JSON.parse(result!.repaired);
+    const r = result as NonNullable<typeof result>;
+    const parsed = JSON.parse(r.repaired);
     expect(parsed.name).toBe('read');
     expect(parsed.arguments.path).toBe('README.md');
-    expect(result!.fixes).toContain('extracted JSON from surrounding text');
+    expect(r.fixes).toContain('extracted JSON from surrounding text');
   });
 
   it('handles multiple trailing commas', () => {
     const raw = '{"name":"read","arguments":{"a":1,"b":2,},}';
     const result = repairJson(raw);
     expect(result).not.toBeNull();
-    const parsed = JSON.parse(result!.repaired);
+    const r = result as NonNullable<typeof result>;
+    const parsed = JSON.parse(r.repaired);
     expect(parsed.name).toBe('read');
     expect(parsed.arguments.a).toBe(1);
     expect(parsed.arguments.b).toBe(2);
@@ -101,14 +107,16 @@ describe('repairJson', () => {
     const raw = '{"name":"edit","arguments":{"path":"x","changes":[{"old":"a","new":"b"';
     const result = repairJson(raw);
     expect(result).not.toBeNull();
-    expect(result!.fixes.length).toBeGreaterThan(0);
+    const r = result as NonNullable<typeof result>;
+    expect(r.fixes.length).toBeGreaterThan(0);
   });
 
   it('records fixes for debugging', () => {
     const raw = '{"name":"read","arguments":{"path":"x",}}';
     const result = repairJson(raw);
     expect(result).not.toBeNull();
-    expect(result!.fixes).toContain('removed trailing commas');
+    const r = result as NonNullable<typeof result>;
+    expect(r.fixes).toContain('removed trailing commas');
   });
 });
 
@@ -119,7 +127,8 @@ describe('repairXml', () => {
     const raw = '<tool_call>\n<function=read>\n<parameter=path>README.md</parameter>\n</function>\n';
     const result = repairXml(raw);
     expect(result).not.toBeNull();
-    expect(result!.repaired).toContain('</tool_call>');
+    const r = result as NonNullable<typeof result>;
+    expect(r.repaired).toContain('</tool_call>');
   });
 
   it('strips leaked reasoning tags inside tool calls', () => {
@@ -127,16 +136,18 @@ describe('repairXml', () => {
       '<think>I should read the file</think><tool_call><function=read><parameter=path>README.md</parameter></function></tool_call>';
     const result = repairXml(raw);
     expect(result).not.toBeNull();
-    expect(result!.repaired).not.toContain('<think>');
-    expect(result!.repaired).toContain('<tool_call>');
+    const r = result as NonNullable<typeof result>;
+    expect(r.repaired).not.toContain('<think>');
+    expect(r.repaired).toContain('<tool_call>');
   });
 
   it('balances unclosed <function> tags', () => {
     const raw = '<tool_call><function=read><parameter=path>x</parameter></tool_call>';
     const result = repairXml(raw);
     expect(result).not.toBeNull();
+    const r = result as NonNullable<typeof result>;
     // Function has no closing tag — should be balanced
-    expect(result!.repaired).toContain('</function>');
+    expect(r.repaired).toContain('</function>');
   });
 
   it('balances unclosed <parameter> tags', () => {
@@ -144,8 +155,9 @@ describe('repairXml', () => {
       '<tool_call><function=edit><parameter=path>x</parameter><parameter=oldStr>y</parameter><parameter=newStr>z<parameter=flag>true</parameter></function></tool_call>';
     const result = repairXml(raw);
     expect(result).not.toBeNull();
+    const r = result as NonNullable<typeof result>;
     // The newStr parameter is unclosed
-    expect(result!.fixes.length).toBeGreaterThan(0);
+    expect(r.fixes.length).toBeGreaterThan(0);
   });
 
   it('extracts tool-call blocks from mixed content', () => {
@@ -153,10 +165,11 @@ describe('repairXml', () => {
       'Some text before. <tool_call><function=read><parameter=path>x</parameter></function></tool_call> Some text after.';
     const result = repairXml(raw);
     expect(result).not.toBeNull();
-    expect(result!.repaired).toContain('<tool_call>');
+    const r = result as NonNullable<typeof result>;
+    expect(r.repaired).toContain('<tool_call>');
     // Non-tool content should be stripped
-    expect(result!.repaired).not.toContain('Some text before');
-    expect(result!.repaired).not.toContain('Some text after');
+    expect(r.repaired).not.toContain('Some text before');
+    expect(r.repaired).not.toContain('Some text after');
   });
 
   it('returns null for non-XML garbage', () => {
@@ -169,14 +182,16 @@ describe('repairXml', () => {
       '<tool_call><function=read><parameter=path>a.ts</parameter></function></tool_call>\n<tool_call><function=read><parameter=path>b.ts</parameter></function></tool_call>';
     const result = repairXml(raw);
     expect(result).not.toBeNull();
-    expect(result!.repaired.split('<tool_call>').length).toBeGreaterThanOrEqual(3); // 2 blocks + leading split
+    const r = result as NonNullable<typeof result>;
+    expect(r.repaired.split('<tool_call>').length).toBeGreaterThanOrEqual(3); // 2 blocks + leading split
   });
 
   it('records fixes for debugging', () => {
     const raw = '<tool_call><function=read><parameter=path>x</parameter></function>';
     const result = repairXml(raw);
     expect(result).not.toBeNull();
-    expect(result!.fixes.length).toBeGreaterThan(0);
+    const r = result as NonNullable<typeof result>;
+    expect(r.fixes.length).toBeGreaterThan(0);
   });
 });
 

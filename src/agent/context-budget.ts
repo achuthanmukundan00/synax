@@ -47,8 +47,8 @@ const DEFAULT_SETTINGS: ContextBudgetSettings = {
   contextWindowTokens: 131072,
   reservedOutputTokens: 8192,
   keepRecentTokens: 20000,
-  maxSingleReadResultTokens: 6000,
-  maxTotalReadResultTokensPerTurn: 40000,
+  maxSingleReadResultTokens: 12000,
+  maxTotalReadResultTokensPerTurn: 96000,
   keepRecentToolTurns: 3,
 };
 
@@ -383,6 +383,40 @@ function failCompact(
 }
 
 // ---------------------------------------------------------------------------
+// Oversized tool result pre-compaction
+// ---------------------------------------------------------------------------
+
+/**
+ * Compact individual tool results that are disproportionately large relative
+ * to the context budget. A single 10 KB stdout dump shouldn't prevent the
+ * tail-truncation logic from keeping recent conversational context.
+ *
+ * Returns a new messages array (does not mutate the original).
+ */
+function compactOversizedToolResults(messages: AgentMessage[], settings: ContextBudgetSettings): AgentMessage[] {
+  const effectiveLimit = settings.contextWindowTokens - settings.reservedOutputTokens;
+  // Only compact tool results larger than 25% of the effective budget.
+  // This keeps normal-sized results intact while catching stdout dumps,
+  // massive file reads, and other single-message budget dominators.
+  const thresholdTokens = Math.max(50, Math.floor(effectiveLimit * 0.25));
+
+  let changed = false;
+  const result = messages.map((msg) => {
+    if (msg.role !== 'tool') return msg;
+    const tokens = estimateMessageTokens(msg);
+    if (tokens <= thresholdTokens) return msg;
+    const compacted = compactToolResultMessage(msg);
+    if (compacted) {
+      changed = true;
+      return compacted;
+    }
+    return msg;
+  });
+
+  return changed ? result : messages;
+}
+
+// ---------------------------------------------------------------------------
 // Core compaction logic
 // ---------------------------------------------------------------------------
 
@@ -392,8 +426,12 @@ export function compactMessages(
 ): { activeMessages: AgentMessage[]; compaction: CompactionRecord | null } {
   if (messages.length <= 2) return { activeMessages: messages, compaction: null };
 
-  const system = messages[0];
-  const body = messages.slice(1);
+  // Pre-compact oversized individual tool results so a single large
+  // result doesn't dominate the budget and prevent tail truncation.
+  const preCompacted = compactOversizedToolResults(messages, settings);
+
+  const system = preCompacted[0];
+  const body = preCompacted.slice(1);
   let keptTokens = 0;
   let keepFrom = body.length;
   for (let index = body.length - 1; index >= 0; index -= 1) {
@@ -433,8 +471,11 @@ function compactMessagesAggressive(
 ): { activeMessages: AgentMessage[]; compaction: CompactionRecord | null } {
   if (messages.length <= 2) return { activeMessages: messages, compaction: null };
 
-  const system = messages[0];
-  const body = messages.slice(1);
+  // Pre-compact oversized individual tool results
+  const preCompacted = compactOversizedToolResults(messages, settings);
+
+  const system = preCompacted[0];
+  const body = preCompacted.slice(1);
   let keptTokens = 0;
   let keepFrom = body.length;
   for (let index = body.length - 1; index >= 0; index -= 1) {

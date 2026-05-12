@@ -782,6 +782,25 @@ export async function runInteractiveTui(
     const assistantMessages = events.filter((e) => e.type === 'assistant_message').length;
     const toolEvents = events.filter((e) => e.type === 'tool_call' || e.type === 'tool_result').length;
 
+    // Restore context window values from the last state snapshot
+    const lastSnapshot = events.filter((e) => e.type === 'state_snapshot').pop();
+    const snapData = (lastSnapshot?.snapshot ?? {}) as Record<string, unknown>;
+    if (typeof snapData.contextWindowTokens === 'number') {
+      state = applyEventToRunState(
+        state,
+        {
+          type: 'context_budget_updated',
+          timestamp: new Date().toISOString(),
+          estimatedInputTokens: typeof snapData.contextUsedTokens === 'number' ? snapData.contextUsedTokens : 0,
+          inputLimit: (snapData.contextWindowTokens as number) - 8192,
+          contextWindowTokens: snapData.contextWindowTokens as number,
+          reservedOutputTokens: 8192,
+          step: 0,
+        },
+        Date.now(),
+      );
+    }
+
     const contentLines = [
       `Resumed session: ${title}`,
       `Branch: ${meta.branch ?? 'unknown'}  ·  Model: ${meta.activeModel ?? 'unknown'}`,
@@ -899,13 +918,16 @@ export async function runInteractiveTui(
       // ── Steering input routing (model actively generating) ──────
       if (busy) {
         if (event.type === 'escape') {
-          // Escape interrupts bot and stops the session.
+          // Escape interrupts the current turn and returns to idle so the
+          // user can type a new prompt. It does NOT exit the Synax session
+          // (use Ctrl+D for that, as documented in the input dock help).
           session.abortCurrentTurn?.();
           session.setSteeringMessage?.('');
           steeringMessage = '';
           steeringActive = false;
-          finish();
-          break;
+          // submit()'s finally block will reset busy=false and repaint when
+          // the aborted turn settles.
+          continue;
         }
         if (event.type === 'submit') {
           if (steeringMessage.trim()) {
@@ -951,7 +973,6 @@ export async function runInteractiveTui(
         if (event.type === 'backspace') {
           if (steeringMessage.length > 0) {
             steeringMessage = steeringMessage.slice(0, -1);
-            session.setSteeringMessage?.(steeringMessage);
             if (steeringMessage.length === 0) {
               steeringActive = false;
             }
@@ -959,10 +980,15 @@ export async function runInteractiveTui(
           continue;
         }
         if (event.type === 'text' && event.value) {
+          // Steering text is held locally until Enter. We deliberately do NOT
+          // forward each keystroke to session.setSteeringMessage because the
+          // session would auto-consume the pending message between tool calls
+          // (onSteeringCheck), clearing the in-progress text from the steering
+          // bar mid-type. Submission happens explicitly on Enter via the
+          // busy-mode submit handler above.
           if (steeringMessage.length < MAX_INPUT_CHARS) {
             steeringMessage += event.value;
             steeringActive = true;
-            session.setSteeringMessage?.(steeringMessage);
           }
           continue;
         }

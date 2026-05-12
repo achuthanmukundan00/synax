@@ -219,8 +219,9 @@ describe('skill injection into agent context', () => {
     // Skill message should be a system message
     const skillMsg = conv.messages.find((m) => m.content.includes('BEGIN SKILL:'));
     expect(skillMsg).toBeDefined();
-    expect(skillMsg!.role).toBe('system');
-    expect(skillMsg!.content).toContain('# Skill instructions');
+    const msg = skillMsg as NonNullable<typeof skillMsg>;
+    expect(msg.role).toBe('system');
+    expect(msg.content).toContain('# Skill instructions');
   });
 
   it('creates conversation without skills when none provided', () => {
@@ -320,9 +321,10 @@ enabled: true
     expect(discovery.skills.length).toBeGreaterThanOrEqual(1);
     const tsSkill = discovery.skills.find((s) => s.name === 'TypeScript Style Guide');
     expect(tsSkill).toBeDefined();
-    expect(tsSkill!.source).toBe('project');
-    expect(tsSkill!.enabled).toBe(true);
-    expect(tsSkill!.instructions).toContain('Use strict mode');
+    const skill = tsSkill as NonNullable<typeof tsSkill>;
+    expect(skill.source).toBe('project');
+    expect(skill.enabled).toBe(true);
+    expect(skill.instructions).toContain('Use strict mode');
   });
 
   it('returns empty discovery for directory with no skills', () => {
@@ -350,7 +352,8 @@ enabled: false
     const discovery = discoverSkills(testProjectDir);
     const disabled = discovery.disabled.find((s) => s.name === 'Disabled Skill');
     expect(disabled).toBeDefined();
-    expect(disabled!.enabled).toBe(false);
+    const skill = disabled as NonNullable<typeof disabled>;
+    expect(skill.enabled).toBe(false);
   });
 
   it('builds skill messages from loaded skills', () => {

@@ -47,7 +47,7 @@ describe('DeterministicCompactor', () => {
 
       const input = msgs(stackTrace);
       const result = compactor.compact(input);
-      const output = result.messages[0].content!;
+      const output = result.messages[0].content ?? '';
 
       // First two node_modules frames kept, rest collapsed
       expect(output).toContain('node_modules/jest-runtime/index.js:123:1');
@@ -106,7 +106,7 @@ describe('DeterministicCompactor', () => {
       const result = compactor.compact(input);
 
       // Should have at most 2 consecutive blank lines
-      const blankCount = (result.messages[0].content!.match(/^\s*$/gm) || []).length;
+      const blankCount = (result.messages[0].content ?? '').match(/^\s*$/gm)?.length ?? 0;
       // After collapse, the maximum consecutive is 2, and since we have 2 gaps:
       // gap1: 4 blanks → max 2; gap2: 2 blanks → 2. Total: 4 blanks max
       expect(blankCount).toBeLessThanOrEqual(4);
@@ -183,7 +183,7 @@ describe('DeterministicCompactor', () => {
 
       const input = msgs(content);
       const result = compactor.compact(input);
-      const output = result.messages[0].content!;
+      const output = result.messages[0].content ?? '';
 
       // Important content preserved
       expect(output).toContain('critical error');

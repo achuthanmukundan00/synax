@@ -13,6 +13,23 @@ const BREATHING_GLYPHS = ['◌', '◓', '◑', '◒'];
 
 // ─── Tool-summary detection ───────────────────────────────
 
+/** Strip LaTeX math commands that terminals can't render.
+ *  Converts common escapes to Unicode and removes remaining \commands. */
+function stripLatexCommands(text: string): string {
+  return text
+    .replace(/\\pmod\{([^}]*)\}/gi, ' (mod $1)')
+    .replace(/\\bmod\b/gi, ' mod ')
+    .replace(/\\equiv\b/gi, '≡')
+    .replace(/\\cdot\b/gi, '·')
+    .replace(/\\times\b/gi, '×')
+    .replace(/\\ldots\b/gi, '…')
+    .replace(/\\cdots\b/gi, '⋯')
+    .replace(/\\text\{([^}]*)\}/gi, '$1')
+    .replace(/\\[a-zA-Z]+(\{[^}]*\})*/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 /** Detect notes that are only tool-call summaries with no useful prose.
  *  These should not appear in the user transcript or as working preview text. */
 function isToolSummaryNote(text: string): boolean {
@@ -768,12 +785,14 @@ function truncate(text: string, max: number): string {
  *  stripping think blocks, tool_call XML, and excess whitespace.
  *  Returns empty string when content is only tool-call summaries. */
 function extractModelProse(detail: string): string {
-  const clean = detail
-    .replace(/<tool_call>[\s\S]*?<\/tool_call>/gi, '')
-    .replace(/\s*[-–—>→]*\s*\d+\s+tool call\(s\):\s*[A-Za-z0-9_,\s.-]+$/gi, '')
-    .replace(/<\/?(?:think|thinking)>/gi, '')
-    .replace(/[ \t]+/g, ' ')
-    .trim();
+  const clean = stripLatexCommands(
+    detail
+      .replace(/<tool_call>[\s\S]*?<\/tool_call>/gi, '')
+      .replace(/\s*[-–—>→]*\s*\d+\s+tool call\(s\):\s*[A-Za-z0-9_,\s.-]+$/gi, '')
+      .replace(/<\/?(?:think|thinking)>/gi, '')
+      .replace(/[ \t]+/g, ' ')
+      .trim(),
+  );
   // If the remaining text is itself only a tool-summary line, return empty.
   if (isToolSummaryNote(clean)) return '';
   // Filter process-chatter that narrates intended future actions.
@@ -1034,11 +1053,13 @@ function renderInlineMd(text: string, _maxWidth: number): string {
 /** Render the final model output — uses markdown formatting when applicable,
  *  otherwise renders as plain wrapped text. */
 function renderReviewOutput(body: string, width: number): string[] {
-  let clean = body
-    .replace(/<think>[\s\S]*?<\/think>/gi, '')
-    .replace(/<thinking>[\s\S]*?<\/thinking>/gi, '')
-    .replace(/<tool_call>[\s\S]*?<\/tool_call>/gi, '')
-    .trim();
+  let clean = stripLatexCommands(
+    body
+      .replace(/<think>[\s\S]*?<\/think>/gi, '')
+      .replace(/<thinking>[\s\S]*?<\/thinking>/gi, '')
+      .replace(/<tool_call>[\s\S]*?<\/tool_call>/gi, '')
+      .trim(),
+  );
   // Filter process-chatter lines from the final result.
   clean = clean
     .split('\n')

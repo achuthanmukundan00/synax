@@ -12,7 +12,7 @@ import { estimateTokens, truncateForTokenBudget } from '../../agent/context-budg
 
 // ─── Constants ────────────────────────────────────────────
 
-const MAX_TOTAL_READS_PER_TURN = 24;
+const MAX_TOTAL_READS_PER_TURN = 64;
 const MAX_IDENTICAL_READS_PER_TURN = 3;
 
 // ─── Public handler ───────────────────────────────────────

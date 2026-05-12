@@ -55,9 +55,20 @@ async function dispatchRequest(
   body: unknown,
   headers: Record<string, string>,
   timeoutMs: number,
+  externalSignal?: AbortSignal,
 ): Promise<{ status: number; bodyText: string; headers: Record<string, string> }> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+  // Wire external signal (e.g. user abort) into the fetch controller.
+  const onExternalAbort = (): void => controller.abort();
+  if (externalSignal) {
+    if (externalSignal.aborted) {
+      clearTimeout(timer);
+      throw providerError('timeout', 'Request aborted before dispatch', { detail: 'external abort signal' });
+    }
+    externalSignal.addEventListener('abort', onExternalAbort, { once: true });
+  }
 
   try {
     const res = await fetch(url, {
@@ -67,6 +78,7 @@ async function dispatchRequest(
       signal: controller.signal,
     });
     clearTimeout(timer);
+    externalSignal?.removeEventListener('abort', onExternalAbort);
     const bodyText = await res.text();
     const respHeaders: Record<string, string> = {};
     res.headers.forEach((v, k) => {
@@ -75,8 +87,13 @@ async function dispatchRequest(
     return { status: res.status, bodyText, headers: respHeaders };
   } catch (err) {
     clearTimeout(timer);
+    externalSignal?.removeEventListener('abort', onExternalAbort);
     const msg = describeNetworkError(err);
     if (err instanceof DOMException && err.name === 'AbortError') {
+      // Distinguish external abort (user cancel) from timeout.
+      if (externalSignal?.aborted) {
+        throw providerError('timeout', 'Request aborted by user', { detail: 'external abort signal' });
+      }
       throw providerError('timeout', `Request timed out after ${timeoutMs}ms`, { detail: msg });
     }
     if (msg.includes('ECONNREFUSED') || msg.includes('ENOTFOUND') || msg.includes('connect ECONNREFUSED')) {
@@ -237,9 +254,20 @@ async function dispatchStreamingRequest(
   headers: Record<string, string>,
   timeoutMs: number,
   onDelta: NonNullable<ChatOptions['onDelta']>,
+  externalSignal?: AbortSignal,
 ): Promise<{ status: number; bodyText: string; headers: Record<string, string> }> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+  // Wire external signal (e.g. user abort) into the fetch controller.
+  const onExternalAbort = (): void => controller.abort();
+  if (externalSignal) {
+    if (externalSignal.aborted) {
+      clearTimeout(timer);
+      throw providerError('timeout', 'Request aborted before dispatch', { detail: 'external abort signal' });
+    }
+    externalSignal.addEventListener('abort', onExternalAbort, { once: true });
+  }
 
   try {
     const res = await fetch(url, {
@@ -254,16 +282,22 @@ async function dispatchStreamingRequest(
     });
     if (!res.ok || !res.body) {
       clearTimeout(timer);
+      externalSignal?.removeEventListener('abort', onExternalAbort);
       return { status: res.status, bodyText: await res.text(), headers: respHeaders };
     }
 
     const parsed = await readOpenAIStream(res.body, onDelta);
     clearTimeout(timer);
+    externalSignal?.removeEventListener('abort', onExternalAbort);
     return { status: res.status, bodyText: JSON.stringify(parsed), headers: respHeaders };
   } catch (err) {
     clearTimeout(timer);
+    externalSignal?.removeEventListener('abort', onExternalAbort);
     const msg = describeNetworkError(err);
     if (err instanceof DOMException && err.name === 'AbortError') {
+      if (externalSignal?.aborted) {
+        throw providerError('timeout', 'Request aborted by user', { detail: 'external abort signal' });
+      }
       throw providerError('timeout', `Request timed out after ${timeoutMs}ms`, { detail: msg });
     }
     if (msg.includes('ECONNREFUSED') || msg.includes('ENOTFOUND') || msg.includes('connect ECONNREFUSED')) {
@@ -531,8 +565,8 @@ export function createOpenAICompatibleClient(
       };
 
       const result = opts.onDelta
-        ? await dispatchStreamingRequest(endpoint, body, headers, timeoutMs, opts.onDelta)
-        : await dispatchRequest(endpoint, body, headers, timeoutMs);
+        ? await dispatchStreamingRequest(endpoint, body, headers, timeoutMs, opts.onDelta, opts.signal)
+        : await dispatchRequest(endpoint, body, headers, timeoutMs, opts.signal);
 
       if (result.status >= 200 && result.status < 300) {
         const response = parseSuccessResponse(result.bodyText, parserMode);

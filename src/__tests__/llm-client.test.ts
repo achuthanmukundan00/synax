@@ -88,9 +88,10 @@ describe('LLM client — basic chat', () => {
   test('POSTs to /chat/completions and returns content', async () => {
     const client = createOpenAICompatibleClient(makeConfig({ baseUrl: getServerUrl(srv) }));
     const resp = await client.chat({ messages: [{ role: 'user', content: 'hi' }], maxTokens: 32 });
-    expect(captured!.method).toBe('POST');
-    expect(captured!.path).toBe('/chat/completions');
-    expect(JSON.parse(captured!.body).max_tokens).toBe(32);
+    if (!captured) throw new Error('No request captured');
+    expect(captured.method).toBe('POST');
+    expect(captured.path).toBe('/chat/completions');
+    expect(JSON.parse(captured.body).max_tokens).toBe(32);
     expect(resp.content).toBe('Hello');
     expect(resp.model).toBe('test-model');
     expect(resp.finishReason).toBe('stop');
@@ -108,7 +109,8 @@ describe('LLM client — basic chat', () => {
       ],
     });
 
-    const body = JSON.parse(captured!.body) as {
+    if (!captured) throw new Error('No request captured');
+    const body = JSON.parse(captured.body) as {
       messages: Array<{ role: string; content: string; tool_calls?: unknown }>;
     };
     expect(body.messages[1]).toEqual({ role: 'assistant', content: 'final answer' });
@@ -164,7 +166,8 @@ describe('LLM client — basic chat', () => {
       onDelta: (delta) => deltas.push(delta),
     });
 
-    expect(JSON.parse(captured!.body).stream).toBe(true);
+    if (!captured) throw new Error('No request captured');
+    expect(JSON.parse(captured.body).stream).toBe(true);
     expect(deltas).toEqual([
       { reasoningContent: 'think ' },
       { reasoningContent: 'more' },
@@ -213,7 +216,8 @@ describe('LLM client — basic chat', () => {
       ],
     });
 
-    const body = JSON.parse(captured!.body);
+    if (!captured) throw new Error('No request captured');
+    const body = JSON.parse(captured.body);
     expect(body.thinking).toEqual({ type: 'enabled' });
     expect(body.reasoning_effort).toBe('high');
     expect(body.messages[0].reasoning_content).toBe('must echo');
@@ -236,7 +240,8 @@ describe('LLM client — basic chat', () => {
       messages: [{ role: 'assistant', content: 'prior', reasoning_content: 'deepseek-only' }],
     });
 
-    const body = JSON.parse(captured!.body);
+    if (!captured) throw new Error('No request captured');
+    const body = JSON.parse(captured.body);
     expect(body.thinking).toBeUndefined();
     expect(body.reasoning_effort).toBeUndefined();
     expect(body.messages[0].reasoning_content).toBeUndefined();
@@ -280,7 +285,8 @@ describe('LLM client — basic chat', () => {
         },
       ],
     });
-    const body = JSON.parse(captured!.body) as Record<string, unknown>;
+    if (!captured) throw new Error('No request captured');
+    const body = JSON.parse(captured.body) as Record<string, unknown>;
 
     expect(body.tools).toEqual([
       {
@@ -460,7 +466,8 @@ describe('LLM client — empty API key', () => {
   test('does not send Authorization when api_key is empty', async () => {
     const client = createOpenAICompatibleClient(makeConfig({ baseUrl: getServerUrl(srv), apiKey: '' }));
     await client.chat({ messages: [{ role: 'user', content: 'x' }] });
-    expect(captured!.headers['authorization']).toBeUndefined();
+    if (!captured) throw new Error('No request captured');
+    expect(captured.headers['authorization']).toBeUndefined();
   });
 });
 
@@ -492,7 +499,8 @@ describe('LLM client — custom headers', () => {
       makeConfig({ baseUrl: getServerUrl(srv), customHeaders: { 'X-Test-Header': 'abc' } }),
     );
     await client.chat({ messages: [{ role: 'user', content: 'hi' }] });
-    expect(captured!.headers['x-test-header']).toBe('abc');
+    if (!captured) throw new Error('No request captured');
+    expect(captured.headers['x-test-header']).toBe('abc');
   });
 });
 
@@ -586,7 +594,7 @@ describe('LLM client — provider error plain text', () => {
 // Test 6: Config validation — missing provider kind
 describe('Config validation — missing kind', () => {
   test('missing provider.kind is allowed and inferred by preset/defaults', () => {
-    const errors = validateConfig({ provider: {} as any });
+    const errors = validateConfig({ provider: {} } as unknown as Parameters<typeof validateConfig>[0]);
     expect(errors.some((e) => e.path === 'provider.kind')).toBeFalsy();
   });
 });
@@ -596,7 +604,7 @@ describe('Config validation — unsupported kind', () => {
   test('anthropic kind produces unsupported-provider error', () => {
     const errors = validateConfig({
       provider: { kind: 'anthropic' as unknown as 'openai-compatible', base_url: 'http://x' },
-    } as any);
+    } as unknown as Parameters<typeof validateConfig>[0]);
     expect(errors.some((e) => e.path === 'provider.kind' && e.message.includes('unsupported-provider'))).toBeTruthy();
   });
 });
