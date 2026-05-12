@@ -90,8 +90,8 @@ describe('ToolCallParserRegistry', () => {
     expect(qwen3coder).toBeDefined();
     // Both should parse Qwen XML the same way
     const input = '<tool_call><function=read><parameter=path>a.ts</parameter></function></tool_call>';
-    const resultXml = qwen3xml!.parse(input);
-    const resultCoder = qwen3coder!.parse(input);
+    const resultXml = (qwen3xml as NonNullable<typeof qwen3xml>).parse(input);
+    const resultCoder = (qwen3coder as NonNullable<typeof qwen3coder>).parse(input);
     expect(resultXml.calls.length).toBe(1);
     expect(resultCoder.calls.length).toBe(1);
     expect(resultXml.calls[0].name).toBe('read');

@@ -5,6 +5,7 @@
  */
 
 import { resolve, join } from 'path';
+import { Command } from 'commander';
 import { loadProjectConfig, writeConfigFile, generateDefaultConfig, ProjectConfig } from '../config/project';
 import { buildProjectProfile, formatTextProfile, FullProfile } from '../config/profile';
 
@@ -19,7 +20,14 @@ export interface ConfigCommandOptions {
 /**
  * Run the config command.
  */
-export function runConfigCommand(program: any): void {
+interface ConfigActionOptions {
+  path?: string;
+  key?: string;
+  json?: boolean;
+  force?: boolean;
+}
+
+export function runConfigCommand(program: Command): void {
   const cwd = process.cwd();
 
   program
@@ -30,7 +38,7 @@ export function runConfigCommand(program: any): void {
     .option('-k, --key <key>', 'Key to get')
     .option('-j, --json', 'Output as JSON')
     .option('-f, --force', 'Overwrite existing config')
-    .action((subcommand: string, options: any) => {
+    .action((subcommand: string, options: ConfigActionOptions) => {
       const targetPath = options.path ? resolve(options.path) : cwd;
       const opts: ConfigCommandOptions = {
         command: subcommand as 'init' | 'show' | 'get',

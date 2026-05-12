@@ -416,7 +416,7 @@ describe('Memory → Handoff → Continue Pipeline', () => {
         client: mockClient(),
       });
 
-      session.eventBus.on('session_shutdown' as any, () => {
+      session.eventBus.on('session_shutdown', () => {
         // subscription intact
       });
 

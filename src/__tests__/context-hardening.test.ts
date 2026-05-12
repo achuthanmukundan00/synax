@@ -377,7 +377,7 @@ describe('hard read omission', () => {
       (m) => m.role === 'tool' && m.tool_call_id === '2',
     )?.content;
     expect(secondToolContent).toBeDefined();
-    const parsed = JSON.parse(secondToolContent!);
+    const parsed = JSON.parse(secondToolContent as string);
     expect(parsed.output.omitted).toBe(true);
     expect(parsed.output.reason).toBe('turn token budget exceeded');
     expect(parsed.output.guidance).toBe('use targeted read/search');
@@ -740,8 +740,10 @@ describe('preflight enforcement within tool loop', () => {
     expect(result.terminalState).toBe('completed');
     expect(result.finalAnswer).toBe('done');
     // The loop-detection error was delivered to the model as a tool result
-    const toolMsgs = client.requests.flatMap((r: any) =>
-      (r.messages ?? []).filter((m: any) => m.role === 'tool' && m.content.includes('Read loop detected')),
+    const toolMsgs = client.requests.flatMap((r: unknown) =>
+      (((r as Record<string, unknown>).messages as Array<Record<string, unknown>>) ?? []).filter(
+        (m: Record<string, unknown>) => m.role === 'tool' && String(m.content ?? '').includes('Read loop detected'),
+      ),
     );
     expect(toolMsgs.length).toBeGreaterThanOrEqual(1);
   });
@@ -859,7 +861,7 @@ describe('progressive loop resistance', () => {
       (m) => m.role === 'tool' && m.tool_call_id === '2',
     )?.content;
     expect(secondToolMsg).toBeDefined();
-    const parsed = JSON.parse(secondToolMsg!);
+    const parsed = JSON.parse(secondToolMsg as string);
     expect(parsed.success).toBe(true);
   });
 
@@ -885,7 +887,7 @@ describe('progressive loop resistance', () => {
       (m) => m.role === 'tool' && m.tool_call_id === '3',
     )?.content;
     expect(thirdToolMsg).toBeDefined();
-    const parsed = JSON.parse(thirdToolMsg!);
+    const parsed = JSON.parse(thirdToolMsg as string);
     expect(parsed.output.guidance ?? '').toMatch(/already|reread|duplicate|stop/i);
   });
 
@@ -912,8 +914,14 @@ describe('progressive loop resistance', () => {
     expect(result.terminalState).toBe('completed');
     expect(result.finalAnswer).toBe('ok');
     // The loop-detection error was delivered to the model as a tool result
-    const toolMsgs = client.requests.flatMap((r: any) => (r.messages ?? []).filter((m: any) => m.role === 'tool'));
-    const loopMsg = toolMsgs.find((m: any) => /already read|reread|duplicate|loop/i.test(m.content));
+    const toolMsgs = client.requests.flatMap((r: unknown) =>
+      (((r as Record<string, unknown>).messages as Array<Record<string, unknown>>) ?? []).filter(
+        (m: Record<string, unknown>) => m.role === 'tool',
+      ),
+    );
+    const loopMsg = toolMsgs.find((m: Record<string, unknown>) =>
+      /already read|reread|duplicate|loop/i.test(String(m.content ?? '')),
+    );
     expect(loopMsg).toBeDefined();
   });
 
@@ -969,8 +977,9 @@ describe('working context injection', () => {
     const msgs = secondReq.messages as AgentMessage[];
     const orientationMsg = msgs.find((m) => m.role === 'system' && m.content.includes('WORKING CONTEXT'));
     expect(orientationMsg).toBeDefined();
-    expect(orientationMsg!.content).toContain('a.txt');
-    expect(orientationMsg!.content).toContain('Editable from memory');
+    const orientMsg = orientationMsg as NonNullable<typeof orientationMsg>;
+    expect(orientMsg.content).toContain('a.txt');
+    expect(orientMsg.content).toContain('Editable from memory');
   });
 
   it('omits orientation when nothing inspected yet', async () => {
@@ -1014,9 +1023,10 @@ describe('working context injection', () => {
     const msgs = lastReq.messages as AgentMessage[];
     const orientationMsg = msgs.find((m) => m.role === 'system' && m.content.includes('WORKING CONTEXT'));
     expect(orientationMsg).toBeDefined();
-    expect(orientationMsg!.content).toContain('src/main.ts');
-    expect(orientationMsg!.content).toContain('src/utils.ts');
-    expect(orientationMsg!.content).toContain('Editable from memory');
+    const orientMsg = orientationMsg as NonNullable<typeof orientationMsg>;
+    expect(orientMsg.content).toContain('src/main.ts');
+    expect(orientMsg.content).toContain('src/utils.ts');
+    expect(orientMsg.content).toContain('Editable from memory');
   });
 });
 
@@ -1079,13 +1089,15 @@ describe('model message assembly', () => {
     // Tool result for id='4' should be verbatim (recent turn, within last 3)
     const tool4 = lastReqMsgs.find((m) => m.role === 'tool' && m.tool_call_id === '4');
     expect(tool4).toBeDefined();
-    expect(tool4!.content).not.toContain('_compacted');
+    const t4 = tool4 as NonNullable<typeof tool4>;
+    expect(t4.content).not.toContain('_compacted');
 
     // Tool result for id='1' should be compacted (old, outside last 3 turns)
     const tool1 = lastReqMsgs.find((m) => m.role === 'tool' && m.tool_call_id === '1');
     expect(tool1).toBeDefined();
-    expect(tool1!.content).toContain('_compacted');
-    expect(tool1!.content.length).toBeLessThan(600);
+    const t1 = tool1 as NonNullable<typeof tool1>;
+    expect(t1.content).toContain('_compacted');
+    expect(t1.content.length).toBeLessThan(600);
   });
 
   it('assembly shrinks model request compared to conversation history', async () => {
@@ -1188,8 +1200,9 @@ describe('model message assembly', () => {
     const msgs = lastReq.messages as AgentMessage[];
     const tool1 = msgs.find((m) => m.role === 'tool' && m.tool_call_id === '1');
     expect(tool1).toBeDefined();
-    expect(tool1!.content).toContain('_compacted');
-    expect(tool1!.content).toContain('src/main.ts');
+    const t1 = tool1 as NonNullable<typeof tool1>;
+    expect(t1.content).toContain('_compacted');
+    expect(t1.content).toContain('src/main.ts');
   });
 
   it('non-tool messages are preserved verbatim', async () => {
@@ -1247,11 +1260,12 @@ describe('model message assembly', () => {
 
     expect(result.terminalState).toBe('completed');
     expect(conversation.assemblyStats).toBeDefined();
-    expect(conversation.assemblyStats!.compactedToolResults).toBeGreaterThan(0);
-    expect(conversation.assemblyStats!.estimatedTokensOut).toBeLessThan(conversation.assemblyStats!.estimatedTokensIn);
+    const stats = conversation.assemblyStats as NonNullable<typeof conversation.assemblyStats>;
+    expect(stats.compactedToolResults).toBeGreaterThan(0);
+    expect(stats.estimatedTokensOut).toBeLessThan(stats.estimatedTokensIn);
     const lastRequestMessages = client.requests[client.requests.length - 1].messages as AgentMessage[];
-    expect(conversation.assemblyStats!.totalMessagesOut).toBe(lastRequestMessages.length);
-    expect(conversation.assemblyStats!.estimatedTokensOut).toBe(estimateRequestTokens(lastRequestMessages));
+    expect(stats.totalMessagesOut).toBe(lastRequestMessages.length);
+    expect(stats.estimatedTokensOut).toBe(estimateRequestTokens(lastRequestMessages));
   });
 
   it('assembly stats include read-budget warning messages sent to the model', async () => {
@@ -1280,8 +1294,9 @@ describe('model message assembly', () => {
     expect(result.terminalState).toBe('completed');
     const lastRequestMessages = client.requests[client.requests.length - 1].messages as AgentMessage[];
     expect(lastRequestMessages.at(-1)?.content).toContain('STOP READING');
-    expect(conversation.assemblyStats!.totalMessagesOut).toBe(lastRequestMessages.length);
-    expect(conversation.assemblyStats!.estimatedTokensOut).toBe(estimateRequestTokens(lastRequestMessages));
+    const stats = conversation.assemblyStats as NonNullable<typeof conversation.assemblyStats>;
+    expect(stats.totalMessagesOut).toBe(lastRequestMessages.length);
+    expect(stats.estimatedTokensOut).toBe(estimateRequestTokens(lastRequestMessages));
   });
 
   it('directory listing results are compacted correctly', async () => {
@@ -1315,7 +1330,8 @@ describe('model message assembly', () => {
     const msgs = lastReq.messages as AgentMessage[];
     const tool1 = msgs.find((m) => m.role === 'tool' && m.tool_call_id === '1');
     expect(tool1).toBeDefined();
-    expect(tool1!.content).toContain('_compacted');
+    const t1 = tool1 as NonNullable<typeof tool1>;
+    expect(t1.content).toContain('_compacted');
   });
 
   it('orientation marks compacted files as not model-visible for editing', async () => {
@@ -1350,7 +1366,8 @@ describe('model message assembly', () => {
     const orientationMsg = msgs.find((m) => m.role === 'system' && m.content.includes('WORKING CONTEXT'));
     expect(orientationMsg).toBeDefined();
 
-    const content = orientationMsg!.content;
+    const orientMsg = orientationMsg as NonNullable<typeof orientationMsg>;
+    const content = orientMsg.content;
 
     // Recent files (s.txt, t.txt — turns 4 and 5) should be model-visible
     expect(content).toContain('Editable from memory');
@@ -1387,8 +1404,9 @@ describe('model message assembly', () => {
 
     expect(result.terminalState).toBe('completed');
     expect(conversation.assemblyStats).toBeDefined();
-    expect(conversation.assemblyStats!.compactedFilePaths.length).toBeGreaterThanOrEqual(2);
-    expect(conversation.assemblyStats!.compactedFilePaths).toContain('a.txt');
-    expect(conversation.assemblyStats!.compactedFilePaths).toContain('b.txt');
+    const stats = conversation.assemblyStats as NonNullable<typeof conversation.assemblyStats>;
+    expect(stats.compactedFilePaths.length).toBeGreaterThanOrEqual(2);
+    expect(stats.compactedFilePaths).toContain('a.txt');
+    expect(stats.compactedFilePaths).toContain('b.txt');
   });
 });

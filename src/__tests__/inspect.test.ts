@@ -345,7 +345,7 @@ describe('ledger save and load from disk', () => {
     const loaded = loadLedgerFromDisk(ledgerPath);
     expect(loaded).not.toBeNull();
 
-    const expanded = loaded!.getExpanded();
+    const expanded = (loaded as NonNullable<typeof loaded>).getExpanded();
     expect(expanded.task).toBe('refactor auth module');
     expect(expanded.budget.total).toBe(16000);
     expect(expanded.budget.used).toBe(9500);
@@ -384,7 +384,8 @@ describe('ledger save and load from disk', () => {
 
     const loaded = loadLedgerFromDisk(ledgerPath);
     expect(loaded).not.toBeNull();
-    expect(loaded!.getExpanded().task).toBeNull();
-    expect(loaded!.getExpanded().instructionSources).toHaveLength(0);
+    const l = loaded as NonNullable<typeof loaded>;
+    expect(l.getExpanded().task).toBeNull();
+    expect(l.getExpanded().instructionSources).toHaveLength(0);
   });
 });

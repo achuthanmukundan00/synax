@@ -47,15 +47,16 @@ export function renderLayout(state: InteractiveViewState, cols: number, rows: nu
   const width = Math.max(40, cols);
   const renderWidth = terminalWriteWidth(width);
   const height = Math.max(14, rows);
+  const steeringBarHeight = state.steeringMessage ? 1 : 0;
   const panel = renderInputDock(
     state.objectiveInput,
     renderWidth,
     state.coreMode,
     state.nowMs,
     locationLabel(state.cwdLabel, state.gitBranch),
-    maxInputDockBodyLines(height),
+    maxInputDockBodyLines(height - steeringBarHeight),
   );
-  const bodyHeight = Math.max(1, height - panel.length);
+  const bodyHeight = Math.max(1, height - panel.length - steeringBarHeight);
   const lines = Array.from({ length: bodyHeight }, () => '');
   const hasTranscript =
     state.run.timeline.length > 0 ||
@@ -90,7 +91,9 @@ export function renderLayout(state: InteractiveViewState, cols: number, rows: nu
       state.steeringMessage.length > maxMsgWidth
         ? state.steeringMessage.slice(0, maxMsgWidth - 3) + '...'
         : state.steeringMessage;
-    clipped.push(pad(`\u001b[36m${steeringLabel}${truncated}\u001b[0m`, width));
+    // Steel blue (synax) + italic
+    const steelBlue = '\u001b[38;2;67;76;88m\u001b[3m';
+    clipped.push(pad(`${steelBlue}${steeringLabel}${truncated}\u001b[0m`, width));
   }
   clipped.push(...panel);
   return clipped.map((line) => pad(clip(line, width), width));
@@ -100,8 +103,13 @@ export function maxHistoryScrollOffset(state: InteractiveViewState, _cols: numbe
   const width = Math.max(40, _cols);
   const renderWidth = terminalWriteWidth(width);
   const height = Math.max(14, rows);
-  const panelHeight = inputDockHeight(state.objectiveInput, renderWidth, maxInputDockBodyLines(height));
-  const bodyHeight = Math.max(1, height - panelHeight - (state.steeringMessage ? 1 : 0));
+  const steeringBarHeight = state.steeringMessage ? 1 : 0;
+  const panelHeight = inputDockHeight(
+    state.objectiveInput,
+    renderWidth,
+    maxInputDockBodyLines(height - steeringBarHeight),
+  );
+  const bodyHeight = Math.max(1, height - panelHeight - steeringBarHeight);
   const visibleRows = Math.max(1, bodyHeight - 3);
   const sideWidth = operationalSideWidth(renderWidth, bodyHeight);
   const transcriptWidth = sideWidth > 0 ? renderWidth - sideWidth - 5 : renderWidth - 4;
@@ -319,9 +327,9 @@ export function inputCursorPosition(
   const width = Math.max(40, cols);
   const renderWidth = terminalWriteWidth(width);
   const height = Math.max(14, rows);
-  const effectiveMaxBodyLines = maxBodyLines ?? maxInputDockBodyLines(height);
+  const effectiveMaxBodyLines = maxBodyLines ?? maxInputDockBodyLines(height - (hasSteering ? 1 : 0));
   const panelHeight = renderInputDock(objectiveInput, renderWidth, undefined, effectiveMaxBodyLines).length;
-  const bodyHeight = Math.max(1, height - panelHeight);
+  const bodyHeight = Math.max(1, height - panelHeight - (hasSteering ? 1 : 0));
   const inner = Math.max(8, renderWidth - 2);
   const wrapWidth = inner - INPUT_DOCK_PADDING * 2;
   const hasInput = objectiveInput.length > 0;
@@ -337,6 +345,7 @@ export function inputCursorPosition(
   // If no explicit cursor offset, place at end of last line.
   if (cursorOffset === undefined) {
     const lastBodyLine = wrapped[wrapped.length - 1] ?? '';
+    // dockStartRow: where the input dock begins in the layout (after transcript + steering)
     const dockStartRow = bodyHeight + steeringOffset;
     const row = dockStartRow + 2 + visibleInputLineCount;
     const col = 1 + INPUT_DOCK_PADDING + lastBodyLine.length;

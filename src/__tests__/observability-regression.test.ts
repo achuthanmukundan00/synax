@@ -19,6 +19,7 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 
 import { EventStore } from '../store/EventStore';
+import type { AgentEvent } from '../agent/events';
 import { TokenCounter } from '../metrics/TokenCounter';
 import { CostTracker } from '../metrics/CostTracker';
 import { resolvePricing, isLocalModel } from '../metrics/provider-pricing';
@@ -89,7 +90,7 @@ function seedTokenUsageEvents(
         inputTokens: t.input,
         outputTokens: t.output,
         estimatedCost: t.cost,
-      } as any,
+      } as unknown as AgentEvent,
       i + 1,
     );
   }
@@ -183,7 +184,7 @@ describe('EventStore query methods', () => {
           maxModelSteps: 10,
           maxToolCalls: 5,
           tools: ['read'],
-        } as any,
+        } as unknown as AgentEvent,
         1,
       );
 
@@ -199,7 +200,7 @@ describe('EventStore query methods', () => {
           maxModelSteps: 10,
           changedFiles: [],
           verification: 'skipped',
-        } as any,
+        } as unknown as AgentEvent,
         2,
       );
 
@@ -228,7 +229,7 @@ describe('EventStore query methods', () => {
           maxModelSteps: 10,
           maxToolCalls: 5,
           tools: ['read'],
-        } as any,
+        } as unknown as AgentEvent,
         1,
       );
 
@@ -578,14 +579,14 @@ describe('token_usage event shape', () => {
   test('token_usage event round-trips through EventStore with correct fields', () => {
     if (!store.isOpen) return;
     const [sessionId] = seedTestSessions(store, 1);
-    const event: any = {
+    const event = {
       type: 'token_usage',
       timestamp: new Date().toISOString(),
       stepIndex: 1,
       inputTokens: 500,
       outputTokens: 200,
       estimatedCost: 0.0005,
-    };
+    } as unknown as AgentEvent;
 
     store.appendEvent(sessionId, event, 1);
 

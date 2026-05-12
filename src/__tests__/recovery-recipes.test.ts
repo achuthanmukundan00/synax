@@ -32,8 +32,9 @@ describe('RecoveryManager', () => {
     });
 
     expect(result).not.toBeNull();
-    expect(result!.recovered).toBe(true);
-    expect(result!.injectedMessage).toContain('empty');
+    const r = result as NonNullable<typeof result>;
+    expect(r.recovered).toBe(true);
+    expect(r.injectedMessage).toContain('empty');
     expect(conv.messages.length).toBe(3); // system + user + nudge
     expect(conv.messages[2].role).toBe('user');
   });
@@ -49,8 +50,9 @@ describe('RecoveryManager', () => {
     });
 
     expect(result).not.toBeNull();
-    expect(result!.recovered).toBe(true);
-    expect(result!.injectedMessage).toContain('npm ERR! test failed');
+    const r = result as NonNullable<typeof result>;
+    expect(r.recovered).toBe(true);
+    expect(r.injectedMessage).toContain('npm ERR! test failed');
     expect(conv.messages.length).toBe(3);
   });
 
@@ -64,8 +66,9 @@ describe('RecoveryManager', () => {
     });
 
     expect(result).not.toBeNull();
-    expect(result!.recovered).toBe(true);
-    expect(result!.injectedMessage).toContain('Context budget');
+    const r = result as NonNullable<typeof result>;
+    expect(r.recovered).toBe(true);
+    expect(r.injectedMessage).toContain('Context budget');
     expect(conv.messages.length).toBe(3);
   });
 
@@ -80,9 +83,10 @@ describe('RecoveryManager', () => {
     });
 
     expect(result).not.toBeNull();
-    expect(result!.recovered).toBe(true);
-    expect(result!.injectedMessage).toContain('stuck repeating');
-    expect(result!.injectedMessage).toContain('reading the same file');
+    const r = result as NonNullable<typeof result>;
+    expect(r.recovered).toBe(true);
+    expect(r.injectedMessage).toContain('stuck repeating');
+    expect(r.injectedMessage).toContain('reading the same file');
     expect(conv.messages.length).toBe(3);
   });
 
@@ -118,12 +122,13 @@ describe('RecoveryManager', () => {
       attempt: 0,
     });
     expect(fresh).not.toBeNull();
-    expect(fresh!.recovered).toBe(true);
+    const f = fresh as NonNullable<typeof fresh>;
+    expect(f.recovered).toBe(true);
   });
 
   test('returns null for unrecognized scenario', async () => {
     const result = await manager.attemptRecovery({
-      scenario: 'missing_api_key' as any,
+      scenario: 'missing_api_key',
       conversation: makeConversation(),
       task: 'test',
       attempt: 0,

@@ -388,6 +388,8 @@ export function createChatSession(options: {
           steps: result.steps,
           toolCalls: result.toolCalls.length,
           changedFiles: result.changedFiles,
+          contextWindowTokens: config.contextWindowTokens,
+          contextUsedTokens: result.conversation.tokenLedger.lastKnownTokenCount,
         },
       });
       // Finalize session on terminal states

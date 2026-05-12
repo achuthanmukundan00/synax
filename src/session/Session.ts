@@ -509,7 +509,10 @@ export class Session {
 
             // Preflight budget guard
             const effectiveInputLimit = contextBudget.contextWindowTokens - contextBudget.reservedOutputTokens;
-            const estimatedInputTokens = estimateIncrementalTokens(conversation.messages, conversation.tokenLedger);
+            const estimatedInputTokens = estimateRequestTokens(conversation.messages);
+            // Keep the token ledger in sync with raw conversation messages
+            resetTokenLedger(conversation.tokenLedger);
+            estimateIncrementalTokens(conversation.messages, conversation.tokenLedger);
 
             this.onBudget?.({
               estimatedInputTokens,
@@ -601,6 +604,7 @@ export class Session {
                 tools,
                 temperature: 0,
                 maxTokens: 2048,
+                signal: this.abortSignal,
                 onDelta: (delta) => emitAssistantDelta(this, delta),
               });
             } else {
@@ -616,6 +620,7 @@ export class Session {
                 tools,
                 temperature: 0,
                 maxTokens: 2048,
+                signal: this.abortSignal,
                 onDelta: (delta) => emitAssistantDelta(this, delta),
               });
             }
@@ -624,6 +629,13 @@ export class Session {
               this.tracer.addEvent(modelSpan, 'error', { message: errorMessage(error) });
               this.tracer.endSpan(modelSpan);
             }
+
+            // Re-throw on user abort so the outer catch in handleUserMessage
+            // can convert it to a proper 'blocked' / 'turn aborted' result.
+            if (this.abortSignal?.aborted) {
+              throw error;
+            }
+
             const message = errorMessage(error);
             this.logger?.error('Model call failed', error instanceof Error ? error : new Error(message), {
               stepIndex: step,

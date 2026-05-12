@@ -10,41 +10,45 @@ describe('Provider presets registry', () => {
     it('returns relay preset', () => {
       const preset = getProviderPreset('relay');
       expect(preset).toBeDefined();
-      expect(preset!.protocol).toBe('openai-compatible');
-      expect(preset!.baseUrl).toBe('http://127.0.0.1:1234/v1');
-      expect(preset!.apiKeyRequired).toBe(false);
-      expect(preset!.cloud).toBe(false);
+      const p = preset as NonNullable<typeof preset>;
+      expect(p.protocol).toBe('openai-compatible');
+      expect(p.baseUrl).toBe('http://127.0.0.1:1234/v1');
+      expect(p.apiKeyRequired).toBe(false);
+      expect(p.cloud).toBe(false);
     });
 
     it('returns custom preset', () => {
       const preset = getProviderPreset('custom');
       expect(preset).toBeDefined();
-      expect(preset!.protocol).toBe('openai-compatible');
-      expect(preset!.apiKeyRequired).toBe(false);
-      expect(preset!.cloud).toBe(false);
+      const p = preset as NonNullable<typeof preset>;
+      expect(p.protocol).toBe('openai-compatible');
+      expect(p.apiKeyRequired).toBe(false);
+      expect(p.cloud).toBe(false);
     });
 
     it('returns deepseek preset with correct base URL', () => {
       const preset = getProviderPreset('deepseek');
       expect(preset).toBeDefined();
-      expect(preset!.protocol).toBe('openai-compatible');
-      expect(preset!.baseUrl).toBe('https://api.deepseek.com/v1');
-      expect(preset!.apiKeyEnv).toBe('DEEPSEEK_API_KEY');
-      expect(preset!.apiKeyRequired).toBe(true);
-      expect(preset!.cloud).toBe(true);
-      expect(preset!.defaultModel).toBe('deepseek-chat');
-      expect(preset!.contextWindow).toBe(1_000_000);
+      const p = preset as NonNullable<typeof preset>;
+      expect(p.protocol).toBe('openai-compatible');
+      expect(p.baseUrl).toBe('https://api.deepseek.com/v1');
+      expect(p.apiKeyEnv).toBe('DEEPSEEK_API_KEY');
+      expect(p.apiKeyRequired).toBe(true);
+      expect(p.cloud).toBe(true);
+      expect(p.defaultModel).toBe('deepseek-chat');
+      expect(p.contextWindow).toBe(1_000_000);
     });
 
     it('returns openrouter preset with default headers', () => {
       const preset = getProviderPreset('openrouter');
       expect(preset).toBeDefined();
-      expect(preset!.protocol).toBe('openai-compatible');
-      expect(preset!.baseUrl).toBe('https://openrouter.ai/api/v1');
-      expect(preset!.apiKeyEnv).toBe('OPENROUTER_API_KEY');
-      expect(preset!.apiKeyRequired).toBe(true);
-      expect(preset!.cloud).toBe(true);
-      expect(preset!.defaultHeaders).toEqual({
+      const p = preset as NonNullable<typeof preset>;
+      expect(p.protocol).toBe('openai-compatible');
+      expect(p.baseUrl).toBe('https://openrouter.ai/api/v1');
+      expect(p.apiKeyEnv).toBe('OPENROUTER_API_KEY');
+      expect(p.apiKeyRequired).toBe(true);
+      expect(p.cloud).toBe(true);
+      expect(p.defaultHeaders).toEqual({
         'HTTP-Referer': 'https://github.com/achuthanmukundan00/synax',
         'X-Title': 'Synax',
       });
@@ -53,42 +57,46 @@ describe('Provider presets registry', () => {
     it('returns groq preset with correct base URL', () => {
       const preset = getProviderPreset('groq');
       expect(preset).toBeDefined();
-      expect(preset!.protocol).toBe('openai-compatible');
-      expect(preset!.baseUrl).toBe('https://api.groq.com/openai/v1');
-      expect(preset!.apiKeyEnv).toBe('GROQ_API_KEY');
-      expect(preset!.apiKeyRequired).toBe(true);
-      expect(preset!.cloud).toBe(true);
-      expect(preset!.defaultModel).toBe('llama-3.3-70b-versatile');
-      expect(preset!.contextWindow).toBe(128000);
+      const p = preset as NonNullable<typeof preset>;
+      expect(p.protocol).toBe('openai-compatible');
+      expect(p.baseUrl).toBe('https://api.groq.com/openai/v1');
+      expect(p.apiKeyEnv).toBe('GROQ_API_KEY');
+      expect(p.apiKeyRequired).toBe(true);
+      expect(p.cloud).toBe(true);
+      expect(p.defaultModel).toBe('llama-3.3-70b-versatile');
+      expect(p.contextWindow).toBe(128000);
     });
 
     it('returns anthropic preset with correct protocol', () => {
       const preset = getProviderPreset('anthropic');
       expect(preset).toBeDefined();
-      expect(preset!.protocol).toBe('anthropic-messages');
-      expect(preset!.baseUrl).toBe('https://api.anthropic.com');
-      expect(preset!.apiKeyEnv).toBe('ANTHROPIC_API_KEY');
-      expect(preset!.apiKeyRequired).toBe(true);
-      expect(preset!.cloud).toBe(true);
-      expect(preset!.defaultModel).toBe('claude-sonnet-4-5-20250929');
-      expect(preset!.contextWindow).toBe(200000);
-      expect(preset!.supportsToolCalling).toBe(false); // not implemented yet
+      const p = preset as NonNullable<typeof preset>;
+      expect(p.protocol).toBe('anthropic-messages');
+      expect(p.baseUrl).toBe('https://api.anthropic.com');
+      expect(p.apiKeyEnv).toBe('ANTHROPIC_API_KEY');
+      expect(p.apiKeyRequired).toBe(true);
+      expect(p.cloud).toBe(true);
+      expect(p.defaultModel).toBe('claude-sonnet-4-5-20250929');
+      expect(p.contextWindow).toBe(200000);
+      expect(p.supportsToolCalling).toBe(false); // not implemented yet
     });
 
     it('returns mistral preset', () => {
       const preset = getProviderPreset('mistral');
       expect(preset).toBeDefined();
-      expect(preset!.protocol).toBe('openai-compatible');
-      expect(preset!.baseUrl).toBe('https://api.mistral.ai/v1');
-      expect(preset!.apiKeyEnv).toBe('MISTRAL_API_KEY');
+      const p = preset as NonNullable<typeof preset>;
+      expect(p.protocol).toBe('openai-compatible');
+      expect(p.baseUrl).toBe('https://api.mistral.ai/v1');
+      expect(p.apiKeyEnv).toBe('MISTRAL_API_KEY');
     });
 
     it('returns together preset', () => {
       const preset = getProviderPreset('together');
       expect(preset).toBeDefined();
-      expect(preset!.protocol).toBe('openai-compatible');
-      expect(preset!.baseUrl).toBe('https://api.together.xyz/v1');
-      expect(preset!.apiKeyEnv).toBe('TOGETHER_API_KEY');
+      const p = preset as NonNullable<typeof preset>;
+      expect(p.protocol).toBe('openai-compatible');
+      expect(p.baseUrl).toBe('https://api.together.xyz/v1');
+      expect(p.apiKeyEnv).toBe('TOGETHER_API_KEY');
     });
 
     it('returns undefined for unknown provider', () => {

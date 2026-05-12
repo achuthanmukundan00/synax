@@ -311,7 +311,8 @@ describe('slash command registry', () => {
   it('/exit command has exit flag', () => {
     const cmd = getCommand('exit');
     expect(cmd).toBeDefined();
-    const result = cmd!.handler();
+    const resolved = cmd as NonNullable<typeof cmd>;
+    const result = resolved.handler();
     expect(result).toEqual({ handled: true, exit: true, output: '[synax] bye' });
   });
 
@@ -507,7 +508,7 @@ describe('session-store', () => {
     createSession({ id });
 
     // Write corrupt JSON to the event file
-    const homeDir = process.env.HOME!;
+    const homeDir = process.env.HOME ?? '';
     const eventsPath = join(
       homeDir,
       '.local',
