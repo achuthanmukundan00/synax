@@ -8,7 +8,7 @@
  *   memory_fts — FTS5 holographic memory for semantic retrieval
  */
 
-export const SCHEMA_VERSION = 3;
+export const SCHEMA_VERSION = 4;
 
 export const CREATE_SESSIONS_TABLE = `
 CREATE TABLE IF NOT EXISTS sessions (
@@ -103,9 +103,15 @@ CREATE VIRTUAL TABLE IF NOT EXISTS memory_fts USING fts5(
   tool_name,
   file_paths,
   content,
+  domain_tags,
   prefix='2 3',
   tokenize='porter unicode61'
 );
+`;
+
+/** Add domain_tags column to an existing memory_fts table (migration from schema v3). */
+export const MIGRATE_MEMORY_FTS_ADD_DOMAIN_TAGS = `
+ALTER TABLE memory_fts ADD COLUMN domain_tags;
 `;
 
 /** All DDL statements in order for a fresh database. */

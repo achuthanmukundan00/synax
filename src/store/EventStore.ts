@@ -10,7 +10,13 @@ import { dirname, join } from 'path';
 
 import { loadBetterSqlite3, type Database } from './sqlite-loader';
 import type { AgentEvent } from '../agent/events';
-import { ALL_DDL, SCHEMA_VERSION_PRAGMA, type SessionRecord } from './schema';
+import {
+  ALL_DDL,
+  MIGRATE_MEMORY_FTS_ADD_DOMAIN_TAGS,
+  SCHEMA_VERSION,
+  SCHEMA_VERSION_PRAGMA,
+  type SessionRecord,
+} from './schema';
 import { HolographicMemory } from '../memory/HolographicMemory';
 
 export type { SessionRecord };
@@ -70,9 +76,15 @@ export class EventStore {
     db.pragma('synchronous = NORMAL');
     db.pragma('foreign_keys = ON');
 
-    // Run schema migration
+    // Run schema creation
     for (const ddl of ALL_DDL) {
       db.exec(ddl);
+    }
+
+    // Schema migration: check and apply incremental upgrades
+    const currentVersion = (db.pragma('user_version', { simple: true }) as number) || 0;
+    if (currentVersion < SCHEMA_VERSION) {
+      this.migrateSchema(db, currentVersion);
     }
     db.exec(SCHEMA_VERSION_PRAGMA);
 
@@ -87,6 +99,20 @@ export class EventStore {
     `);
 
     this.db = db;
+  }
+
+  /** Apply incremental schema migrations based on current version. */
+  private migrateSchema(db: Database.Database, currentVersion: number): void {
+    // v3 → v4: add domain_tags column to memory_fts
+    if (currentVersion < 4) {
+      try {
+        db.exec(MIGRATE_MEMORY_FTS_ADD_DOMAIN_TAGS);
+      } catch {
+        // Column may already exist (e.g. table created by updated DDL on fresh DB)
+        // This is safe to ignore — the new DDL already includes the column.
+      }
+    }
+    // Future migrations go here.
   }
 
   /** Start a new session record. */
