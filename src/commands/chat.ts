@@ -206,6 +206,18 @@ export function createChatSession(options: {
     return sessionId;
   };
 
+  const doResetConversation = (): void => {
+    startNewSessionId();
+    const fresh = Session.createConversation({
+      skillMessages: options.skillMessages,
+    });
+    conversation.messages.splice(0, conversation.messages.length, ...fresh.messages);
+    conversation.inspectionLedger = fresh.inspectionLedger;
+    conversation.latestCompaction = null;
+    conversation.assemblyStats = null;
+    resetTokenLedger(conversation.tokenLedger);
+  };
+
   return {
     conversation,
     sessionId,
@@ -217,30 +229,10 @@ export function createChatSession(options: {
       if (thinkingLevel !== undefined) thinkingLevelRef = thinkingLevel;
     },
     resetConversation: () => {
-      // Reset the shared conversation in-place to a clean slate
-      finalizeCurrentSession('cancelled');
-      sessionId = generateSessionId();
-      createSessionRecord(sessionId);
-
-      const fresh = Session.createConversation({
-        skillMessages: options.skillMessages,
-      });
-      conversation.messages.splice(0, conversation.messages.length, ...fresh.messages);
-      conversation.inspectionLedger = fresh.inspectionLedger;
-      conversation.latestCompaction = null;
-      conversation.assemblyStats = null;
-      resetTokenLedger(conversation.tokenLedger);
+      doResetConversation();
     },
     startNewSession: () => {
-      startNewSessionId();
-      const fresh = Session.createConversation({
-        skillMessages: options.skillMessages,
-      });
-      conversation.messages.splice(0, conversation.messages.length, ...fresh.messages);
-      conversation.inspectionLedger = fresh.inspectionLedger;
-      conversation.latestCompaction = null;
-      conversation.assemblyStats = null;
-      resetTokenLedger(conversation.tokenLedger);
+      doResetConversation();
     },
     appendSessionEvent: appendSessionEventFn,
     async handleUserMessage(message: string): Promise<ChatTurnReport> {
@@ -343,7 +335,11 @@ export function createChatSession(options: {
       ) {
         finalizeCurrentSession(result.terminalState === 'completed' ? 'completed' : 'failed');
       }
-      updateSessionTitle();
+      // Only refresh title/summary on first turn to avoid O(n) disk reads every turn
+      const meta = findSessionMeta(sessionId);
+      if (!meta || meta.messageCount <= 1) {
+        updateSessionTitle();
+      }
       return {
         terminalState: result.terminalState,
         finalAnswer: result.finalAnswer,
