@@ -86,11 +86,13 @@ describe('Anthropic adapter — basic chat', () => {
 
     await adapter.chat({ messages: [{ role: 'user', content: 'hi' }] });
 
-    expect(captured!.method).toBe('POST');
-    expect(captured!.path).toBe('/v1/messages');
-    expect(captured!.headers['x-api-key']).toBe('sk-ant-test');
-    expect(captured!.headers['anthropic-version']).toBe('2023-06-01');
-    expect(captured!.headers['content-type']).toBe('application/json');
+    const req = captured;
+    if (!req) throw new Error('No request captured');
+    expect(req.method).toBe('POST');
+    expect(req.path).toBe('/v1/messages');
+    expect(req.headers['x-api-key']).toBe('sk-ant-test');
+    expect(req.headers['anthropic-version']).toBe('2023-06-01');
+    expect(req.headers['content-type']).toBe('application/json');
   });
 
   it('maps user messages to Anthropic format', async () => {
@@ -102,7 +104,8 @@ describe('Anthropic adapter — basic chat', () => {
 
     await adapter.chat({ messages: [{ role: 'user', content: 'Hello' }] });
 
-    const body = JSON.parse(captured!.body);
+    if (!captured) throw new Error('No request captured');
+    const body = JSON.parse(captured.body);
     expect(body.messages).toEqual([{ role: 'user', content: 'Hello' }]);
   });
 
@@ -121,7 +124,8 @@ describe('Anthropic adapter — basic chat', () => {
       ],
     });
 
-    const body = JSON.parse(captured!.body);
+    if (!captured) throw new Error('No request captured');
+    const body = JSON.parse(captured.body);
     expect(body.messages).toHaveLength(3);
     expect(body.messages[1]).toEqual({ role: 'assistant', content: 'hello' });
   });
@@ -140,7 +144,8 @@ describe('Anthropic adapter — basic chat', () => {
       ],
     });
 
-    const body = JSON.parse(captured!.body);
+    if (!captured) throw new Error('No request captured');
+    const body = JSON.parse(captured.body);
     expect(body.system).toBe('You are a helpful assistant.');
     expect(body.messages).toHaveLength(1); // system extracted, only user remains
     expect(body.messages[0].role).toBe('user');
@@ -161,7 +166,8 @@ describe('Anthropic adapter — basic chat', () => {
       ],
     });
 
-    const body = JSON.parse(captured!.body);
+    if (!captured) throw new Error('No request captured');
+    const body = JSON.parse(captured.body);
     expect(body.system).toBe('Rule 1.\n\nRule 2.');
   });
 
@@ -178,7 +184,8 @@ describe('Anthropic adapter — basic chat', () => {
       temperature: 0.7,
     });
 
-    const body = JSON.parse(captured!.body);
+    if (!captured) throw new Error('No request captured');
+    const body = JSON.parse(captured.body);
     expect(body.max_tokens).toBe(256);
     expect(body.temperature).toBe(0.7);
   });
@@ -192,7 +199,8 @@ describe('Anthropic adapter — basic chat', () => {
 
     await adapter.chat({ messages: [{ role: 'user', content: 'hi' }] });
 
-    const body = JSON.parse(captured!.body);
+    if (!captured) throw new Error('No request captured');
+    const body = JSON.parse(captured.body);
     expect(body.max_tokens).toBe(4096);
   });
 });

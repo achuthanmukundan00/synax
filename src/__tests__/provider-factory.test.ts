@@ -85,7 +85,9 @@ describe('Provider factory — relay (local)', () => {
     const { client, metadata } = createLLMClient(makeInput({ baseUrl: getServerUrl(srv) }));
     const resp = await client.chat({ messages: [{ role: 'user', content: 'hi' }] });
 
-    expect(captured!.path).toBe('/chat/completions');
+    const req = captured;
+    if (!req) throw new Error('No request captured');
+    expect(req.path).toBe('/chat/completions');
     expect(resp.content).toBe('Hello');
     expect(metadata.protocol).toBe('openai-compatible');
     expect(metadata.providerId).toBe('relay');

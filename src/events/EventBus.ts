@@ -34,8 +34,8 @@ export type ControlHookHandler<H extends PreToolUseEvent | PostToolUseFailureEve
 // ─── EventBus ────────────────────────────────────────────────────────────────
 
 export class EventBus {
-  private lifecycleHandlers = new Map<string, Set<LifecycleHandler<any>>>();
-  private controlHandlers = new Map<string, Set<ControlHookHandler<any>>>();
+  private lifecycleHandlers = new Map<string, Set<LifecycleHandler<AgentEvent | LifecycleEvent>>>();
+  private controlHandlers = new Map<string, Set<ControlHookHandler<PreToolUseEvent | PostToolUseFailureEvent>>>();
   private wildcardHandlers = new Set<LifecycleHandler<AgentEvent | LifecycleEvent>>();
 
   // ── Lifecycle subscription ──────────────────────────────────────────────
@@ -55,9 +55,10 @@ export class EventBus {
     if (!this.lifecycleHandlers.has(type)) {
       this.lifecycleHandlers.set(type, new Set());
     }
-    this.lifecycleHandlers.get(type)!.add(handler);
+    const handlers = this.lifecycleHandlers.get(type);
+    if (handlers) handlers.add(handler as LifecycleHandler<AgentEvent | LifecycleEvent>);
     return () => {
-      this.lifecycleHandlers.get(type)?.delete(handler);
+      this.lifecycleHandlers.get(type)?.delete(handler as LifecycleHandler<AgentEvent | LifecycleEvent>);
     };
   }
 
@@ -82,7 +83,7 @@ export class EventBus {
     const typeHandlers = this.lifecycleHandlers.get(event.type);
     const wildcard = this.wildcardHandlers;
 
-    const handlers: Array<LifecycleHandler<any>> = [];
+    const handlers: Array<LifecycleHandler<AgentEvent | LifecycleEvent>> = [];
     if (typeHandlers) handlers.push(...Array.from(typeHandlers));
     if (wildcard) handlers.push(...Array.from(wildcard));
 
@@ -118,9 +119,10 @@ export class EventBus {
     if (!this.controlHandlers.has(hook)) {
       this.controlHandlers.set(hook, new Set());
     }
-    this.controlHandlers.get(hook)!.add(handler);
+    const handlers = this.controlHandlers.get(hook);
+    if (handlers) handlers.add(handler as ControlHookHandler<PreToolUseEvent | PostToolUseFailureEvent>);
     return () => {
-      this.controlHandlers.get(hook)?.delete(handler);
+      this.controlHandlers.get(hook)?.delete(handler as ControlHookHandler<PreToolUseEvent | PostToolUseFailureEvent>);
     };
   }
 
