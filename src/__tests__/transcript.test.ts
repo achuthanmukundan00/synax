@@ -1,8 +1,4 @@
-import {
-  extractReadOutput,
-  renderMarkdownBlock,
-  renderReviewOutput,
-} from '../tui/transcript';
+import { extractReadOutput, renderMarkdownBlock, renderReviewOutput } from '../tui/transcript';
 
 function ansiFree(lines: string[]): string[] {
   // eslint-disable-next-line no-control-regex
@@ -13,11 +9,7 @@ describe('renderMarkdownBlock', () => {
   const W = 80;
 
   it('renders headings at different levels', () => {
-    const md = [
-      '# Heading 1',
-      '## Heading 2',
-      '### Heading 3',
-    ].join('\n');
+    const md = ['# Heading 1', '## Heading 2', '### Heading 3'].join('\n');
     const out = ansiFree(renderMarkdownBlock(md, W));
     expect(out).toContain('Heading 1');
     expect(out).toContain('Heading 2');
@@ -27,11 +19,7 @@ describe('renderMarkdownBlock', () => {
   });
 
   it('renders bullet lists with • glyphs', () => {
-    const md = [
-      '* first item',
-      '* second item',
-      '- third item',
-    ].join('\n');
+    const md = ['* first item', '* second item', '- third item'].join('\n');
     const out = ansiFree(renderMarkdownBlock(md, W));
     const bulletLines = out.filter((l) => l.includes('•'));
     expect(bulletLines.length).toBe(3);
@@ -41,11 +29,7 @@ describe('renderMarkdownBlock', () => {
   });
 
   it('renders numbered lists', () => {
-    const md = [
-      '1. step one',
-      '2. step two',
-      '3. step three',
-    ].join('\n');
+    const md = ['1. step one', '2. step two', '3. step three'].join('\n');
     const out = ansiFree(renderMarkdownBlock(md, W));
     const listLines = out.filter((l) => l.includes('•'));
     expect(listLines.length).toBe(3);
@@ -64,12 +48,7 @@ describe('renderMarkdownBlock', () => {
   });
 
   it('renders fenced code blocks', () => {
-    const md = [
-      '```',
-      'const x = 1;',
-      'const y = 2;',
-      '```',
-    ].join('\n');
+    const md = ['```', 'const x = 1;', 'const y = 2;', '```'].join('\n');
     const out = ansiFree(renderMarkdownBlock(md, W));
     // Code lines should appear indented
     const codeLines = out.filter((l) => l.includes('const'));
@@ -85,11 +64,7 @@ describe('renderMarkdownBlock', () => {
   });
 
   it('preserves paragraph breaks (blank lines)', () => {
-    const md = [
-      'First paragraph.',
-      '',
-      'Second paragraph.',
-    ].join('\n');
+    const md = ['First paragraph.', '', 'Second paragraph.'].join('\n');
     const out = ansiFree(renderMarkdownBlock(md, W));
     // Should contain blank lines between paragraphs
     const blankCount = out.filter((l) => l.trim() === '').length;
@@ -142,13 +117,7 @@ describe('renderReviewOutput', () => {
   });
 
   it('preserves multi-paragraph structure', () => {
-    const md = [
-      '### Section',
-      '',
-      'Paragraph one with **bold** text.',
-      '',
-      'Paragraph two with `code`.',
-    ].join('\n');
+    const md = ['### Section', '', 'Paragraph one with **bold** text.', '', 'Paragraph two with `code`.'].join('\n');
     const out = ansiFree(renderReviewOutput(md, W));
     // Should have blank lines between paragraphs
     const textOnly = out.filter((l) => !l.includes('result') && !l.includes('╌'));
