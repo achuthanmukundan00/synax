@@ -10,6 +10,7 @@ import { createTerminalSession } from '../tui/terminal';
 import { renderSettings } from '../settings/settings-renderer';
 import { createSettingsState, settingsReducer } from '../settings/settings-state';
 import type { EffectiveSynaxConfig } from '../config/schema';
+import pkg from '../../package.json';
 import { PassThrough, Writable } from 'stream';
 
 const EXPECTED_MAX_INPUT_CHARS = 4096;
@@ -110,8 +111,20 @@ describe('tui input parser', () => {
       expect(parseInputChunk(input)).toEqual([{ type: 'arrow_down' }]);
       return;
     }
-    if (input === '\x1b[C' || input === '\x1b[D') {
-      expect(parseInputChunk(input)).toEqual([]);
+    if (input === '\x1b[C') {
+      expect(parseInputChunk(input)).toEqual([{ type: 'arrow_right' }]);
+      return;
+    }
+    if (input === '\x1b[D') {
+      expect(parseInputChunk(input)).toEqual([{ type: 'arrow_left' }]);
+      return;
+    }
+    if (input === '\x1b[H' || input === '\x1b[1~') {
+      expect(parseInputChunk(input)).toEqual([{ type: 'home' }]);
+      return;
+    }
+    if (input === '\x1b[F' || input === '\x1b[4~') {
+      expect(parseInputChunk(input)).toEqual([{ type: 'end' }]);
       return;
     }
     if (input === '\x1b') {
@@ -605,7 +618,7 @@ describe('interactive layout visual agreements', () => {
       .map(stripAnsi)
       .join('\n');
 
-    expect(plain).toContain('Synax v0.0.22-alpha  Ready  0:25');
+    expect(plain).toContain(`Synax v${pkg.version}  Ready  0:25`);
   });
 
   it('renders terminal-state status bars in the header without redundant final summary blocks', () => {
@@ -1154,9 +1167,9 @@ describe('interactive layout visual agreements', () => {
     expect(plain).toContain('The renderer now keeps the prompt inside a proper box.');
     expect(plain).not.toContain('Qwen3.6-35B-A3B-UD-IQ3_XXS.gguf');
     expect(dock[0]).toMatch(/^┌─+ ~\/workspace\/git\/\.worktrees\/synax-tui {2}dev\/tui ┐\s*$/);
-    expect(dock[1]).toMatch(/^│ Implement fixed-footprint reactor core rendering\s+│\s*$/);
-    expect(dock[2]).toMatch(/^│\s+│\s*$/);
-    expect(dock[3]).toMatch(/Enter submit.*Ctrl\+D exit.*Shift.*newline.*Ctrl\+C clear.*\/help.*!cmd/);
+    expect(dock[1]).toMatch(/^│ {2}Implement fixed-footprint reactor core rendering\s+│\s*$/);
+    expect(dock[2]).toMatch(/^│ {2}\s+│\s*$/);
+    expect(dock[3]).toMatch(/Enter submit.*Esc interrupt.*Shift.*Ctrl\+D exit.*Ctrl\+C clear.*\/help/);
   });
 
   it('keeps the input dock inside the terminal write-safe column', () => {
@@ -1865,6 +1878,7 @@ describe('interactive tui runtime', () => {
       resolveSubmitted = resolve;
     });
     const session: ChatSession = {
+      sessionId: 'test-session',
       conversation: createChatSession({
         repoRoot: process.cwd(),
         config: { provider: { kind: 'openai-compatible', base_url: 'http://localhost/v1', model: 'fake' } },
@@ -1900,6 +1914,7 @@ describe('interactive tui runtime', () => {
       resolveSubmitted = resolve;
     });
     const session: ChatSession = {
+      sessionId: 'test-session',
       conversation: createChatSession({
         repoRoot: process.cwd(),
         config: { provider: { kind: 'openai-compatible', base_url: 'http://localhost/v1', model: 'fake' } },
@@ -1952,6 +1967,7 @@ describe('interactive tui runtime', () => {
       resolveSlash = resolve;
     });
     const session: ChatSession = {
+      sessionId: 'test-session',
       conversation: createChatSession({
         repoRoot: process.cwd(),
         config: { provider: { kind: 'openai-compatible', base_url: 'http://localhost/v1', model: 'fake' } },
@@ -1993,6 +2009,7 @@ describe('interactive tui runtime', () => {
       resolveShell = resolve;
     });
     const session: ChatSession = {
+      sessionId: 'test-session',
       conversation: createChatSession({
         repoRoot: process.cwd(),
         config: { provider: { kind: 'openai-compatible', base_url: 'http://localhost/v1', model: 'fake' } },
@@ -2038,6 +2055,7 @@ describe('interactive tui runtime', () => {
       resolveExit = resolve;
     });
     const session: ChatSession = {
+      sessionId: 'test-session',
       conversation: createChatSession({
         repoRoot: process.cwd(),
         config: { provider: { kind: 'openai-compatible', base_url: 'http://localhost/v1', model: 'fake' } },
@@ -2084,6 +2102,7 @@ describe('interactive tui runtime', () => {
       resolveSubmitted = resolve;
     });
     const session: ChatSession = {
+      sessionId: 'test-session',
       conversation: createChatSession({
         repoRoot: process.cwd(),
         config: { provider: { kind: 'openai-compatible', base_url: 'http://localhost/v1', model: 'qwen' } },
@@ -2155,6 +2174,7 @@ describe('interactive tui runtime', () => {
   it('listens to the default stdin when no custom stdin is provided', async () => {
     const stdout = new CapturingWritable();
     const session: ChatSession = {
+      sessionId: 'test-session',
       conversation: createChatSession({
         repoRoot: process.cwd(),
         config: { provider: { kind: 'openai-compatible', base_url: 'http://localhost/v1', model: 'fake' } },
