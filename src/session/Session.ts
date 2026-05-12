@@ -115,6 +115,9 @@ const AGENT_EVENT_TYPES: Set<string> = new Set([
   'task_finished',
   'error',
   'token_usage',
+  'child_session_spawned',
+  'child_session_completed',
+  'child_session_failed',
 ]);
 
 // ─── Session Class ───────────────────────────────────────────────────────────
@@ -325,6 +328,126 @@ export class Session {
   /** Override the verification contract (normally derived from mode). */
   setVerificationContract(contract: import('./verification-contracts').VerificationContract | null): void {
     this._verificationContract = contract;
+  }
+
+  /**
+   * Spawn a child session for evaluating a specific sub-task in an orchestration plan (Spec 021 Phase 3).
+   *
+   * The new session operates in an isolated environment but receives the parent's memory
+   * and selected orchestration context. Emits orchestration lifecycle events directly to parent event bus.
+   */
+  async fork(
+    subtask: import('./types').SubTask,
+    parentManifest: import('../handoff/types').HandoffManifest,
+    options?: {
+      maxToolCalls?: number;
+      maxModelSteps?: number;
+      contextBudget?: Partial<ContextBudgetSettings>;
+    },
+  ): Promise<import('./types').SubAgentResult> {
+    const parentDepth = this._handoffManager?.getCurrentDepth() ?? 0;
+
+    // 1. Create a child handoff manifest matching parent but enriched with orchestration scope
+    const childManifest: import('../handoff/types').HandoffManifest = {
+      ...parentManifest,
+      handoffId: `fork-${this.sessionId}-${subtask.id}-${Date.now()}`,
+      parentSessionId: this.sessionId,
+      reason: 'task_delegation',
+      depth: parentDepth, // Depth does not increase monotonically for forks vs exhaustions across same tree layer
+      createdAt: new Date().toISOString(),
+      subtaskId: subtask.id,
+      orchestrationContext: `Sub-task dependencies: ${subtask.dependencies.length > 0 ? subtask.dependencies.join(', ') : 'none'}. Verification strictness: ${subtask.verification.level}.`,
+    };
+
+    const orchestratorHandoffManager = this._handoffManager ?? new HandoffManager();
+    const childSessionId = `${this.sessionId}-fork-${subtask.id}`;
+
+    // 2. Emit spawn event
+    this.eventBus.emit({
+      type: 'child_session_spawned',
+      timestamp: eventNow(),
+      parentSessionId: this.sessionId,
+      childSessionId,
+      subtaskId: subtask.id,
+    });
+
+    const skillMessages = [
+      `You are executing an orchestrated sub-task. Your specific goal is: ${subtask.description}`,
+      `Your file scope is restricted to: ${subtask.fileScope.length > 0 ? subtask.fileScope.join(', ') : 'Any relevant files'}`,
+    ];
+
+    try {
+      // 3. Delegate child execution to handoff manager (which will spawn a fresh context)
+      const executionResult = await orchestratorHandoffManager.executeOrchestratedHandoff({
+        manifest: childManifest,
+        repoRoot: this.repoRoot,
+        client: this.client,
+        mode: this.mode,
+        memory: this.memory,
+        skillMessages,
+        bashEnabled: this.bashEnabled,
+        maxToolCalls: options?.maxToolCalls ?? this.maxToolCalls,
+        maxModelSteps: options?.maxModelSteps ?? this.maxModelSteps,
+        contextBudget: options?.contextBudget ?? this.contextBudget,
+        logger: this.logger,
+        tracer: this.tracer,
+        tokenCounter: this.tokenCounter,
+        costTracker: this.costTracker,
+      });
+
+      // 4. Map to SubAgentResult and emit completion/failure
+      const subResult: import('./types').SubAgentResult = {
+        subTaskId: subtask.id,
+        terminalState: executionResult.turnResult.terminalState,
+        changedFiles: executionResult.turnResult.changedFiles,
+        toolCalls: executionResult.turnResult.toolCalls.length,
+        error: executionResult.error || executionResult.turnResult.error,
+      };
+
+      if (executionResult.success) {
+        this.eventBus.emit({
+          type: 'child_session_completed',
+          timestamp: eventNow(),
+          parentSessionId: this.sessionId,
+          childSessionId,
+          subtaskId: subtask.id,
+          result: subResult,
+        });
+      } else {
+        this.eventBus.emit({
+          type: 'child_session_failed',
+          timestamp: eventNow(),
+          parentSessionId: this.sessionId,
+          childSessionId,
+          subtaskId: subtask.id,
+          error: executionResult.error ?? 'Unknown child execution failure',
+          partialResult: subResult,
+        });
+      }
+
+      return subResult;
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      const failedResult: import('./types').SubAgentResult = {
+        subTaskId: subtask.id,
+        terminalState: 'model_error',
+        changedFiles: [],
+        toolCalls: 0,
+        error: errorMessage,
+      };
+
+      this.eventBus.emit({
+        type: 'child_session_failed',
+        timestamp: eventNow(),
+        parentSessionId: this.sessionId,
+        childSessionId,
+        subtaskId: subtask.id,
+        error: errorMessage,
+        partialResult: failedResult,
+      });
+
+      return failedResult;
+    }
   }
 
   /**

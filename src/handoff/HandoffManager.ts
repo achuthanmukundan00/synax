@@ -48,6 +48,13 @@ export class HandoffManager {
   }
 
   /**
+   * Get the current depth of this manager.
+   */
+  getCurrentDepth(): number {
+    return this.currentDepth;
+  }
+
+  /**
    * Generate a HandoffManifest from parent session state.
    *
    * Combines holographic memory data with conversation-level metadata
@@ -218,11 +225,13 @@ export class HandoffManager {
     // Create a child HandoffManager with incremented depth
     const childHandoff = new HandoffManager({ maxDepth: this.maxDepth, currentDepth: this.currentDepth + 1 });
 
+    const childSessionId = `${params.manifest.parentSessionId}-child-d${this.currentDepth + 1}`;
+
     // Build child session with clean context
     const childSession = new Session({
       repoRoot: params.repoRoot,
       client: params.client,
-      sessionId: `${params.manifest.parentSessionId}-child-d${this.currentDepth + 1}`,
+      sessionId: childSessionId,
       mode: params.mode,
       memory: params.memory, // Inherit parent's FTS5
       maxToolCalls: params.maxToolCalls,
@@ -278,6 +287,33 @@ export class HandoffManager {
         error: error instanceof Error ? error.message : String(error),
       };
     }
+  }
+
+  /**
+   * Execute an orchestrated handoff for parallel sub-agents (spec 021 phase 3).
+   *
+   * Extends the normal handoff logic by adding orchestration context, explicitly scoped file context,
+   * and isolated event emitting. The returning turn result is converted to a SubAgentResult.
+   */
+  async executeOrchestratedHandoff(params: {
+    manifest: HandoffManifest;
+    repoRoot: string;
+    client: AgentClient;
+    mode: RunMode;
+    memory: HolographicMemory | null;
+    skillMessages?: string[];
+    bashEnabled?: boolean;
+    maxToolCalls?: number;
+    maxModelSteps?: number;
+    contextBudget?: Partial<ContextBudgetSettings>;
+    logger?: Logger;
+    tracer?: SpanTracer;
+    tokenCounter?: TokenCounter;
+    costTracker?: CostTracker;
+    onEvent?: (event: unknown) => void;
+  }): Promise<HandoffResult> {
+    // We reuse executeHandoff since it abstracts context initialization and session startup
+    return this.executeHandoff(params);
   }
 
   /**
