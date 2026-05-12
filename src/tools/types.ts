@@ -46,4 +46,5 @@ export interface ToolRegistry {
   list(): ToolDefinition[];
   get(name: string): ToolDefinition | undefined;
   execute(name: string, input: unknown): Promise<ToolResult>;
+  register(definition: ToolDefinition): void;
 }
