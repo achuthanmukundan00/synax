@@ -25,7 +25,7 @@ import {
 import { Session } from '../session/Session';
 import { resolveContextBudgetSettings } from '../agent/context-budget';
 import { createContextLedger, type ContextLedger, type ModelCallEntry } from '../tools';
-import { EventStore } from '../store/EventStore';
+import { createEventStore } from '../store/EventStore';
 import { runMetricsCommand, type MetricsOptions } from './inspect-metrics';
 import { discoverSkills } from '../skills/SkillLoader';
 
@@ -147,7 +147,11 @@ export function runInspectCommand(program: Command): void {
 
       // --metrics: show run dashboard from event store
       if (opts.metrics || opts.session || opts.stats) {
-        const store = new EventStore();
+        const store = createEventStore();
+        if (!store) {
+          console.log('[synax] Event store is not available. Run a chat/ask session first.');
+          return;
+        }
         try {
           runMetricsCommand(store, {
             json: opts.json,
