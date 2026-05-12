@@ -51,6 +51,7 @@ function createInMemoryDb(): Database.Database | null {
       tool_name,
       file_paths,
       content,
+      domain_tags,
       prefix='2 3',
       tokenize='porter unicode61'
     );
