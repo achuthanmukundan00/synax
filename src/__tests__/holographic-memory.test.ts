@@ -315,14 +315,15 @@ describe('HolographicMemory', () => {
 
       const index = mem.buildMemoryIndex();
       expect(index).not.toBeNull();
-      expect(index!).toContain('[Memory:');
-      expect(index!).toContain('entries across');
-      expect(index!).toContain('turns');
-      expect(index!).toContain('src/auth/login.ts');
-      expect(index!).toContain(']');
+      const idx = index as string;
+      expect(idx).toContain('[Memory:');
+      expect(idx).toContain('entries across');
+      expect(idx).toContain('turns');
+      expect(idx).toContain('src/auth/login.ts');
+      expect(idx).toContain(']');
 
       // Should be compact (~under 500 chars for this small dataset)
-      expect(index!.length).toBeLessThan(500);
+      expect(idx.length).toBeLessThan(500);
     });
 
     it('includes error snippets when errors exist', () => {
@@ -347,7 +348,8 @@ describe('HolographicMemory', () => {
       const index = mem.buildMemoryIndex();
       expect(index).not.toBeNull();
       // Should contain error/failure hints
-      expect(index!).toMatch(/error|fail|Error|FAIL/i);
+      const idx = index as string;
+      expect(idx).toMatch(/error|fail|Error|FAIL/i);
     });
 
     it('returns null for null database', () => {

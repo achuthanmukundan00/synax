@@ -5,6 +5,7 @@ import { join } from 'path';
 
 import { type AgentEvent } from '../agent/events';
 import { Session, type AgentClient, type AgentRunnerOptions } from '../session/Session';
+import type { ChatOptions, ChatResponse } from '../llm/types';
 
 const TMP = join(process.cwd(), 'tmp', 'synax-runner-tests');
 
@@ -24,10 +25,10 @@ function fakeClient(
     content?: string;
     reasoningContent?: string;
     toolCallFormat?: 'openai' | 'content_xml' | 'none';
-    toolCalls?: any[];
+    toolCalls?: ChatResponse['toolCalls'];
   }>,
-): AgentClient & { requests: any[] } {
-  const requests: any[] = [];
+): AgentClient & { requests: ChatOptions[] } {
+  const requests: ChatOptions[] = [];
   return {
     requests,
     async chat(options) {
@@ -56,7 +57,7 @@ describe('shared bounded agent runner', () => {
     const result = await runTurn({ repoRoot: TMP, task: 'hello', client });
 
     expect(result.terminalState).toBe('completed');
-    expect(client.requests[0].tools.map((tool: { name: string }) => tool.name)).toEqual([
+    expect((client.requests[0].tools ?? []).map((tool: { name: string }) => tool.name)).toEqual([
       'read',
       'write',
       'edit',
@@ -128,7 +129,7 @@ describe('shared bounded agent runner', () => {
 
     await runTurn({ repoRoot: TMP, task: 'hello', client, tools: { bashEnabled: true } });
 
-    expect(client.requests[0].tools.map((tool: { name: string }) => tool.name)).toEqual([
+    expect((client.requests[0].tools ?? []).map((tool: { name: string }) => tool.name)).toEqual([
       'read',
       'write',
       'edit',
@@ -546,7 +547,7 @@ describe('shared bounded agent runner', () => {
     expect(client.requests[1].messages).not.toEqual(
       expect.arrayContaining([expect.objectContaining({ role: 'tool', tool_call_id: 'call_1' })]),
     );
-    expect(client.requests[1].messages.at(-1).content).toContain('"path":"a.txt"');
+    expect(client.requests[1].messages.at(-1)?.content).toContain('"path":"a.txt"');
   });
 
   it('groups multiple content-parsed tool results into one Qwen-style response message', async () => {
@@ -943,7 +944,8 @@ describe('shared bounded agent runner', () => {
     );
     const loopErrorMsg = allToolMessages.find((m) => m.content.includes('Read loop detected'));
     expect(loopErrorMsg).toBeDefined();
-    expect(loopErrorMsg!.content).toContain('WORKING CONTEXT');
+    const msg = loopErrorMsg as NonNullable<typeof loopErrorMsg>;
+    expect(msg.content).toContain('WORKING CONTEXT');
   });
 
   it('allows absolute read paths', async () => {
@@ -982,8 +984,9 @@ describe('shared bounded agent runner', () => {
     // The third read (tool_call_id '3') result should contain guidance.
     const read3 = toolMsgs.find((m) => (m as { tool_call_id?: string }).tool_call_id === '3');
     expect(read3).toBeDefined();
-    expect(read3!.content).toContain('guidance');
-    expect(read3!.content).toContain('search');
+    const r3 = read3 as NonNullable<typeof read3>;
+    expect(r3.content).toContain('guidance');
+    expect(r3.content).toContain('search');
   });
 
   it('treats different line ranges as distinct reads, not repetitions', async () => {

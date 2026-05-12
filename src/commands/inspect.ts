@@ -11,6 +11,7 @@
 import { join, resolve } from 'path';
 import { readFileSync, existsSync, writeFileSync, mkdirSync, renameSync } from 'fs';
 import { execSync } from 'child_process';
+import { Command } from 'commander';
 import { buildProjectProfile, formatTextProfile, FullProfile, type ConfigProfile } from '../config/profile';
 import { discoverConfigPath, loadProjectConfig } from '../config/project';
 import {
@@ -61,7 +62,28 @@ export interface InspectCommandOptions {
 /**
  * Run the inspect command.
  */
-export function runInspectCommand(program: any): void {
+interface InspectActionOptions {
+  json?: boolean;
+  path?: string;
+  section?: string[];
+  profile?: boolean;
+  brief?: boolean;
+  ledger?: boolean;
+  context?: boolean;
+  expanded?: boolean;
+  budget?: boolean;
+  metrics?: boolean;
+  session?: string;
+  stats?: boolean;
+  docs?: boolean;
+  doc?: string;
+  searchDocs?: string;
+  docsImpact?: boolean;
+  skills?: boolean;
+  skill?: string;
+}
+
+export function runInspectCommand(program: Command): void {
   const cwd = process.cwd();
 
   program
@@ -85,7 +107,7 @@ export function runInspectCommand(program: any): void {
     .option('--stats', 'Show aggregate statistics (use with --metrics)')
     .option('--skills', 'List auto-discovered skills from ~/.synax/skills/ and .synax/skills/')
     .option('--skill <name>', 'Show full instructions for a specific skill')
-    .action(async (options: any) => {
+    .action(async (options: InspectActionOptions) => {
       const targetPath = options.path ? resolve(options.path) : cwd;
       const projectProfile = buildProjectProfile(targetPath);
       const configProfile = buildInspectConfigProfile(targetPath);

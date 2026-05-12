@@ -50,7 +50,7 @@ describe('SpanTracer', () => {
     tracer.endSpan(span);
     expect(span.endTime).toBeGreaterThan(0);
     expect(span.durationMs).toBeDefined();
-    expect(span.durationMs!).toBeGreaterThanOrEqual(0);
+    expect(span.durationMs ?? -1).toBeGreaterThanOrEqual(0);
   });
 
   test('should nest spans with parent-child relationships', () => {
@@ -116,12 +116,13 @@ describe('SpanTracer', () => {
     tracer.endSpan(span);
 
     // Verify span was written to the database
-    const db = (eventStore as any).db;
-    const row = db.prepare('SELECT * FROM spans WHERE id = ?').get(span.id) as any;
+    const db = (eventStore as unknown as { db: { prepare: (sql: string) => { get: (...args: unknown[]) => Record<string, unknown> | undefined } } }).db;
+    const row = db.prepare('SELECT * FROM spans WHERE id = ?').get(span.id);
     expect(row).toBeTruthy();
+    if (!row) throw new Error('expected row');
     expect(row.kind).toBe('model_call');
     expect(row.duration_ms).toBe(span.durationMs);
-    expect(JSON.parse(row.metadata)).toEqual({ step: 1 });
+    expect(JSON.parse(row.metadata as string)).toEqual({ step: 1 });
   });
 
   test('should work without EventStore (optional)', () => {
@@ -169,7 +170,7 @@ describe('SpanTracer', () => {
     // All spans should have timing
     [turnSpan, modelSpan1, parseSpan1, toolSpan1, toolSpan2].forEach((s) => {
       expect(s.durationMs).toBeDefined();
-      expect(s.durationMs!).toBeGreaterThanOrEqual(0);
+      expect(s.durationMs ?? -1).toBeGreaterThanOrEqual(0);
     });
   });
 
