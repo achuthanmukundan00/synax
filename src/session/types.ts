@@ -15,7 +15,7 @@ import type {
   RepoMetadata,
   BudgetStrategy,
 } from '../agent/context-budget';
-import type { AgentEvent, TerminalState } from '../agent/events';
+import type { AgentEvent, TerminalState, AgentEventBase } from '../agent/events';
 import type { RunMode } from '../agent/task-policy';
 import type { Logger } from '../logging/index.js';
 import type { SpanTracer } from '../telemetry/SpanTracer';
@@ -151,6 +151,18 @@ export interface TurnContext {
 // ─── Orchestration types (spec 021 phase 1) ───────────────────────────────────
 
 /**
+ * Sub-task for orchestration planner output parsing.
+ */
+export interface OrchestratedSubtask {
+  id: string;
+  description: string;
+  fileScope?: string[];
+  dependencies?: string[];
+  parallelizable?: boolean;
+  estimatedTokens?: number;
+}
+
+/**
  * A single sub-task in an orchestration plan.
  *
  * Each SubTask carries a typed budget that the orchestration runtime enforces,
@@ -197,6 +209,9 @@ export interface SubAgentResult {
  * into sub-tasks, each with a typed budget and verification contract.
  */
 export interface OrchestrationPlan {
+  planId?: string;
+  inline?: boolean;
+  subtasks?: OrchestratedSubtask[]; // Added for new plan parser compatibility
   /** Decomposed sub-tasks in dependency order. */
   subTasks: SubTask[];
   /** Strategy used to produce this plan. */
@@ -225,4 +240,23 @@ export interface OrchestrationResult {
   toolCalls: number;
   /** Aggregate error if any sub-agent failed. */
   error?: string;
+}
+
+/**
+ * Result of attempting to parse an orchestration plan from a model response.
+ */
+export type PlanParseResult = 
+  | { success: true; plan: OrchestrationPlan }
+  | { success: false; inline: true; error?: string };
+
+/**
+ * Emitted when the model proposes a task decomposition plan.
+ */
+export interface OrchestrationPlanGeneratedEvent extends AgentEventBase {
+  type: 'orchestration_plan_generated';
+  payload: {
+    sessionId: string;
+    task: string;
+    plan: OrchestrationPlan | { inline: true };
+  };
 }

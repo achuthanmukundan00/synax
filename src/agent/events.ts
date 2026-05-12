@@ -40,6 +40,8 @@ export interface VerificationLifecycleEvent extends AgentEventBase {
   durationMs?: number;
 }
 
+import type { OrchestrationPlanGeneratedEvent } from '../session/types';
+
 export type AgentEvent =
   | (AgentEventBase & {
       type: 'task_started';
@@ -69,6 +71,7 @@ export type AgentEvent =
     })
   | ToolEvent
   | VerificationLifecycleEvent
+  | OrchestrationPlanGeneratedEvent
   | (AgentEventBase &
       PatchPreview & {
         type: 'patch_preview';
