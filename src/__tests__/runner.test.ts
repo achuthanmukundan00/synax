@@ -214,6 +214,10 @@ describe('shared bounded agent runner', () => {
   });
 
   it('lets the model recover from failed bash commands', async () => {
+    execSync('git init', { cwd: TMP, stdio: 'ignore' });
+    execSync('git config user.email "synax@example.test"', { cwd: TMP, stdio: 'ignore' });
+    execSync('git config user.name "Synax Test"', { cwd: TMP, stdio: 'ignore' });
+
     const client = fakeClient([
       { toolCalls: [{ id: 'call_1', name: 'bash', arguments: { command: 'git commit -m "missing stage"' } }] },
       { toolCalls: [{ id: 'call_2', name: 'bash', arguments: { command: 'git status --short' } }] },
