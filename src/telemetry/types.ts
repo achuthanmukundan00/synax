@@ -13,7 +13,8 @@ export type SpanKind =
   | 'tool_execution'
   | 'compaction'
   | 'handoff'
-  | 'verification';
+  | 'verification'
+  | 'orchestration';
 
 /** A timestamped event within a span. */
 export interface TimedEvent {
