@@ -149,6 +149,16 @@ export class Session {
   approvePatch?: (preview: PatchPreview) => PatchApprovalDecision | Promise<PatchApprovalDecision>;
   ensureCheckpoint?: () => Promise<unknown>;
 
+  // ── Steering ───────────────────────────────────────────────────────
+  /** Abort signal to cancel a running turn mid-generation. */
+  abortSignal?: AbortSignal;
+  /**
+   * Called after each tool call result is appended to the conversation.
+   * Return a non-empty string to inject it as the next user message
+   * (steering injection, continues the current turn without aborting).
+   */
+  onSteeringCheck?: () => string | undefined;
+
   // ── Observability ────────────────────────────────────────────────────
   logger?: Logger;
   tracer?: SpanTracer;
@@ -196,6 +206,8 @@ export class Session {
     costTracker?: CostTracker;
     maxBudget?: number;
     memory?: HolographicMemory | null;
+    abortSignal?: AbortSignal;
+    onSteeringCheck?: () => string | undefined;
   }) {
     this.repoRoot = options.repoRoot;
     this.client = options.client;
@@ -224,6 +236,10 @@ export class Session {
     this.tokenCounter = options.tokenCounter;
     this.costTracker = options.costTracker;
     this.maxBudget = options.maxBudget;
+
+    // ── Steering ─────────────────────────────────────────────────────
+    this.abortSignal = options.abortSignal;
+    this.onSteeringCheck = options.onSteeringCheck;
 
     // ── Wire EventBus: legacy callbacks as subscribers ──────────────────
     // Only forward events that belong to the AgentEvent discriminated union.
@@ -385,6 +401,19 @@ export class Session {
     // ── Build memory index once per turn (tells model what's searchable) ─
     const memoryIndex = this.memory?.buildMemoryIndex() ?? null;
 
+    // ── Steering: abort before any work ────────────────────────────
+    if (this.abortSignal?.aborted) {
+      return {
+        terminalState: 'blocked',
+        finalAnswer: '',
+        steps: 0,
+        toolCalls,
+        changedFiles,
+        conversation,
+        error: 'turn aborted by user',
+      };
+    }
+
     // ── Task guards ────────────────────────────────────────────────────
     const broadTask = guardBroadTask(task);
     if (broadTask) {
@@ -450,6 +479,19 @@ export class Session {
     try {
       turnResult = await (async (): Promise<AgentTurnResult> => {
         for (let step = 1; step <= this.maxModelSteps; step += 1) {
+          // ── Steering: check abort before each model step ──────────
+          if (this.abortSignal?.aborted) {
+            return {
+              terminalState: 'blocked',
+              finalAnswer: '',
+              steps: step - 1,
+              toolCalls,
+              changedFiles,
+              conversation,
+              error: 'turn aborted by user',
+            };
+          }
+
           let response: ChatResponse;
           let modelSpan: ReturnType<SpanTracer['startSpan']> | undefined;
 
@@ -733,6 +775,18 @@ export class Session {
           // ── Tool execution loop ─────────────────────────────────────
           const contentToolResults: Array<{ id: string; content: string }> = [];
           for (const call of response.toolCalls) {
+            // ── Steering: check abort before each tool call ─────────
+            if (this.abortSignal?.aborted) {
+              return {
+                terminalState: 'blocked',
+                finalAnswer: response.content.trim(),
+                steps: step,
+                toolCalls,
+                changedFiles,
+                conversation,
+                error: 'turn aborted by user',
+              };
+            }
             const toolExecSpan =
               this.tracer && turnSpan
                 ? this.tracer.startChildSpan(turnSpan, 'tool_execution', { toolName: call.name })
@@ -991,6 +1045,25 @@ export class Session {
             }
           }
           flushContentToolResults(conversation, response, contentToolResults);
+
+          // ── Steering: inject queued message after tool call results ──
+          const steeringInject = this.onSteeringCheck?.();
+          if (steeringInject) {
+            conversation.messages.push({ role: 'user', content: steeringInject });
+            // Memory: store steering injection
+            this.memory?.store({
+              sessionId: this.sessionId,
+              turnId: turnIndex,
+              role: 'user',
+              content: `[steering] ${steeringInject.slice(0, 8000)}`,
+            });
+            this.eventBus.emit({
+              type: 'command_output',
+              timestamp: eventNow(),
+              command: 'steering',
+              content: `[synax] steering injected: ${steeringInject.slice(0, 120)}`,
+            });
+          }
         }
         // Loop exhausted without returning — max steps hit
         return {

@@ -1169,7 +1169,7 @@ describe('interactive layout visual agreements', () => {
     expect(dock[0]).toMatch(/^┌─+ ~\/workspace\/git\/\.worktrees\/synax-tui {2}dev\/tui ┐\s*$/);
     expect(dock[1]).toMatch(/^│ {2}Implement fixed-footprint reactor core rendering\s+│\s*$/);
     expect(dock[2]).toMatch(/^│ {2}\s+│\s*$/);
-    expect(dock[3]).toMatch(/Enter submit.*Ctrl\+D exit.*Shift.*newline.*Ctrl\+C clear.*\/help.*!cmd/);
+    expect(dock[3]).toMatch(/Enter submit.*Esc interrupt.*Shift.*newline.*Ctrl\+D exit.*Ctrl\+C clear.*\/help.*!cmd/);
   });
 
   it('keeps the input dock inside the terminal write-safe column', () => {
