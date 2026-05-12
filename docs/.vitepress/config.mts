@@ -9,6 +9,8 @@ export default defineConfig({
   themeConfig: {
     nav: [
       { text: 'Guide', link: '/guide/getting-started' },
+      { text: 'Architecture', link: '/guide/architecture' },
+      { text: 'Extensions', link: '/guide/extensions' },
       { text: 'Relay', link: '/guide/relay' },
       { text: 'Commands', link: '/guide/commands' },
       { text: 'Compatibility', link: '/guide/compatibility' },
@@ -33,6 +35,8 @@ export default defineConfig({
           { text: 'Safety and Context', link: '/guide/safety-context' },
           { text: 'Compatibility Reports', link: '/guide/compatibility' },
           { text: 'Development', link: '/guide/development' },
+          { text: 'Architecture', link: '/guide/architecture' },
+          { text: 'Extensions', link: '/guide/extensions' },
           { text: 'Runtime Architecture', link: '/architecture/runtime' },
         ],
       },
