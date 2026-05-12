@@ -17,15 +17,15 @@ const BREATHING_GLYPHS = ['◌', '◓', '◑', '◒'];
  *  Converts common escapes to Unicode and removes remaining \commands. */
 function stripLatexCommands(text: string): string {
   return text
-    .replace(/\pmod\{([^}]*)\}/gi, ' (mod $1)')
-    .replace(/\bmod\b/gi, ' mod ')
-    .replace(/\equiv\b/gi, '≡')
-    .replace(/\cdot\b/gi, '·')
-    .replace(/\times\b/gi, '×')
-    .replace(/\ldots\b/gi, '…')
-    .replace(/\cdots\b/gi, '⋯')
-    .replace(/\text\{([^}]*)\}/gi, '$1')
-    .replace(/\[a-zA-Z]+(\{[^}]*\})*/g, '')
+    .replace(/\\pmod\{([^}]*)\}/gi, ' (mod $1)')
+    .replace(/\\bmod\b/gi, ' mod ')
+    .replace(/\\equiv\b/gi, '≡')
+    .replace(/\\cdot\b/gi, '·')
+    .replace(/\\times\b/gi, '×')
+    .replace(/\\ldots\b/gi, '…')
+    .replace(/\\cdots\b/gi, '⋯')
+    .replace(/\\text\{([^}]*)\}/gi, '$1')
+    .replace(/\\[a-zA-Z]+(\{[^}]*\})*/g, '')
     .replace(/\s+/g, ' ')
     .trim();
 }

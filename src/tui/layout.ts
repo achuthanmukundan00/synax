@@ -104,7 +104,11 @@ export function maxHistoryScrollOffset(state: InteractiveViewState, _cols: numbe
   const renderWidth = terminalWriteWidth(width);
   const height = Math.max(14, rows);
   const steeringBarHeight = state.steeringMessage ? 1 : 0;
-  const panelHeight = inputDockHeight(state.objectiveInput, renderWidth, maxInputDockBodyLines(height - steeringBarHeight));
+  const panelHeight = inputDockHeight(
+    state.objectiveInput,
+    renderWidth,
+    maxInputDockBodyLines(height - steeringBarHeight),
+  );
   const bodyHeight = Math.max(1, height - panelHeight - steeringBarHeight);
   const visibleRows = Math.max(1, bodyHeight - 3);
   const sideWidth = operationalSideWidth(renderWidth, bodyHeight);
