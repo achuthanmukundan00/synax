@@ -154,6 +154,8 @@ export async function runInteractiveTui(
   let steeringMessage = '';
   /** Whether we're in steering-input mode (user typed while bot is working). */
   let steeringActive = false;
+  /** Whether the current turn was interrupted via Escape. Cleared on second Escape or new prompt. */
+  let interrupted = false;
   const diff = new DiffRenderer();
 
   // Adaptive render loop — 60 FPS when active, 0 when idle.
@@ -478,6 +480,7 @@ export async function runInteractiveTui(
     // Clear any lingering steering state when starting a fresh turn.
     steeringMessage = '';
     steeringActive = false;
+    interrupted = false;
     session.setSteeringMessage?.('');
 
     state = applyEventToRunState(
@@ -927,6 +930,13 @@ export async function runInteractiveTui(
           session.setSteeringMessage?.('');
           steeringMessage = '';
           steeringActive = false;
+          interrupted = true;
+          // Inject an error event to show the red interrupted banner.
+          state = applyEventToRunState(
+            state,
+            { type: 'error', timestamp: new Date().toISOString(), message: '⏻ Interrupted' },
+            Date.now(),
+          );
           // submit()'s finally block will reset busy=false and repaint when
           // the aborted turn settles.
           continue;
@@ -1129,6 +1139,14 @@ export async function runInteractiveTui(
       if (event.type === 'escape') {
         if (autocomplete.visible) {
           autocomplete.visible = false;
+          continue;
+        }
+        // Clear interrupted state to "allow the process to continue" (return to idle).
+        if (interrupted) {
+          interrupted = false;
+          state = createInitialRunStateSnapshot(Date.now());
+          applyOptionsToState();
+          diff.reset();
           continue;
         }
         continue;
