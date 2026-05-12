@@ -31,6 +31,9 @@ import {
   type BudgetEstimate,
   type ContextBudgetSettings,
 } from '../agent/context-budget';
+import { orchestrationPlanPrompt } from '../agent/prompts/orchestration-plan';
+import { parseOrchestrationPlan } from '../orchestration/plan-parser';
+import type { PlanParseResult } from './types';
 import { eventNow, type AgentEvent, type TerminalState } from '../agent/events';
 import { describeToolCall, guardBroadTask, guardUnsupportedTask, type RunMode } from '../agent/task-policy';
 import { ActionExecutor, createDefaultHandlerMap } from '../actions/ActionExecutor';
@@ -345,6 +348,79 @@ export class Session {
       contextWindow: this.contextBudget.contextWindowTokens,
       tokenCounter: this.tokenCounter,
     });
+  }
+
+  /**
+   * Determines if a task requires orchestration based on budget estimation.
+   */
+  shouldOrchestrate(estimate: BudgetEstimate): boolean {
+    return (estimate.strategy as string) === 'orchestrated';
+  }
+
+  /**
+   * Prompts the model to decompose the task, validating and repairing the JSON response.
+   * Emits the orchestration_plan_generated event.
+   */
+  async planOrchestratedTurn(task: string): Promise<PlanParseResult> {
+    const repoMetadata = await collectRepoMetadata(this.env, this.repoRoot);
+    
+    // Create prompt for decomposition
+    const prompt = orchestrationPlanPrompt
+      .replace('{{task}}', task)
+      .replace('{{repoShape}}', `Files: ${repoMetadata.fileCount}, Total KB: Math.ceil(${(repoMetadata as any).totalSizeBytes || (repoMetadata as any).totalSizeKb || 0} / 1024)`);
+      
+    // Create system message
+    const messages = [{ role: 'system', content: prompt }];
+    
+    // Trace the call if tracer is available
+    let span: any;
+    if (this.tracer) { 
+      span = this.tracer.startSpan({ kind: 'orchestration' });
+    }
+    
+    let content = '';
+    
+    try {
+      const response = await this.client.chat({
+        messages,
+      });
+      content = typeof response.content === 'string' 
+        ? response.content 
+        : Array.isArray(response.content) 
+          ? (response.content as any[]).map((c: any) => 'text' in c ? c.text : '').join('')
+          : '';
+    } catch (error) {
+       // Log safely?
+       const fallback: PlanParseResult = { success: false, inline: true };
+       this.eventBus.emit({
+         type: 'orchestration_plan_generated',
+         timestamp: eventNow(),
+         payload: { sessionId: this.sessionId, task, plan: { inline: true } }
+       });
+       return fallback;
+    }
+        
+    const parsed = parseOrchestrationPlan(content);
+    
+    this.eventBus.emit({
+      type: 'orchestration_plan_generated',
+      timestamp: Date.now(),
+      payload: {
+        sessionId: this.sessionId,
+        task,
+        plan: parsed.success ? parsed.plan : { inline: true }
+      }
+    } as any);
+
+    if (this.tracer && span) {
+      span.metadata = { 
+         success: parsed.success, 
+         inlineFallback: parsed.success ? !!(parsed.plan as any).inline : true 
+      };
+      this.tracer.endSpan(span);
+    }
+
+    return parsed;
   }
 
   /** Shutdown the session, emit session_shutdown, and clean up the bus. */
