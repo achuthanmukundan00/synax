@@ -24,6 +24,8 @@ export interface MemoryEntry {
   toolName?: string;
   filePaths?: string[];
   content: string;
+  /** Product-domain tags for cross-product memory filtering (e.g. 'autocareer', 'wytos'). */
+  domainTags?: string[];
 }
 
 export interface MemorySearchResult {
@@ -33,6 +35,8 @@ export interface MemorySearchResult {
   toolName: string | null;
   filePaths: string | null;
   content: string;
+  /** Product-domain tags stored with the entry (e.g. 'autocareer', 'wytos'). */
+  domainTags: string | null;
   /** FTS5 rank (lower = more relevant). */
   rank: number;
 }
@@ -49,6 +53,8 @@ export interface HandoffManifest {
   turnCount: number;
   /** Total entries in memory. */
   entryCount: number;
+  /** Product-domain context tags observed in recent memory entries. */
+  domainTags: string[];
 }
 
 // ─── HolographicMemory ───────────────────────────────────────────────────────
@@ -65,8 +71,8 @@ export class HolographicMemory {
     if (db) {
       try {
         this.insertStmt = db.prepare(`
-          INSERT INTO memory_fts (turn_id, session_id, role, tool_name, file_paths, content)
-          VALUES (@turnId, @sessionId, @role, @toolName, @filePaths, @content)
+          INSERT INTO memory_fts (turn_id, session_id, role, tool_name, file_paths, content, domain_tags)
+          VALUES (@turnId, @sessionId, @role, @toolName, @filePaths, @content, @domainTags)
         `);
       } catch {
         // FTS5 table may not exist yet — will be created by EventStore migration
@@ -95,6 +101,7 @@ export class HolographicMemory {
         role: entry.role,
         toolName: entry.toolName ?? null,
         filePaths: entry.filePaths ? entry.filePaths.join(',') : null,
+        domainTags: entry.domainTags && entry.domainTags.length > 0 ? entry.domainTags.join(',') : null,
         content: entry.content.slice(0, 8000), // cap at 8K chars per entry
       });
     } catch {
@@ -131,7 +138,7 @@ export class HolographicMemory {
     try {
       const rows = this.db
         .prepare(
-          `SELECT turn_id, session_id, role, tool_name, file_paths, content, rank
+          `SELECT turn_id, session_id, role, tool_name, file_paths, domain_tags, content, rank
          FROM memory_fts
          WHERE memory_fts MATCH @query
          ORDER BY rank
@@ -143,6 +150,7 @@ export class HolographicMemory {
         role: string;
         tool_name: string | null;
         file_paths: string | null;
+        domain_tags: string | null;
         content: string;
         rank: number;
       }>;
@@ -153,6 +161,7 @@ export class HolographicMemory {
         role: r.role,
         toolName: r.tool_name,
         filePaths: r.file_paths,
+        domainTags: r.domain_tags,
         content: r.content,
         rank: r.rank,
       }));
@@ -174,8 +183,8 @@ export class HolographicMemory {
     try {
       const rows = this.db
         .prepare(
-          `SELECT turn_id, session_id, role, tool_name, file_paths,
-                  snippet(memory_fts, 1, '<mark>', '</mark>', '...', 32) AS snippet,
+          `SELECT turn_id, session_id, role, tool_name, file_paths, domain_tags,
+                  snippet(memory_fts, 5, '<mark>', '</mark>', '...', 32) AS snippet,
                   content, rank
          FROM memory_fts
          WHERE memory_fts MATCH @query
@@ -188,6 +197,7 @@ export class HolographicMemory {
         role: string;
         tool_name: string | null;
         file_paths: string | null;
+        domain_tags: string | null;
         snippet: string;
         content: string;
         rank: number;
@@ -199,6 +209,7 @@ export class HolographicMemory {
         role: r.role,
         toolName: r.tool_name,
         filePaths: r.file_paths,
+        domainTags: r.domain_tags,
         content: r.content,
         rank: r.rank,
         snippet: r.snippet,
@@ -228,6 +239,7 @@ export class HolographicMemory {
         suggestedSearchTerms: [],
         turnCount: 0,
         entryCount: 0,
+        domainTags: [],
       };
     }
 
@@ -235,7 +247,7 @@ export class HolographicMemory {
       // Get recent entries (last 20)
       const recent = this.db
         .prepare(
-          `SELECT turn_id, session_id, role, tool_name, file_paths, content
+          `SELECT turn_id, session_id, role, tool_name, file_paths, domain_tags, content
          FROM memory_fts
          ORDER BY rowid DESC
          LIMIT 20`,
@@ -246,6 +258,7 @@ export class HolographicMemory {
         role: string;
         tool_name: string | null;
         file_paths: string | null;
+        domain_tags: string | null;
         content: string;
       }>;
 
@@ -253,8 +266,17 @@ export class HolographicMemory {
       const keyFindings: string[] = [];
       const filesTouched = new Set<string>();
       const seenFindings = new Set<string>();
+      const domainTags = new Set<string>();
 
       for (const entry of recent) {
+        // Collect domain tags from entries
+        if (entry.domain_tags) {
+          for (const tag of entry.domain_tags.split(',')) {
+            const trimmed = tag.trim();
+            if (trimmed) domainTags.add(trimmed);
+          }
+        }
+
         if (entry.file_paths) {
           for (const fp of entry.file_paths.split(',')) {
             const trimmed = fp.trim();
@@ -294,6 +316,7 @@ export class HolographicMemory {
         sessionId,
         keyFindings,
         filesTouched: Array.from(filesTouched).sort(),
+        domainTags: Array.from(domainTags).sort(),
         suggestedSearchTerms: this.getSuggestedSearchTerms(),
         turnCount: turnCount?.count ?? 0,
         entryCount: entryCount?.count ?? 0,
@@ -303,6 +326,7 @@ export class HolographicMemory {
         sessionId: '',
         keyFindings: [],
         filesTouched: [],
+        domainTags: [],
         suggestedSearchTerms: [],
         turnCount: 0,
         entryCount: 0,
@@ -331,6 +355,16 @@ export class HolographicMemory {
          LIMIT 10`,
         )
         .all() as Array<{ tool_name: string }>;
+
+      // Get distinct domain tags from recent entries
+      const domainRows = this.db
+        .prepare(
+          `SELECT DISTINCT domain_tags FROM memory_fts
+         WHERE domain_tags IS NOT NULL AND domain_tags != ''
+         ORDER BY rowid DESC
+         LIMIT 20`,
+        )
+        .all() as Array<{ domain_tags: string }>;
 
       // Get common words from recent content (simple frequency analysis)
       const recentContent = this.db
@@ -382,9 +416,15 @@ export class HolographicMemory {
         .slice(0, 15)
         .map(([word]) => word);
 
-      // Combine: tool names + frequent words (deduped)
+      // Combine: tool names + domain tags + frequent words (deduped)
       const terms = new Set<string>();
       for (const t of tools) terms.add(t.tool_name);
+      for (const d of domainRows) {
+        for (const tag of d.domain_tags.split(',')) {
+          const trimmed = tag.trim();
+          if (trimmed) terms.add(trimmed);
+        }
+      }
       for (const w of topWords) terms.add(w);
 
       return Array.from(terms).slice(0, 20);
@@ -445,6 +485,24 @@ export class HolographicMemory {
         )
         .all() as Array<{ tool_name: string }>;
 
+      // Domain tags from recent entries
+      const domainRows = this.db
+        .prepare(
+          `SELECT DISTINCT domain_tags FROM memory_fts
+         WHERE domain_tags IS NOT NULL AND domain_tags != ''
+         ORDER BY rowid DESC
+         LIMIT 20`,
+        )
+        .all() as Array<{ domain_tags: string }>;
+
+      const allDomainTags = new Set<string>();
+      for (const row of domainRows) {
+        for (const tag of row.domain_tags.split(',')) {
+          const trimmed = tag.trim();
+          if (trimmed) allDomainTags.add(trimmed);
+        }
+      }
+
       // Recent error/failure snippets (last 15 entries containing error/fail)
       const errors = this.db
         .prepare(
@@ -473,6 +531,11 @@ export class HolographicMemory {
       // Build the index
       const lines: string[] = [];
       lines.push(`[Memory: ${stats.entries} entries across ${stats.turns} turns`);
+
+      if (allDomainTags.size > 0) {
+        const tagList = Array.from(allDomainTags).slice(0, 5);
+        lines.push(`Domain: ${tagList.join(', ')}`);
+      }
 
       if (allFiles.size > 0) {
         const fileList = Array.from(allFiles).slice(0, 5);
