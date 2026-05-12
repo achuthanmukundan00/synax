@@ -49,10 +49,18 @@ export function renderTranscript(state: TranscriptRenderState, width: number): s
       // Streaming delta → final assistant_message can produce near-duplicates;
       // this catch-all prevents double rendering.
       const isLastModel = i === history.length - 1 || !history.slice(i + 1).some((h) => h.kind === 'model');
+      // A model entry is a "final answer" (shown as a result, not a dim note)
+      // when it's the last model entry before the next user prompt or end of
+      // history (and the run is completed).  This preserves result formatting
+      // for historical answers even after a new prompt starts a fresh run.
+      const nextUserIdx = history.slice(i + 1).findIndex((h) => h.kind === 'user');
+      const isLastModelBeforeUser =
+        nextUserIdx >= 0 && !history.slice(i + 1, i + 1 + nextUserIdx).some((h) => h.kind === 'model');
+      const isFinalAnswer = isLastModelBeforeUser || (completed && isLastModel);
       if (prose && prose === lastRenderedProse && !isLastModel) {
         continue;
       }
-      if (completed && isLastModel) {
+      if (isFinalAnswer) {
         blocks.push(renderReviewOutput(prose || item.detail || item.summary, width));
         lastRenderedProse = prose;
       } else if (prose) {
@@ -574,6 +582,12 @@ function stripTerminalControl(input: string): string {
       .replace(/\u001b[@-Z\\-_]/g, '')
       // eslint-disable-next-line no-control-regex
       .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/g, '')
+      // Orphaned CSI remnants after ESC stripping — e.g. "[1;37m" left over
+      // when \u001b was removed from "\u001b[1;37m" by the control-character pass.
+      // Only strip orphaned SGR (Select Graphic Rendition) codes which are the
+      // visually noisy ones; other CSI orphans (e.g. cursor moves) are rare.
+      // eslint-disable-next-line no-control-regex
+      .replace(/\[[0-9;:<=>?]*m/g, '')
   );
 }
 
