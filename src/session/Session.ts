@@ -320,7 +320,15 @@ export class Session {
 
   /** Build model-facing tools for this session's active configuration. */
   getModelTools(): ToolDefinition[] {
-    return buildModelFacingTools({ bashEnabled: this.bashEnabled, mode: this.mode });
+    const builtins = buildModelFacingTools({ bashEnabled: this.bashEnabled, mode: this.mode });
+    const registryTools = this.registry.list();
+    // Exclude builtins that are already provided by registry to allow overrides,
+    // and exclude inspection tools (read/write/edit/bash) which are already in builtins.
+    const customTools = registryTools.filter(t => 
+      !builtins.find(b => b.name === t.name) && 
+      !['read', 'write', 'edit', 'bash', 'search_memory', 'view_image'].includes(t.name)
+    );
+    return [...builtins, ...customTools];
   }
 
   /** Set the handoff manager for spawning child sessions on context exhaustion. */

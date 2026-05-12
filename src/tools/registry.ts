@@ -22,6 +22,13 @@ export function createToolRegistry(options: ToolRegistryOptions): ToolRegistry {
       return byName.get(name);
     },
 
+    register(definition: ToolDefinition): void {
+      if (byName.has(definition.name)) {
+        throw new Error(`Tool already registered: ${definition.name}`);
+      }
+      byName.set(definition.name, definition);
+    },
+
     async execute(name: string, input: unknown): Promise<ToolResult> {
       const tool = byName.get(name);
       if (!tool) {
