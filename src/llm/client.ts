@@ -675,6 +675,11 @@ function normalizeMessagesForProvider(
   );
   return messages.map((message) => {
     const normalized = { ...message };
+    // Strip internal compaction markers before sending to the provider.
+    // These are not part of the OpenAI Chat Completions message schema
+    // and cause 400 errors with strict providers (OpenRouter, Relay, DeepSeek).
+    delete (normalized as Record<string, unknown>)._tool_call_ids;
+    delete (normalized as Record<string, unknown>)._tool_result_ids;
     if (Array.isArray(normalized.tool_calls) && normalized.tool_calls.length === 0) {
       delete normalized.tool_calls;
     }
