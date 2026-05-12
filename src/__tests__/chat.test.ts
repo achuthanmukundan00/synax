@@ -229,6 +229,7 @@ describe('chat session', () => {
     const input = new FakeTtyInput();
     const output = new CapturingWritable();
     const session: ChatSession = {
+      sessionId: 'test-session',
       handleUserMessage: jest.fn(async () => ({
         terminalState: 'model_error' as const,
         finalAnswer: "I'll begin by checking the repository.",
@@ -265,6 +266,7 @@ describe('chat session', () => {
     const input = new FakeTtyInput();
     const output = new CapturingWritable();
     const session: ChatSession = {
+      sessionId: 'test-session',
       handleUserMessage: jest.fn(async () => ({
         terminalState: 'model_error' as const,
         finalAnswer: '',
@@ -296,6 +298,7 @@ describe('chat session', () => {
       resolveSubmitted = resolve;
     });
     const session: ChatSession = {
+      sessionId: 'test-session',
       handleUserMessage: jest.fn(async () => {
         resolveSubmitted?.();
         return {
@@ -342,6 +345,7 @@ describe('chat session', () => {
       resolveSubmitted = resolve;
     });
     const session: ChatSession = {
+      sessionId: 'test-session',
       handleUserMessage: jest.fn(async () => {
         resolveSubmitted?.();
         return {
@@ -626,6 +630,7 @@ describe('chat session', () => {
     const input = new FakeTtyInput();
     const output = new CapturingWritable();
     const session: ChatSession = {
+      sessionId: 'test-session',
       handleUserMessage: jest.fn(async () => ({
         terminalState: 'completed' as const,
         finalAnswer: 'ok',
