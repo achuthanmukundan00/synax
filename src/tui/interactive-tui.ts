@@ -893,7 +893,22 @@ export async function runInteractiveTui(
             setTimeout(() => {
               void (async () => {
                 // Wait for the aborted turn to settle.
+                const deadline = Date.now() + 5000; // 5s safety timeout
                 while (busy) {
+                  if (Date.now() > deadline) {
+                    // Turn didn't settle in time — bail out gracefully.
+                    state = applyEventToRunState(
+                      state,
+                      {
+                        type: 'command_output',
+                        timestamp: new Date().toISOString(),
+                        command: 'steering',
+                        content: '[synax] timed out waiting for turn to abort — steering message lost',
+                      },
+                      Date.now(),
+                    );
+                    return;
+                  }
                   await new Promise((r) => setTimeout(r, 25));
                 }
                 // Submit the steering message.
@@ -911,6 +926,9 @@ export async function runInteractiveTui(
           if (steeringMessage.length > 0) {
             steeringMessage = steeringMessage.slice(0, -1);
             session.setSteeringMessage?.(steeringMessage);
+            if (steeringMessage.length === 0) {
+              steeringActive = false;
+            }
           }
           continue;
         }

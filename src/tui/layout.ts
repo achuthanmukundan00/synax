@@ -84,7 +84,7 @@ export function renderLayout(state: InteractiveViewState, cols: number, rows: nu
     const maxMsgWidth = width - steeringLabel.length - 4;
     const truncated =
       state.steeringMessage.length > maxMsgWidth
-        ? state.steeringMessage.slice(0, maxMsgWidth - 1) + '…'
+        ? state.steeringMessage.slice(0, maxMsgWidth - 3) + '...'
         : state.steeringMessage;
     clipped.push(pad(`\u001b[36m${steeringLabel}${truncated}\u001b[0m`, width));
   }
