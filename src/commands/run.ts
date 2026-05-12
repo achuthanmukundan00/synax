@@ -7,6 +7,7 @@ import { loadSynaxConfig } from '../config/load-config';
 import { describeLLMProvider } from '../llm/provider-factory';
 import { createChatSession, compactHome, currentGitBranch, providerRuntimeBlockedMessage } from './chat';
 import { loadSkills, type SkillDiagnostic } from '../agent/skills';
+import { discoverSkills, buildSkillMessages } from '../skills/SkillLoader';
 import { runInteractiveTui } from '../tui/interactive-tui';
 import { createLogger } from '../logging/index.js';
 
@@ -138,11 +139,33 @@ export function runCommand(program: Command): void {
             }
             enableMouse = effectiveConfig.tui?.mouse ?? false;
             alternateScreen = effectiveConfig.tui?.alternateScreen ?? true;
+
+            // Config-based skills (personas) — always loaded.
+            const configMessages: string[] = [];
+            let configDiagnostics: SkillDiagnostic[] = [];
             if (effectiveConfig.skills.enabled.length > 0) {
               const result = loadSkills(effectiveConfig.skills, repoRoot);
-              skillMessages = result.systemMessages;
-              skillDiagnostics = result.diagnostics;
+              configMessages.push(...result.systemMessages);
+              configDiagnostics = result.diagnostics;
             }
+
+            // Auto-discovered skills — skippable via --no-skills.
+            const autoMessages: string[] = [];
+            if (options.skills !== false) {
+              try {
+                const discovery = discoverSkills(repoRoot);
+                if (discovery.loaded.length > 0) {
+                  autoMessages.push(...buildSkillMessages(discovery.loaded));
+                }
+              } catch {
+                // Auto-discovery is best-effort
+              }
+            }
+
+            // Merge: config-based (persona) first, then auto-discovered domain skills.
+            skillMessages = [...configMessages, ...autoMessages];
+            if (skillMessages.length === 0) skillMessages = undefined;
+            skillDiagnostics = configDiagnostics;
           } catch {
             // best-effort
           }
