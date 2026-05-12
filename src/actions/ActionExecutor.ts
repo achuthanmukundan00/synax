@@ -22,6 +22,7 @@ import { handleEdit } from './handlers/edit-handler';
 import { handleWrite } from './handlers/write-handler';
 import { handleBash } from './handlers/bash-handler';
 import { handleSearchMemory } from './handlers/search-memory-handler';
+import { handleViewImage } from './handlers/view-image-handler';
 
 // ─── Handler map type ─────────────────────────────────────
 
@@ -42,6 +43,7 @@ export function createDefaultHandlerMap(): HandlerMap {
   map.set('write', handleWrite as ActionHandler);
   map.set('bash', handleBash as ActionHandler);
   map.set('search_memory', handleSearchMemory as ActionHandler);
+  map.set('view_image', handleViewImage as ActionHandler);
   return map;
 }
 
