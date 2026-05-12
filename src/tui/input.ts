@@ -11,6 +11,10 @@ export interface ParsedInput {
     | 'paste'
     | 'arrow_up'
     | 'arrow_down'
+    | 'arrow_left'
+    | 'arrow_right'
+    | 'home'
+    | 'end'
     | 'escape'
     | 'tab'
     | 'shift_tab';
@@ -98,13 +102,52 @@ function parseSingleInputEvent(
     return;
   }
   if (chunk.startsWith('\x1b[C', index)) {
-    // Right arrow is intentionally ignored; settings tabs use Tab.
+    events.push({ type: 'arrow_right' });
     setIndex(index + 2);
     return;
   }
   if (chunk.startsWith('\x1b[D', index)) {
-    // Left arrow is intentionally ignored; settings tabs use Shift+Tab.
+    events.push({ type: 'arrow_left' });
     setIndex(index + 2);
+    return;
+  }
+  // Home / End (xterm-style)
+  if (chunk.startsWith('\x1b[H', index)) {
+    events.push({ type: 'home' });
+    setIndex(index + 2);
+    return;
+  }
+  if (chunk.startsWith('\x1b[F', index)) {
+    events.push({ type: 'end' });
+    setIndex(index + 2);
+    return;
+  }
+  // Home / End (vt220-style tilde)
+  if (chunk.startsWith('\x1b[1~', index)) {
+    events.push({ type: 'home' });
+    setIndex(index + 3);
+    return;
+  }
+  if (chunk.startsWith('\x1b[4~', index)) {
+    events.push({ type: 'end' });
+    setIndex(index + 3);
+    return;
+  }
+  // Ctrl+Left / Ctrl+Right (word navigation)
+  if (chunk.startsWith('\x1b[1;5D', index)) {
+    // Ctrl+Left: treat as repeated arrow_left for word skip
+    events.push({ type: 'arrow_left' });
+    events.push({ type: 'arrow_left' });
+    events.push({ type: 'arrow_left' });
+    setIndex(index + 6);
+    return;
+  }
+  if (chunk.startsWith('\x1b[1;5C', index)) {
+    // Ctrl+Right: treat as repeated arrow_right for word skip
+    events.push({ type: 'arrow_right' });
+    events.push({ type: 'arrow_right' });
+    events.push({ type: 'arrow_right' });
+    setIndex(index + 6);
     return;
   }
   // Escape
@@ -138,10 +181,23 @@ function parseSingleInputEvent(
     setIndex(index + 3);
     return;
   }
-  // Shift+Enter (kitty keyboard protocol CSI u)
+  // Shift+Enter variants
+  // kitty keyboard protocol CSI u
   if (chunk.startsWith('\x1b[13;2u', index)) {
     events.push({ type: 'newline' });
     setIndex(index + 6);
+    return;
+  }
+  // xterm modifyOtherKeys: CSI 27 ; 2 ; 13 ~
+  if (chunk.startsWith('\x1b[27;2;13~', index)) {
+    events.push({ type: 'newline' });
+    setIndex(index + 9);
+    return;
+  }
+  // xterm modified function key: CSI 13 ; 2 ~
+  if (chunk.startsWith('\x1b[13;2~', index)) {
+    events.push({ type: 'newline' });
+    setIndex(index + 7);
     return;
   }
   const escapeLength = parseUnsupportedEscapeLength(chunk, index);

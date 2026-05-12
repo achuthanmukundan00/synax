@@ -218,6 +218,7 @@ export async function runInteractiveTui(
     gitBranch: options?.gitBranch,
     coreVisualProfile: runtimeLabels.coreVisualProfile,
     historyScrollOffset,
+    inputCursorOffset: inputDraft.getCursorOffset(),
   });
 
   const clampHistoryScroll = (): void => {
@@ -262,7 +263,13 @@ export async function runInteractiveTui(
     terminal.synchronizedWrite(out || '');
 
     // Position and show cursor beam in the input box.
-    const cursor = inputCursorPosition(viewState().objectiveInput, terminal.columns, terminal.rows);
+    const cursor = inputCursorPosition(
+      viewState().objectiveInput,
+      terminal.columns,
+      terminal.rows,
+      undefined,
+      viewState().inputCursorOffset,
+    );
     // Terminal cursor positions are 1-indexed. Use beam cursor style to avoid
     // overwriting the first character of placeholder text.
     terminal.write(`\u001b[${cursor.row + 1};${cursor.col + 1}H\u001b[5 q\u001b[?25h`);
@@ -842,6 +849,8 @@ export async function runInteractiveTui(
       if (event.type === 'arrow_up' || event.type === 'scroll_history_up') {
         if (autocomplete.visible) {
           autocomplete.selection = Math.max(0, autocomplete.selection - 1);
+        } else if (inputDraft.getVisibleBody().includes('\n')) {
+          inputDraft.handleCursorUp();
         } else {
           historyScrollOffset += 3;
           clampHistoryScroll();
@@ -851,9 +860,35 @@ export async function runInteractiveTui(
       if (event.type === 'arrow_down' || event.type === 'scroll_history_down') {
         if (autocomplete.visible) {
           autocomplete.selection = Math.min(autocomplete.filtered.length - 1, autocomplete.selection + 1);
+        } else if (inputDraft.getVisibleBody().includes('\n')) {
+          inputDraft.handleCursorDown();
         } else {
           historyScrollOffset = Math.max(0, historyScrollOffset - 3);
           clampHistoryScroll();
+        }
+        continue;
+      }
+      if (event.type === 'arrow_left') {
+        if (!autocomplete.visible) {
+          inputDraft.handleCursorLeft();
+        }
+        continue;
+      }
+      if (event.type === 'arrow_right') {
+        if (!autocomplete.visible) {
+          inputDraft.handleCursorRight();
+        }
+        continue;
+      }
+      if (event.type === 'home') {
+        if (!autocomplete.visible) {
+          inputDraft.handleHome();
+        }
+        continue;
+      }
+      if (event.type === 'end') {
+        if (!autocomplete.visible) {
+          inputDraft.handleEnd();
         }
         continue;
       }
