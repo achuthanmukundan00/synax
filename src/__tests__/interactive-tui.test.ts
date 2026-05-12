@@ -110,8 +110,20 @@ describe('tui input parser', () => {
       expect(parseInputChunk(input)).toEqual([{ type: 'arrow_down' }]);
       return;
     }
-    if (input === '\x1b[C' || input === '\x1b[D') {
-      expect(parseInputChunk(input)).toEqual([]);
+    if (input === '\x1b[C') {
+      expect(parseInputChunk(input)).toEqual([{ type: 'arrow_right' }]);
+      return;
+    }
+    if (input === '\x1b[D') {
+      expect(parseInputChunk(input)).toEqual([{ type: 'arrow_left' }]);
+      return;
+    }
+    if (input === '\x1b[H' || input === '\x1b[1~') {
+      expect(parseInputChunk(input)).toEqual([{ type: 'home' }]);
+      return;
+    }
+    if (input === '\x1b[F' || input === '\x1b[4~') {
+      expect(parseInputChunk(input)).toEqual([{ type: 'end' }]);
       return;
     }
     if (input === '\x1b') {
@@ -605,7 +617,7 @@ describe('interactive layout visual agreements', () => {
       .map(stripAnsi)
       .join('\n');
 
-    expect(plain).toContain('Synax v0.0.22-alpha  Ready  0:25');
+    expect(plain).toContain('Synax v0.1.0-alpha.0  Ready  0:25');
   });
 
   it('renders terminal-state status bars in the header without redundant final summary blocks', () => {
@@ -1154,8 +1166,8 @@ describe('interactive layout visual agreements', () => {
     expect(plain).toContain('The renderer now keeps the prompt inside a proper box.');
     expect(plain).not.toContain('Qwen3.6-35B-A3B-UD-IQ3_XXS.gguf');
     expect(dock[0]).toMatch(/^┌─+ ~\/workspace\/git\/\.worktrees\/synax-tui {2}dev\/tui ┐\s*$/);
-    expect(dock[1]).toMatch(/^│ Implement fixed-footprint reactor core rendering\s+│\s*$/);
-    expect(dock[2]).toMatch(/^│\s+│\s*$/);
+    expect(dock[1]).toMatch(/^│ {2}Implement fixed-footprint reactor core rendering\s+│\s*$/);
+    expect(dock[2]).toMatch(/^│ {2}\s+│\s*$/);
     expect(dock[3]).toMatch(/Enter submit.*Ctrl\+D exit.*Shift.*newline.*Ctrl\+C clear.*\/help.*!cmd/);
   });
 
