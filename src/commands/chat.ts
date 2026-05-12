@@ -361,7 +361,15 @@ export function createInlinePasteInputSession(): InlinePasteInputSession {
       offset += segLen;
     }
     // Past end: move to end of last text segment.
-    setCursorSeg(draft.segments.length - 1, current.text.length);
+    for (let i = draft.segments.length - 1; i >= 0; i -= 1) {
+      if (draft.segments[i]?.kind === 'text') {
+        setCursorSeg(i, draft.segments[i].text.length);
+        return;
+      }
+    }
+    // No text segments at all: create one.
+    const seg = ensureTextSegment();
+    setCursorSeg(draft.segments.indexOf(seg), 0);
   };
 
   return {
