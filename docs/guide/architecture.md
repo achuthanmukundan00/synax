@@ -194,7 +194,7 @@ Synax is designed for extensibility. The following extension points are public a
 6. **Custom recovery recipes** — register failure handling strategies
 7. **Skills** — drop SKILL.md files into `.synax/skills/`
 
-See the Extensions guide for concrete code examples and `examples/hello-world-extension/` for a working example.
+See [Extensions](/guide/extensions) for concrete code examples and `examples/hello-world-extension/` for a working example.
 
 ## Design Decisions
 
