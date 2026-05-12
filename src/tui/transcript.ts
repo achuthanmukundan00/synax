@@ -600,10 +600,22 @@ function wrapText(text: string, maxWidth: number): string[] {
 
     while (visibleLength(remaining) > width) {
       const breakAt = findVisibleBreak(remaining, width);
+      // sliceAnsi must correctly preserve state
       lines.push(closeAnsi(sliceAnsi(remaining, 0, breakAt).trimEnd()));
-      remaining = sliceAnsi(remaining, breakAt, Number.POSITIVE_INFINITY).trimStart();
+      // Extract the pending ansi from the previously sliced portion to carry it over
+      // Instead of manual carry-over, let sliceAnsi deal with it if it is implemented correctly
+      const nextRemaining = sliceAnsi(remaining, breakAt, Number.POSITIVE_INFINITY).trimStart();
+      if (nextRemaining === remaining) {
+        // Prevent infinite loop if we can't break it
+        lines.push(closeAnsi(remaining.trimEnd()));
+        remaining = '';
+        break;
+      }
+      remaining = nextRemaining;
     }
-    lines.push(remaining.trimEnd());
+    if (remaining.trim().length > 0 || visibleLength(remaining) > 0) {
+      lines.push(closeAnsi(remaining.trimEnd()));
+    }
   }
 
   return lines.length > 0 ? lines : [''];
@@ -647,33 +659,51 @@ function hasAnsi(input: string): boolean {
 }
 
 /**
- * Calculate the visual length of a string in a terminal.
- * Correctly accounts for multi-width characters (e.g. emojis).
+ * Calculate the visual (display) width of a string in a terminal.
+ * Accounts for CJK ideographs, fullwidth forms, emoji, and other
+ * characters that occupy two column positions.
  */
 function visibleLength(input: string): number {
   const stripped = stripAnsi(input);
   let len = 0;
   for (let i = 0; i < stripped.length; i++) {
     const code = stripped.charCodeAt(i);
-    // Rough approximation for multi-column characters.
-    // In a real application, consider 'string-width' library.
-    if (code > 0x1f000) {
-      len += 2;
-      // Handle surrogate pairs
-      if (
-        code >= 0xd800 &&
-        code <= 0xdbff &&
-        i + 1 < stripped.length &&
-        stripped.charCodeAt(i + 1) >= 0xdc00 &&
-        stripped.charCodeAt(i + 1) <= 0xdfff
-      ) {
-        i++;
-      }
-    } else {
-      len++;
+    let displayWidth = 1;
+
+    if (isSurrogateLead(code) && i + 1 < stripped.length && isSurrogateTrail(stripped.charCodeAt(i + 1))) {
+      const hi = code;
+      const lo = stripped.charCodeAt(i + 1);
+      const cp = ((hi & 0x3ff) << 10) | ((lo & 0x3ff) + 0x10000);
+      displayWidth = charDisplayWidth(cp);
+      i++;
+    } else if (!isSurrogateLead(code) && !isSurrogateTrail(code)) {
+      displayWidth = charDisplayWidth(code);
     }
+    len += displayWidth;
   }
   return len;
+}
+
+function isSurrogateLead(code: number): boolean {
+  return code >= 0xd800 && code <= 0xdbff;
+}
+
+function isSurrogateTrail(code: number): boolean {
+  return code >= 0xdc00 && code <= 0xdfff;
+}
+
+/** Terminal display width for a Unicode code point. */
+function charDisplayWidth(cp: number): number {
+  if ((cp >= 0x4e00 && cp <= 0x9fff) || (cp >= 0x3400 && cp <= 0x4dbf)) return 2;
+  if (cp >= 0xf900 && cp <= 0xfaff) return 2;
+  if (cp >= 0x2e80 && cp <= 0x2fdf) return 2;
+  if (cp >= 0x2ff0 && cp <= 0x2fff) return 2;
+  if ((cp >= 0xff01 && cp <= 0xff60) || (cp >= 0xffe0 && cp <= 0xffe6)) return 2;
+  if (cp >= 0xac00 && cp <= 0xd7a3) return 2;
+  if ((cp >= 0x2600 && cp <= 0x27bf) || (cp >= 0x2300 && cp <= 0x23ff)) return 2;
+  if (cp >= 0x1f000) return 2;
+  if (cp >= 0x20000 && cp <= 0x3ffff) return 2;
+  return 1;
 }
 
 function closeAnsi(input: string): string {
@@ -681,7 +711,11 @@ function closeAnsi(input: string): string {
 }
 
 function findVisibleBreak(input: string, maxWidth: number): number {
+  if (maxWidth <= 0) return 1;
   const visible = stripAnsi(input);
+  if (visible.length <= maxWidth) return visible.length;
+
+  // We need to return a VISIBLE index because sliceAnsi expects VISIBLE indices
   const prefix = visible.slice(0, maxWidth);
   const lastSpace = prefix.lastIndexOf(' ');
   return lastSpace > maxWidth / 2 ? lastSpace : maxWidth;

@@ -327,9 +327,10 @@ export class Session {
     const registryTools = this.registry.list();
     // Exclude builtins that are already provided by registry to allow overrides,
     // and exclude inspection tools (read/write/edit/bash) which are already in builtins.
-    const customTools = registryTools.filter(t => 
-      !builtins.find(b => b.name === t.name) && 
-      !['read', 'write', 'edit', 'bash', 'search_memory', 'view_image'].includes(t.name)
+    const customTools = registryTools.filter(
+      (t) =>
+        !builtins.find((b) => b.name === t.name) &&
+        !['read', 'write', 'edit', 'bash', 'search_memory', 'view_image'].includes(t.name),
     );
     return [...builtins, ...customTools];
   }
@@ -497,59 +498,63 @@ export class Session {
    */
   async planOrchestratedTurn(task: string): Promise<PlanParseResult> {
     const repoMetadata = await collectRepoMetadata(this.env, this.repoRoot);
-    
+
     // Create prompt for decomposition
     const prompt = orchestrationPlanPrompt
       .replace('{{task}}', task)
-      .replace('{{repoShape}}', `Files: ${repoMetadata.fileCount}, Total KB: Math.ceil(${(repoMetadata as any).totalSizeBytes || (repoMetadata as any).totalSizeKb || 0} / 1024)`);
-      
+      .replace(
+        '{{repoShape}}',
+        `Files: ${repoMetadata.fileCount}, Total KB: Math.ceil(${(repoMetadata as any).totalSizeBytes || (repoMetadata as any).totalSizeKb || 0} / 1024)`,
+      );
+
     // Create system message
     const messages = [{ role: 'system', content: prompt }];
-    
+
     // Trace the call if tracer is available
     let span: any;
-    if (this.tracer) { 
+    if (this.tracer) {
       span = this.tracer.startSpan({ kind: 'orchestration' });
     }
-    
+
     let content = '';
-    
+
     try {
       const response = await this.client.chat({
         messages,
       });
-      content = typeof response.content === 'string' 
-        ? response.content 
-        : Array.isArray(response.content) 
-          ? (response.content as any[]).map((c: any) => 'text' in c ? c.text : '').join('')
-          : '';
+      content =
+        typeof response.content === 'string'
+          ? response.content
+          : Array.isArray(response.content)
+            ? (response.content as any[]).map((c: any) => ('text' in c ? c.text : '')).join('')
+            : '';
     } catch (error) {
-       // Log safely?
-       const fallback: PlanParseResult = { success: false, inline: true };
-       this.eventBus.emit({
-         type: 'orchestration_plan_generated',
-         timestamp: eventNow(),
-         payload: { sessionId: this.sessionId, task, plan: { inline: true } }
-       });
-       return fallback;
+      // Log safely?
+      const fallback: PlanParseResult = { success: false, inline: true };
+      this.eventBus.emit({
+        type: 'orchestration_plan_generated',
+        timestamp: eventNow(),
+        payload: { sessionId: this.sessionId, task, plan: { inline: true } },
+      });
+      return fallback;
     }
-        
+
     const parsed = parseOrchestrationPlan(content);
-    
+
     this.eventBus.emit({
       type: 'orchestration_plan_generated',
       timestamp: Date.now(),
       payload: {
         sessionId: this.sessionId,
         task,
-        plan: parsed.success ? parsed.plan : { inline: true }
-      }
+        plan: parsed.success ? parsed.plan : { inline: true },
+      },
     } as any);
 
     if (this.tracer && span) {
-      span.metadata = { 
-         success: parsed.success, 
-         inlineFallback: parsed.success ? !!(parsed.plan as any).inline : true 
+      span.metadata = {
+        success: parsed.success,
+        inlineFallback: parsed.success ? !!(parsed.plan as any).inline : true,
       };
       this.tracer.endSpan(span);
     }
