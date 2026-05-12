@@ -1,8 +1,28 @@
 import type { ThinkingLevel } from '../config/schema';
 
+// ─── Multimodal content types (OpenAI vision format) ──────────────────────
+
+/** A text part in a multimodal content array. */
+export interface TextContentPart {
+  type: 'text';
+  text: string;
+}
+
+/** An image part in a multimodal content array (OpenAI vision format). */
+export interface ImageContentPart {
+  type: 'image_url';
+  image_url: {
+    url: string;
+    detail?: 'auto' | 'low' | 'high';
+  };
+}
+
+/** Content for a chat message: plain text or an array of content parts. */
+export type ChatContent = string | Array<TextContentPart | ImageContentPart>;
+
 export interface ChatMessage {
   role: 'system' | 'user' | 'assistant';
-  content: string;
+  content: ChatContent;
 }
 
 // ─── Provider protocol types ───────────────────────────
@@ -33,6 +53,8 @@ export interface ProviderPreset {
   contextWindow?: number;
   supportsStreaming?: boolean;
   supportsToolCalling?: boolean;
+  /** Whether this provider/model supports vision/image inputs. */
+  supportsVision?: boolean;
   /** Price per 1M input tokens in USD. */
   inputPricePer1MTokens?: number;
   /** Price per 1M output tokens in USD. */
@@ -52,6 +74,8 @@ export interface ProviderMetadata {
   toolCallingSupported: boolean;
   apiKeyRequired: boolean;
   apiKeyConfigured: boolean;
+  /** Whether this provider/model supports vision/image inputs. */
+  supportsVision?: boolean;
   /** Price per 1M input tokens in USD. */
   inputPricePer1MTokens?: number;
   /** Price per 1M output tokens in USD. */
@@ -163,7 +187,7 @@ export interface ChatResponse {
 export interface ChatOptions {
   messages: Array<{
     role: string;
-    content: string;
+    content: ChatContent;
     tool_call_id?: string;
     name?: string;
     tool_calls?: unknown;
