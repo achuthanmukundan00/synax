@@ -23,10 +23,12 @@ import {
   createTokenLedger,
   estimateIncrementalTokens,
   estimateRequestTokens,
+  estimateTaskBudget,
   formatContextBudgetError,
   resolveContextBudgetSettings,
   resetTokenLedger,
   summarizeLargestContributors,
+  type BudgetEstimate,
   type ContextBudgetSettings,
 } from '../agent/context-budget';
 import { eventNow, type AgentEvent, type TerminalState } from '../agent/events';
@@ -323,6 +325,26 @@ export class Session {
   /** Override the verification contract (normally derived from mode). */
   setVerificationContract(contract: import('./verification-contracts').VerificationContract | null): void {
     this._verificationContract = contract;
+  }
+
+  /**
+   * Estimate the token budget for a task by collecting repository metadata
+   * and delegating to the context-budget estimation engine.
+   *
+   * This is a thin wrapper that:
+   * 1. Collects repo metadata (file count, total KB, source KB) via find/du.
+   * 2. Delegates to estimateTaskBudget() with the model's context window.
+   *
+   * Returns a BudgetEstimate with strategy classification and component breakdown.
+   */
+  async estimateTaskBudget(task: string): Promise<BudgetEstimate> {
+    const repoMetadata = await collectRepoMetadata(this.env, this.repoRoot);
+    return estimateTaskBudget({
+      task,
+      repoMetadata,
+      contextWindow: this.contextBudget.contextWindowTokens,
+      tokenCounter: this.tokenCounter,
+    });
   }
 
   /** Shutdown the session, emit session_shutdown, and clean up the bus. */
@@ -1337,4 +1359,43 @@ function generatePersistentSessionId(): string {
   const rand = Math.random().toString(36).slice(2, 6);
   globalSessionCounter += 1;
   return `syn-${yyyy}${mm}${dd}-${hh}${min}${ss}-${rand}-${globalSessionCounter}`;
+}
+
+// ─── Repo metadata collection ─────────────────────────────────────────────────
+
+/**
+ * Collect repository metadata for budget estimation.
+ *
+ * Uses find/du commands via the ExecutionEnv to count files and measure sizes,
+ * excluding common non-source directories (node_modules, .git, dist, build).
+ */
+async function collectRepoMetadata(
+  env: import('../env/ExecutionEnv').ExecutionEnv,
+  repoRoot: string,
+): Promise<import('../agent/context-budget').RepoMetadata> {
+  // Count all tracked files (excluding node_modules, .git, dist, build)
+  const fileCountResult = await env.execCommand(
+    `find . -type f -not -path '*/node_modules/*' -not -path '*/.git/*' -not -path '*/dist/*' -not -path '*/build/*' -not -path '*/.cache/*' -not -path '*/coverage/*' 2>/dev/null | wc -l`,
+    repoRoot,
+    { timeout: 10000 },
+  );
+  const fileCount = parseInt(fileCountResult.stdout.trim(), 10) || 0;
+
+  // Get total KB of all tracked files
+  const totalKBResult = await env.execCommand(
+    `find . -type f -not -path '*/node_modules/*' -not -path '*/.git/*' -not -path '*/dist/*' -not -path '*/build/*' -not -path '*/.cache/*' -not -path '*/coverage/*' 2>/dev/null -exec du -sk {} + 2>/dev/null | awk '{sum+=$1} END {print sum+0}'`,
+    repoRoot,
+    { timeout: 10000 },
+  );
+  const totalKB = parseInt(totalKBResult.stdout.trim(), 10) || 0;
+
+  // Get KB of source files only
+  const sourceKBResult = await env.execCommand(
+    `find . -type f \( -name '*.ts' -o -name '*.tsx' -o -name '*.js' -o -name '*.jsx' -o -name '*.py' -o -name '*.rs' -o -name '*.go' -o -name '*.java' -o -name '*.rb' -o -name '*.c' -o -name '*.cpp' -o -name '*.h' -o -name '*.css' -o -name '*.html' -o -name '*.json' -o -name '*.yaml' -o -name '*.yml' -o -name '*.toml' -o -name '*.md' \) -not -path '*/node_modules/*' -not -path '*/.git/*' -not -path '*/dist/*' -not -path '*/build/*' -not -path '*/.cache/*' -not -path '*/coverage/*' 2>/dev/null -exec du -sk {} + 2>/dev/null | awk '{sum+=$1} END {print sum+0}'`,
+    repoRoot,
+    { timeout: 10000 },
+  );
+  const sourceKB = parseInt(sourceKBResult.stdout.trim(), 10) || 0;
+
+  return { fileCount, totalKB, sourceKB };
 }

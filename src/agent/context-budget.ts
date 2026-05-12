@@ -1,6 +1,7 @@
 import { type AgentMessage } from '../session/Session';
 import { type InspectionLedger } from '../tools/ledger';
 import { DeterministicCompactor } from '../compaction/DeterministicCompactor';
+import type { TokenCounter } from '../metrics/TokenCounter';
 
 export interface ContextBudgetSettings {
   contextWindowTokens: number;
@@ -1246,4 +1247,125 @@ function tryParseJson(value: string): unknown {
 
 function isString(value: unknown): value is string {
   return typeof value === 'string';
+}
+
+// ---------------------------------------------------------------------------
+// Budget estimation for orchestration (spec 021 phase 1)
+// ---------------------------------------------------------------------------
+
+/**
+ * Budget strategy derived from task size relative to context window.
+ *
+ * - inline: task fits well under 50% of context window → single agent
+ * - orchestrate: task needs 50-90% → plan sub-tasks but might fit inline
+ * - decompose: task exceeds 90% → mandatory decomposition into sub-agents
+ */
+export type BudgetStrategy = 'inline' | 'orchestrate' | 'decompose';
+
+/**
+ * Repository metadata collected for budget estimation.
+ */
+export interface RepoMetadata {
+  /** Total number of files tracked in the repo (excluding node_modules, .git, etc.). */
+  fileCount: number;
+  /** Total size of all tracked files in KB. */
+  totalKB: number;
+  /** Total size of source files (extensions like .ts, .js, .py, etc.) in KB. */
+  sourceKB: number;
+}
+
+/**
+ * Component breakdown of a budget estimate.
+ */
+export interface BudgetBreakdown {
+  /** Tokens needed for the task description itself. */
+  taskTokens: number;
+  /** Tokens needed for repo structure overhead (file listings, git metadata). */
+  repoOverheadTokens: number;
+  /** Tokens needed for system prompt and tool definitions. */
+  systemOverheadTokens: number;
+}
+
+/**
+ * Budget estimate produced by the estimation engine.
+ */
+export interface BudgetEstimate {
+  /** Estimated tokens for the task + repo overhead + system overhead. */
+  estimatedTokens: number;
+  /** Classified strategy based on utilization. */
+  strategy: BudgetStrategy;
+  /** Safety margin in tokens (buffer between estimate and context window). */
+  safetyMargin: number;
+  /** Fraction of context window utilized (0-1). */
+  utilization: number;
+  /** Context window tokens used as the baseline. */
+  contextWindowTokens: number;
+  /** Breakdown of the estimate into components. */
+  breakdown: BudgetBreakdown;
+}
+
+/**
+ * Estimate the token budget for a task and determine the orchestration strategy.
+ *
+ * Integrates with the existing context budget framework:
+ * - Uses resolveContextBudgetSettings() to get the per-model reserved tokens as baseline.
+ * - Uses tokenCounter.estimate() when available, falls back to Math.ceil(text.length / 4).
+ * - Classifies: < 50% window → inline, < 90% → orchestrate, ≥ 90% → decompose.
+ *
+ * @param params.task - The user's task description.
+ * @param params.repoMetadata - File count and sizes for the repository.
+ * @param params.contextWindow - Model's context window in tokens.
+ * @param params.tokenCounter - Optional TokenCounter for more accurate estimation.
+ * @returns A BudgetEstimate with strategy classification.
+ */
+export function estimateTaskBudget(params: {
+  task: string;
+  repoMetadata: RepoMetadata;
+  contextWindow: number;
+  tokenCounter?: TokenCounter;
+}): BudgetEstimate {
+  const { task, repoMetadata, contextWindow } = params;
+
+  // Resolve default settings to get reserved output tokens as baseline
+  const settings = resolveContextBudgetSettings({ contextWindowTokens: contextWindow });
+  const effectiveWindow = contextWindow - settings.reservedOutputTokens;
+
+  // Estimate task tokens
+  const taskTokens = params.tokenCounter
+    ? params.tokenCounter.countInput([{ role: 'user', content: task }])
+    : Math.ceil(task.length / 4);
+
+  // Estimate repo overhead: each file contributes ~60 tokens for path + metadata,
+  // plus ~1 token per KB of source for file listing overhead.
+  const repoOverheadTokens = Math.ceil(repoMetadata.fileCount * 60 + repoMetadata.sourceKB * 1);
+
+  // System overhead: system prompt + tool definitions ≈ 2500 tokens (baseline)
+  const systemOverheadTokens = 2500;
+
+  const estimatedTokens = taskTokens + repoOverheadTokens + systemOverheadTokens;
+  const utilization = effectiveWindow > 0 ? estimatedTokens / effectiveWindow : 1;
+  const safetyMargin = Math.max(0, effectiveWindow - estimatedTokens);
+
+  // Classify strategy based on utilization thresholds
+  let strategy: BudgetStrategy;
+  if (utilization < 0.5) {
+    strategy = 'inline';
+  } else if (utilization < 0.9) {
+    strategy = 'orchestrate';
+  } else {
+    strategy = 'decompose';
+  }
+
+  return {
+    estimatedTokens,
+    strategy,
+    safetyMargin,
+    utilization: Math.min(utilization, 1),
+    contextWindowTokens: contextWindow,
+    breakdown: {
+      taskTokens,
+      repoOverheadTokens,
+      systemOverheadTokens,
+    },
+  };
 }
