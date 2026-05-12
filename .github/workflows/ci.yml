@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
 
 jobs:
-  quality:
+  lint:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -22,7 +22,7 @@ jobs:
       - run: npm run format:check
 
   test:
-    needs: quality
+    needs: lint
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -38,7 +38,7 @@ jobs:
       - run: npm test
 
   build:
-    needs: test
+    needs: lint
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -48,4 +48,26 @@ jobs:
           cache: 'npm'
       - run: npm ci
       - run: npm run build
+      
+  docs:
+    needs: lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      - run: npm ci
       - run: npm run docs:build
+
+  ci-pass:
+    needs: [test, build, docs]
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Check jobs status
+        if: ${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}
+        run: exit 1
+      - name: All jobs passed
+        run: echo "All checks passed!"
