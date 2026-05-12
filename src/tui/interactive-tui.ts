@@ -276,10 +276,12 @@ export async function runInteractiveTui(
     }
 
     const out = diff.render(lines, terminal.columns, terminal.rows);
-    if (!out && !force) return;
-    terminal.synchronizedWrite(out || '');
+    if (out || force) {
+      terminal.synchronizedWrite(out || '');
+    }
 
-    // Position and show cursor beam in the input box.
+    // Always reposition cursor, even when the diff renderer returned empty
+    // (e.g. cursor moved via arrow keys while text content didn't change).
     const cursor = inputCursorPosition(
       viewState().objectiveInput,
       terminal.columns,
@@ -931,9 +933,75 @@ export async function runInteractiveTui(
         }
         if (event.type === 'submit') {
           if (steeringMessage.trim()) {
+            const trimmed = steeringMessage.trim();
+            // ── Slash commands during generation ──────────────────
+            // Route /commands through the slash-command path instead of
+            // the steering buffer, so users can open settings, switch
+            // models, inspect state, etc. without waiting for the model
+            // to finish.
+            if (trimmed.startsWith('/')) {
+              const cmdName = trimmed.slice(1);
+              const slashCmd = getCommand(cmdName);
+              session.abortCurrentTurn?.();
+              session.setSteeringMessage?.('');
+              steeringMessage = '';
+              steeringActive = false;
+
+              // Modal-triggering commands open immediately.
+              if (slashCmd?.opensSettings) {
+                openSettingsModal();
+                paint(true);
+                continue;
+              }
+              if (slashCmd?.opensResume) {
+                openResumePicker();
+                paint(true);
+                continue;
+              }
+
+              // Non-modal slash commands: wait for turn to settle,
+              // then dispatch through the session.
+              setTimeout(() => {
+                void (async () => {
+                  const deadline = Date.now() + 5000;
+                  while (busy) {
+                    if (Date.now() > deadline) return;
+                    await new Promise((r) => setTimeout(r, 25));
+                  }
+                  if (session.handleSlashCommand) {
+                    const result = await session.handleSlashCommand(trimmed);
+                    if (result.output) {
+                      state = applyEventToRunState(
+                        state,
+                        {
+                          type: 'command_output',
+                          timestamp: new Date().toISOString(),
+                          command: trimmed,
+                          content: result.output,
+                        },
+                        Date.now(),
+                      );
+                    }
+                    if (result.newSession) {
+                      session.resetConversation?.();
+                      options?.resetLastModelOutput?.();
+                      state = createInitialRunStateSnapshot(Date.now());
+                      applyOptionsToState();
+                      historyScrollOffset = 0;
+                      diff.reset();
+                    }
+                    if (result.exit) finish();
+                  }
+                  paint(true);
+                })();
+              }, 0);
+              continue;
+            }
+
+            // ── Regular steering text ─────────────────────────────
             // Enter with queued steering: interrupt bot, submit steering.
             session.abortCurrentTurn?.();
-            const msg = session.consumeSteeringMessage?.() ?? steeringMessage.trim();
+            const msg = session.consumeSteeringMessage?.() ?? trimmed;
             steeringMessage = '';
             steeringActive = false;
             // busy will be cleared when the aborted turn resolves.
