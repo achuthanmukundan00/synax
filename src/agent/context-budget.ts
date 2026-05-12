@@ -393,10 +393,7 @@ function failCompact(
  *
  * Returns a new messages array (does not mutate the original).
  */
-function compactOversizedToolResults(
-  messages: AgentMessage[],
-  settings: ContextBudgetSettings,
-): AgentMessage[] {
+function compactOversizedToolResults(messages: AgentMessage[], settings: ContextBudgetSettings): AgentMessage[] {
   const effectiveLimit = settings.contextWindowTokens - settings.reservedOutputTokens;
   // Only compact tool results larger than 25% of the effective budget.
   // This keeps normal-sized results intact while catching stdout dumps,
