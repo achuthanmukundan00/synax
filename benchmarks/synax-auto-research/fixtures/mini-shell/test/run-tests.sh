@@ -45,3 +45,8 @@ run_test "pipeline"        cases/pipeline.sh
 run_test "exit-status"     cases/exit-status.sh
 
 echo "$PASSED passed, $FAILED failed, $TOTAL total"
+
+if [ "$FAILED" -gt 0 ]; then
+  exit 1
+fi
+exit 0

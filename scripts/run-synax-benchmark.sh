@@ -295,7 +295,11 @@ git status > "$ARTIFACTS_DIR/git-status.txt" 2>/dev/null || true
 # 7. Run tests and capture output
 echo "[run-bench] Running tests..."
 cd "$WORKDIR"
-bash -c "$TEST_COMMAND" > "$ARTIFACTS_DIR/test-output.txt" 2>&1 && TEST_EXIT_CODE=0 || TEST_EXIT_CODE=$?
+if bash -c "$TEST_COMMAND" > "$ARTIFACTS_DIR/test-output.txt" 2>&1; then
+  TEST_EXIT_CODE=0
+else
+  TEST_EXIT_CODE=$?
+fi
 echo "$TEST_EXIT_CODE" > "$ARTIFACTS_DIR/test-exit-code.txt"
 
 # ─── Copy sanitized .synax.toml summary ────────────────────
