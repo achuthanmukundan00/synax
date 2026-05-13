@@ -25,3 +25,7 @@ bench-results/
 
 # Auto-research benchmark artifacts
 benchmark-artifacts/
+
+# macOS
+.DS_Store
+**/.DS_Store
