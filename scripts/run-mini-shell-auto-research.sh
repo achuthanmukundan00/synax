@@ -18,8 +18,8 @@
 #   PATIENCE                 Override patience (default: 5)
 #   COOLDOWN_SECONDS         Override cooldown between iterations (default: 10)
 #   ARTIFACTS_DIR            Override artifacts directory (default: ./benchmark-artifacts)
-#   PI_AUTO_RESEARCH_PROVIDER       Pi provider (default: openrouter)
-#   PI_AUTO_RESEARCH_MODEL          Pi model (default: deepseek/deepseek-v4-pro:high)
+#   PI_AUTO_RESEARCH_PROVIDER       Pi provider (default: deepseek)
+#   PI_AUTO_RESEARCH_MODEL          Pi model (default: deepseek-v4-pro:high)
 #   PI_AUTO_RESEARCH_TIMEOUT_SECONDS Pi timeout (default: 900)
 #   SYNAX_BENCH_THINKING     Benchmark thinking level (default: off)
 
@@ -37,8 +37,8 @@ COOLDOWN="${COOLDOWN_SECONDS:-10}"
 ARTIFACTS="${ARTIFACTS_DIR:-./benchmark-artifacts}"
 BENCH_THINKING="${SYNAX_BENCH_THINKING:-off}"
 
-PI_PROVIDER="${PI_AUTO_RESEARCH_PROVIDER:-openrouter}"
-PI_MODEL="${PI_AUTO_RESEARCH_MODEL:-deepseek/deepseek-v4-pro:high}"
+PI_PROVIDER="${PI_AUTO_RESEARCH_PROVIDER:-deepseek}"
+PI_MODEL="${PI_AUTO_RESEARCH_MODEL:-deepseek-v4-pro:high}"
 PI_TIMEOUT="${PI_AUTO_RESEARCH_TIMEOUT_SECONDS:-900}"
 
 # ─── Pre-flight checks ───────────────────────────────────────

@@ -17,8 +17,8 @@
 #   AUTO_RESEARCH_MIN_IMPROVEMENT      Min improvement threshold
 #
 # Optional environment variables:
-#   PI_AUTO_RESEARCH_PROVIDER         Provider (default: openrouter)
-#   PI_AUTO_RESEARCH_MODEL            Model (default: deepseek/deepseek-v4-pro:high)
+#   PI_AUTO_RESEARCH_PROVIDER         Provider (default: deepseek)
+#   PI_AUTO_RESEARCH_MODEL            Model (default: deepseek-v4-pro:high)
 #   PI_AUTO_RESEARCH_TOOLS            Tool allowlist (default: read,bash,edit,write,grep,find,ls)
 #   PI_AUTO_RESEARCH_TIMEOUT_SECONDS  Timeout seconds (default: 900)
 #   PI_AUTO_RESEARCH_EXTRA_ARGS       Extra args passed to pi
@@ -50,8 +50,8 @@ if [ ${#missing_vars[@]} -gt 0 ]; then
 fi
 
 # ─── Defaults for optional vars ──────────────────────────────
-PI_PROVIDER="${PI_AUTO_RESEARCH_PROVIDER:-openrouter}"
-PI_MODEL="${PI_AUTO_RESEARCH_MODEL:-deepseek/deepseek-v4-pro:high}"
+PI_PROVIDER="${PI_AUTO_RESEARCH_PROVIDER:-deepseek}"
+PI_MODEL="${PI_AUTO_RESEARCH_MODEL:-deepseek-v4-pro:high}"
 PI_TOOLS="${PI_AUTO_RESEARCH_TOOLS:-read,bash,edit,write,grep,find,ls}"
 PI_TIMEOUT="${PI_AUTO_RESEARCH_TIMEOUT_SECONDS:-900}"
 PI_EXTRA_ARGS="${PI_AUTO_RESEARCH_EXTRA_ARGS:-}"
