@@ -31,12 +31,24 @@ export type {
 } from './memory/HolographicMemory';
 
 export { RecoveryManager } from './recovery/RecoveryManager';
-export type { RecoveryManagerOptions } from './recovery/RecoveryManager';
 
-export { ActionExecutor } from './actions/ActionExecutor';
-export type { ActionExecutorOptions, ExecuteOptions, ActionResult } from './actions/ActionExecutor';
+export { ActionExecutor, createDefaultHandlerMap } from './actions/ActionExecutor';
+export type { ActionKind, HandlerMap } from './actions/ActionExecutor';
+export type {
+  AgentAction,
+  AgentToolExecutionResult,
+  ActionHandler,
+  ExecutionContext,
+  ReadAction,
+  EditAction,
+  WriteAction,
+  BashAction,
+  SearchMemoryAction,
+  ViewImageAction,
+} from './actions/types';
 
-export { SkillLoader } from './skills/SkillLoader';
+export { discoverSkills, buildSkillMessages, parseFrontmatter } from './skills/SkillLoader';
+export type { Skill, SkillDiscovery, SkillFrontmatter } from './skills/types';
 
 export type { ToolRegistry, ToolDefinition, ToolResult, ToolSafetyPolicy } from './tools/types';
 export type { AgentEvent, TerminalState } from './agent/events';

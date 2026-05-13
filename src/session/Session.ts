@@ -528,7 +528,7 @@ export class Session {
           : Array.isArray(response.content)
             ? (response.content as any[]).map((c: any) => ('text' in c ? c.text : '')).join('')
             : '';
-    } catch (error) {
+    } catch {
       // Log safely?
       const fallback: PlanParseResult = { success: false, inline: true };
       this.eventBus.emit({
@@ -840,7 +840,6 @@ export class Session {
                 messages: assembled,
                 tools,
                 temperature: 0,
-                maxTokens: 2048,
                 signal: this.abortSignal,
                 onDelta: (delta) => emitAssistantDelta(this, delta),
               });
@@ -856,7 +855,6 @@ export class Session {
                 messages: assembled,
                 tools,
                 temperature: 0,
-                maxTokens: 2048,
                 signal: this.abortSignal,
                 onDelta: (delta) => emitAssistantDelta(this, delta),
               });
@@ -982,10 +980,54 @@ export class Session {
             }
           }
 
+          // ── Truncation guard: if response was cut off by output token
+          // limit, inject a continuation nudge instead of treating as
+          // completion. The model may have been mid-thought or mid-tool-call.
+          // Check BEFORE tool-call processing so truncated tool calls are not
+          // executed with incomplete arguments.
+          if (response.finishReason === 'length' && !verificationNudgeInjected) {
+            verificationNudgeInjected = true;
+            if (this.tracer && toolParseSpan) {
+              this.tracer.endSpan(toolParseSpan);
+            }
+            const continuationNudge =
+              'Your response was truncated (output token limit reached). ' +
+              'Continue from where you left off. If you were about to call a tool, call it now.';
+            conversation.messages.push({ role: 'user', content: continuationNudge });
+            this.logger?.warn('Model response truncated (finish_reason=length), injecting continuation', {
+              stepIndex: step,
+              charLength: response.content.length,
+            });
+            continue;
+          }
+
           // ── No tool calls → completion ──────────────────────────────
           if (response.toolCalls.length === 0) {
             if (this.tracer && toolParseSpan) {
               this.tracer.endSpan(toolParseSpan);
+            }
+
+            // ── Step-1 no-tool challenge: in patch/verify mode, if the model
+            // returns a substantial text response without using any tools on the
+            // first step, challenge it to actually do work rather than explaining.
+            // A response > 200 chars is likely an explanation; short acks are fine.
+            if (
+              step === 1 &&
+              (mode === 'patch' || mode === 'verify') &&
+              response.content.trim().length > 200 &&
+              !verificationNudgeInjected
+            ) {
+              verificationNudgeInjected = true;
+              const actionNudge =
+                'You responded with text but did not use any tools. ' +
+                'In this mode you must take action using the available tools (read, write, edit, bash) to complete the task. ' +
+                'Do not just explain what to do — actually do it. Start by reading the relevant files.';
+              conversation.messages.push({ role: 'user', content: actionNudge });
+              this.logger?.info('Model attempted text-only completion on step 1, injecting action nudge', {
+                stepIndex: step,
+                mode,
+              });
+              continue;
             }
 
             // Verification contract check — only enforce when the model has already

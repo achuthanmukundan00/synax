@@ -35,7 +35,7 @@ export function parseOrchestrationPlan(jsonText: string): PlanParseResult {
     try {
       // First attempt native parse
       parsed = JSON.parse(jsonText);
-    } catch (parseError) {
+    } catch {
       // If native fails, attempt comprehensive repair pipeline
       const repaired = repairJson(jsonText);
       if (!repaired || !repaired.repaired) {
@@ -54,7 +54,7 @@ export function parseOrchestrationPlan(jsonText: string): PlanParseResult {
 
     // Invalid schema structure even after successful parse
     return { success: false, inline: true, error: 'schema_invalid' } as any;
-  } catch (error) {
+  } catch {
     // Ultimate fallback on unhandled internal error
     return { success: false, inline: true, error: 'unhandled_error' } as any;
   }
