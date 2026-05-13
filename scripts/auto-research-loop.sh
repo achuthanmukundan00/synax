@@ -147,7 +147,8 @@ check_forbidden_paths() {
 
 # ─── Helper: cleanup_agent_untracked ────────────────────────
 cleanup_agent_untracked() {
-  local iter_dir="$1" report="$iter_dir/cleanup-report.txt"
+  local iter_dir="$1"
+  local report="$iter_dir/cleanup-report.txt"
   cd "$REPO_ROOT"
   { echo "# Agent Untracked File Cleanup"; echo "# $(date -u +%Y-%m-%dT%H:%M:%SZ)"; echo ""; } > "$report"
   local untracked
