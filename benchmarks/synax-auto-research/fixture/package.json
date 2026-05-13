@@ -1,0 +1,9 @@
+{
+  "name": "synax-auto-research-fixture",
+  "version": "0.0.0",
+  "private": true,
+  "type": "commonjs",
+  "scripts": {
+    "test": "node test/validate-email.test.js"
+  }
+}
