@@ -22,6 +22,7 @@
 #     --artifacts-dir ./benchmark-artifacts \
 #     --agent-cmd "synax run -t \"\$(cat improve-prompt.md)\" -y" \
 #     [--synax-cmd "node dist/cli.js"] \
+#     [--fixture validate-email] \
 #     [--dry-run] \
 #     [--patience 1]
 #
@@ -39,6 +40,7 @@ ARTIFACTS_DIR=""
 AGENT_CMD=""
 SYNAX_CMD=""
 DRY_RUN=false
+FIXTURE="${SYNAX_BENCH_FIXTURE:-validate-email}"
 PATIENCE=1
 
 while [[ $# -gt 0 ]]; do
@@ -63,6 +65,10 @@ while [[ $# -gt 0 ]]; do
       SYNAX_CMD="$2"
       shift 2
       ;;
+    --fixture)
+      FIXTURE="$2"
+      shift 2
+      ;;
     --dry-run)
       DRY_RUN=true
       shift
@@ -73,7 +79,7 @@ while [[ $# -gt 0 ]]; do
       ;;
     *)
       echo "Unknown flag: $1"
-      echo "Usage: $0 --max-iterations N --timeout-seconds N --artifacts-dir DIR --agent-cmd CMD [--synax-cmd CMD] [--dry-run] [--patience N]"
+      echo "Usage: $0 --max-iterations N --timeout-seconds N --artifacts-dir DIR --agent-cmd CMD [--synax-cmd CMD] [--fixture NAME] [--dry-run] [--patience N]"
       exit 1
       ;;
   esac
@@ -147,6 +153,7 @@ run_benchmark() {
     "$LOOP_RUN_DIR"
     --timeout-seconds "$TIMEOUT_SECONDS"
     --synax-cmd "$SYNAX_CMD"
+    --fixture "$FIXTURE"
   )
 
   echo "[loop] Running benchmark: $label ($run_id)" >&2
@@ -170,6 +177,7 @@ echo "  Synax Auto-Research Loop"
 echo "  Max iterations:  $MAX_ITERATIONS"
 echo "  Timeout:         ${TIMEOUT_SECONDS}s"
 echo "  Artifacts:       $LOOP_RUN_DIR"
+echo "  Fixture:         $FIXTURE"
 echo "  Agent command:   $AGENT_CMD"
 echo "  Dry run:         $DRY_RUN"
 echo "  Patience:        $PATIENCE"
@@ -186,6 +194,7 @@ echo "[loop] Baseline score: $BASELINE_SCORE"
 # Write loop state
 cat > "$LOOP_RUN_DIR/loop-state.json" <<EOF
 {
+  "fixture": "$FIXTURE",
   "initialHead": "$INITIAL_HEAD",
   "baselineScore": $BASELINE_SCORE,
   "currentBestScore": $CURRENT_BEST_SCORE,
@@ -274,12 +283,12 @@ print('true' if new > old else 'false')
     if [ "$DRY_RUN" = false ]; then
       # Commit the improvement
       git add -A
-      git commit -m "auto-research: score improved ${CURRENT_BEST_SCORE} → ${NEW_SCORE} (iteration ${ITERATION})" || {
+      git commit -m "auto-research [$FIXTURE]: score improved ${CURRENT_BEST_SCORE} → ${NEW_SCORE} (iteration ${ITERATION})" || {
         echo "[loop] WARNING: git commit failed (no changes to commit?)"
       }
       echo "[loop] Committed improvement."
     else
-      echo "[loop] DRY RUN: would commit with message 'auto-research: score improved ${CURRENT_BEST_SCORE} → ${NEW_SCORE}'"
+      echo "[loop] DRY RUN: would commit with message 'auto-research [$FIXTURE]: score improved ${CURRENT_BEST_SCORE} → ${NEW_SCORE} (iteration ${ITERATION})'"
     fi
 
     CURRENT_BEST_SCORE="$NEW_SCORE"
@@ -308,6 +317,7 @@ print('true' if new > old else 'false')
   cat > "$ITER_DIR/result.json" <<EOF
 {
   "iteration": $ITERATION,
+  "fixture": "$FIXTURE",
   "baselineScore": $CURRENT_BEST_SCORE,
   "newScore": $NEW_SCORE,
   "result": "$ITER_RESULT",
@@ -324,6 +334,7 @@ state['currentBestScore'] = float('$CURRENT_BEST_SCORE')
 state['totalIterations'] = $ITERATION
 state['iterations'].append({
     'iteration': $ITERATION,
+    'fixture': '$FIXTURE',
     'baselineScore': float('$CURRENT_BEST_SCORE'),
     'newScore': float('$NEW_SCORE'),
     'result': '$ITER_RESULT'
@@ -342,6 +353,7 @@ done
 echo ""
 echo "═══════════════════════════════════════════════════════════════"
 echo "  Auto-Research Loop Complete"
+echo "  Fixture:          $FIXTURE"
 echo "  Iterations:       $ITERATION / $MAX_ITERATIONS"
 echo "  Baseline score:   $BASELINE_SCORE"
 echo "  Final best score: $CURRENT_BEST_SCORE"
@@ -352,9 +364,9 @@ echo "════════════════════════�
 cd "$REPO_ROOT"
 
 if [ "$DRY_RUN" = true ]; then
-  # Clean up dry-run dummy changes (only tracked files)
+  # Clean up dry-run dummy change to src/cli.ts only.
   echo "[loop] Cleaning up dry-run changes..."
-  git checkout -- . 2>/dev/null || true
+  git checkout -- src/cli.ts 2>/dev/null || true
 else
   CURRENT_HEAD=$(git rev-parse HEAD)
   if [ "$CURRENT_HEAD" != "$INITIAL_HEAD" ]; then

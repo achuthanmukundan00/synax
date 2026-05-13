@@ -1,0 +1,5 @@
+{
+  "prompt": "Implement a working mini Unix shell from this C skeleton. The shell must support: (1) simple external commands via fork/execvp/waitpid, (2) builtins: cd <dir>, pwd, exit, (3) quoted arguments (single and double quotes), (4) environment variable expansion ($VAR and \"$VAR\"), (5) output redirection with > and >>, (6) pipelines with |, (7) correct non-interactive exit status. Do NOT use system(). Do NOT modify any test files. Read src/main.c, src/shell.c, src/shell.h, src/parser.c, src/parser.h. Implement the missing features in src/shell.c and src/parser.c. Run 'make test' to verify. All tests must pass.",
+  "testCommand": "make test",
+  "description": "Implement a mini Unix shell with builtins, quoting, env expansion, redirection, and pipelines"
+}
