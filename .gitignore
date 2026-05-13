@@ -29,3 +29,7 @@ benchmark-artifacts/
 # macOS
 .DS_Store
 **/.DS_Store
+
+# macOS
+.DS_Store
+**/.DS_Store
