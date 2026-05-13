@@ -738,8 +738,8 @@ supports_thinking = false
       localPath,
       `
 [provider]
-preset = "deepseek"
-model = "deepseek-chat"
+preset = "relay"
+model = "Qwen3.6-35B-A3B-UD-IQ3_XXS.gguf"
 api_key = "sk-test"
 `,
       'utf-8',
@@ -748,8 +748,8 @@ api_key = "sk-test"
     const loaded = loadProjectConfig(TMP);
 
     expect(loaded.errors).toEqual([]);
-    expect(loaded.config.contextWindowTokens).toBe(1_000_000);
-    expect(loaded.config.contextBudgetTokens).toBe(1_000_000);
+    expect(loaded.config.contextWindowTokens).toBe(131_072);
+    expect(loaded.config.contextBudgetTokens).toBe(131_072);
   });
 
   it('preserves explicit context windows over provider preset defaults', () => {
@@ -760,8 +760,8 @@ api_key = "sk-test"
 context_window_tokens = 65536
 
 [provider]
-preset = "deepseek"
-model = "deepseek-chat"
+preset = "relay"
+model = "Qwen3.6-35B-A3B-UD-IQ3_XXS.gguf"
 api_key = "sk-test"
 `,
       'utf-8',

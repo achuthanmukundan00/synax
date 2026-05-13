@@ -8,17 +8,10 @@ export type ProviderKind = 'openai-compatible' | 'anthropic-messages';
 export type ProviderPreset =
   // Legacy alias for relay.
   | 'relay-local'
-  | 'openai'
-  | 'anthropic'
-  | 'openrouter'
-  | 'custom-openai-compatible'
   // New provider IDs
   | 'relay'
   | 'custom'
-  | 'deepseek'
-  | 'groq'
-  | 'mistral'
-  | 'together';
+  | 'custom-openai-compatible';
 
 export interface ProviderConfig {
   preset?: string;
@@ -66,66 +59,6 @@ export interface AgentBudgetConfig {
 function providerPresetDefaults(preset: string): ProviderConfig {
   const canonicalPreset = canonicalProviderPreset(preset);
   switch (canonicalPreset) {
-    case 'openai':
-      return {
-        preset,
-        kind: 'openai-compatible',
-        base_url: 'https://api.openai.com/v1',
-        model: 'gpt-4.1',
-        api_key_env: 'OPENAI_API_KEY',
-      };
-    case 'anthropic':
-      return {
-        preset,
-        kind: 'anthropic-messages',
-        base_url: 'https://api.anthropic.com',
-        model: 'claude-sonnet-4-5',
-        api_key_env: 'ANTHROPIC_API_KEY',
-      };
-    case 'openrouter':
-      return {
-        preset,
-        kind: 'openai-compatible',
-        base_url: 'https://openrouter.ai/api/v1',
-        model: '',
-        api_key_env: 'OPENROUTER_API_KEY',
-        custom_headers: {
-          'HTTP-Referer': 'https://github.com/achuthanmukundan00/synax',
-          'X-Title': 'Synax',
-        },
-      };
-    case 'deepseek':
-      return {
-        preset,
-        kind: 'openai-compatible',
-        base_url: 'https://api.deepseek.com/v1',
-        model: 'deepseek-chat',
-        api_key_env: 'DEEPSEEK_API_KEY',
-      };
-    case 'groq':
-      return {
-        preset,
-        kind: 'openai-compatible',
-        base_url: 'https://api.groq.com/openai/v1',
-        model: 'llama-3.3-70b-versatile',
-        api_key_env: 'GROQ_API_KEY',
-      };
-    case 'mistral':
-      return {
-        preset,
-        kind: 'openai-compatible',
-        base_url: 'https://api.mistral.ai/v1',
-        model: 'mistral-large-latest',
-        api_key_env: 'MISTRAL_API_KEY',
-      };
-    case 'together':
-      return {
-        preset,
-        kind: 'openai-compatible',
-        base_url: 'https://api.together.xyz/v1',
-        model: 'meta-llama/Llama-3.3-70B-Instruct-Turbo',
-        api_key_env: 'TOGETHER_API_KEY',
-      };
     case 'custom-openai-compatible':
       return { preset, kind: 'openai-compatible', base_url: '', model: '', api_key_env: '' };
     case 'relay':
@@ -151,18 +84,6 @@ function providerPresetDefaults(preset: string): ProviderConfig {
 
 function providerPresetContextWindowDefault(preset: string): number | undefined {
   switch (canonicalProviderPreset(preset)) {
-    case 'deepseek':
-      return 1_000_000;
-    case 'groq':
-    case 'mistral':
-    case 'together':
-      return 128_000;
-    case 'anthropic':
-      return 200_000;
-    case 'openrouter':
-      return 64_000;
-    case 'openai':
-      return 128_000;
     case 'relay':
       return 131_072;
     default:
