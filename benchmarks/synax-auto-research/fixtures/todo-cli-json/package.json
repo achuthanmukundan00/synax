@@ -1,0 +1,8 @@
+{
+  "name": "synax-benchmark-todo-cli",
+  "version": "0.0.0",
+  "private": true,
+  "scripts": {
+    "test": "node test/todo.test.js"
+  }
+}

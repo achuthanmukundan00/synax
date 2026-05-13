@@ -6,7 +6,7 @@
 # deterministic scorer, and writes score.json.
 #
 # Usage:
-#   scripts/run-synax-benchmark.sh <run-id> <artifacts-dir> [--timeout-seconds N] [--synax-cmd CMD]
+#   scripts/run-synax-benchmark.sh <run-id> <artifacts-dir> [--timeout-seconds N] [--synax-cmd CMD] [--fixture NAME]
 #
 # Environment variables (fallback when CLI flags are absent):
 #   SYNAX_BENCH_TIMEOUT        Default timeout seconds (default: 300)
@@ -35,6 +35,7 @@ shift 2
 
 TIMEOUT_SECONDS="${SYNAX_BENCH_TIMEOUT:-300}"
 SYNAX_CMD="${SYNAX_CMD:-}"
+FIXTURE_NAME="${SYNAX_BENCH_FIXTURE:-validate-email}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -44,6 +45,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --synax-cmd)
       SYNAX_CMD="$2"
+      shift 2
+      ;;
+    --fixture)
+      FIXTURE_NAME="$2"
       shift 2
       ;;
     *)
@@ -65,7 +70,7 @@ else
 fi
 
 ARTIFACTS_DIR="$ARTIFACTS_PARENT_ABS/$RUN_ID"
-FIXTURE_SRC="$REPO_ROOT/benchmarks/synax-auto-research/fixture"
+FIXTURE_SRC="$REPO_ROOT/benchmarks/synax-auto-research/fixtures/$FIXTURE_NAME"
 SCORER="$REPO_ROOT/scripts/score-synax-benchmark.mjs"
 
 # Default Synax command: use the built dist/cli.js
@@ -152,9 +157,15 @@ git config user.name "Synax Benchmark"
 git add -A
 git commit -m "initial fixture state" --quiet
 
-# ─── Benchmark prompt ───────────────────────────────────────
-# The task: implement validateEmail so tests pass.
-BENCHMARK_PROMPT="Implement the validateEmail function in src/validate-email.js. The exported function should accept an email string and return true for valid emails and false for invalid ones. Run 'node test/validate-email.test.js' to check your work. All tests must pass."
+# ─── Load fixture benchmark config ──────────────────────────
+FIXTURE_CONFIG="$FIXTURE_SRC/benchmark-config.json"
+if [ ! -f "$FIXTURE_CONFIG" ]; then
+  echo "[run-bench] ERROR: fixture config not found: $FIXTURE_CONFIG"
+  exit 1
+fi
+
+BENCHMARK_PROMPT=$(python3 -c "import json,sys; print(json.load(open('$FIXTURE_CONFIG'))['prompt'])")
+TEST_COMMAND=$(python3 -c "import json,sys; print(json.load(open('$FIXTURE_CONFIG'))['testCommand'])")
 
 # ─── Capture pre-run state ──────────────────────────────────
 SESSION_INDEX_PATH="$HOME/.local/share/synax/sessions/index.json"
@@ -269,11 +280,7 @@ git status > "$ARTIFACTS_DIR/git-status.txt" 2>/dev/null || true
 # 7. Run tests and capture output
 echo "[run-bench] Running tests..."
 cd "$WORKDIR"
-if node test/validate-email.test.js > "$ARTIFACTS_DIR/test-output.txt" 2>&1; then
-  TEST_EXIT_CODE=0
-else
-  TEST_EXIT_CODE=$?
-fi
+bash -c "$TEST_COMMAND" > "$ARTIFACTS_DIR/test-output.txt" 2>&1 && TEST_EXIT_CODE=0 || TEST_EXIT_CODE=$?
 echo "$TEST_EXIT_CODE" > "$ARTIFACTS_DIR/test-exit-code.txt"
 
 # ─── Write meta.json ────────────────────────────────────────

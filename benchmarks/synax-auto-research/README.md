@@ -50,10 +50,19 @@ apply exactly one code patch — accepting it only if the score improves.
 benchmarks/synax-auto-research/
   README.md                         This file
   improvement-agent-prompt.md       Prompt for the improvement agent
-  fixture/                          Disposable benchmark task repo
-    package.json
-    src/validate-email.js           Missing function — Synax must implement
-    test/validate-email.test.js     Tests that define correctness
+  fixtures/                         Benchmark task repos
+    validate-email/                 Fixture: implement validateEmail
+      benchmark-config.json         Prompt, test command, description
+      package.json
+      src/validate-email.js         Missing function — Synax must implement
+      test/validate-email.test.js   Tests that define correctness
+    todo-cli-json/                  Fixture: add --json flag to todo CLI
+      benchmark-config.json         Prompt, test command, description
+      package.json
+      src/cli.js                    CLI entrypoint (arg parsing)
+      src/todo.js                   Core TodoList with formatList()
+      src/storage.js                File-based persistence
+      test/todo.test.js             Tests for text + JSON output
 
 scripts/
   run-synax-benchmark.sh            Run one benchmark trial
@@ -61,7 +70,9 @@ scripts/
   auto-research-loop.sh             Orchestration loop
 ```
 
-## The Benchmark Task
+## Benchmark Fixtures
+
+### `validate-email`
 
 Synax is given a minimal JavaScript project with one missing feature:
 `validateEmail` in `src/validate-email.js`. The project has 14 tests that define
@@ -71,6 +82,21 @@ Synax must:
 1. Read the source file and tests
 2. Implement `validateEmail` correctly
 3. Run the tests to verify
+
+### `todo-cli-json`
+
+Synax is given a tiny CLI task tracker with one missing feature: the `--json`
+flag on `todo list`. The text output (`todo list`) already works; the JSON
+output (`todo list --json`) is missing. The project has 10 tests covering
+both text and JSON output.
+
+Synax must:
+1. Inspect the CLI entrypoint (`src/cli.js`)
+2. Inspect the core module (`src/todo.js`) and storage (`src/storage.js`)
+3. Inspect the test file (`test/todo.test.js`)
+4. Implement `formatList({ json: true })` to output valid JSON
+5. Ensure text output continues to work unchanged
+6. Run `npm test` to verify
 
 The scorer checks:
 - How many tests passed (weight: 30%)
@@ -96,19 +122,27 @@ npm run build
 ### Run a Single Benchmark Trial
 
 ```sh
-# Using default Synax command (node dist/cli.js)
+# validate-email fixture (default)
 bash scripts/run-synax-benchmark.sh trial-1 ./benchmark-artifacts
+
+# validate-email fixture, explicit
+bash scripts/run-synax-benchmark.sh trial-1 ./benchmark-artifacts --fixture validate-email
+
+# todo-cli-json fixture
+bash scripts/run-synax-benchmark.sh trial-1 ./benchmark-artifacts --fixture todo-cli-json
 
 # With a custom Synax command and timeout
 bash scripts/run-synax-benchmark.sh trial-1 ./benchmark-artifacts \
   --timeout-seconds 120 \
-  --synax-cmd "node ./dist/cli.js"
+  --synax-cmd "node ./dist/cli.js" \
+  --fixture validate-email
 
 # Using environment variables for model configuration
 SYNAX_BENCH_MODEL=qwen3-gguf \
 SYNAX_BENCH_BASE_URL=http://127.0.0.1:1234/v1 \
 SYNAX_BENCH_API_KEY=not-needed \
-bash scripts/run-synax-benchmark.sh trial-1 ./benchmark-artifacts
+bash scripts/run-synax-benchmark.sh trial-1 ./benchmark-artifacts \
+  --fixture todo-cli-json
 ```
 
 Artifacts are written to `./benchmark-artifacts/trial-1/`:
@@ -163,7 +197,17 @@ Template variables in `--agent-cmd`:
 - `{LATEST_BASELINE}` → path to the most recent baseline artifact directory
 - `{IMPROVEMENT_PROMPT}` → path to the improvement agent prompt markdown file
 
-### Flags
+### Runner Flags (`run-synax-benchmark.sh`)
+
+| Flag | Required | Default | Description |
+|------|----------|---------|-------------|
+| `<run-id>` | yes | — | Identifier for this trial (e.g., `trial-1`) |
+| `<artifacts-dir>` | yes | — | Parent directory for artifact storage |
+| `--timeout-seconds` | no | `300` | Timeout for the Synax run |
+| `--synax-cmd` | no | `node dist/cli.js` | Path to Synax CLI |
+| `--fixture` | no | `validate-email` | Fixture name: `validate-email` or `todo-cli-json` |
+
+### Loop Flags (`auto-research-loop.sh`)
 
 | Flag | Required | Default | Description |
 |------|----------|---------|-------------|
@@ -179,19 +223,24 @@ Template variables in `--agent-cmd`:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `SYNAX_BENCH_MODEL` | `local` | Model name for generated `.synax.toml` |
-| `SYNAX_BENCH_BASE_URL` | `http://localhost:8080/v1` | OpenAI-compatible base URL |
-| `SYNAX_BENCH_API_KEY` | `not-needed` | API key |
+| `SYNAX_BENCH_MODEL` | `gemma-4-26B-A4B-it-UD-IQ4_XS.gguf` | Model name for generated `.synax.toml` |
+| `SYNAX_BENCH_BASE_URL` | (from repo config) | OpenAI-compatible base URL |
+| `SYNAX_BENCH_API_KEY` | (from repo config) | API key |
+| `SYNAX_BENCH_PROVIDER` | `relay` | Provider name in `.synax.toml` |
+| `SYNAX_BENCH_THINKING` | `high` | Thinking level for the active model |
+| `SYNAX_BENCH_FIXTURE` | `validate-email` | Default fixture name |
 | `SYNAX_BENCH_TIMEOUT` | `300` | Fallback timeout seconds |
 | `SYNAX_CMD` | — | Fallback Synax command |
 | `SYNAX_EVENT_STORE_PATH` | `~/.local/share/synax/history.db` | EventStore DB path (for artifact collection) |
 
 ## Manual Fixture Verification
 
-The fixture is a standalone testable project:
+Each fixture is a standalone testable project.
+
+### validate-email
 
 ```sh
-cd benchmarks/synax-auto-research/fixture
+cd benchmarks/synax-auto-research/fixtures/validate-email
 
 # Tests will fail (validateEmail is missing)
 node test/validate-email.test.js
@@ -201,6 +250,20 @@ node test/validate-email.test.js
 # tests should all pass:
 node test/validate-email.test.js
 # Expected: 14 passed, 0 failed, 14 total
+```
+
+### todo-cli-json
+
+```sh
+cd benchmarks/synax-auto-research/fixtures/todo-cli-json
+
+# Text output tests pass, JSON tests fail (formatList json branch missing)
+npm test
+# Expected: 4 passed, 6 failed, 10 total
+
+# After implementing formatList({ json: true }) in src/todo.js:
+npm test
+# Expected: 10 passed, 0 failed, 10 total
 ```
 
 ## Scoring Details
