@@ -94,3 +94,15 @@ Your final output should be a brief summary of:
 2. What file(s) you changed
 3. Why this change should improve the score
 4. What verification you ran and its result
+
+Mini-shell strategy:
+- Optimize exactly one milestone per iteration.
+- If current mini-shell result is 2/7, implement only cd/pwd builtins.
+- If current result is 3/7 and builtins pass, implement only quoted argument parsing.
+- If current result is 4/7, implement only environment variable expansion.
+- If current result is 5/7, implement only output redirection.
+- If current result is 6/7, implement only pipelines.
+- Do not attempt multiple milestones in one patch.
+- Do not modify tests.
+- Do not use system().
+- Run make test once after the patch.
