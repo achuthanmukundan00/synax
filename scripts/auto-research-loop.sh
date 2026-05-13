@@ -332,10 +332,12 @@ else:
     print('false')
 ")
 
-  # Determine reject reason
-  REJECT_REASON=""
+  # Determine reject reason (JSON-safe: null or "value")
+  REJECT_REASON_JSON=""
+  REJECT_REASON_LABEL=""
   if [ "$ACCEPTED" = "true" ]; then
-    REJECT_REASON="null"
+    REJECT_REASON_JSON="null"
+    REJECT_REASON_LABEL="null"
   else
     TOTAL_OK=$(python3 -c "
 candidate_total = float('$CANDIDATE_TOTAL' or '0')
@@ -351,11 +353,14 @@ eps           = 1e-9
 print('true' if candidate_tpr > baseline_tpr + eps else 'false')
 ")
     if [ "$TOTAL_OK" = "false" ] && [ "$TPR_OK" = "false" ]; then
-      REJECT_REASON="score_not_improved"
+      REJECT_REASON_JSON='"score_not_improved"'
+      REJECT_REASON_LABEL="score_not_improved"
     elif [ "$TOTAL_OK" = "false" ]; then
-      REJECT_REASON="total_insufficient_improvement"
+      REJECT_REASON_JSON='"total_insufficient_improvement"'
+      REJECT_REASON_LABEL="total_insufficient_improvement"
     else
-      REJECT_REASON="test_pass_rate_not_improved"
+      REJECT_REASON_JSON='"test_pass_rate_not_improved"'
+      REJECT_REASON_LABEL="test_pass_rate_not_improved"
     fi
   fi
 
@@ -380,7 +385,7 @@ print('true' if candidate_tpr > baseline_tpr + eps else 'false')
     STREAK_WITHOUT_IMPROVEMENT=0
     ITER_RESULT="accepted"
   else
-    echo "[loop] ✗ Rejected: $REJECT_REASON (total $CURRENT_BEST_TOTAL → $CANDIDATE_TOTAL, tpr $CURRENT_BEST_TEST_PASS_RATE → $CANDIDATE_TEST_PASS_RATE)"
+    echo "[loop] ✗ Rejected: $REJECT_REASON_LABEL (total $CURRENT_BEST_TOTAL → $CANDIDATE_TOTAL, tpr $CURRENT_BEST_TEST_PASS_RATE → $CANDIDATE_TEST_PASS_RATE)"
 
     if [ "$DRY_RUN" = false ]; then
       echo "[loop] Reverting changes (git restore tracked files)..."
@@ -409,7 +414,7 @@ print('true' if candidate_tpr > baseline_tpr + eps else 'false')
   "candidateTestPassRate": $CANDIDATE_TEST_PASS_RATE,
   "minImprovement": $MIN_IMPROVEMENT,
   "accepted": $ACCEPTED,
-  "rejectReason": $REJECT_REASON,
+  "rejectReason": $REJECT_REASON_JSON,
   "result": "$ITER_RESULT",
   "dryRun": $DRY_RUN,
   "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -432,7 +437,7 @@ state['iterations'].append({
     'candidateTestPassRate': $CANDIDATE_TEST_PASS_RATE,
     'minImprovement': float('$MIN_IMPROVEMENT'),
     'accepted': $ACCEPTED,
-    'rejectReason': $REJECT_REASON,
+    'rejectReason': None if '$REJECT_REASON_LABEL' == 'null' else '$REJECT_REASON_LABEL',
     'result': '$ITER_RESULT'
 })
 json.dump(state, open('$LOOP_RUN_DIR/loop-state.json', 'w'), indent=2)
