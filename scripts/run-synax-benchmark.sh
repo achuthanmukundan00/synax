@@ -111,6 +111,39 @@ else
   exit 1
 fi
 
+# Force benchmark runs onto Relay by default while preserving the rest of the
+# repo config, including Cloudflare Access headers and provider definitions.
+BENCH_PROVIDER="${SYNAX_BENCH_PROVIDER:-relay}"
+BENCH_MODEL="${SYNAX_BENCH_MODEL:-gemma-4-26B-A4B-it-UD-IQ4_XS.gguf}"
+BENCH_THINKING="${SYNAX_BENCH_THINKING:-high}"
+export BENCH_PROVIDER BENCH_MODEL BENCH_THINKING
+
+python3 - <<'PYCONF'
+from pathlib import Path
+import os
+import re
+
+path = Path(".synax.toml")
+text = path.read_text()
+
+provider = os.environ["BENCH_PROVIDER"]
+model = os.environ["BENCH_MODEL"]
+thinking = os.environ["BENCH_THINKING"]
+
+active = f"""[active]
+provider = "{provider}"
+model = "{model}"
+thinking = "{thinking}"
+"""
+
+if re.search(r"(?ms)^\[active\]\n.*?(?=^\[|\Z)", text):
+    text = re.sub(r"(?ms)^\[active\]\n.*?(?=^\[|\Z)", active + "\n", text, count=1)
+else:
+    text = active + "\n" + text
+
+path.write_text(text)
+PYCONF
+
 # Initialize git in the workdir after config is present, so Synax starts from
 # a clean fixture baseline and only task-related changes appear as diffs.
 git init --quiet
