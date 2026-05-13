@@ -22,3 +22,6 @@ coverage/
 
 # bench results
 bench-results/
+
+# Auto-research benchmark artifacts
+benchmark-artifacts/
