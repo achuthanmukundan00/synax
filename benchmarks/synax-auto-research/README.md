@@ -98,6 +98,31 @@ Synax must:
 5. Ensure text output continues to work unchanged
 6. Run `npm test` to verify
 
+### `mini-shell`
+
+Synax is given a C Unix shell skeleton with most features missing. Only simple
+external commands and exit status work initially (2/7 tests pass). This
+benchmark is harder than validate-email or todo-cli-json — it tests whether a
+local model agent can make meaningful partial progress on a multi-feature C
+codebase under a 5-minute timeout.
+
+Synax must implement (in priority order):
+1. `cd` and `pwd` builtins
+2. Quoted argument parsing (single and double quotes)
+3. Environment variable expansion (`$VAR` and `"$VAR"`)
+4. Output redirection (`>` and `>>`)
+5. Pipeline support (`|`)
+
+The prompt instructs the agent to edit early, test after each feature, and
+deliver partial progress when time is short.
+
+**Recommended config**: Disable thinking for this benchmark — thinking mode
+causes large models to over-plan and time out before making any edits:
+
+```sh
+SYNAX_BENCH_THINKING=off bash scripts/run-synax-benchmark.sh mini-shell-off-1 ./benchmark-artifacts --fixture mini-shell
+```
+
 The scorer checks:
 - How many tests passed (weight: 30%)
 - Whether all tests passed (weight: 20%)
@@ -131,6 +156,12 @@ bash scripts/run-synax-benchmark.sh trial-1 ./benchmark-artifacts --fixture vali
 # todo-cli-json fixture
 bash scripts/run-synax-benchmark.sh trial-1 ./benchmark-artifacts --fixture todo-cli-json
 
+# mini-shell fixture (C shell skeleton)
+bash scripts/run-synax-benchmark.sh trial-1 ./benchmark-artifacts --fixture mini-shell
+
+# mini-shell with thinking disabled (recommended for large-model benchmarks)
+SYNAX_BENCH_THINKING=off bash scripts/run-synax-benchmark.sh mini-shell-off-1 ./benchmark-artifacts --fixture mini-shell
+
 # With a custom Synax command and timeout
 bash scripts/run-synax-benchmark.sh trial-1 ./benchmark-artifacts \
   --timeout-seconds 120 \
@@ -148,20 +179,22 @@ bash scripts/run-synax-benchmark.sh trial-1 ./benchmark-artifacts \
 Artifacts are written to `./benchmark-artifacts/trial-1/`:
 ```
 trial-1/
-  transcript.txt          Full Synax stdout+stderr
-  test-output.txt         Test runner output
-  test-exit-code.txt      Exit code from npm test
-  score.json              Deterministic score
-  meta.json               Run metadata
-  git-diff.txt            Changes Synax made to the fixture
-  git-status.txt          Git status after run
-  session-index.json      Copy of session index
-  session-events.jsonl    Session event log (if available)
-  session-id.txt          Detected session ID
-  history.db              EventStore SQLite DB (if available)
-  context.json            Synax context state (if available)
-  workdir-snapshot.txt    File listing of workdir
-  workdir/                The actual fixture workdir
+  transcript.txt              Full Synax stdout+stderr
+  prompt.txt                  Exact prompt as passed to Synax
+  test-output.txt             Test runner output
+  test-exit-code.txt          Exit code from npm test
+  score.json                  Deterministic score
+  meta.json                   Run metadata
+  git-diff.txt                Changes Synax made to the fixture
+  git-status.txt              Git status after run
+  session-index.json          Copy of session index
+  session-events.jsonl        Session event log (if available)
+  session-id.txt              Detected session ID
+  history.db                  EventStore SQLite DB (if available)
+  context.json                Synax context state (if available)
+  synax-config-sanitized.toml Sanitized copy of active config
+  workdir-snapshot.txt        File listing of workdir
+  workdir/                    The actual fixture workdir
 ```
 
 ### Run the Auto-Research Loop
@@ -227,7 +260,7 @@ Template variables in `--agent-cmd`:
 | `SYNAX_BENCH_BASE_URL` | (from repo config) | OpenAI-compatible base URL |
 | `SYNAX_BENCH_API_KEY` | (from repo config) | API key |
 | `SYNAX_BENCH_PROVIDER` | `relay` | Provider name in `.synax.toml` |
-| `SYNAX_BENCH_THINKING` | `high` | Thinking level for the active model |
+| `SYNAX_BENCH_THINKING` | `high` | Thinking level: `off`, `low`, `medium`, `high`. Use `off` for large-model benchmarks to prevent timeout from over-planning |
 | `SYNAX_BENCH_FIXTURE` | `validate-email` | Default fixture name |
 | `SYNAX_BENCH_TIMEOUT` | `300` | Fallback timeout seconds |
 | `SYNAX_CMD` | — | Fallback Synax command |
@@ -264,6 +297,20 @@ npm test
 # After implementing formatList({ json: true }) in src/todo.js:
 npm test
 # Expected: 10 passed, 0 failed, 10 total
+```
+
+### mini-shell
+
+```sh
+cd benchmarks/synax-auto-research/fixtures/mini-shell
+
+# Baseline: only simple-command and exit-status pass
+make test
+# Expected: 2 passed, 5 failed, 7 total
+
+# After full implementation:
+make test
+# Expected: 7 passed, 0 failed, 7 total
 ```
 
 ## Scoring Details

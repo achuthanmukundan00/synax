@@ -14,17 +14,22 @@
 #   SYNAX_BENCH_MODEL          Model name for generated .synax.toml
 #   SYNAX_BENCH_BASE_URL       OpenAI-compatible base URL
 #   SYNAX_BENCH_API_KEY        API key
+#   SYNAX_BENCH_THINKING       Thinking level: off | low | medium | high (default: high)
+#   SYNAX_BENCH_PROVIDER       Provider name (default: relay)
+#   SYNAX_BENCH_FIXTURE        Default fixture name (default: validate-email)
 #
 # Output artifacts in <artifacts-dir>/<run-id>/:
-#   transcript.txt          Full stdout+stderr from Synax
-#   session-index.json      Copy of ~/.local/share/synax/sessions/index.json (if it exists)
-#   session-events.jsonl    Copy of session event log (if session ID detectable)
-#   history.db              Copy of EventStore SQLite DB (if available)
-#   context.json            Copy of .synax/context.json from workdir
-#   workdir-snapshot.txt    File listing from workdir after run
-#   test-output.txt         Test run output (npm test)
-#   score.json              Deterministic score (written by the scorer)
-#   meta.json               Run metadata
+#   transcript.txt              Full stdout+stderr from Synax
+#   prompt.txt                  Exact prompt as passed to Synax
+#   session-index.json          Copy of ~/.local/share/synax/sessions/index.json (if it exists)
+#   session-events.jsonl        Copy of session event log (if session ID detectable)
+#   history.db                  Copy of EventStore SQLite DB (if available)
+#   context.json                Copy of .synax/context.json from workdir
+#   synax-config-sanitized.toml Sanitized copy of .synax.toml (no secrets)
+#   workdir-snapshot.txt        File listing from workdir after run
+#   test-output.txt             Test run output (npm test)
+#   score.json                  Deterministic score (written by the scorer)
+#   meta.json                   Run metadata
 
 set -euo pipefail
 
@@ -167,12 +172,20 @@ fi
 BENCHMARK_PROMPT=$(python3 -c "import json,sys; print(json.load(open('$FIXTURE_CONFIG'))['prompt'])")
 TEST_COMMAND=$(python3 -c "import json,sys; print(json.load(open('$FIXTURE_CONFIG'))['testCommand'])")
 
+# Shell-safe escaping for bash -c re-evaluation.
+# benchmark prompts contain $VAR, "$VAR", |, >, >>, and quotes —
+# they must survive inner-shell expansion intact.
+SAFE_PROMPT=$(printf '%q' "$BENCHMARK_PROMPT")
+
 # ─── Capture pre-run state ──────────────────────────────────
 SESSION_INDEX_PATH="$HOME/.local/share/synax/sessions/index.json"
 PRE_RUN_SESSION_INDEX_FILE="$ARTIFACTS_DIR/pre-session-index.json"
 if [ -f "$SESSION_INDEX_PATH" ]; then
   cp "$SESSION_INDEX_PATH" "$PRE_RUN_SESSION_INDEX_FILE" 2>/dev/null || true
 fi
+
+# ─── Write prompt.txt for artifact inspection ───────────────
+printf '%s' "$BENCHMARK_PROMPT" > "$ARTIFACTS_DIR/prompt.txt"
 
 # ─── Run Synax with timeout ──────────────────────────────────
 TRANSCRIPT_FILE="$ARTIFACTS_DIR/transcript.txt"
@@ -184,16 +197,18 @@ echo "[run-bench] Timeout: ${TIMEOUT_SECONDS}s"
 echo "[run-bench] Prompt: $BENCHMARK_PROMPT"
 echo "[run-bench] Workdir: $WORKDIR"
 
+# SAFE_PROMPT is shell-escaped via printf '%q' so bash -c re-evaluates
+# it without mangling $VAR, "$VAR", |, >, >>, or any quotes.
 if command -v timeout &>/dev/null; then
   # Linux: GNU timeout
-  cd "$WORKDIR" && timeout "$TIMEOUT_SECONDS" bash -c "$SYNAX_CMD run -t \"$BENCHMARK_PROMPT\" -y --log-level debug" > "$TRANSCRIPT_FILE" 2>&1 || RUN_EXIT=$?
+  cd "$WORKDIR" && timeout "$TIMEOUT_SECONDS" bash -c "$SYNAX_CMD run -t $SAFE_PROMPT -y --log-level debug" > "$TRANSCRIPT_FILE" 2>&1 || RUN_EXIT=$?
 elif command -v perl &>/dev/null; then
   # macOS: perl alarm-based timeout
   cd "$WORKDIR" && perl -e 'alarm shift; exec @ARGV' "$TIMEOUT_SECONDS" \
-    bash -c "$SYNAX_CMD run -t \"$BENCHMARK_PROMPT\" -y --log-level debug" > "$TRANSCRIPT_FILE" 2>&1 || RUN_EXIT=$?
+    bash -c "$SYNAX_CMD run -t $SAFE_PROMPT -y --log-level debug" > "$TRANSCRIPT_FILE" 2>&1 || RUN_EXIT=$?
 else
   # No timeout tool available — run without timeout (not recommended for long runs)
-  cd "$WORKDIR" && bash -c "$SYNAX_CMD run -t \"$BENCHMARK_PROMPT\" -y --log-level debug" > "$TRANSCRIPT_FILE" 2>&1 || RUN_EXIT=$?
+  cd "$WORKDIR" && bash -c "$SYNAX_CMD run -t $SAFE_PROMPT -y --log-level debug" > "$TRANSCRIPT_FILE" 2>&1 || RUN_EXIT=$?
 fi
 
 END_EPOCH=$(date +%s)
@@ -283,10 +298,27 @@ cd "$WORKDIR"
 bash -c "$TEST_COMMAND" > "$ARTIFACTS_DIR/test-output.txt" 2>&1 && TEST_EXIT_CODE=0 || TEST_EXIT_CODE=$?
 echo "$TEST_EXIT_CODE" > "$ARTIFACTS_DIR/test-exit-code.txt"
 
+# ─── Copy sanitized .synax.toml summary ────────────────────
+# Keep section structure and env-var references, but redact literal secrets.
+if [ -f "$WORKDIR/.synax.toml" ]; then
+  python3 -c "
+import re, json
+src = open('$WORKDIR/.synax.toml', 'r').read()
+# Redact values that look like tokens/keys (not env-var refs)
+src = re.sub(r'(?<== )(?!\\$\\{)[A-Za-z0-9+/=_-]{24,}', '[REDACTED]', src)
+open('$ARTIFACTS_DIR/synax-config-sanitized.toml', 'w').write(src)
+" 2>/dev/null || true
+fi
+
 # ─── Write meta.json ────────────────────────────────────────
 cat > "$ARTIFACTS_DIR/meta.json" <<METAEOF
 {
   "runId": "$RUN_ID",
+  "fixture": "$FIXTURE_NAME",
+  "provider": "$BENCH_PROVIDER",
+  "model": "$BENCH_MODEL",
+  "thinking": "$BENCH_THINKING",
+  "testCommand": "$TEST_COMMAND",
   "startedAt": "$(date -u -r "$START_EPOCH" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u +%Y-%m-%dT%H:%M:%SZ)",
   "durationSeconds": $DURATION_SECONDS,
   "synaxExitCode": $RUN_EXIT,
