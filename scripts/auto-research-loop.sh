@@ -37,6 +37,7 @@ COOLDOWN_SECONDS="0"
 STOP_FILE=".auto-research-stop"
 ALLOW_DIRTY=false
 ALLOW_HARNESS_EDITS=false
+STOP_ON_PERFECT=2
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -56,6 +57,7 @@ while [[ $# -gt 0 ]]; do
     --stop-file)           STOP_FILE="$2"; shift 2 ;;
     --allow-dirty)         ALLOW_DIRTY=true; shift ;;
     --allow-harness-edits) ALLOW_HARNESS_EDITS=true; shift ;;
+    --stop-on-perfect)    STOP_ON_PERFECT="$2"; shift 2 ;;
     *)
       echo "Unknown flag: $1"
       echo "Usage: $0 --max-iterations N --timeout-seconds N --artifacts-dir DIR --agent-cmd CMD [...]"
@@ -104,6 +106,7 @@ BASELINE_TOTAL=0; BASELINE_TEST_PASS_RATE=0
 CURRENT_BEST_TOTAL=0; CURRENT_BEST_TEST_PASS_RATE=0
 STREAK_WITHOUT_IMPROVEMENT=0; ITERATION=0
 ACCEPTED_COUNT=0; REJECTED_COUNT=0; NO_CHANGE_COUNT=0; TIMEOUT_COUNT=0
+PERFECT_SCORE_COUNT=0
 STOP_REASON="max_iterations"
 LOOP_START_EPOCH=$(date +%s)
 INITIAL_HEAD=$(cd "$REPO_ROOT" && git rev-parse HEAD)
@@ -171,6 +174,26 @@ cleanup_agent_untracked() {
 # ─── Helper: check_stop_file ────────────────────────────────
 check_stop_file() { [ -f "$REPO_ROOT/$STOP_FILE" ] && return 0; return 1; }
 
+# ─── Helper: is_perfect_score ───────────────────────────────
+# Reads a score.json and checks whether it is a perfect score.
+# Perfect: total >= 1.0, testPassRate >= 1.0, allTestsPass == 1.
+# Returns 0 (true) if perfect, 1 (false) otherwise.
+is_perfect_score() {
+  local sf="$1"
+  if [ ! -f "$sf" ]; then return 1; fi
+  python3 -c "
+import json, sys
+s = json.load(open('$sf'))
+total = s.get('total', 0)
+tpr  = s.get('breakdown', {}).get('testPassRate', 0)
+atp  = s.get('breakdown', {}).get('allTestsPass', 0)
+if total >= 1.0 and tpr >= 1.0 and atp == 1:
+    sys.exit(0)
+else:
+    sys.exit(1)
+" 2>/dev/null
+}
+
 # ─── Helper: update_loop_state ──────────────────────────────
 update_loop_state() {
   local result="$1" reject_reason="$2" agent_exit="$3" agent_timed_out="$4"
@@ -191,6 +214,8 @@ state['acceptedCount'] = $ACCEPTED_COUNT
 state['rejectedCount'] = $REJECTED_COUNT
 state['noChangeCount'] = $NO_CHANGE_COUNT
 state['timeoutCount'] = $TIMEOUT_COUNT
+state['perfectScoreCount'] = $PERFECT_SCORE_COUNT
+state['stopOnPerfect'] = $STOP_ON_PERFECT
 entry = {
     'iteration': $ITERATION, 'fixture': '$FIXTURE', 'result': '$result',
     'rejectReason': $rr_json,
@@ -253,6 +278,7 @@ echo "  Cooldown:         ${COOLDOWN_SECONDS}s"
 echo "  Stop file:        ${STOP_FILE}"
 echo "  Allow dirty:      ${ALLOW_DIRTY}"
 echo "  Allow harness:    ${ALLOW_HARNESS_EDITS}"
+echo "  Stop on perfect:  ${STOP_ON_PERFECT}"
 echo "  Initial HEAD:     $INITIAL_HEAD"
 echo "═══════════════════════════════════════════════════════════════"
 echo ""
@@ -267,6 +293,12 @@ CURRENT_BEST_TEST_PASS_RATE="$BASELINE_TEST_PASS_RATE"
 echo "[loop] Baseline: total=$BASELINE_TOTAL testPassRate=$BASELINE_TEST_PASS_RATE"
 BASELINE_RUN_DIR=$(ls -dt "$LOOP_RUN_DIR"/baseline-iter-* 2>/dev/null | head -1 || echo "")
 
+# Check if baseline is a perfect score
+if [ "$STOP_ON_PERFECT" -gt 0 ] && is_perfect_score "$LOOP_RUN_DIR/baseline-iter-0/score.json"; then
+  PERFECT_SCORE_COUNT=1
+  echo "[loop] Baseline is a perfect score! (perfectScoreCount=$PERFECT_SCORE_COUNT/$STOP_ON_PERFECT)"
+fi
+
 cat > "$LOOP_RUN_DIR/loop-state.json" <<LOOPEOF
 {
   "startedAt": "$(date -u +%Y-%m-%dT%H:%M:%SZ)", "updatedAt": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
@@ -274,7 +306,9 @@ cat > "$LOOP_RUN_DIR/loop-state.json" <<LOOPEOF
   "baselineTotal": $BASELINE_TOTAL, "baselineTestPassRate": $BASELINE_TEST_PASS_RATE,
   "currentBestTotal": $CURRENT_BEST_TOTAL, "currentBestTestPassRate": $CURRENT_BEST_TEST_PASS_RATE,
   "acceptedCount": 0, "rejectedCount": 0, "noChangeCount": 0, "timeoutCount": 0,
-  "lastCommit": null, "stopReason": null, "minImprovement": $MIN_IMPROVEMENT, "iterations": []
+  "lastCommit": null, "stopReason": null, "minImprovement": $MIN_IMPROVEMENT,
+  "perfectScoreCount": $PERFECT_SCORE_COUNT, "stopOnPerfect": $STOP_ON_PERFECT,
+  "iterations": []
 }
 LOOPEOF
 
@@ -289,6 +323,12 @@ while [ "$ITERATION" -lt "$MAX_ITERATIONS" ]; do
 
   # Stop-file check
   if check_stop_file; then echo "[loop] Stop file detected: $STOP_FILE"; STOP_REASON="stop_file"; break; fi
+
+  # Perfect-score check (before running agent)
+  if [ "$STOP_ON_PERFECT" -gt 0 ] && [ "$PERFECT_SCORE_COUNT" -ge "$STOP_ON_PERFECT" ]; then
+    echo "[loop] Perfect score verified: $PERFECT_SCORE_COUNT consecutive perfect scores (limit: $STOP_ON_PERFECT)"
+    STOP_REASON="perfect_score_verified"; break
+  fi
 
   # Wall-clock check
   if [ -n "$MAX_WALL_MINUTES" ]; then
@@ -353,7 +393,7 @@ while [ "$ITERATION" -lt "$MAX_ITERATIONS" ]; do
   if git diff --quiet && git diff --cached --quiet; then
     echo "[loop] No changes detected. Skipping candidate benchmark."
     cat > "$ITER_DIR/result.json" <<EOF
-{"iteration":$ITERATION,"fixture":"$FIXTURE","baselineTotal":$CURRENT_BEST_TOTAL,"candidateTotal":null,"baselineTestPassRate":$CURRENT_BEST_TEST_PASS_RATE,"candidateTestPassRate":null,"minImprovement":$MIN_IMPROVEMENT,"accepted":false,"rejectReason":"no_changes","forbiddenPathsChanged":[],"changedFiles":[],"commitSha":null,"agentExitCode":$AGENT_EXIT,"agentTimedOut":$AGENT_TIMED_OUT,"benchmarkExitCode":null,"verifyExitCode":null,"verifyPassed":null,"startedAt":"$(date -u -r "$ITER_START_EPOCH" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u +%Y-%m-%dT%H:%M:%SZ)","finishedAt":"$(date -u +%Y-%m-%dT%H:%M:%SZ)","durationSeconds":$AGENT_DURATION,"stopReason":null}
+{"iteration":$ITERATION,"fixture":"$FIXTURE","baselineTotal":$CURRENT_BEST_TOTAL,"candidateTotal":null,"baselineTestPassRate":$CURRENT_BEST_TEST_PASS_RATE,"candidateTestPassRate":null,"minImprovement":$MIN_IMPROVEMENT,"accepted":false,"rejectReason":"no_changes","forbiddenPathsChanged":[],"changedFiles":[],"commitSha":null,"agentExitCode":$AGENT_EXIT,"agentTimedOut":$AGENT_TIMED_OUT,"benchmarkExitCode":null,"verifyExitCode":null,"verifyPassed":null,"startedAt":"$(date -u -r "$ITER_START_EPOCH" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u +%Y-%m-%dT%H:%M:%SZ)","finishedAt":"$(date -u +%Y-%m-%dT%H:%M:%SZ)","durationSeconds":$AGENT_DURATION,"stopReason":null,"perfectScore":null,"perfectScoreCount":$PERFECT_SCORE_COUNT,"stopOnPerfect":$STOP_ON_PERFECT}
 EOF
     STREAK_WITHOUT_IMPROVEMENT=$((STREAK_WITHOUT_IMPROVEMENT + 1))
     NO_CHANGE_COUNT=$((NO_CHANGE_COUNT + 1))
@@ -377,7 +417,7 @@ EOF
         cleanup_agent_untracked "$ITER_DIR"
       fi
       cat > "$ITER_DIR/result.json" <<EOF
-{"iteration":$ITERATION,"fixture":"$FIXTURE","baselineTotal":$CURRENT_BEST_TOTAL,"candidateTotal":null,"baselineTestPassRate":$CURRENT_BEST_TEST_PASS_RATE,"candidateTestPassRate":null,"minImprovement":$MIN_IMPROVEMENT,"accepted":false,"rejectReason":"forbidden_paths_changed","forbiddenPathsChanged":[$FORBIDDEN_JSON],"changedFiles":[],"commitSha":null,"agentExitCode":$AGENT_EXIT,"agentTimedOut":$AGENT_TIMED_OUT,"benchmarkExitCode":null,"verifyExitCode":null,"verifyPassed":null,"startedAt":"$(date -u -r "$ITER_START_EPOCH" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u +%Y-%m-%dT%H:%M:%SZ)","finishedAt":"$(date -u +%Y-%m-%dT%H:%M:%SZ)","durationSeconds":$AGENT_DURATION,"stopReason":null}
+{"iteration":$ITERATION,"fixture":"$FIXTURE","baselineTotal":$CURRENT_BEST_TOTAL,"candidateTotal":null,"baselineTestPassRate":$CURRENT_BEST_TEST_PASS_RATE,"candidateTestPassRate":null,"minImprovement":$MIN_IMPROVEMENT,"accepted":false,"rejectReason":"forbidden_paths_changed","forbiddenPathsChanged":[$FORBIDDEN_JSON],"changedFiles":[],"commitSha":null,"agentExitCode":$AGENT_EXIT,"agentTimedOut":$AGENT_TIMED_OUT,"benchmarkExitCode":null,"verifyExitCode":null,"verifyPassed":null,"startedAt":"$(date -u -r "$ITER_START_EPOCH" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u +%Y-%m-%dT%H:%M:%SZ)","finishedAt":"$(date -u +%Y-%m-%dT%H:%M:%SZ)","durationSeconds":$AGENT_DURATION,"stopReason":null,"perfectScore":null,"perfectScoreCount":$PERFECT_SCORE_COUNT,"stopOnPerfect":$STOP_ON_PERFECT}
 EOF
       STREAK_WITHOUT_IMPROVEMENT=$((STREAK_WITHOUT_IMPROVEMENT + 1))
       REJECTED_COUNT=$((REJECTED_COUNT + 1))
@@ -422,7 +462,7 @@ EOF
       fi
 
       cat > "$ITER_DIR/result.json" <<EOF
-{"iteration":$ITERATION,"fixture":"$FIXTURE","baselineTotal":$CURRENT_BEST_TOTAL,"candidateTotal":null,"baselineTestPassRate":$CURRENT_BEST_TEST_PASS_RATE,"candidateTestPassRate":null,"minImprovement":$MIN_IMPROVEMENT,"accepted":false,"rejectReason":"verify_failed","forbiddenPathsChanged":[],"changedFiles":[$CHANGED_FILES],"commitSha":null,"agentExitCode":$AGENT_EXIT,"agentTimedOut":$AGENT_TIMED_OUT,"benchmarkExitCode":null,"verifyExitCode":$VERIFY_EXIT,"verifyPassed":false,"startedAt":"$(date -u -r "$ITER_START_EPOCH" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u +%Y-%m-%dT%H:%M:%SZ)","finishedAt":"$(date -u +%Y-%m-%dT%H:%M:%SZ)","durationSeconds":$(( $(date +%s) - ITER_START_EPOCH )),"stopReason":null}
+{"iteration":$ITERATION,"fixture":"$FIXTURE","baselineTotal":$CURRENT_BEST_TOTAL,"candidateTotal":null,"baselineTestPassRate":$CURRENT_BEST_TEST_PASS_RATE,"candidateTestPassRate":null,"minImprovement":$MIN_IMPROVEMENT,"accepted":false,"rejectReason":"verify_failed","forbiddenPathsChanged":[],"changedFiles":[$CHANGED_FILES],"commitSha":null,"agentExitCode":$AGENT_EXIT,"agentTimedOut":$AGENT_TIMED_OUT,"benchmarkExitCode":null,"verifyExitCode":$VERIFY_EXIT,"verifyPassed":false,"startedAt":"$(date -u -r "$ITER_START_EPOCH" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u +%Y-%m-%dT%H:%M:%SZ)","finishedAt":"$(date -u +%Y-%m-%dT%H:%M:%SZ)","durationSeconds":$(( $(date +%s) - ITER_START_EPOCH )),"stopReason":null,"perfectScore":null,"perfectScoreCount":$PERFECT_SCORE_COUNT,"stopOnPerfect":$STOP_ON_PERFECT}
 EOF
 
       STREAK_WITHOUT_IMPROVEMENT=$((STREAK_WITHOUT_IMPROVEMENT + 1))
@@ -478,6 +518,15 @@ print('true' if ct>=bt+mi-e and ctp>btp+e else 'false')
     fi
     CURRENT_BEST_TOTAL="$CANDIDATE_TOTAL"; CURRENT_BEST_TEST_PASS_RATE="$CANDIDATE_TEST_PASS_RATE"
     STREAK_WITHOUT_IMPROVEMENT=0; ACCEPTED_COUNT=$((ACCEPTED_COUNT + 1)); ITER_RESULT="accepted"
+
+    # Check if candidate is a perfect score
+    CANDIDATE_SCORE_FILE=$(ls -t "$LOOP_RUN_DIR"/iter-iter-*/score.json 2>/dev/null | head -1 || echo "")
+    if [ "$STOP_ON_PERFECT" -gt 0 ] && [ -n "$CANDIDATE_SCORE_FILE" ] && is_perfect_score "$CANDIDATE_SCORE_FILE"; then
+      PERFECT_SCORE_COUNT=$((PERFECT_SCORE_COUNT + 1))
+      echo "[loop] Candidate is a perfect score! (perfectScoreCount=$PERFECT_SCORE_COUNT/$STOP_ON_PERFECT)"
+    else
+      PERFECT_SCORE_COUNT=0
+    fi
   else
     echo "[loop] ✗ Rejected: $REJECT_REASON_LABEL ($CURRENT_BEST_TOTAL → $CANDIDATE_TOTAL)"
     if [ "$DRY_RUN" = false ]; then
@@ -486,11 +535,21 @@ print('true' if ct>=bt+mi-e and ctp>btp+e else 'false')
     fi
     STREAK_WITHOUT_IMPROVEMENT=$((STREAK_WITHOUT_IMPROVEMENT + 1))
     REJECTED_COUNT=$((REJECTED_COUNT + 1)); ITER_RESULT="rejected"
+    PERFECT_SCORE_COUNT=0
   fi
 
   # ── Step 5: Record result ────────────────────────────────
+  # Determine if the candidate score was perfect
+  PERFECT_CANDIDATE_JSON="null"
+  CANDIDATE_SF=$(ls -t "$LOOP_RUN_DIR"/iter-iter-*/score.json 2>/dev/null | head -1 || echo "")
+  if [ "$STOP_ON_PERFECT" -gt 0 ] && [ -n "$CANDIDATE_SF" ] && is_perfect_score "$CANDIDATE_SF"; then
+    PERFECT_CANDIDATE_JSON="true"
+  elif [ -n "$CANDIDATE_SF" ]; then
+    PERFECT_CANDIDATE_JSON="false"
+  fi
+
   cat > "$ITER_DIR/result.json" <<EOF
-{"iteration":$ITERATION,"fixture":"$FIXTURE","baselineTotal":$CURRENT_BEST_TOTAL,"candidateTotal":$CANDIDATE_TOTAL,"baselineTestPassRate":$CURRENT_BEST_TEST_PASS_RATE,"candidateTestPassRate":$CANDIDATE_TEST_PASS_RATE,"minImprovement":$MIN_IMPROVEMENT,"accepted":$ACCEPTED,"rejectReason":$REJECT_REASON_JSON,"forbiddenPathsChanged":[],"changedFiles":[$CHANGED_FILES],"commitSha":$COMMIT_SHA_JSON,"agentExitCode":$AGENT_EXIT,"agentTimedOut":$AGENT_TIMED_OUT,"benchmarkExitCode":$BENCH_EXIT,"verifyExitCode":$VERIFY_EXIT,"verifyPassed":$VERIFY_PASSED,"startedAt":"$(date -u -r "$ITER_START_EPOCH" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u +%Y-%m-%dT%H:%M:%SZ)","finishedAt":"$(date -u +%Y-%m-%dT%H:%M:%SZ)","durationSeconds":$ITER_DURATION,"stopReason":null}
+{"iteration":$ITERATION,"fixture":"$FIXTURE","baselineTotal":$CURRENT_BEST_TOTAL,"candidateTotal":$CANDIDATE_TOTAL,"baselineTestPassRate":$CURRENT_BEST_TEST_PASS_RATE,"candidateTestPassRate":$CANDIDATE_TEST_PASS_RATE,"minImprovement":$MIN_IMPROVEMENT,"accepted":$ACCEPTED,"rejectReason":$REJECT_REASON_JSON,"forbiddenPathsChanged":[],"changedFiles":[$CHANGED_FILES],"commitSha":$COMMIT_SHA_JSON,"agentExitCode":$AGENT_EXIT,"agentTimedOut":$AGENT_TIMED_OUT,"benchmarkExitCode":$BENCH_EXIT,"verifyExitCode":$VERIFY_EXIT,"verifyPassed":$VERIFY_PASSED,"startedAt":"$(date -u -r "$ITER_START_EPOCH" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u +%Y-%m-%dT%H:%M:%SZ)","finishedAt":"$(date -u +%Y-%m-%dT%H:%M:%SZ)","durationSeconds":$ITER_DURATION,"stopReason":null,"perfectScore":$PERFECT_CANDIDATE_JSON,"perfectScoreCount":$PERFECT_SCORE_COUNT,"stopOnPerfect":$STOP_ON_PERFECT}
 EOF
 
   update_loop_state "$ITER_RESULT" "$REJECT_REASON_LABEL" "$AGENT_EXIT" "$AGENT_TIMED_OUT" "$COMMIT_SHA_JSON" "$ITER_START_EPOCH" "$CANDIDATE_TOTAL" "$CANDIDATE_TEST_PASS_RATE" $([ "$VERIFY_PASSED" = "true" ] && echo 'True' || echo 'False') "$VERIFY_EXIT"
@@ -514,6 +573,7 @@ echo "  Baseline total:   $BASELINE_TOTAL"
 echo "  Baseline tpr:     $BASELINE_TEST_PASS_RATE"
 echo "  Final best total: $CURRENT_BEST_TOTAL"
 echo "  Final best tpr:   $CURRENT_BEST_TEST_PASS_RATE"
+echo "  Perfect scores:   $PERFECT_SCORE_COUNT / ${STOP_ON_PERFECT:-0}"
 echo "  Accepted: $ACCEPTED_COUNT | Rejected: $REJECTED_COUNT | No-chg: $NO_CHANGE_COUNT | Timeout: $TIMEOUT_COUNT"
 echo "  Artifacts:        $LOOP_RUN_DIR"
 echo "═══════════════════════════════════════════════════════════════"
@@ -531,6 +591,8 @@ state['acceptedCount'] = $ACCEPTED_COUNT
 state['rejectedCount'] = $REJECTED_COUNT
 state['noChangeCount'] = $NO_CHANGE_COUNT
 state['timeoutCount'] = $TIMEOUT_COUNT
+state['perfectScoreCount'] = $PERFECT_SCORE_COUNT
+state['stopOnPerfect'] = $STOP_ON_PERFECT
 state['lastCommit'] = '$LAST_COMMIT'
 json.dump(state, open('$LOOP_RUN_DIR/loop-state.json', 'w'), indent=2)
 PYFINAL

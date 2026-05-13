@@ -77,6 +77,7 @@ bash scripts/auto-research-loop.sh \
 | **Max wall minutes** | Loop auto-stops after N minutes (default: 240) |
 | **Max accepted** | Loop auto-stops after N accepted patches |
 | **Max rejected** | Loop auto-stops after N rejected/no-change iterations |
+| **Stop on perfect** | Loop auto-stops after N consecutive perfect scores (default: 2) |
 
 The stop file is checked at the start of *every iteration*. Once detected,
 the loop prints the stop reason and exits cleanly without running the agent.
@@ -265,6 +266,7 @@ bash scripts/auto-research-loop.sh \
 | `--stop-file` | no | `.auto-research-stop` | Path to stop signal file |
 | `--allow-dirty` | no | `false` | Allow running on dirty repo |
 | `--allow-harness-edits` | no | `false` | Disable forbidden-path protection |
+| `--stop-on-perfect` | no | `2` | Stop after N consecutive perfect scores (0 disables) |
 
 ### Environment Variables (run-pi-improvement-agent.sh)
 
