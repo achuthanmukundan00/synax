@@ -34,15 +34,20 @@ apply exactly one code patch — accepting it only if the score improves.
   `.synax.toml` and git repo.
 - **Every run has its own artifact directory** with transcript, test output, git
   diff, session logs, event store DB, context state, and score.
-- **Accept/reject is deterministic.** A Node.js script scores dimensions
-  (test pass rate, timeout, files changed, read-before-edit, etc.) and computes
-  a weighted total. No LLM is involved in the decision.
+- **Accept/reject is deterministic and conservative.** A Node.js script scores
+  dimensions (test pass rate, timeout, files changed, read-before-edit, etc.)
+  and computes a weighted total. A candidate is accepted only if:
+  `candidateTotal >= baselineTotal + minImprovement` (default 0.05)
+  **AND** `candidateTestPassRate > baselineTestPassRate`. No LLM is involved
+  in the decision.
 - **One patch per iteration.** The improvement agent is instructed to make
   exactly one minimal change.
 - **Safe revert.** Uses `git restore .` (tracked files only) — never `git clean`.
   This protects untracked benchmark/harness files from accidental deletion.
-- **Dry-run mode.** Use `--dry-run` to test the loop without invoking the agent
-  or making real git commits.
+- **Dry-run mode.** Use `--dry-run` to exercise loop control flow without
+  invoking the agent, mutating source files, or making git commits. The loop
+  runs the baseline benchmark, skips the agent, detects no changes, and exits
+  cleanly without modifying any product code.
 
 ## Files
 
@@ -249,8 +254,10 @@ Template variables in `--agent-cmd`:
 | `--artifacts-dir` | yes | — | Directory for artifact storage |
 | `--agent-cmd` | yes | — | Command to invoke the improvement agent |
 | `--synax-cmd` | no | `node dist/cli.js` | Path to Synax CLI |
-| `--dry-run` | no | `false` | Skip agent invocation and git operations |
+| `--fixture` | no | `validate-email` | Fixture name to benchmark |
+| `--dry-run` | no | `false` | Exercise loop control flow without agent or git changes |
 | `--patience` | no | `1` | Stop after N iterations without improvement |
+| `--min-improvement` | no | `0.05` | Minimum total score improvement required to accept |
 
 ### Environment Variables
 

@@ -10,10 +10,14 @@
 #   5. If improved: git commit the patch with a message including old/new scores.
 #      If not improved or failed: git restore tracked files to HEAD.
 #
+# Accept rule (conservative):
+#   candidateTotal >= baselineTotal + minImprovement
+#   AND candidateTestPassRate > baselineTestPassRate
+#
 # Stop conditions:
 #   - Max iterations reached (--max-iterations)
 #   - No score improvement for N consecutive iterations (--patience, default: 1)
-#   - Dry-run mode (--dry-run): skip the actual agent invocation and git operations
+#   - Dry-run mode (--dry-run): exercise control flow but skip git operations
 #
 # Usage:
 #   scripts/auto-research-loop.sh \
@@ -24,7 +28,8 @@
 #     [--synax-cmd "node dist/cli.js"] \
 #     [--fixture validate-email] \
 #     [--dry-run] \
-#     [--patience 1]
+#     [--patience 1] \
+#     [--min-improvement 0.05]
 #
 # Environment variables (defaults):
 #   SYNAX_BENCH_MODEL          Model name (default: local)
@@ -42,6 +47,7 @@ SYNAX_CMD=""
 DRY_RUN=false
 FIXTURE="${SYNAX_BENCH_FIXTURE:-validate-email}"
 PATIENCE=1
+MIN_IMPROVEMENT="0.05"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -77,9 +83,13 @@ while [[ $# -gt 0 ]]; do
       PATIENCE="$2"
       shift 2
       ;;
+    --min-improvement)
+      MIN_IMPROVEMENT="$2"
+      shift 2
+      ;;
     *)
       echo "Unknown flag: $1"
-      echo "Usage: $0 --max-iterations N --timeout-seconds N --artifacts-dir DIR --agent-cmd CMD [--synax-cmd CMD] [--fixture NAME] [--dry-run] [--patience N]"
+      echo "Usage: $0 --max-iterations N --timeout-seconds N --artifacts-dir DIR --agent-cmd CMD [--synax-cmd CMD] [--fixture NAME] [--dry-run] [--patience N] [--min-improvement FLOAT]"
       exit 1
       ;;
   esac
@@ -88,7 +98,7 @@ done
 # Validate required args
 if [ -z "$MAX_ITERATIONS" ] || [ -z "$ARTIFACTS_DIR" ] || [ -z "$AGENT_CMD" ]; then
   echo "ERROR: --max-iterations, --artifacts-dir, and --agent-cmd are required."
-  echo "Usage: $0 --max-iterations N --timeout-seconds N --artifacts-dir DIR --agent-cmd CMD [--synax-cmd CMD] [--dry-run] [--patience N]"
+  echo "Usage: $0 --max-iterations N --timeout-seconds N --artifacts-dir DIR --agent-cmd CMD [--synax-cmd CMD] [--dry-run] [--patience N] [--min-improvement FLOAT]"
   exit 1
 fi
 
@@ -133,8 +143,10 @@ fi
 LOOP_RUN_DIR="$ARTIFACTS_DIR/loop-$(date +%Y%m%d-%H%M%S)"
 mkdir -p "$LOOP_RUN_DIR"
 
-BASELINE_SCORE=0
-CURRENT_BEST_SCORE=0
+BASELINE_TOTAL=0
+BASELINE_TEST_PASS_RATE=0
+CURRENT_BEST_TOTAL=0
+CURRENT_BEST_TEST_PASS_RATE=0
 STREAK_WITHOUT_IMPROVEMENT=0
 ITERATION=0
 
@@ -143,8 +155,8 @@ INITIAL_HEAD=$(cd "$REPO_ROOT" && git rev-parse HEAD)
 
 # ─── Helper functions ───────────────────────────────────────
 
-# Run a single benchmark trial and return the score.
-# All diagnostic output goes to stderr; only the numeric score goes to stdout.
+# Run a single benchmark trial and return score components.
+# All diagnostic output goes to stderr; only "total testPassRate" goes to stdout.
 run_benchmark() {
   local label="$1"
   local run_id="${label}-iter-${ITERATION}"
@@ -160,12 +172,19 @@ run_benchmark() {
   # Run benchmark; diagnostics go to stderr via the bench script's own output
   bash "$BENCH_SCRIPT" "${bench_args[@]}" >&2
 
-  # Read score from the written score.json — this is the ONLY output to stdout
+  # Read total and testPassRate from the written score.json
+  # Output: "total testPassRate" on stdout (space-separated)
   local score_file="$LOOP_RUN_DIR/$run_id/score.json"
   if [ -f "$score_file" ]; then
-    python3 -c "import json; print(json.load(open('$score_file'))['total'])" 2>/dev/null || echo "0"
+    python3 -c "
+import json
+s = json.load(open('$score_file'))
+total = s.get('total', 0)
+tpr = s.get('breakdown', {}).get('testPassRate', 0)
+print(f'{total} {tpr}')
+" 2>/dev/null || echo "0 0"
   else
-    echo "0"
+    echo "0 0"
   fi
 }
 
@@ -181,25 +200,32 @@ echo "  Fixture:         $FIXTURE"
 echo "  Agent command:   $AGENT_CMD"
 echo "  Dry run:         $DRY_RUN"
 echo "  Patience:        $PATIENCE"
+echo "  Min improvement: $MIN_IMPROVEMENT"
 echo "  Initial HEAD:    $INITIAL_HEAD"
 echo "═══════════════════════════════════════════════════════════════"
 echo ""
 
 # ── Step 0: Establish baseline ──────────────────────────────
 echo "[loop] === Establishing baseline ==="
-BASELINE_SCORE=$(run_benchmark "baseline")
-CURRENT_BEST_SCORE="$BASELINE_SCORE"
-echo "[loop] Baseline score: $BASELINE_SCORE"
+BASELINE_RESULT=$(run_benchmark "baseline")
+BASELINE_TOTAL=$(echo "$BASELINE_RESULT" | cut -d' ' -f1)
+BASELINE_TEST_PASS_RATE=$(echo "$BASELINE_RESULT" | cut -d' ' -f2)
+CURRENT_BEST_TOTAL="$BASELINE_TOTAL"
+CURRENT_BEST_TEST_PASS_RATE="$BASELINE_TEST_PASS_RATE"
+echo "[loop] Baseline: total=$BASELINE_TOTAL testPassRate=$BASELINE_TEST_PASS_RATE"
 
 # Write loop state
 cat > "$LOOP_RUN_DIR/loop-state.json" <<EOF
 {
   "fixture": "$FIXTURE",
   "initialHead": "$INITIAL_HEAD",
-  "baselineScore": $BASELINE_SCORE,
-  "currentBestScore": $CURRENT_BEST_SCORE,
+  "baselineTotal": $BASELINE_TOTAL,
+  "baselineTestPassRate": $BASELINE_TEST_PASS_RATE,
+  "currentBestTotal": $CURRENT_BEST_TOTAL,
+  "currentBestTestPassRate": $CURRENT_BEST_TEST_PASS_RATE,
   "totalIterations": 0,
   "successfulIterations": 0,
+  "minImprovement": $MIN_IMPROVEMENT,
   "iterations": []
 }
 EOF
@@ -210,7 +236,7 @@ while [ "$ITERATION" -lt "$MAX_ITERATIONS" ]; do
   echo ""
   echo "───────────────────────────────────────────────────────────────"
   echo "[loop] === Iteration $ITERATION / $MAX_ITERATIONS ==="
-  echo "[loop] Current best score: $CURRENT_BEST_SCORE"
+  echo "[loop] Current best: total=$CURRENT_BEST_TOTAL testPassRate=$CURRENT_BEST_TEST_PASS_RATE"
 
   # ── Step 1: Run improvement agent ─────────────────────────
   ITER_DIR="$LOOP_RUN_DIR/iter-${ITERATION}"
@@ -219,10 +245,7 @@ while [ "$ITERATION" -lt "$MAX_ITERATIONS" ]; do
   if [ "$DRY_RUN" = true ]; then
     echo "[loop] DRY RUN: skipping improvement agent invocation."
     echo "[loop] Would run: cd $REPO_ROOT && $AGENT_CMD"
-    # In dry-run mode, create a dummy change to demonstrate the loop.
-    # We add a comment to a tracked source file so git restore can clean it up.
-    echo "[loop] Creating dummy change to demonstrate score comparison..."
-    echo "// auto-research dry-run marker" >> "$REPO_ROOT/src/cli.ts"
+    echo "[loop] DRY RUN: no source changes made (dry-run does not mutate files)."
   else
     echo "[loop] Running improvement agent..."
     echo "[loop] Agent reads artifacts from: $LOOP_RUN_DIR"
@@ -250,7 +273,25 @@ while [ "$ITERATION" -lt "$MAX_ITERATIONS" ]; do
   # ── Step 2: Check if anything actually changed ────────────
   cd "$REPO_ROOT"
   if git diff --quiet && git diff --cached --quiet; then
-    echo "[loop] No changes detected after improvement agent. Skipping benchmark rerun."
+    echo "[loop] No changes detected after improvement agent. Skipping candidate benchmark."
+
+    # Record the no-changes result
+    cat > "$ITER_DIR/result.json" <<EOF
+{
+  "iteration": $ITERATION,
+  "fixture": "$FIXTURE",
+  "baselineTotal": $CURRENT_BEST_TOTAL,
+  "candidateTotal": null,
+  "baselineTestPassRate": $CURRENT_BEST_TEST_PASS_RATE,
+  "candidateTestPassRate": null,
+  "minImprovement": $MIN_IMPROVEMENT,
+  "accepted": false,
+  "rejectReason": "no_changes",
+  "dryRun": $DRY_RUN,
+  "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+}
+EOF
+
     STREAK_WITHOUT_IMPROVEMENT=$((STREAK_WITHOUT_IMPROVEMENT + 1))
     if [ "$STREAK_WITHOUT_IMPROVEMENT" -ge "$PATIENCE" ]; then
       echo "[loop] Patience exhausted ($PATIENCE iterations without change). Stopping."
@@ -264,38 +305,82 @@ while [ "$ITERATION" -lt "$MAX_ITERATIONS" ]; do
   git diff --stat 2>/dev/null || true
 
   # ── Step 3: Rerun benchmark with the patch applied ────────
-  NEW_SCORE=$(run_benchmark "iter" || echo "0")
-  echo "[loop] New score: $NEW_SCORE (baseline: $CURRENT_BEST_SCORE)"
+  CANDIDATE_RESULT=$(run_benchmark "iter" || echo "0 0")
+  CANDIDATE_TOTAL=$(echo "$CANDIDATE_RESULT" | cut -d' ' -f1)
+  CANDIDATE_TEST_PASS_RATE=$(echo "$CANDIDATE_RESULT" | cut -d' ' -f2)
+  echo "[loop] Candidate: total=$CANDIDATE_TOTAL testPassRate=$CANDIDATE_TEST_PASS_RATE"
+  echo "[loop] Baseline:  total=$CURRENT_BEST_TOTAL testPassRate=$CURRENT_BEST_TEST_PASS_RATE"
 
-  # ── Step 4: Accept or reject ──────────────────────────────
-  # Use numeric comparison via python3 for reliable float comparison
-  SCORE_IMPROVED=$(python3 -c "
-new = float('$NEW_SCORE' or '0')
-old = float('$CURRENT_BEST_SCORE' or '0')
-print('true' if new > old else 'false')
+  # ── Step 4: Accept or reject (conservative rule) ──────────
+  # Accept only if:
+  #   candidateTotal >= baselineTotal + minImprovement
+  #   AND candidateTestPassRate > baselineTestPassRate
+  ACCEPTED=$(python3 -c "
+candidate_total = float('$CANDIDATE_TOTAL' or '0')
+candidate_tpr   = float('$CANDIDATE_TEST_PASS_RATE' or '0')
+baseline_total  = float('$CURRENT_BEST_TOTAL' or '0')
+baseline_tpr    = float('$CURRENT_BEST_TEST_PASS_RATE' or '0')
+min_imp         = float('$MIN_IMPROVEMENT' or '0.05')
+eps             = 1e-9
+
+total_ok = candidate_total >= baseline_total + min_imp - eps
+tpr_ok   = candidate_tpr > baseline_tpr + eps
+
+if total_ok and tpr_ok:
+    print('true')
+else:
+    print('false')
 ")
+
+  # Determine reject reason
+  REJECT_REASON=""
+  if [ "$ACCEPTED" = "true" ]; then
+    REJECT_REASON="null"
+  else
+    TOTAL_OK=$(python3 -c "
+candidate_total = float('$CANDIDATE_TOTAL' or '0')
+baseline_total  = float('$CURRENT_BEST_TOTAL' or '0')
+min_imp         = float('$MIN_IMPROVEMENT' or '0.05')
+eps             = 1e-9
+print('true' if candidate_total >= baseline_total + min_imp - eps else 'false')
+")
+    TPR_OK=$(python3 -c "
+candidate_tpr = float('$CANDIDATE_TEST_PASS_RATE' or '0')
+baseline_tpr  = float('$CURRENT_BEST_TEST_PASS_RATE' or '0')
+eps           = 1e-9
+print('true' if candidate_tpr > baseline_tpr + eps else 'false')
+")
+    if [ "$TOTAL_OK" = "false" ] && [ "$TPR_OK" = "false" ]; then
+      REJECT_REASON="score_not_improved"
+    elif [ "$TOTAL_OK" = "false" ]; then
+      REJECT_REASON="total_insufficient_improvement"
+    else
+      REJECT_REASON="test_pass_rate_not_improved"
+    fi
+  fi
 
   ITER_RESULT=""
 
-  if [ "$SCORE_IMPROVED" = "true" ]; then
-    echo "[loop] ✓ Score improved: $CURRENT_BEST_SCORE → $NEW_SCORE"
+  if [ "$ACCEPTED" = "true" ]; then
+    echo "[loop] ✓ Accepted: total $CURRENT_BEST_TOTAL → $CANDIDATE_TOTAL, tpr $CURRENT_BEST_TEST_PASS_RATE → $CANDIDATE_TEST_PASS_RATE"
 
     if [ "$DRY_RUN" = false ]; then
       # Commit the improvement
       git add -A
-      git commit -m "auto-research [$FIXTURE]: score improved ${CURRENT_BEST_SCORE} → ${NEW_SCORE} (iteration ${ITERATION})" || {
+      git commit -m "auto-research [$FIXTURE]: total ${CURRENT_BEST_TOTAL} → ${CANDIDATE_TOTAL}, tpr ${CURRENT_BEST_TEST_PASS_RATE} → ${CANDIDATE_TEST_PASS_RATE} (iteration ${ITERATION})" || {
         echo "[loop] WARNING: git commit failed (no changes to commit?)"
       }
       echo "[loop] Committed improvement."
     else
-      echo "[loop] DRY RUN: would commit with message 'auto-research [$FIXTURE]: score improved ${CURRENT_BEST_SCORE} → ${NEW_SCORE} (iteration ${ITERATION})'"
+      echo "[loop] DRY RUN: would commit with message 'auto-research [$FIXTURE]: total ${CURRENT_BEST_TOTAL} → ${CANDIDATE_TOTAL} (iteration ${ITERATION})'"
     fi
 
-    CURRENT_BEST_SCORE="$NEW_SCORE"
+    CURRENT_BEST_TOTAL="$CANDIDATE_TOTAL"
+    CURRENT_BEST_TEST_PASS_RATE="$CANDIDATE_TEST_PASS_RATE"
     STREAK_WITHOUT_IMPROVEMENT=0
-    ITER_RESULT="improved"
+    ITER_RESULT="accepted"
   else
-    echo "[loop] ✗ Score did not improve: $CURRENT_BEST_SCORE → $NEW_SCORE"
+    echo "[loop] ✗ Rejected: $REJECT_REASON (total $CURRENT_BEST_TOTAL → $CANDIDATE_TOTAL, tpr $CURRENT_BEST_TEST_PASS_RATE → $CANDIDATE_TEST_PASS_RATE)"
 
     if [ "$DRY_RUN" = false ]; then
       echo "[loop] Reverting changes (git restore tracked files)..."
@@ -318,8 +403,13 @@ print('true' if new > old else 'false')
 {
   "iteration": $ITERATION,
   "fixture": "$FIXTURE",
-  "baselineScore": $CURRENT_BEST_SCORE,
-  "newScore": $NEW_SCORE,
+  "baselineTotal": $CURRENT_BEST_TOTAL,
+  "candidateTotal": $CANDIDATE_TOTAL,
+  "baselineTestPassRate": $CURRENT_BEST_TEST_PASS_RATE,
+  "candidateTestPassRate": $CANDIDATE_TEST_PASS_RATE,
+  "minImprovement": $MIN_IMPROVEMENT,
+  "accepted": $ACCEPTED,
+  "rejectReason": $REJECT_REASON,
   "result": "$ITER_RESULT",
   "dryRun": $DRY_RUN,
   "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -330,13 +420,19 @@ EOF
   python3 -c "
 import json
 state = json.load(open('$LOOP_RUN_DIR/loop-state.json'))
-state['currentBestScore'] = float('$CURRENT_BEST_SCORE')
+state['currentBestTotal'] = float('$CURRENT_BEST_TOTAL')
+state['currentBestTestPassRate'] = float('$CURRENT_BEST_TEST_PASS_RATE')
 state['totalIterations'] = $ITERATION
 state['iterations'].append({
     'iteration': $ITERATION,
     'fixture': '$FIXTURE',
-    'baselineScore': float('$CURRENT_BEST_SCORE'),
-    'newScore': float('$NEW_SCORE'),
+    'baselineTotal': float('$CURRENT_BEST_TOTAL'),
+    'candidateTotal': $CANDIDATE_TOTAL,
+    'baselineTestPassRate': float('$CURRENT_BEST_TEST_PASS_RATE'),
+    'candidateTestPassRate': $CANDIDATE_TEST_PASS_RATE,
+    'minImprovement': float('$MIN_IMPROVEMENT'),
+    'accepted': $ACCEPTED,
+    'rejectReason': $REJECT_REASON,
     'result': '$ITER_RESULT'
 })
 json.dump(state, open('$LOOP_RUN_DIR/loop-state.json', 'w'), indent=2)
@@ -355,22 +451,22 @@ echo "════════════════════════�
 echo "  Auto-Research Loop Complete"
 echo "  Fixture:          $FIXTURE"
 echo "  Iterations:       $ITERATION / $MAX_ITERATIONS"
-echo "  Baseline score:   $BASELINE_SCORE"
-echo "  Final best score: $CURRENT_BEST_SCORE"
+echo "  Baseline total:   $BASELINE_TOTAL"
+echo "  Baseline tpr:     $BASELINE_TEST_PASS_RATE"
+echo "  Final best total: $CURRENT_BEST_TOTAL"
+echo "  Final best tpr:   $CURRENT_BEST_TEST_PASS_RATE"
 echo "  Artifacts:        $LOOP_RUN_DIR"
 echo "═══════════════════════════════════════════════════════════════"
 
 # ─── Restore to clean state ─────────────────────────────────
 cd "$REPO_ROOT"
 
-if [ "$DRY_RUN" = true ]; then
-  # Clean up dry-run dummy change to src/cli.ts only.
-  echo "[loop] Cleaning up dry-run changes..."
-  git checkout -- src/cli.ts 2>/dev/null || true
-else
+if [ "$DRY_RUN" = false ]; then
   CURRENT_HEAD=$(git rev-parse HEAD)
   if [ "$CURRENT_HEAD" != "$INITIAL_HEAD" ]; then
     echo "[loop] Note: HEAD moved from $INITIAL_HEAD to $CURRENT_HEAD (improvements were committed)."
     echo "[loop] To restore original state: git checkout $INITIAL_HEAD"
   fi
+else
+  echo "[loop] Dry run complete — no source changes were made."
 fi
