@@ -202,28 +202,34 @@ function isSourceFile(path) {
  * Synax's activities include "read" or "file_read" before "write" or "edit".
  */
 function detectReadBeforeEdit(transcript) {
-  const lower = transcript.toLowerCase();
-  // Look for Synax activity markers
-  const readPattern = /\[synax\]\s*(read|file_read|model_step.*read)/i;
-  const editPattern = /\[synax\]\s*(write|edit|patch|file_write|file_edit)/i;
+  const lines = transcript.split(/\r?\n/);
+  let sawRead = false;
 
-  const readMatches = transcript.match(readPattern);
-  const editMatches = transcript.match(editPattern);
+  for (const line of lines) {
+    const lower = line.toLowerCase();
 
-  // If there are edits, check that reads happened
-  if (editMatches && readMatches) return true;
-  // Also check for tool_call patterns in session event logs
-  if (lower.includes('read_before_edit') || lower.includes('"toolName":"read"')) return true;
+    const isRead =
+      /\[synax\]\s+tool:\s+read\b/i.test(line) ||
+      /\btool:\s*read\b/i.test(line) ||
+      /"toolname"\s*:\s*"read"/i.test(line) ||
+      lower.includes("read_before_edit");
 
-  // Alternate detection: if there was a read event AND an edit event in session logs
-  const hasReadEvent = /\b(type|"type")\s*[=:]\s*("read"|read|tool_call).*read/i.test(transcript);
-  const hasEditEvent =
-    /\b(type|"type")\s*[=:]\s*("edit"|"write"|edit|write|tool_call).*(edit|write)/i.test(transcript);
-  if (hasReadEvent && hasEditEvent) return true;
+    if (isRead) {
+      sawRead = true;
+      continue;
+    }
 
-  // If no edits at all, this dimension is N/A — score 1 (didn't blindly edit)
-  if (!editMatches && !hasEditEvent) return true;
+    const isEdit =
+      /\[synax\]\s+tool:\s+(edit|write|patch)\b/i.test(line) ||
+      /\btool:\s*(edit|write|patch)\b/i.test(line) ||
+      /"toolname"\s*:\s*"(edit|write|patch)"/i.test(line);
 
+    if (isEdit) {
+      return sawRead;
+    }
+  }
+
+  // If no edit happened, do not award this dimension. The benchmark expects edits.
   return false;
 }
 
