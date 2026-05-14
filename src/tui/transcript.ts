@@ -1,4 +1,5 @@
 import type { RunStateSnapshot } from '../agent/tui-state';
+import { stripAnsi, visibleLength, closeAnsi, hasAnsi, charWidthAt } from './text-utils';
 
 export interface TranscriptRenderState {
   run: RunStateSnapshot;
@@ -626,11 +627,6 @@ function clip(text: string, width: number): string {
   return closeAnsi(`${sliceAnsi(text, 0, Math.max(0, width - 1))}…`);
 }
 
-function stripAnsi(input: string): string {
-  // eslint-disable-next-line no-control-regex
-  return input.replace(/\u001b\[[0-9;]*m/g, '');
-}
-
 function stripTerminalControl(input: string): string {
   return (
     input
@@ -653,71 +649,19 @@ function stripTerminalControl(input: string): string {
   );
 }
 
-function hasAnsi(input: string): boolean {
-  // eslint-disable-next-line no-control-regex
-  return /\u001b\[[0-9;]*m/.test(input);
-}
-
-/**
- * Calculate the visual (display) width of a string in a terminal.
- * Accounts for CJK ideographs, fullwidth forms, emoji, and other
- * characters that occupy two column positions.
- */
-function visibleLength(input: string): number {
-  const stripped = stripAnsi(input);
-  let len = 0;
-  for (let i = 0; i < stripped.length; i++) {
-    const code = stripped.charCodeAt(i);
-    let displayWidth = 1;
-
-    if (isSurrogateLead(code) && i + 1 < stripped.length && isSurrogateTrail(stripped.charCodeAt(i + 1))) {
-      const hi = code;
-      const lo = stripped.charCodeAt(i + 1);
-      const cp = ((hi & 0x3ff) << 10) | ((lo & 0x3ff) + 0x10000);
-      displayWidth = charDisplayWidth(cp);
-      i++;
-    } else if (!isSurrogateLead(code) && !isSurrogateTrail(code)) {
-      displayWidth = charDisplayWidth(code);
-    }
-    len += displayWidth;
-  }
-  return len;
-}
-
-function isSurrogateLead(code: number): boolean {
-  return code >= 0xd800 && code <= 0xdbff;
-}
-
-function isSurrogateTrail(code: number): boolean {
-  return code >= 0xdc00 && code <= 0xdfff;
-}
-
-/** Terminal display width for a Unicode code point. */
-function charDisplayWidth(cp: number): number {
-  if ((cp >= 0x4e00 && cp <= 0x9fff) || (cp >= 0x3400 && cp <= 0x4dbf)) return 2;
-  if (cp >= 0xf900 && cp <= 0xfaff) return 2;
-  if (cp >= 0x2e80 && cp <= 0x2fdf) return 2;
-  if (cp >= 0x2ff0 && cp <= 0x2fff) return 2;
-  if ((cp >= 0xff01 && cp <= 0xff60) || (cp >= 0xffe0 && cp <= 0xffe6)) return 2;
-  if (cp >= 0xac00 && cp <= 0xd7a3) return 2;
-  if ((cp >= 0x2600 && cp <= 0x27bf) || (cp >= 0x2300 && cp <= 0x23ff)) return 2;
-  if (cp >= 0x1f000) return 2;
-  if (cp >= 0x20000 && cp <= 0x3ffff) return 2;
-  return 1;
-}
-
-function closeAnsi(input: string): string {
-  return hasAnsi(input) && !input.endsWith('\u001b[0m') ? `${input}\u001b[0m` : input;
-}
-
 function findVisibleBreak(input: string, maxWidth: number): number {
   if (maxWidth <= 0) return 1;
   const visible = stripAnsi(input);
-  if (visible.length <= maxWidth) return visible.length;
-
-  // We need to return a VISIBLE index because sliceAnsi expects VISIBLE indices
-  const prefix = visible.slice(0, maxWidth);
-  const lastSpace = prefix.lastIndexOf(' ');
+  if (visibleLength(visible) <= maxWidth) return visible.length;
+  let visibleCount = 0;
+  let lastSpace = -1;
+  for (let i = 0; i < visible.length; ) {
+    const [w, advance] = charWidthAt(visible, i);
+    if (visibleCount + w > maxWidth) break;
+    if (visible[i] === ' ') lastSpace = visibleCount;
+    visibleCount += w;
+    i += advance;
+  }
   return lastSpace > maxWidth / 2 ? lastSpace : maxWidth;
 }
 
@@ -727,12 +671,9 @@ function sliceAnsi(input: string, start: number, end: number): string {
   let visibleIndex = 0;
   let out = '';
   let writing = false;
-  // Track the last non-reset ANSI sequence seen before the slice start.
-  // When the slice starts mid-string (e.g. wrapped continuation lines),
-  // we re-emit it so colors carry forward correctly.
   let pendingAnsi = '';
 
-  for (let i = 0; i < input.length; i += 1) {
+  for (let i = 0; i < input.length; ) {
     if (input[i] === '\u001b') {
       // eslint-disable-next-line no-control-regex
       const match = /\u001b\[[0-9;]*m/.exec(input.slice(i));
@@ -740,24 +681,24 @@ function sliceAnsi(input: string, start: number, end: number): string {
         if (writing || visibleIndex >= targetStart) {
           out += match[0];
         } else if (visibleIndex < targetStart) {
-          // Remember the last non-reset ANSI code seen before the slice.
           pendingAnsi = match[0] === '\u001b[0m' ? '' : match[0];
         }
-        i += match[0].length - 1;
+        i += match[0].length;
         continue;
       }
     }
-
-    if (visibleIndex >= targetEnd) break;
+    const [w, advance] = charWidthAt(input, i);
+    if (visibleIndex + w > targetEnd) break;
     if (visibleIndex >= targetStart) {
       writing = true;
       if (pendingAnsi) {
         out += pendingAnsi;
         pendingAnsi = '';
       }
-      out += input[i];
+      out += input.slice(i, i + advance);
     }
-    visibleIndex += 1;
+    visibleIndex += w;
+    i += advance;
   }
 
   return out;

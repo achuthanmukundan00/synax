@@ -93,6 +93,7 @@ export interface SynaxConfig {
   skills?: SkillsConfig;
   mcp?: McpConfig;
   tui?: TuiConfig;
+  /** @deprecated No longer consumed by the TUI. Kept for config compatibility. */
   coreVisualProfile?: string;
 }
 
@@ -147,6 +148,7 @@ export interface EffectiveSynaxConfig {
   skills: ResolvedSkillsConfig;
   mcp: ResolvedMcpConfig;
   tui?: ResolvedTuiConfig;
+  /** @deprecated No longer consumed by the TUI. Kept for config compatibility. */
   coreVisualProfile?: string;
   /** The source path that provided the effective config, or null for defaults. */
   source: string | null;

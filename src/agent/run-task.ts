@@ -60,6 +60,37 @@ export interface RunTaskReport {
 
 const execFileAsync = promisify(execFile);
 
+/** Detected subagent trigger from user task text. */
+interface SubagentTrigger {
+  active: boolean;
+  mode: 'parallel' | 'sequential' | 'auto';
+  cleanTask: string;
+}
+
+const SUBAGENT_TRIGGERS: Array<{ pattern: RegExp; mode: SubagentTrigger['mode'] }> = [
+  { pattern: /parallel\s+subagents?\b/i, mode: 'parallel' },
+  { pattern: /sequential\s+subagents?\b/i, mode: 'sequential' },
+  { pattern: /\bsubagents?\b/i, mode: 'auto' },
+];
+
+/**
+ * Detect explicit subagent trigger phrases in the user's task.
+ * Returns the trigger mode and the cleaned task text (trigger phrase removed).
+ * If no trigger is found, returns active=false.
+ */
+function detectSubagentTrigger(task: string): SubagentTrigger {
+  for (const trigger of SUBAGENT_TRIGGERS) {
+    if (trigger.pattern.test(task)) {
+      const cleanTask = task
+        .replace(trigger.pattern, '')
+        .replace(/\s{2,}/g, ' ')
+        .trim();
+      return { active: true, mode: trigger.mode, cleanTask: cleanTask || task };
+    }
+  }
+  return { active: false, mode: 'auto', cleanTask: task };
+}
+
 export async function runAgentTask(options: RunTaskOptions): Promise<RunTaskReport> {
   const projectConfig = loadProjectConfig(options.repoRoot);
   const mode = normalizeRunMode(options.mode);
@@ -188,15 +219,38 @@ export async function runAgentTask(options: RunTaskOptions): Promise<RunTaskRepo
     }
   }
 
-  // ── Orchestration: estimate budget, plan decomposition, execute if needed ──
+  // ── Orchestration: detect explicit triggers, or auto-estimate budget ──
   let turn: AgentTurnResult;
   let orchestrationUsed = false;
 
-  const estimate = await session.estimateTaskBudget(options.task);
-  const strategy = estimate.strategy as string;
+  const subagentTrigger = detectSubagentTrigger(options.task);
+  const effectiveTask = subagentTrigger.cleanTask;
 
-  if (strategy === 'orchestrate' || strategy === 'decompose') {
-    const planResult = await session.planOrchestratedTurn(options.task);
+  // Determine strategy: explicit trigger phrase overrides auto-estimation
+  let strategy: string;
+  let forceOrchestrate = false;
+  let forcedMode: 'parallel' | 'sequential' | undefined;
+
+  if (subagentTrigger.active) {
+    // User explicitly requested subagents via trigger phrase — force orchestration
+    strategy =
+      subagentTrigger.mode === 'parallel'
+        ? 'orchestrate (parallel)'
+        : subagentTrigger.mode === 'sequential'
+          ? 'orchestrate (sequential)'
+          : 'orchestrate';
+    forceOrchestrate = true;
+    if (subagentTrigger.mode === 'parallel' || subagentTrigger.mode === 'sequential') {
+      forcedMode = subagentTrigger.mode;
+    }
+  } else {
+    // Auto-detect strategy via budget estimation
+    const estimate = await session.estimateTaskBudget(options.task);
+    strategy = estimate.strategy as string;
+  }
+
+  if (forceOrchestrate || strategy === 'orchestrate' || strategy === 'decompose') {
+    const planResult = await session.planOrchestratedTurn(effectiveTask);
 
     if (planResult.success && planResult.plan.subTasks && planResult.plan.subTasks.length > 0) {
       const handoffManager = new HandoffManager();
@@ -208,7 +262,9 @@ export async function runAgentTask(options: RunTaskOptions): Promise<RunTaskRepo
         content: `Orchestrating task across ${planResult.plan.subTasks.length} sub-tasks (strategy: ${strategy})...`,
       });
 
-      const orchestrationResult = await OrchestrationManager.execute(planResult.plan, session, handoffManager);
+      const orchestrationResult = await OrchestrationManager.execute(planResult.plan, session, handoffManager, {
+        forcedMode: forceOrchestrate ? forcedMode : undefined,
+      });
 
       orchestrationUsed = true;
 
@@ -234,8 +290,11 @@ export async function runAgentTask(options: RunTaskOptions): Promise<RunTaskRepo
         },
         error: orchestrationResult.error,
       };
+    } else if (forceOrchestrate) {
+      // Plan failed for explicitly forced orchestration — fall back to inline with clean task
+      turn = await session.startTurnWithRecovery(effectiveTask);
     } else {
-      // Plan failed or returned inline — fall through to inline execution
+      // Auto-detection: plan failed or returned inline — fall through to inline execution
       turn = await session.startTurnWithRecovery(options.task);
     }
   } else {

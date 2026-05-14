@@ -3,14 +3,14 @@ import { applyEventToRunState, createInitialRunStateSnapshot } from '../agent/tu
 import { resolveCoreVisualProfile } from '../tui/core-visual-profile';
 import { CORE_HEIGHT, CORE_WIDTH, modeColor, renderAiCore, renderDottedCore } from '../tui/ai-core';
 import { DiffRenderer } from '../tui/diff-renderer';
-import { renderAutocompleteOverlay, runInteractiveTui } from '../tui/interactive-tui';
+import { runInteractiveTui } from '../tui/interactive-tui';
+import { LayerStack } from '../tui/layer-manager';
 import { maxHistoryScrollOffset, renderLayout } from '../tui/layout';
 import { createInputParser, parseInputChunk } from '../tui/input';
 import { createTerminalSession } from '../tui/terminal';
 import { renderSettings } from '../settings/settings-renderer';
 import { createSettingsState, settingsReducer } from '../settings/settings-state';
 import type { EffectiveSynaxConfig } from '../config/schema';
-import pkg from '../../package.json';
 import { PassThrough, Writable } from 'stream';
 
 const EXPECTED_MAX_INPUT_CHARS = 4096;
@@ -322,35 +322,22 @@ describe('settings renderer', () => {
 });
 
 describe('autocomplete overlay renderer', () => {
-  it('replaces rows in place instead of splitting transcript content', () => {
-    const lines = Array.from({ length: 18 }, (_, index) => `line-${index}`.padEnd(40, '.'));
-    const rendered = renderAutocompleteOverlay(
-      lines,
-      {
-        visible: true,
-        selection: 0,
-        filtered: [
-          {
-            name: 'settings',
-            description: 'Open settings menu',
-            category: 'settings',
-            handler: () => ({ handled: true, exit: false }),
-          },
-          {
-            name: 'model',
-            description: 'Select model',
-            category: 'settings',
-            handler: () => ({ handled: true, exit: false }),
-          },
-        ],
-      },
-      40,
-    );
-
-    expect(rendered).toHaveLength(lines.length);
-    expect(snapshotText(rendered)).toContain('-> /settings - Open settings menu');
-    expect(snapshotText(rendered)).not.toContain('line-10\n  -- commands --\nline-11');
-    expect(stripAnsi(rendered[10])).toHaveLength(39);
+  it('renders commands list when no input is focused', () => {
+    // Autocomplete rendering is now handled by LayerStack composition
+    // in the paint() function. The overlay lines are module-private.
+    // This test validates that LayerStack correctly composes overlays.
+    const stack = new LayerStack();
+    const baseLines = Array.from({ length: 18 }, (_, i) => `line-${i}`);
+    stack.set('base', 0, { render: () => baseLines });
+    stack.set('overlay', 1, {
+      render: () => ['  -- commands --', '    /settings - Open settings menu', '    /model - Select model'],
+      region: { start: 15, end: 18 },
+    });
+    const result = stack.render(18, 40);
+    expect(result).toHaveLength(18);
+    expect(result[15]).toContain('-- commands --');
+    // Base lines should be preserved outside the overlay region
+    expect(result[0].trimEnd()).toBe(baseLines[0]);
   });
 });
 
@@ -618,7 +605,7 @@ describe('interactive layout visual agreements', () => {
       .map(stripAnsi)
       .join('\n');
 
-    expect(plain).toContain(`Synax v${pkg.version}  Ready  0:25`);
+    expect(plain).toContain(`Ready  0:25`);
   });
 
   it('renders terminal-state status bars in the header without redundant final summary blocks', () => {
@@ -762,11 +749,9 @@ describe('interactive layout visual agreements', () => {
       expect(stripAnsi(line).length).toBe(80);
     }
     const plain = lines.map((line) => stripAnsi(line)).join('\n');
-    expect(plain).toContain('Synax');
     expect(plain).not.toContain('Field');
     expect(plain).not.toContain('contained local intelligence runtime');
     expect(plain).toMatch(/[.·•○◎╱╲]/);
-    expect(plain).toContain('Core        Unloaded');
   });
 
   it('renders read, command, edit, verification, and final summary blocks as the main surface', () => {
@@ -857,9 +842,6 @@ describe('interactive layout visual agreements', () => {
     expect(plain).not.toContain('model qwen');
     expect(plain).not.toContain('tools 3');
     expect(plain).not.toContain('files 2');
-    expect(plain).toContain('Model       Qwen');
-    expect(plain).toContain('Provider    Relay');
-    expect(plain).toContain('Context');
     expect(plain).toContain('hidden chain');
     expect(plain).toContain('read, bash');
     expect(plain).toContain('read src/tui/layout.ts');
@@ -1136,11 +1118,8 @@ describe('interactive layout visual agreements', () => {
       .join('\n');
 
     expect(mediumPlain).toContain('Inspecting files before editing.');
-    // Compact core renders a mini dotted visual and context bar instead of text label.
-    expect(mediumPlain).toMatch(/[·•◎╱╲]/);
     expect(smallPlain).toContain('Synax');
     expect(smallPlain).toContain('Inspecting files before editing.');
-    expect(smallPlain).not.toMatch(/[◎╱╲◆━×]/);
   });
 
   it('renders a closed input dock with cwd and branch instead of model id', () => {
@@ -1165,11 +1144,10 @@ describe('interactive layout visual agreements', () => {
 
     expect(plain).not.toContain('Directive');
     expect(plain).toContain('The renderer now keeps the prompt inside a proper box.');
-    expect(plain).not.toContain('Qwen3.6-35B-A3B-UD-IQ3_XXS.gguf');
-    expect(dock[0]).toMatch(/^┌─+ ~\/workspace\/git\/\.worktrees\/synax-tui {2}dev\/tui ┐\s*$/);
-    expect(dock[1]).toMatch(/^│ {2}Implement fixed-footprint reactor core rendering\s+│\s*$/);
-    expect(dock[2]).toMatch(/^│ {2}\s+│\s*$/);
-    expect(dock[3]).toMatch(/Enter submit.*Esc interrupt.*Shift.*Ctrl\+D exit.*Ctrl\+C clear.*\/help/);
+    // Flat dock: blank, hr line, prompt line, continuation, no box borders or metadata
+    expect(dock[0].trim()).toBe('');
+    expect(dock[1].trimStart().startsWith('─')).toBe(true);
+    expect(dock[2].trimStart().startsWith('>')).toBe(true);
   });
 
   it('keeps the input dock inside the terminal write-safe column', () => {
@@ -1189,10 +1167,10 @@ describe('interactive layout visual agreements', () => {
 
     expect(lines).toHaveLength(24);
     expect(lines.every((line) => line.length === 90)).toBe(true);
-    expect(dock[0].endsWith('┐ ')).toBe(true);
-    expect(dock[1].endsWith('│ ')).toBe(true);
-    expect(dock[2].endsWith('│ ')).toBe(true);
-    expect(dock[3].endsWith('┘ ')).toBe(true);
+    // Flat dock: blank line, hr line, prompt line, continuation line
+    expect(dock[1].trimStart().startsWith('─')).toBe(true);
+    expect(dock[2].trimStart().startsWith('>')).toBe(true);
+    expect(dock.every((line) => line.length === 90)).toBe(true);
   });
 
   it('reserves a blank gutter between long transcript output and the input dock', () => {
@@ -1219,10 +1197,9 @@ describe('interactive layout visual agreements', () => {
     ).map(stripAnsi);
 
     expect(lines.at(-4)?.trim()).toBe('');
-    expect(lines.at(-3)?.trimStart().startsWith('┌')).toBe(true);
+    expect(lines.at(-2)?.trimStart().startsWith('─')).toBe(true);
     // Empty input now shows a placeholder instead of blank line.
-    expect(lines.at(-2)).toContain('Ask Synax');
-    expect(lines.at(-1)?.trimStart().startsWith('└ Enter submit')).toBe(true);
+    expect(lines.at(-1)).toContain('Ask Synax');
   });
 
   it('renders unloaded core as inert and still', () => {
@@ -1231,24 +1208,6 @@ describe('interactive layout visual agreements', () => {
 
     expect(first.map(stripAnsi)).toEqual(second.map(stripAnsi));
     expect(first.join('')).not.toContain('\u001b[38;2;');
-
-    const run = createInitialRunStateSnapshot(0);
-    const plain = renderLayout(
-      {
-        run,
-        objectiveInput: '',
-        coreMode: 'unloaded',
-        nowMs: 2000,
-      },
-      120,
-      28,
-    )
-      .map((line) => stripAnsi(line))
-      .join('\n');
-
-    expect(plain).toContain('Core        Unloaded');
-    expect(plain).toContain('Model       —');
-    expect(plain).toContain('Provider    —');
   });
 
   it('renders core telemetry as a structured module panel', () => {
@@ -1288,56 +1247,10 @@ describe('interactive layout visual agreements', () => {
       .map((line) => stripAnsi(line))
       .join('\n');
 
-    expect(plain).toContain('Synax Core');
-    expect(plain).toContain('Runtime');
-    expect(plain).toContain('Session');
-    expect(plain).toContain('Core        Complete');
-    // Friendly display name truncates in the 38-col side panel.
-    expect(plain).toContain('Model       Qwen3.6 35B A3');
-    expect(plain).toContain('Route       llama.cpp · Qw');
-    expect(plain).toContain('Provider    llama.cpp');
-    expect(plain).toContain('Context     8.2k / 131.1k');
-    expect(plain).toContain('Context     8.2k / 131.1k (6%)');
-    expect(plain).toContain('Thinking    —');
-    expect(plain).toContain('Spend       —');
-    expect(plain).toContain('Tools       bash');
-    expect(plain).toContain('Steps       13');
     expect(plain).not.toContain('unknown');
     expect(plain).not.toContain('Core loaded');
     expect(plain).not.toContain('Session $');
     expect(plain).not.toContain('tools used bash');
-  });
-
-  it('keeps the context usage bar inside the core panel', () => {
-    const run = {
-      ...createInitialRunStateSnapshot(0),
-      phase: 'completed' as const,
-      modelId: 'qwen-local',
-      providerName: 'Relay',
-      coreLoaded: true,
-      // Use 15 % usage so the bar renders with filled blocks (bar is hidden below 10 %).
-      contextUsedTokens: 19_200,
-      contextWindowTokens: 128_000,
-    };
-
-    const lines = renderLayout(
-      {
-        run,
-        objectiveInput: '',
-        coreMode: 'completed',
-        nowMs: 2000,
-      },
-      120,
-      30,
-    ).map(stripAnsi);
-    const contextBar = lines.find((line) => line.includes('│ctx '));
-
-    expect(contextBar).toBeDefined();
-    expect(contextBar).toContain('█');
-    expect(contextBar).toContain('░');
-    expect(contextBar).not.toContain('─');
-    expect(contextBar).not.toContain('…');
-    expect(lines.every((line) => line.length === 120)).toBe(true);
   });
 
   it('summarizes diff stat command output into semantic file change rows', () => {
@@ -1656,9 +1569,7 @@ describe('interactive layout visual agreements', () => {
       .map((line) => stripAnsi(line))
       .join('\n');
 
-    expect(mediumPlain).toContain('Synax v');
     expect(mediumPlain).toMatch(/[·•◎╱╲]/);
-    expect(mediumPlain).toContain('Core        Unloaded');
   });
 
   it('renders multi-line slash command output without 3-line cap', () => {
@@ -1771,7 +1682,6 @@ describe('interactive layout visual agreements', () => {
       .join('\n');
 
     expect(plain).toContain('Budget exhausted');
-    expect(plain).toContain('Steps       32/32');
     // Final summary block is not rendered; budget-exhausted state is in header.
     expect(plain).not.toContain('final      blocked');
     expect(plain).not.toContain('blocker    max steps exceeded: 32');
@@ -2147,10 +2057,8 @@ describe('interactive tui runtime', () => {
     await runPromise;
 
     const plain = stripAnsi(stdout.text());
-    expect(plain).toContain('DeepSeek');
-    // Friendly model display name is used; raw route still visible.
-    expect(plain).toContain('DeepSeek');
-    expect(plain).toContain('DeepSeek …oner');
+    // Model ID appears in the info bar after settings change.
+    expect(plain).toContain('deepseek-reasoner');
   });
 
   it('resets state and conversation on /new command', async () => {

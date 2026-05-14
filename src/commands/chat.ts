@@ -935,7 +935,6 @@ export function chatCommand(program: Command): void {
             cwdLabel,
             gitBranch,
             contextWindowTokens: loaded.config.contextWindowTokens ?? loaded.config.contextBudgetTokens,
-            coreVisualProfile: loaded.config.coreVisualProfile,
             coreLoaded: true,
             activeSkills: skillDiagnostics?.filter((d) => d.loaded).map((d) => d.id),
             inputPricePer1MTokens: metadata.inputPricePer1MTokens,
@@ -961,7 +960,6 @@ export function chatCommand(program: Command): void {
                   providerNameFromPreset(loaded.config.provider?.preset),
                 contextWindowTokens:
                   activeModel?.contextWindow ?? loaded.config.contextWindowTokens ?? loaded.config.contextBudgetTokens,
-                coreVisualProfile: loaded.config.coreVisualProfile,
                 thinkingEnabled: nextThinkingLevel !== 'off',
                 coreLoaded: true,
                 providerWarning: nextBlockedMessage,

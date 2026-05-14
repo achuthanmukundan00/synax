@@ -12,6 +12,8 @@ import { DiffRenderer } from './diff-renderer';
 import { inputCursorPosition, maxHistoryScrollOffset, renderLayout, type InteractiveViewState } from './layout';
 import { createInputParser, MAX_INPUT_CHARS } from './input';
 import { createTerminalSession, type InputStreamLike, type TerminalSession } from './terminal';
+import { terminalWriteWidth, padAnsi } from './text-utils';
+import { LayerStack } from './layer-manager';
 import type { Writable } from 'node:stream';
 import type { CoreMode } from './ai-core';
 import {
@@ -38,29 +40,23 @@ import {
 import { loadSynaxConfig, persistConfig } from '../config/load-config';
 import type { EffectiveSynaxConfig } from '../config/schema';
 
-export function renderAutocompleteOverlay(
-  lines: string[],
+/** Return overlay lines for the autocomplete list (composited by LayerStack). */
+function renderAutocompleteOverlayLines(
   ac: { visible: boolean; selection: number; filtered: SlashCommand[] },
   width: number,
 ): string[] {
-  if (!ac.visible || ac.filtered.length === 0) return lines;
+  if (!ac.visible || ac.filtered.length === 0) return [];
 
   const renderWidth = terminalWriteWidth(width);
   const overlayLines: string[] = [];
-  overlayLines.push(dim('  -- commands --'));
+  overlayLines.push(padAnsi(dim('  -- commands --'), renderWidth));
   for (let i = 0; i < Math.min(ac.filtered.length, 8); i += 1) {
     const cmd = ac.filtered[i];
     const desc = cmd.description ? ` - ${cmd.description}` : '';
     const text = `${i === ac.selection ? bold(` -> /${cmd.name}${desc}`) : dim(`    /${cmd.name}${desc}`)}`;
-    overlayLines.push(text);
+    overlayLines.push(padAnsi(text, renderWidth));
   }
-
-  const insertAt = Math.max(0, lines.length - 5 - overlayLines.length);
-  const rendered = lines.slice();
-  for (let i = 0; i < overlayLines.length && insertAt + i < rendered.length; i += 1) {
-    rendered[insertAt + i] = padAnsi(clipAnsi(overlayLines[i], renderWidth), renderWidth);
-  }
-  return rendered;
+  return overlayLines;
 }
 
 export async function runInteractiveTui(
@@ -89,8 +85,6 @@ export async function runInteractiveTui(
     contextWindowTokens?: number;
     /** Names of loaded skills currently active for the session. */
     activeSkills?: string[];
-    /** Override core visual profile: 'model' (auto-detect), 'default', 'qwen', 'openai', 'claude', 'deepseek', 'gemini'. */
-    coreVisualProfile?: string;
     /** Whether the active provider/model can be queried right now. */
     coreLoaded?: boolean;
     /** Price per 1M input tokens for cost display. */
@@ -109,7 +103,6 @@ export async function runInteractiveTui(
       endpointLabel?: string;
       providerName?: string;
       contextWindowTokens?: number;
-      coreVisualProfile?: string;
       coreLoaded?: boolean;
       providerWarning?: string;
       inputPricePer1MTokens?: number;
@@ -176,7 +169,6 @@ export async function runInteractiveTui(
     endpointLabel: options?.endpointLabel,
     providerName: options?.providerName,
     contextWindowTokens: options?.contextWindowTokens,
-    coreVisualProfile: options?.coreVisualProfile,
     coreLoaded: true,
     inputPricePer1MTokens: options?.inputPricePer1MTokens,
     outputPricePer1MTokens: options?.outputPricePer1MTokens,
@@ -234,7 +226,6 @@ export async function runInteractiveTui(
     endpointLabel: runtimeLabels.endpointLabel,
     cwdLabel: options?.cwdLabel ?? process.cwd(),
     gitBranch: options?.gitBranch,
-    coreVisualProfile: runtimeLabels.coreVisualProfile,
     historyScrollOffset,
     inputCursorOffset: inputDraft.getCursorOffset(),
     steeringMessage: steeringActive ? steeringMessage : undefined,
@@ -252,49 +243,75 @@ export async function runInteractiveTui(
     if (externalRendererActive) return;
     clampHistoryScroll();
 
-    // Settings modal takes over the entire screen
+    // Use LayerStack for compositing base layout + overlays + modals
+    const viewStateSnapshot = viewState();
+    const cols = terminal.columns;
+    const rows = terminal.rows;
+    const layerStack = new LayerStack();
+
+    // Settings modal takes over the entire screen (z=2 replace layer)
     if (settingsState?.active) {
-      const settingsLines = renderSettings(settingsState, terminal.columns, terminal.rows);
-      const out = diff.render(settingsLines, terminal.columns, terminal.rows);
-      if (out || force) terminal.synchronizedWrite(out || '');
-      terminal.write('\u001b[?25l');
-      return;
+      const modal = settingsState; // non-null after active guard
+      layerStack.set('settings', 2, {
+        render: () => renderSettings(modal, cols, rows),
+      });
+    } else {
+      layerStack.remove('settings');
     }
 
-    // Resume picker takes over the entire screen
+    // Resume picker takes over the entire screen (z=2 replace layer)
     if (resumeState?.active) {
-      const resumeLines = renderResumePicker(resumeState, terminal.columns, terminal.rows);
-      const out = diff.render(resumeLines, terminal.columns, terminal.rows);
-      if (out || force) terminal.synchronizedWrite(out || '');
-      terminal.write('\u001b[?25l');
-      return;
+      const picker = resumeState; // non-null after active guard
+      layerStack.set('resume', 2, {
+        render: () => renderResumePicker(picker, cols, rows),
+      });
+    } else {
+      layerStack.remove('resume');
     }
 
-    let lines = renderLayout(viewState(), terminal.columns, terminal.rows);
+    // Base layout only renders when no modal is active
+    if (!settingsState?.active && !resumeState?.active) {
+      layerStack.set('base', 0, {
+        render: () => renderLayout(viewStateSnapshot, cols, rows),
+      });
 
-    // Render autocomplete overlay at the bottom of the input area
-    if (autocomplete.visible && autocomplete.filtered.length > 0) {
-      lines = renderAutocompleteOverlay(lines, autocomplete, terminal.columns);
+      // Render autocomplete overlay at the bottom of the input area
+      if (autocomplete.visible && autocomplete.filtered.length > 0) {
+        const acOverlayLines = renderAutocompleteOverlayLines(autocomplete, cols);
+        layerStack.set('autocomplete', 1, {
+          render: () => acOverlayLines,
+          region: { start: Math.max(0, rows - acOverlayLines.length - 2), end: rows },
+        });
+      } else {
+        layerStack.remove('autocomplete');
+      }
+    } else {
+      layerStack.remove('base');
+      layerStack.remove('autocomplete');
     }
 
-    const out = diff.render(lines, terminal.columns, terminal.rows);
+    const lines = layerStack.render(rows, cols);
+    const out = diff.render(lines, cols, rows);
     if (out || force) {
       terminal.synchronizedWrite(out || '');
     }
 
-    // Always reposition cursor, even when the diff renderer returned empty
-    // (e.g. cursor moved via arrow keys while text content didn't change).
-    const cursor = inputCursorPosition(
-      viewState().objectiveInput,
-      terminal.columns,
-      terminal.rows,
-      undefined,
-      viewState().inputCursorOffset,
-      steeringActive,
-    );
-    // Terminal cursor positions are 1-indexed. Use beam cursor style to avoid
-    // overwriting the first character of placeholder text.
-    terminal.write(`\u001b[${cursor.row + 1};${cursor.col + 1}H\u001b[5 q\u001b[?25h`);
+    // Reposition cursor only when no modal is active (modals have their own cursor handling)
+    if (!settingsState?.active && !resumeState?.active) {
+      const cursor = inputCursorPosition(
+        viewStateSnapshot.objectiveInput,
+        cols,
+        rows,
+        undefined,
+        viewStateSnapshot.inputCursorOffset,
+        steeringActive,
+      );
+      // Terminal cursor positions are 1-indexed. Use beam cursor style to avoid
+      // overwriting the first character of placeholder text.
+      terminal.write(`\u001b[${cursor.row + 1};${cursor.col + 1}H\u001b[5 q\u001b[?25h`);
+    } else {
+      terminal.write('\u001b[?25l');
+    }
   };
 
   const finish = (): void => {
@@ -1305,46 +1322,6 @@ function bold(text: string): string {
 
 function dim(text: string): string {
   return `\u001b[90m${text}\u001b[0m`;
-}
-
-function stripAnsi(text: string): string {
-  // eslint-disable-next-line no-control-regex
-  return text.replace(/\u001b\[[0-9;]*[a-zA-Z]/g, '');
-}
-
-function padAnsi(text: string, width: number): string {
-  const visible = stripAnsi(text).length;
-  if (visible >= width) return text;
-  return `${text}${' '.repeat(width - visible)}`;
-}
-
-function clipAnsi(text: string, width: number): string {
-  const visible = stripAnsi(text);
-  if (visible.length <= width) return text;
-
-  const target = Math.max(0, width - 1);
-  let visibleCount = 0;
-  let out = '';
-  for (let i = 0; i < text.length; i += 1) {
-    if (text[i] === '\u001b') {
-      // eslint-disable-next-line no-control-regex
-      const match = /\u001b\[[0-9;]*[a-zA-Z]/.exec(text.slice(i));
-      if (match) {
-        out += match[0];
-        i += match[0].length - 1;
-        continue;
-      }
-    }
-
-    if (visibleCount >= target) break;
-    out += text[i];
-    visibleCount += 1;
-  }
-  return `${out}…`;
-}
-
-function terminalWriteWidth(width: number): number {
-  return width > 1 ? width - 1 : width;
 }
 
 function inferToolExecutionMode(state: RunStateSnapshot): CoreMode {
