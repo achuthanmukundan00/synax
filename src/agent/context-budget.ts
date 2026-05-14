@@ -16,6 +16,8 @@ export interface ContextBudgetSettings {
   strategyReserveTokens?: number;
   /** Strategy-based window override for 'off' mode (internal). */
   strategyWindowOverride?: number;
+  /** Context strategy mode for tuning compaction behavior. */
+  strategyMode?: 'aggressive' | 'moderate' | 'light' | 'none' | 'off';
 }
 
 export interface CompactionRecord {
@@ -74,6 +76,8 @@ export function resolveContextBudgetSettings(config: {
   strategyReserveTokens?: number;
   /** Strategy-based window override (for 'off' mode). */
   strategyWindowOverride?: number;
+  /** Strategy mode for compaction tuning. */
+  strategyMode?: 'aggressive' | 'moderate' | 'light' | 'none' | 'off';
 }): ContextBudgetSettings {
   const contextWindowTokens =
     config.strategyWindowOverride ??
@@ -93,6 +97,7 @@ export function resolveContextBudgetSettings(config: {
       config.maxTotalReadResultTokensPerTurn ?? DEFAULT_SETTINGS.maxTotalReadResultTokensPerTurn,
     keepRecentToolTurns: config.keepRecentToolTurns ?? DEFAULT_SETTINGS.keepRecentToolTurns,
     assemblyCompactionThreshold: config.assemblyCompactionThreshold ?? 0.8,
+    strategyMode: config.strategyMode,
   };
 }
 
@@ -241,8 +246,19 @@ export interface CompactionResult {
 export function compactMessagesMultiStage(messages: AgentMessage[], settings: ContextBudgetSettings): CompactionResult {
   const effectiveLimit = settings.contextWindowTokens - settings.reservedOutputTokens;
 
+  // Strategy: none/off — skip all compaction entirely
+  if (settings.strategyMode === 'none' || settings.strategyMode === 'off') {
+    const tokensAfter = estimateRequestTokens(messages);
+    return { activeMessages: messages, compaction: null, stage: 0, tokensAfter };
+  }
+
+  // Strategy: light — deterministic dedup + strip noise only (stage 0), no summarization
+  if (settings.strategyMode === 'light') {
+    return runDeterministicCompaction(messages);
+  }
+
+  // Strategy: aggressive/moderate/undefined — full multi-stage with deterministic pre-pass
   // Stage 0: deterministic zero-token compression
-  // Only run for aggressive/moderate strategies; skip for light/none
   const skipDeterministic = settings.strategyReserveTokens !== undefined && settings.strategyReserveTokens >= 32768;
   if (!skipDeterministic) {
     const compactor = new DeterministicCompactor();
@@ -380,6 +396,45 @@ function failCompact(
     compaction: null,
     stage,
     tokensAfter: tokens,
+  };
+}
+
+/**
+ * Run deterministic compaction only (stage 0).
+ * Used by 'light' strategy — dedup + strip noise, no summarization.
+ * Always returns a result without falling through to stages 1-4.
+ */
+function runDeterministicCompaction(messages: AgentMessage[]): CompactionResult {
+  const compactor = new DeterministicCompactor();
+  const compacted = compactor.compact(messages);
+  const tokensAfter = estimateRequestTokens(messages);
+
+  if (compacted.stats.savedTokens > 0) {
+    return {
+      activeMessages: messages,
+      compaction: {
+        type: 'compaction',
+        stage: 0,
+        summary: `Deterministic compaction saved ${compacted.stats.savedTokens} tokens`,
+        firstKeptEntryId: 'deterministic',
+        tokensBefore: compacted.stats.originalTokens,
+        tokensAfter: compacted.stats.afterTokens,
+        createdAt: new Date().toISOString(),
+      },
+      stage: 0,
+      tokensAfter,
+      deterministicStats: {
+        savedTokens: compacted.stats.savedTokens,
+        techniques: compacted.stats.techniques,
+      },
+    };
+  }
+
+  return {
+    activeMessages: messages,
+    compaction: null,
+    stage: 0,
+    tokensAfter,
   };
 }
 
@@ -901,6 +956,18 @@ export function assembleModelMessages(
 
   if (messages.length === 0) return { messages: [], stats };
 
+  // 'none' and 'off' strategies: skip all tool result compaction
+  if (settings.strategyMode === 'none' || settings.strategyMode === 'off') {
+    stats.totalMessagesOut = messages.length;
+    stats.estimatedTokensOut = stats.estimatedTokensIn;
+    return { messages: [...messages], stats };
+  }
+
+  // For 'light' strategy: compute oversized threshold (25% of effective window)
+  const shouldSkipOldResultCompaction = settings.strategyMode === 'light';
+  const effectiveLimit = settings.contextWindowTokens - settings.reservedOutputTokens;
+  const lightOversizedThreshold = Math.max(50, Math.floor(effectiveLimit * 0.25));
+
   // Step 1: Find recent tool turns (count from the end backward)
   const toolTurnIndices = findToolTurnIndices(messages);
   const recentTurnStartIndex =
@@ -940,17 +1007,33 @@ export function assembleModelMessages(
         }
         result.push(msg);
       } else {
-        // Old tool result: compact
-        const compacted = compactToolResultMessage(msg, ledger, readCounts);
-        if (compacted) {
-          result.push(compacted);
-          stats.compactedToolResults += 1;
-          // Track which file paths are compacted out of model view
-          const filePath = extractFilePathFromToolMessage(msg);
-          if (filePath) stats.compactedFilePaths.push(filePath);
-        } else {
-          // If we can't compact (unparseable), keep original but flag
+        // Old tool result
+        if (shouldSkipOldResultCompaction) {
+          // Light strategy: keep old results verbatim unless truly enormous (>25% of window)
+          if (estimateMessageTokens(msg) > lightOversizedThreshold) {
+            const compacted = compactToolResultMessage(msg, ledger, readCounts);
+            if (compacted) {
+              result.push(compacted);
+              stats.compactedToolResults += 1;
+              const filePath = extractFilePathFromToolMessage(msg);
+              if (filePath) stats.compactedFilePaths.push(filePath);
+              continue;
+            }
+          }
           result.push(msg);
+        } else {
+          // Aggressive/moderate/default: compact old tool results to structured summaries
+          const compacted = compactToolResultMessage(msg, ledger, readCounts);
+          if (compacted) {
+            result.push(compacted);
+            stats.compactedToolResults += 1;
+            // Track which file paths are compacted out of model view
+            const filePath = extractFilePathFromToolMessage(msg);
+            if (filePath) stats.compactedFilePaths.push(filePath);
+          } else {
+            // If we can't compact (unparseable), keep original but flag
+            result.push(msg);
+          }
         }
       }
       continue;
@@ -1020,6 +1103,7 @@ function compactToolResultMessage(
 
   const toolResult = parsed as { success?: boolean; toolName?: string; output?: unknown; error?: string };
   const summary = summarizeToolOutput(toolResult.toolName ?? 'unknown', toolResult.output, ledger, readCounts);
+  const summaryContent = (summary?.contentSummary as string | undefined) ?? '';
 
   return {
     role: msg.role,
@@ -1031,6 +1115,9 @@ function compactToolResultMessage(
       error: toolResult.error,
       output: summary,
       _compacted: true,
+      contentSummary: summaryContent
+        ? `Previous ${toolResult.toolName} result was compacted. ${summaryContent}`
+        : `Previous ${toolResult.toolName} result was compacted to save context space. The metadata is authoritative — re-run the tool for full output.`,
     }),
   };
 }
@@ -1108,6 +1195,7 @@ function summarizeReadOutput(out: Record<string, unknown>, readCounts?: Map<stri
   if (omitted) {
     summary.omitted = true;
     summary.reason = out.reason ?? 'budget';
+    summary.contentSummary = `File read for "${path ?? 'unknown'}" was omitted (reason: ${summary.reason}).`;
     return summary;
   }
 
@@ -1115,6 +1203,24 @@ function summarizeReadOutput(out: Record<string, unknown>, readCounts?: Map<stri
     summary.lines = `${startLine}-${endLine}${totalLines !== undefined ? `/${totalLines}` : ''}`;
   } else if (totalLines !== undefined) {
     summary.totalLines = totalLines;
+  }
+
+  // Build natural language summary for the model
+  if (path) {
+    if (startLine !== undefined && endLine !== undefined) {
+      const lineInfo =
+        totalLines !== undefined ? `lines ${startLine}-${endLine} of ${totalLines}` : `lines ${startLine}-${endLine}`;
+      summary.contentSummary = `File "${path}" ${lineInfo} were read earlier. Use the read tool to re-read if needed.`;
+    } else if (totalLines !== undefined) {
+      summary.contentSummary = `File "${path}" (${totalLines} lines total) was read earlier. Use the read tool to re-read if needed.`;
+    } else {
+      summary.contentSummary = `File "${path}" was read earlier. Use the read tool to re-read if needed.`;
+    }
+    if (truncated) {
+      summary.contentSummary += ' (output was truncated).';
+    }
+  } else {
+    summary.contentSummary = 'A file read was performed earlier (path unknown).';
   }
 
   if (estimatedTokens !== undefined) {
@@ -1148,12 +1254,19 @@ function summarizeListOutput(out: Record<string, unknown>): Record<string, unkno
   if (files) {
     summary.fileCount = files.length;
     summary.topFiles = files.slice(0, 20);
+    summary.contentSummary = `Directory listing for "${path ?? 'unknown'}" — ${files.length} file(s).`;
   } else if (entries) {
     summary.entryCount = entries.length;
     summary.topEntries = entries.slice(0, 20).map((e) => e.name);
+    summary.contentSummary = `Directory listing for "${path ?? 'unknown'}" — ${entries.length} entries.`;
+  } else {
+    summary.contentSummary = `Directory listing for "${path ?? 'unknown'}" was performed earlier.`;
   }
 
-  if (truncated) summary.truncated = true;
+  if (truncated) {
+    summary.truncated = true;
+    summary.contentSummary += ' Results were truncated.';
+  }
 
   return summary;
 }
@@ -1162,34 +1275,48 @@ function summarizeSearchOutput(out: Record<string, unknown>): Record<string, unk
   const query = typeof out.query === 'string' ? out.query : undefined;
   const matches = Array.isArray(out.matches) ? (out.matches as unknown[]) : undefined;
   const truncated = !!out.truncated;
+  const matchCount = matches?.length ?? 0;
+
+  const contentSummary = query
+    ? `Searched for "${query}" — ${matchCount} match(es). Use read or search_text to fetch full content if needed.`
+    : `Text search returned ${matchCount} match(es).`;
 
   return {
     query,
-    matchCount: matches?.length ?? 0,
+    matchCount,
     truncated,
     _compacted: true,
+    contentSummary: truncated ? contentSummary + ' Results were truncated.' : contentSummary,
   };
 }
 
 function summarizeGitStatusOutput(out: Record<string, unknown>): Record<string, unknown> {
   const status = Array.isArray(out.status) ? (out.status as string[]) : undefined;
   const truncated = !!out.truncated;
+  const lineCount = status?.length ?? 0;
+
+  const contentSummary = `Git status had ${lineCount} change(s). Use read or bash to inspect details if needed.`;
 
   return {
-    lineCount: status?.length ?? 0,
+    lineCount,
     truncated,
     _compacted: true,
+    contentSummary: truncated ? contentSummary + ' (truncated).' : contentSummary,
   };
 }
 
 function summarizeGitDiffOutput(out: Record<string, unknown>): Record<string, unknown> {
   const diff = Array.isArray(out.diff) ? (out.diff as string[]) : undefined;
   const truncated = !!out.truncated;
+  const lineCount = diff?.length ?? 0;
+
+  const contentSummary = `Git diff was ${lineCount} line(s). Use bash (git diff) or read to inspect details if needed.`;
 
   return {
-    lineCount: diff?.length ?? 0,
+    lineCount,
     truncated,
     _compacted: true,
+    contentSummary: truncated ? contentSummary + ' (truncated).' : contentSummary,
   };
 }
 
@@ -1225,6 +1352,9 @@ function summarizeBashOutput(out: Record<string, unknown>): Record<string, unkno
     safetyWarnings,
     _compacted: true,
     _compactionReason: `output exceeds ${FULL_OUTPUT_THRESHOLD} bytes`,
+    contentSummary: command
+      ? `Bash command "${command}" exited with code ${exitCode ?? '?'} and produced ${totalBytes} byte(s) of output. Use bash to re-run if needed.`
+      : `Bash command produced ${totalBytes} byte(s) of output.`,
   };
 }
 
