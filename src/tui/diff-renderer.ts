@@ -55,7 +55,7 @@ function clip(line: string, width: number): string {
   for (let i = 0; i < line.length; i += 1) {
     if (line[i] === '\u001b') {
       // eslint-disable-next-line no-control-regex
-      const match = /\u001b\[[0-9;]*m/.exec(line.slice(i));
+      const match = /\u001b\[[0-9;]*[a-zA-Z]/.exec(line.slice(i));
       if (match) {
         out += match[0];
         i += match[0].length - 1;
@@ -79,12 +79,12 @@ function closeAnsi(input: string): string {
 
 function hasAnsi(input: string): boolean {
   // eslint-disable-next-line no-control-regex
-  return /\u001b\[[0-9;]*m/.test(input);
+  return /\u001b\[[0-9;]*[a-zA-Z]/.test(input);
 }
 
 function stripAnsi(line: string): string {
   // eslint-disable-next-line no-control-regex
-  return line.replace(/\u001b\[[0-9;]*m/g, '');
+  return line.replace(/\u001b\[[0-9;]*[a-zA-Z]/g, '');
 }
 
 function terminalWriteWidth(width: number): number {

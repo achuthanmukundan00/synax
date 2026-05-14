@@ -1309,7 +1309,7 @@ function dim(text: string): string {
 
 function stripAnsi(text: string): string {
   // eslint-disable-next-line no-control-regex
-  return text.replace(/\u001b\[[0-9;]*m/g, '');
+  return text.replace(/\u001b\[[0-9;]*[a-zA-Z]/g, '');
 }
 
 function padAnsi(text: string, width: number): string {
@@ -1328,7 +1328,7 @@ function clipAnsi(text: string, width: number): string {
   for (let i = 0; i < text.length; i += 1) {
     if (text[i] === '\u001b') {
       // eslint-disable-next-line no-control-regex
-      const match = /\u001b\[[0-9;]*m/.exec(text.slice(i));
+      const match = /\u001b\[[0-9;]*[a-zA-Z]/.exec(text.slice(i));
       if (match) {
         out += match[0];
         i += match[0].length - 1;
