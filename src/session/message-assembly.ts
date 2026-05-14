@@ -70,7 +70,18 @@ export function buildModelRequest(
 
   const effectiveLimit = settings.contextWindowTokens - settings.reservedOutputTokens;
   const estimatedTokens = estimateRequestTokens(baseMessages);
-  const threshold = settings.assemblyCompactionThreshold ?? 0.8;
+
+  // Strategy-aware compaction threshold:
+  // - 'none'/'off': never compact proactively (threshold = 1.0)
+  // - 'light': rarely compact proactively (threshold = 0.95)
+  // - default: existing behavior (threshold = 0.8)
+  const baseThreshold = settings.assemblyCompactionThreshold ?? 0.8;
+  const threshold =
+    settings.strategyMode === 'none' || settings.strategyMode === 'off'
+      ? 1.0
+      : settings.strategyMode === 'light'
+        ? 0.95
+        : baseThreshold;
   const nearBudget = estimatedTokens > effectiveLimit * threshold;
 
   let assembled: AgentMessage[];
@@ -102,7 +113,20 @@ export function buildModelRequest(
     stats.compactedFilePaths,
   );
 
-  const withMemory = injectMemoryIndex(withOrientation, memoryIndex ?? null);
+  // When tool results were compacted, add an explanatory system message
+  // so the model understands the compacted format and treats metadata as authoritative.
+  const withCompactionNote: AgentMessage[] =
+    stats.compactedToolResults > 0
+      ? [
+          {
+            role: 'system',
+            content: `Note: ${stats.compactedToolResults} older tool result(s) have been summarized to save context space. The metadata is complete — each compacted result includes a "contentSummary" field describing what was originally returned. Use the appropriate tool (read, bash, etc.) to fetch full content if needed. Treat all metadata (paths, line ranges, counts) as authoritative.`,
+          },
+          ...withOrientation,
+        ]
+      : withOrientation;
+
+  const withMemory = injectMemoryIndex(withCompactionNote, memoryIndex ?? null);
 
   const READ_BUDGET_WARNING_THRESHOLD = Math.floor(MAX_TOTAL_READS_PER_TURN * 0.5);
   const hasReadBudgetPressure =

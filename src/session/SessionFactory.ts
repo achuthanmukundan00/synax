@@ -18,7 +18,7 @@ import { createEventStore } from '../store/EventStore';
 import { SpanTracer } from '../telemetry/SpanTracer';
 import { TokenCounter } from '../metrics/TokenCounter';
 import { CostTracker } from '../metrics/CostTracker';
-import { resolveStrategy, getStrategy } from '../context/ContextStrategy';
+import { resolveStrategy, getStrategy, type ContextStrategyMode } from '../context/ContextStrategy';
 import { createLogger, type Logger } from '../logging/index';
 import { discoverSkills, buildSkillMessages } from '../skills/SkillLoader';
 import { loadSkills } from '../agent/skills';
@@ -52,6 +52,10 @@ export interface SessionComponents {
   /** Context strategy based on model window. */
   strategyReserveTokens: number;
   strategyWindowOverride?: number;
+  /** Context strategy mode for tuning compaction behavior. */
+  strategyMode: ContextStrategyMode;
+  /** The model's actual context window in tokens (used for budget sizing). */
+  modelContextWindow: number;
 }
 
 // ─── Options ─────────────────────────────────────────────────────────────────
@@ -136,6 +140,8 @@ export function createSessionComponents(options: CreateSessionComponentsOptions)
     skillMessages,
     strategyReserveTokens: strategy.reserveTokens,
     strategyWindowOverride: strategy.contextWindowOverride,
+    strategyMode: strategy.mode,
+    modelContextWindow,
   };
 }
 
@@ -247,13 +253,17 @@ export function createAgentSession(options: CreateAgentSessionOptions): AgentSes
     contextBudget: {
       contextBudgetTokens: options.config.contextBudgetTokens,
       contextWindowTokens:
-        components.strategyWindowOverride ?? options.config.contextWindowTokens ?? options.config.contextBudgetTokens,
+        components.strategyWindowOverride ??
+        components.modelContextWindow ??
+        options.config.contextWindowTokens ??
+        options.config.contextBudgetTokens,
       reservedOutputTokens: options.config.reservedOutputTokens ?? components.strategyReserveTokens,
       keepRecentTokens: options.config.keepRecentTokens,
       maxSingleReadResultTokens: options.config.maxSingleReadResultTokens,
       maxTotalReadResultTokensPerTurn: options.config.maxTotalReadResultTokensPerTurn,
       strategyReserveTokens: components.strategyReserveTokens,
       strategyWindowOverride: components.strategyWindowOverride,
+      strategyMode: components.strategyMode,
     },
     onActivity: options.onActivity,
     onEvent: wrappedOnEvent,
