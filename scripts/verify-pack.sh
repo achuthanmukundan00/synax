@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# verify-pack.sh — smoke-test the Synax npm package tarball
+# verify-pack.sh — smoke-test the Synax bun pm package tarball
 #
-# Runs `npm pack`, installs the resulting tarball in a temp project,
+# Runs `bun pm pack`, installs the resulting tarball in a temp project,
 # and checks that the CLI binary works and that the package contents
 # are correct (no leaked test/config files, dist/ present).
 #
@@ -32,9 +32,9 @@ info() {
 }
 
 cleanup() {
-  if [ -n "${TMPDIR:-}" ] && [ -d "$TMPDIR" ]; then
-    info "Cleaning up temp directory: $TMPDIR"
-    rm -rf "$TMPDIR"
+  if [ -n "${PACK_VERIFY_TMPDIR:-}" ] && [ -d "$PACK_VERIFY_TMPDIR" ]; then
+    info "Cleaning up temp directory: $PACK_VERIFY_TMPDIR"
+    rm -rf "$PACK_VERIFY_TMPDIR"
   fi
   # Clean up tarball left in project root
   if [ -n "${CWD:-}" ]; then
@@ -55,39 +55,39 @@ CWD="$(pwd)"
 # ---- 1. Build check ----
 info "Checking clean build exists..."
 if [ ! -f "$CWD/dist/cli.js" ]; then
-  fail "dist/cli.js not found — run 'npm run build' first"
+  fail "dist/cli.js not found — run 'bun run build' first"
   exit 1
 fi
 pass "dist/cli.js found"
 
-# ---- 2. npm pack ----
-info "Running npm pack..."
-# `npm pack` prints the tarball filename as the last line (after npm notice lines).
-# We capture all output and parse the filename from the final non-empty line.
-PACK_OUTPUT=$(npm pack 2>&1)
+# ---- 2. bun pm pack ----
+info "Running bun pm pack..."
+# `bun pm pack --quiet` prints only the tarball filename.
+PACK_OUTPUT=$(bun pm pack --quiet 2>&1)
 TARBALL_FILE=$(echo "$PACK_OUTPUT" | tail -1)
 if [ ! -f "$TARBALL_FILE" ]; then
-  fail "npm pack did not produce a tarball (got: '$TARBALL_FILE')"
+  fail "bun pm pack did not produce a tarball (got: '$TARBALL_FILE')"
   exit 1
 fi
-pass "npm pack produced $TARBALL_FILE"
+pass "bun pm pack produced $TARBALL_FILE"
 
 # ---- 3. Install in temp project ----
 # Use a subdirectory of the project dir to avoid macOS TMPDIR SIP issues.
-TMPDIR="$CWD/.tmp-pack-verify-$$"
-mkdir -p "$TMPDIR"
-info "Temp directory: $TMPDIR"
+PACK_VERIFY_TMPDIR="$CWD/.tmp-pack-verify-$$"
+mkdir -p "$PACK_VERIFY_TMPDIR"
+mkdir -p "$PACK_VERIFY_TMPDIR/tmp"
+info "Temp directory: $PACK_VERIFY_TMPDIR"
 
-# Initialize a minimal package.json so npm install doesn't walk up the tree
-echo '{"private": true}' > "$TMPDIR/package.json"
+# Initialize a minimal package.json so bun add has an isolated package root
+echo '{"private": true}' > "$PACK_VERIFY_TMPDIR/package.json"
 info "Installing tarball..."
-if npm install --prefix "$TMPDIR" "$CWD/$TARBALL_FILE" > /dev/null 2>&1; then
-  pass "npm install of tarball succeeded"
+if (cd "$PACK_VERIFY_TMPDIR" && TMPDIR="$PACK_VERIFY_TMPDIR/tmp" bun add "$CWD/$TARBALL_FILE" > /dev/null 2>&1); then
+  pass "bun add of tarball succeeded"
 else
-  fail "npm install of tarball failed"
+  fail "bun add of tarball failed"
 fi
 
-BIN="$TMPDIR/node_modules/.bin/synax"
+BIN="$PACK_VERIFY_TMPDIR/node_modules/.bin/synax"
 if [ ! -f "$BIN" ]; then
   fail "CLI binary not found at node_modules/.bin/synax"
 else
@@ -113,7 +113,7 @@ run_cli "run --help" run
 run_cli "doctor --help" doctor
 
 # ---- 5. Verify package contents ----
-PKG_DIR="$TMPDIR/node_modules/synax"
+PKG_DIR="$PACK_VERIFY_TMPDIR/node_modules/synax"
 info "Verifying package contents..."
 
 # dist/ directory present (as a directory, not just a file)
