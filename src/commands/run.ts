@@ -2,6 +2,7 @@ import { Command } from 'commander';
 import { runAgentTask } from '../agent/run-task';
 import { normalizeRunMode, type RunMode } from '../agent/task-policy';
 import { TuiRenderer } from '../agent/renderers';
+import type { AgentEvent } from '../agent/events';
 import { loadProjectConfig, toProviderFactoryInput } from '../config/project';
 import { loadSynaxConfig } from '../config/load-config';
 import { describeLLMProvider } from '../llm/provider-factory';
@@ -10,6 +11,7 @@ import { loadSkills, type SkillDiagnostic } from '../agent/skills';
 import { discoverSkills, buildSkillMessages } from '../skills/SkillLoader';
 import { runInteractiveTui } from '../tui/interactive-tui';
 import { createLogger } from '../logging/index.js';
+import { reduceEvents, renderPlainText } from '../presentation';
 
 const MAX_REPAIR_ATTEMPTS = 10;
 
@@ -24,6 +26,7 @@ export function runCommand(program: Command): void {
     .option('--verification-profile <profile>', 'Verification profile: quick or full')
     .option('--repair-attempts <count>', 'Bounded verification repair attempts')
     .option('--tui', 'Render run control surface TUI')
+    .option('--cmux-mode', 'Reduce OpenTUI frame rate and live nodes for many parallel terminal sessions')
     .option('--budget <amount>', 'Maximum API cost budget in USD (e.g. 0.50)')
     .option('--strategy <mode>', 'Context strategy override: aggressive, moderate, light, none, or off')
     .option('--verify <level>', 'Verification contract level: none, files-changed, verification-ran, tests-passing')
@@ -37,13 +40,14 @@ export function runCommand(program: Command): void {
         verificationProfile?: 'quick' | 'full';
         repairAttempts?: string;
         tui?: boolean;
+        cmuxMode?: boolean;
         budget?: string;
         strategy?: string;
         verify?: string;
         skills?: boolean;
       }) => {
         if (options.task) {
-          const activities: string[] = [];
+          const collectedEvents: AgentEvent[] = [];
           const renderer = options.tui ? new TuiRenderer() : null;
           try {
             const repairAttemptsResult = parseRepairAttempts(options.repairAttempts);
@@ -69,28 +73,33 @@ export function runCommand(program: Command): void {
                 if (activity.kind === 'model_response') {
                   const fullContent = activity.modelOutput || activity.message;
                   if (fullContent.trim().length > 0) {
-                    renderer?.onEvent({
+                    const event: AgentEvent = {
                       type: 'assistant_message',
                       timestamp: new Date().toISOString(),
                       content: fullContent,
-                    });
+                    };
+                    renderer?.onEvent(event);
+                    if (!renderer) collectedEvents.push(event);
                   }
                 }
                 if (renderer) return;
-                activities.push(activity.message);
                 console.log(`[synax] ${activity.kind}: ${activity.message}`);
               },
               onEvent(event) {
                 renderer?.onEvent(event);
-                if (!renderer && event.type === 'patch_preview') {
-                  console.log(`[synax] patch preview: ${event.path}`);
-                  console.log(event.diff || '(no changes)');
+                if (!renderer) {
+                  collectedEvents.push(event);
+                  if (event.type === 'patch_preview') {
+                    console.log(`[synax] patch preview: ${event.path}`);
+                    console.log(event.diff || '(no changes)');
+                  }
                 }
               },
             });
             renderer?.finish?.();
             if (!renderer) {
-              printReport(report, activities);
+              const state = reduceEvents(collectedEvents);
+              process.stdout.write(renderPlainText(state, { showPatchPreviews: true }));
             } else if (report.terminalState !== 'completed') {
               printTuiFailure(report);
             }
@@ -132,6 +141,7 @@ export function runCommand(program: Command): void {
           let skillDiagnostics: SkillDiagnostic[] | undefined;
           let enableMouse = false;
           let alternateScreen = true;
+          let cmuxMode = false;
           try {
             const effectiveConfig = loadSynaxConfig();
             if (effectiveConfig.active.thinking && effectiveConfig.active.thinking !== 'off') {
@@ -139,6 +149,7 @@ export function runCommand(program: Command): void {
             }
             enableMouse = effectiveConfig.tui?.mouse ?? false;
             alternateScreen = effectiveConfig.tui?.alternateScreen ?? true;
+            cmuxMode = effectiveConfig.tui?.cmuxMode ?? false;
 
             // Config-based skills (personas) — always loaded.
             const configMessages: string[] = [];
@@ -189,6 +200,7 @@ export function runCommand(program: Command): void {
           await runInteractiveTui(session, {
             enableMouse,
             alternateScreen,
+            cmuxMode: options.cmuxMode ?? cmuxMode,
             blockedMessage,
             lastModelOutput: () => lastModelOutput,
             modelLabel,
@@ -198,7 +210,6 @@ export function runCommand(program: Command): void {
             cwdLabel,
             gitBranch,
             contextWindowTokens: loaded.config.contextWindowTokens ?? loaded.config.contextBudgetTokens,
-            coreVisualProfile: loaded.config.coreVisualProfile,
             coreLoaded: blockedMessage === undefined,
             inputPricePer1MTokens: metadata.inputPricePer1MTokens,
             outputPricePer1MTokens: metadata.outputPricePer1MTokens,
@@ -233,52 +244,6 @@ function parseRepairAttempts(
     return { ok: false, error: `--repair-attempts must be between 0 and ${MAX_REPAIR_ATTEMPTS}` };
   }
   return { ok: true, value: parsed };
-}
-
-function printReport(report: Awaited<ReturnType<typeof runAgentTask>>, activities: string[]): void {
-  console.log('Synax Run Report');
-  console.log('----------------');
-  console.log(`Task: ${report.task}`);
-  console.log(`Mode: ${report.mode}`);
-  console.log(`Status: ${report.terminalState === 'completed' ? 'completed' : 'failed'}`);
-  if (report.terminalState !== 'completed') {
-    console.log(`Terminal state: ${report.terminalState}`);
-  }
-  if (report.error) {
-    console.log('Error:');
-    console.log(report.error);
-  }
-  console.log(`Model steps: ${report.steps}`);
-  console.log(`Tool calls: ${report.toolCalls.length} / ${report.maxToolCalls}`);
-  console.log(`Context budget: ${report.contextBudgetTokens}`);
-  console.log(`Changed files: ${report.filesChanged.length > 0 ? report.filesChanged.join(', ') : 'none'}`);
-  console.log(`Files read this run: ${report.filesRead.length > 0 ? report.filesRead.join(', ') : 'none'}`);
-  console.log(
-    `Latest checkpoint: ${report.checkpoint ? `${report.checkpoint.id} (${report.checkpoint.statusPath})` : 'none'}`,
-  );
-  console.log(`Verification: ${report.verification.state}`);
-  if (report.verification.state === 'failed' && report.verification.command) {
-    console.log(`Verification command: ${report.verification.command}`);
-  }
-  if (report.verification.state === 'failed' && report.verification.exitCode !== undefined) {
-    console.log(`Verification exit code: ${report.verification.exitCode}`);
-  }
-  if (report.messages.length > 0) {
-    console.log('Context notes:');
-    for (const message of report.messages) {
-      console.log(`  ${message}`);
-    }
-  }
-  console.log('Activity:');
-  if (activities.length === 0) {
-    console.log('  (none)');
-  } else {
-    activities.forEach((activity, index) => {
-      console.log(`  ${index + 1}. ${activity}`);
-    });
-  }
-  console.log('Final:');
-  console.log(report.finalAnswer || '(none)');
 }
 
 function printTuiFailure(report: Awaited<ReturnType<typeof runAgentTask>>): void {
