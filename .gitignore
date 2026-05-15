@@ -34,3 +34,6 @@ benchmark-artifacts/
 # macOS
 .DS_Store
 **/.DS_Store
+
+# Claude AI agent artifacts
+.claude/
