@@ -1,4 +1,4 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 import { Command } from 'commander';
 import { chatCommand } from './commands/chat.js';
 import { askCommand } from './commands/ask.js';
