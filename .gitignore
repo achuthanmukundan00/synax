@@ -5,6 +5,7 @@ coverage/
 .idea/
 .vscode/
 *.lock
+!bun.lock
 *.tgz
 .env
 .env.*
@@ -22,3 +23,14 @@ coverage/
 
 # bench results
 bench-results/
+
+# Auto-research benchmark artifacts
+benchmark-artifacts/
+
+# macOS
+.DS_Store
+**/.DS_Store
+
+# macOS
+.DS_Store
+**/.DS_Store
