@@ -7,86 +7,6 @@ export interface AgentRenderer {
   finish?(): void;
 }
 
-function kv(label: string, value: string): string {
-  return `${label.padEnd(12)} ${value}`;
-}
-
-export class NormalRenderer implements AgentRenderer {
-  private printedHeader = false;
-  private eventIndex = 0;
-
-  onEvent(event: AgentEvent): void {
-    if (event.type === 'task_started') {
-      this.printedHeader = true;
-      process.stdout.write('Synax Task\n----------\n');
-      process.stdout.write(`${kv('Mode:', event.mode)}\n`);
-      process.stdout.write(`${kv('Profile:', event.profile)}\n`);
-      process.stdout.write(`${kv('Endpoint:', event.endpoint)}\n`);
-      process.stdout.write(`${kv('Model:', event.model)}\n`);
-      process.stdout.write(`${kv('Context:', String(event.contextBudgetTokens))}\n`);
-      process.stdout.write(`${kv('Tools:', event.tools.join(', '))}\n\n`);
-      process.stdout.write('Task:\n');
-      process.stdout.write(`  ${event.task}\n\n`);
-      process.stdout.write('Events\n------\n');
-      return;
-    }
-    if (event.type === 'tool_started') {
-      this.eventIndex += 1;
-      process.stdout.write(`[${this.eventIndex}] ${event.toolName} ${event.summary}\n`);
-      return;
-    }
-    if (event.type === 'tool_finished') {
-      process.stdout.write(`      ${event.status === 'ok' ? 'ok' : 'error'}: ${event.summary}\n\n`);
-      return;
-    }
-    if (event.type === 'patch_preview') {
-      process.stdout.write(`      preview: ${event.path}\n`);
-      process.stdout.write(`${event.diff}\n\n`);
-      return;
-    }
-    if (event.type === 'verification_planned') {
-      process.stdout.write(`${kv('Verif plan:', `${event.checkLabel} (${event.summary ?? 'planned'})`)}\n`);
-      return;
-    }
-    if (event.type === 'verification_started') {
-      process.stdout.write(
-        `${kv('Verif start:', `${event.checkLabel}${event.command ? ` → ${event.command}` : ''}`)}\n`,
-      );
-      return;
-    }
-    if (event.type === 'verification_passed') {
-      const dur = event.durationMs !== undefined ? ` (${formatDurationNormal(event.durationMs)})` : '';
-      process.stdout.write(`${kv('Verif ✓:', `${event.checkLabel}${dur}`)}\n`);
-      return;
-    }
-    if (event.type === 'verification_failed') {
-      const dur = event.durationMs !== undefined ? ` (${formatDurationNormal(event.durationMs)})` : '';
-      process.stdout.write(`${kv('Verif ✗:', `${event.checkLabel}${dur}`)}\n`);
-      if (event.summary) process.stdout.write(`${kv('', event.summary)}\n`);
-      return;
-    }
-    if (event.type === 'verification_skipped') {
-      process.stdout.write(`${kv('Verif skip:', event.checkLabel)}\n`);
-      return;
-    }
-    if (event.type === 'task_finished') {
-      if (!this.printedHeader) return;
-      process.stdout.write('Result\n------\n');
-      process.stdout.write(`${kv('Status:', event.status)}\n`);
-      process.stdout.write(`${kv('Tool calls:', `${event.toolCalls} / ${event.maxToolCalls}`)}\n`);
-      process.stdout.write(`${kv('Model steps:', `${event.modelSteps} / ${event.maxModelSteps}`)}\n`);
-      process.stdout.write(`${kv('Changed:', `${event.changedFiles.length} files`)}\n`);
-      process.stdout.write(`${kv('Verified:', event.verification)}\n`);
-      if (event.error) process.stdout.write(`${kv('Error:', event.error)}\n`);
-      process.stdout.write('\n');
-      return;
-    }
-    if (event.type === 'assistant_message' && event.content.trim()) {
-      process.stdout.write(`${event.content.trim()}\n`);
-    }
-  }
-}
-
 export class QuietRenderer implements AgentRenderer {
   onEvent(event: AgentEvent): void {
     if (event.type === 'assistant_message' && event.content.trim()) {
@@ -162,12 +82,6 @@ export class DebugRenderer implements AgentRenderer {
 function preview(value: string): string {
   const redacted = redact(value).replace(/\s+/g, ' ').trim();
   return redacted.length > 240 ? `${redacted.slice(0, 237)}...` : redacted;
-}
-
-function formatDurationNormal(ms: number): string {
-  if (ms < 1000) return `${ms}ms`;
-  const s = (ms / 1000).toFixed(1);
-  return `${s}s`;
 }
 
 function redact(value: string): string {
