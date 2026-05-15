@@ -93,6 +93,7 @@ export function detectPackageManager(gitRoot: string): PackageManager {
     'package-lock.json': 'npm',
     'pnpm-lock.yaml': 'pnpm',
     'yarn.lock': 'yarn',
+    'bun.lock': 'bun',
     'bun.lockb': 'bun',
   };
 
