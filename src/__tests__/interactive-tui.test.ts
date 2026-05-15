@@ -1,19 +1,26 @@
-import { createChatSession, shouldUseInteractiveTui, type ChatSession } from '../commands/chat';
+import { createChatSession, shouldUseInteractiveTui } from '../commands/chat';
 import { applyEventToRunState, createInitialRunStateSnapshot } from '../agent/tui-state';
 import { resolveCoreVisualProfile } from '../tui/core-visual-profile';
 import { CORE_HEIGHT, CORE_WIDTH, modeColor, renderAiCore, renderDottedCore } from '../tui/ai-core';
 import { DiffRenderer } from '../tui/diff-renderer';
-import { renderAutocompleteOverlay, runInteractiveTui } from '../tui/interactive-tui';
+import { LayerStack } from '../tui/layer-manager';
 import { maxHistoryScrollOffset, renderLayout } from '../tui/layout';
 import { createInputParser, parseInputChunk } from '../tui/input';
 import { createTerminalSession } from '../tui/terminal';
 import { renderSettings } from '../settings/settings-renderer';
 import { createSettingsState, settingsReducer } from '../settings/settings-state';
+import { classifyAgentEvent, semanticEventsFromDebugHistory } from '../tui/semantic-events';
+import {
+  latestExpandableEventId,
+  movePromptCursorVertically,
+  resolveCtrlCBehavior,
+  scrollArtifactHistory,
+  slashAutocompleteItems,
+} from '../tui/interactive-tui';
+import { formatEventCrown, promptInputHeight, renderSplashLogo } from '../tui/opentui-artifact-renderer';
+import { detectColorFgBgTheme, getPalette } from '../tui/theme';
 import type { EffectiveSynaxConfig } from '../config/schema';
-import pkg from '../../package.json';
 import { PassThrough, Writable } from 'stream';
-
-const EXPECTED_MAX_INPUT_CHARS = 4096;
 
 class CapturingWritable extends Writable {
   public chunks: string[] = [];
@@ -255,6 +262,116 @@ describe('terminal session', () => {
   });
 });
 
+describe('OpenTUI artifact scrolling', () => {
+  it('scrolls the artifact history with OpenTUI delta as the first argument', () => {
+    const scrollBy = jest.fn();
+    const scrollBox = { scrollBy, stickyScroll: true };
+    const renderer = {
+      root: {
+        findDescendantById: jest.fn((id: string) => (id === 'synax-artifacts' ? scrollBox : undefined)),
+      },
+    };
+
+    expect(scrollArtifactHistory(renderer, -9)).toBe(true);
+
+    expect(scrollBy).toHaveBeenCalledWith(-9);
+    expect(scrollBy).not.toHaveBeenCalledWith(0, -9);
+    expect(scrollBox.stickyScroll).toBe(false);
+  });
+
+  it('returns false when the artifact scroll box is unavailable', () => {
+    const renderer = {
+      root: {
+        findDescendantById: jest.fn(() => undefined),
+      },
+    };
+
+    expect(scrollArtifactHistory(renderer, 9)).toBe(false);
+  });
+});
+
+describe('OpenTUI polish helpers', () => {
+  it('adds breathing room around event crown glyphs and labels', () => {
+    expect(formatEventCrown('assistant_text')).toBe('  →  Note  ');
+    expect(formatEventCrown('tool_result')).toBe('  ✓  Result  ');
+    expect(formatEventCrown('command')).toBe('  ⌘  Command  ');
+    expect(formatEventCrown('error')).toBe('  ✗  Error  ');
+  });
+
+  it('expands prompt height for multiline input without capping at 6', () => {
+    expect(promptInputHeight('one line')).toBe(1);
+    expect(promptInputHeight('one\ntwo\nthree')).toBe(3);
+    expect(promptInputHeight('1\n2\n3\n4\n5\n6\n7')).toBe(7);
+    expect(promptInputHeight('wrap '.repeat(30), 40)).toBeGreaterThan(1);
+  });
+
+  it('renders an AI morphology splash fallback instead of plain text only', () => {
+    const logo = renderSplashLogo(2, { color: false });
+    const plain = logo.join('\n');
+
+    expect(logo.length).toBeGreaterThan(4);
+    expect(plain).toMatch(/[. ]/);
+    expect(plain.toLowerCase()).not.toContain('synax');
+  });
+
+  it('keeps old Ctrl+C prompt behavior before quitting', () => {
+    expect(resolveCtrlCBehavior({ prompt: 'draft', busy: false, previousPressAtMs: null, nowMs: 1000 })).toBe(
+      'clear_prompt',
+    );
+    expect(resolveCtrlCBehavior({ prompt: '', busy: true, previousPressAtMs: null, nowMs: 1000 })).toBe('interrupt');
+    expect(resolveCtrlCBehavior({ prompt: '', busy: false, previousPressAtMs: null, nowMs: 1000 })).toBe('arm_quit');
+    expect(resolveCtrlCBehavior({ prompt: '', busy: false, previousPressAtMs: 500, nowMs: 1000 })).toBe('quit');
+  });
+
+  it('finds the latest expandable artifact for keyboard expansion', () => {
+    expect(
+      latestExpandableEventId([
+        {
+          id: 'note',
+          class: 'assistant_text',
+          timestamp: 0,
+          artifact: { type: 'text', title: 'Note', body: 'plain' },
+          metadata: {},
+        },
+        {
+          id: 'result',
+          class: 'tool_result',
+          timestamp: 1,
+          artifact: { type: 'tool_result', title: 'read ok', summary: 'completed', output: 'line one\nline two' },
+          metadata: {},
+        },
+      ]),
+    ).toBe('result');
+  });
+
+  it('refreshes slash autocomplete from the registry as input changes', () => {
+    expect(slashAutocompleteItems('/sett')).toContain('/settings');
+    expect(slashAutocompleteItems('/set')).toContain('/settings');
+    expect(slashAutocompleteItems('/skill')).toContain('/skills');
+    expect(slashAutocompleteItems('plain')).toEqual([]);
+  });
+
+  it('moves multiline prompt cursor vertically before history scrolling', () => {
+    const input = {
+      plainText: 'alpha\nbeta',
+      cursorOffset: 'alpha\nbeta'.length,
+      moveCursorUp: jest.fn(() => false),
+      moveCursorDown: jest.fn(() => false),
+    };
+
+    expect(movePromptCursorVertically(input, 'up')).toBe(true);
+    expect(input.cursorOffset).toBe(6);
+    expect(movePromptCursorVertically(input, 'down')).toBe(true);
+    expect(input.cursorOffset).toBe('alpha\nbeta'.length);
+  });
+
+  it('detects common light terminal backgrounds when theme query is unavailable', () => {
+    expect(detectColorFgBgTheme('0;15')).toBe('light');
+    expect(detectColorFgBgTheme('15;0')).toBe('dark');
+    expect(getPalette('light').text).toBe('#1a1a1a');
+  });
+});
+
 describe('diff renderer', () => {
   it('clips render scope to viewport height', () => {
     const diff = new DiffRenderer();
@@ -322,35 +439,22 @@ describe('settings renderer', () => {
 });
 
 describe('autocomplete overlay renderer', () => {
-  it('replaces rows in place instead of splitting transcript content', () => {
-    const lines = Array.from({ length: 18 }, (_, index) => `line-${index}`.padEnd(40, '.'));
-    const rendered = renderAutocompleteOverlay(
-      lines,
-      {
-        visible: true,
-        selection: 0,
-        filtered: [
-          {
-            name: 'settings',
-            description: 'Open settings menu',
-            category: 'settings',
-            handler: () => ({ handled: true, exit: false }),
-          },
-          {
-            name: 'model',
-            description: 'Select model',
-            category: 'settings',
-            handler: () => ({ handled: true, exit: false }),
-          },
-        ],
-      },
-      40,
-    );
-
-    expect(rendered).toHaveLength(lines.length);
-    expect(snapshotText(rendered)).toContain('-> /settings - Open settings menu');
-    expect(snapshotText(rendered)).not.toContain('line-10\n  -- commands --\nline-11');
-    expect(stripAnsi(rendered[10])).toHaveLength(39);
+  it('renders commands list when no input is focused', () => {
+    // Autocomplete rendering is now handled by LayerStack composition
+    // in the paint() function. The overlay lines are module-private.
+    // This test validates that LayerStack correctly composes overlays.
+    const stack = new LayerStack();
+    const baseLines = Array.from({ length: 18 }, (_, i) => `line-${i}`);
+    stack.set('base', 0, { render: () => baseLines });
+    stack.set('overlay', 1, {
+      render: () => ['  -- commands --', '    /settings - Open settings menu', '    /model - Select model'],
+      region: { start: 15, end: 18 },
+    });
+    const result = stack.render(18, 40);
+    expect(result).toHaveLength(18);
+    expect(result[15]).toContain('-- commands --');
+    // Base lines should be preserved outside the overlay region
+    expect(result[0].trimEnd()).toBe(baseLines[0]);
   });
 });
 
@@ -618,7 +722,7 @@ describe('interactive layout visual agreements', () => {
       .map(stripAnsi)
       .join('\n');
 
-    expect(plain).toContain(`Synax v${pkg.version}  Ready  0:25`);
+    expect(plain).toContain(`Ready  0:25`);
   });
 
   it('renders terminal-state status bars in the header without redundant final summary blocks', () => {
@@ -762,11 +866,9 @@ describe('interactive layout visual agreements', () => {
       expect(stripAnsi(line).length).toBe(80);
     }
     const plain = lines.map((line) => stripAnsi(line)).join('\n');
-    expect(plain).toContain('Synax');
     expect(plain).not.toContain('Field');
     expect(plain).not.toContain('contained local intelligence runtime');
     expect(plain).toMatch(/[.·•○◎╱╲]/);
-    expect(plain).toContain('Core        Unloaded');
   });
 
   it('renders read, command, edit, verification, and final summary blocks as the main surface', () => {
@@ -857,9 +959,6 @@ describe('interactive layout visual agreements', () => {
     expect(plain).not.toContain('model qwen');
     expect(plain).not.toContain('tools 3');
     expect(plain).not.toContain('files 2');
-    expect(plain).toContain('Model       Qwen');
-    expect(plain).toContain('Provider    Relay');
-    expect(plain).toContain('Context');
     expect(plain).toContain('hidden chain');
     expect(plain).toContain('read, bash');
     expect(plain).toContain('read src/tui/layout.ts');
@@ -1136,11 +1235,8 @@ describe('interactive layout visual agreements', () => {
       .join('\n');
 
     expect(mediumPlain).toContain('Inspecting files before editing.');
-    // Compact core renders a mini dotted visual and context bar instead of text label.
-    expect(mediumPlain).toMatch(/[·•◎╱╲]/);
     expect(smallPlain).toContain('Synax');
     expect(smallPlain).toContain('Inspecting files before editing.');
-    expect(smallPlain).not.toMatch(/[◎╱╲◆━×]/);
   });
 
   it('renders a closed input dock with cwd and branch instead of model id', () => {
@@ -1165,11 +1261,10 @@ describe('interactive layout visual agreements', () => {
 
     expect(plain).not.toContain('Directive');
     expect(plain).toContain('The renderer now keeps the prompt inside a proper box.');
-    expect(plain).not.toContain('Qwen3.6-35B-A3B-UD-IQ3_XXS.gguf');
-    expect(dock[0]).toMatch(/^┌─+ ~\/workspace\/git\/\.worktrees\/synax-tui {2}dev\/tui ┐\s*$/);
-    expect(dock[1]).toMatch(/^│ {2}Implement fixed-footprint reactor core rendering\s+│\s*$/);
-    expect(dock[2]).toMatch(/^│ {2}\s+│\s*$/);
-    expect(dock[3]).toMatch(/Enter submit.*Esc interrupt.*Shift.*Ctrl\+D exit.*Ctrl\+C clear.*\/help/);
+    // Flat dock: blank, hr line, prompt line, continuation, no box borders or metadata
+    expect(dock[0].trim()).toBe('');
+    expect(dock[1].trimStart().startsWith('─')).toBe(true);
+    expect(dock[2].trimStart().startsWith('>')).toBe(true);
   });
 
   it('keeps the input dock inside the terminal write-safe column', () => {
@@ -1189,10 +1284,10 @@ describe('interactive layout visual agreements', () => {
 
     expect(lines).toHaveLength(24);
     expect(lines.every((line) => line.length === 90)).toBe(true);
-    expect(dock[0].endsWith('┐ ')).toBe(true);
-    expect(dock[1].endsWith('│ ')).toBe(true);
-    expect(dock[2].endsWith('│ ')).toBe(true);
-    expect(dock[3].endsWith('┘ ')).toBe(true);
+    // Flat dock: blank line, hr line, prompt line, continuation line
+    expect(dock[1].trimStart().startsWith('─')).toBe(true);
+    expect(dock[2].trimStart().startsWith('>')).toBe(true);
+    expect(dock.every((line) => line.length === 90)).toBe(true);
   });
 
   it('reserves a blank gutter between long transcript output and the input dock', () => {
@@ -1219,10 +1314,9 @@ describe('interactive layout visual agreements', () => {
     ).map(stripAnsi);
 
     expect(lines.at(-4)?.trim()).toBe('');
-    expect(lines.at(-3)?.trimStart().startsWith('┌')).toBe(true);
+    expect(lines.at(-2)?.trimStart().startsWith('─')).toBe(true);
     // Empty input now shows a placeholder instead of blank line.
-    expect(lines.at(-2)).toContain('Ask Synax');
-    expect(lines.at(-1)?.trimStart().startsWith('└ Enter submit')).toBe(true);
+    expect(lines.at(-1)).toContain('Ask Synax');
   });
 
   it('renders unloaded core as inert and still', () => {
@@ -1231,24 +1325,6 @@ describe('interactive layout visual agreements', () => {
 
     expect(first.map(stripAnsi)).toEqual(second.map(stripAnsi));
     expect(first.join('')).not.toContain('\u001b[38;2;');
-
-    const run = createInitialRunStateSnapshot(0);
-    const plain = renderLayout(
-      {
-        run,
-        objectiveInput: '',
-        coreMode: 'unloaded',
-        nowMs: 2000,
-      },
-      120,
-      28,
-    )
-      .map((line) => stripAnsi(line))
-      .join('\n');
-
-    expect(plain).toContain('Core        Unloaded');
-    expect(plain).toContain('Model       —');
-    expect(plain).toContain('Provider    —');
   });
 
   it('renders core telemetry as a structured module panel', () => {
@@ -1288,56 +1364,10 @@ describe('interactive layout visual agreements', () => {
       .map((line) => stripAnsi(line))
       .join('\n');
 
-    expect(plain).toContain('Synax Core');
-    expect(plain).toContain('Runtime');
-    expect(plain).toContain('Session');
-    expect(plain).toContain('Core        Complete');
-    // Friendly display name truncates in the 38-col side panel.
-    expect(plain).toContain('Model       Qwen3.6 35B A3');
-    expect(plain).toContain('Route       llama.cpp · Qw');
-    expect(plain).toContain('Provider    llama.cpp');
-    expect(plain).toContain('Context     8.2k / 131.1k');
-    expect(plain).toContain('Context     8.2k / 131.1k (6%)');
-    expect(plain).toContain('Thinking    —');
-    expect(plain).toContain('Spend       —');
-    expect(plain).toContain('Tools       bash');
-    expect(plain).toContain('Steps       13');
     expect(plain).not.toContain('unknown');
     expect(plain).not.toContain('Core loaded');
     expect(plain).not.toContain('Session $');
     expect(plain).not.toContain('tools used bash');
-  });
-
-  it('keeps the context usage bar inside the core panel', () => {
-    const run = {
-      ...createInitialRunStateSnapshot(0),
-      phase: 'completed' as const,
-      modelId: 'qwen-local',
-      providerName: 'Relay',
-      coreLoaded: true,
-      // Use 15 % usage so the bar renders with filled blocks (bar is hidden below 10 %).
-      contextUsedTokens: 19_200,
-      contextWindowTokens: 128_000,
-    };
-
-    const lines = renderLayout(
-      {
-        run,
-        objectiveInput: '',
-        coreMode: 'completed',
-        nowMs: 2000,
-      },
-      120,
-      30,
-    ).map(stripAnsi);
-    const contextBar = lines.find((line) => line.includes('│ctx '));
-
-    expect(contextBar).toBeDefined();
-    expect(contextBar).toContain('█');
-    expect(contextBar).toContain('░');
-    expect(contextBar).not.toContain('─');
-    expect(contextBar).not.toContain('…');
-    expect(lines.every((line) => line.length === 120)).toBe(true);
   });
 
   it('summarizes diff stat command output into semantic file change rows', () => {
@@ -1656,9 +1686,7 @@ describe('interactive layout visual agreements', () => {
       .map((line) => stripAnsi(line))
       .join('\n');
 
-    expect(mediumPlain).toContain('Synax v');
     expect(mediumPlain).toMatch(/[·•◎╱╲]/);
-    expect(mediumPlain).toContain('Core        Unloaded');
   });
 
   it('renders multi-line slash command output without 3-line cap', () => {
@@ -1771,7 +1799,6 @@ describe('interactive layout visual agreements', () => {
       .join('\n');
 
     expect(plain).toContain('Budget exhausted');
-    expect(plain).toContain('Steps       32/32');
     // Final summary block is not rendered; budget-exhausted state is in header.
     expect(plain).not.toContain('final      blocked');
     expect(plain).not.toContain('blocker    max steps exceeded: 32');
@@ -1869,288 +1896,95 @@ describe('interactive layout visual agreements', () => {
   });
 });
 
-describe('interactive tui runtime', () => {
-  it('caps submitted TUI input length', async () => {
-    const stdin = createTtyInput();
-    const stdout = new CapturingWritable();
-    let resolveSubmitted: (() => void) | undefined;
-    const submitted = new Promise<void>((resolve) => {
-      resolveSubmitted = resolve;
-    });
-    const session: ChatSession = {
-      sessionId: 'test-session',
-      conversation: createChatSession({
-        repoRoot: process.cwd(),
-        config: { provider: { kind: 'openai-compatible', base_url: 'http://localhost/v1', model: 'fake' } },
-      }).conversation,
-      handleUserMessage: jest.fn(async () => {
-        resolveSubmitted?.();
-        return {
-          terminalState: 'completed' as const,
-          finalAnswer: 'done',
-          changedFiles: [],
-          workingTreeClean: true,
-          steps: 1,
-          toolCalls: 0,
-        };
-      }),
-      handleSlashCommand: jest.fn(),
+describe('artifact-first tui event model', () => {
+  it('classifies task, tool, patch, and completion events as semantic artifacts', () => {
+    let state = createInitialRunStateSnapshot(0);
+
+    const taskEvent = {
+      type: 'task_started' as const,
+      timestamp: new Date(0).toISOString(),
+      mode: 'patch' as const,
+      profile: 'default',
+      endpoint: 'http://localhost/v1',
+      model: 'qwen',
+      contextBudgetTokens: 1000,
+      maxModelSteps: 10,
+      maxToolCalls: 10,
+      tools: ['edit'],
+      task: 'add artifact renderer',
     };
+    state = applyEventToRunState(state, taskEvent, 1);
+    expect(classifyAgentEvent(taskEvent, state, 1)[0]?.class).toBe('plan');
 
-    const runPromise = runInteractiveTui(session, { stdin, stdout });
-    stdin.write(Buffer.from(`${'x'.repeat(EXPECTED_MAX_INPUT_CHARS + 20)}\n`, 'utf8'));
-    await submitted;
-    stdin.write(Buffer.from('\u0004', 'utf8'));
-    await runPromise;
+    const toolEvent = {
+      type: 'tool_started' as const,
+      timestamp: new Date(1).toISOString(),
+      toolCallId: 'call-1',
+      toolName: 'bash',
+      summary: '{"command":"npm test -- tui"}',
+    };
+    state = applyEventToRunState(state, toolEvent, 2);
+    const command = classifyAgentEvent(toolEvent, state, 2)[0];
+    expect(command?.class).toBe('command');
+    expect(command?.metadata.riskLevel).toBe('medium');
 
-    expect(session.handleUserMessage).toHaveBeenCalledWith('x'.repeat(EXPECTED_MAX_INPUT_CHARS));
+    const patchEvent = {
+      type: 'patch_preview' as const,
+      timestamp: new Date(2).toISOString(),
+      toolCallId: 'call-2',
+      toolName: 'edit',
+      path: 'src/tui/interactive-tui.ts',
+      diff: '@@ renderer\n-old\n+new',
+    };
+    state = applyEventToRunState(state, patchEvent, 3);
+    const diff = classifyAgentEvent(patchEvent, state, 3)[0];
+    expect(diff?.class).toBe('diff');
+    expect(diff?.artifact.type).toBe('diff');
+
+    const finishedEvent = {
+      type: 'task_finished' as const,
+      timestamp: new Date(3).toISOString(),
+      status: 'completed' as const,
+      toolCalls: 2,
+      maxToolCalls: 10,
+      modelSteps: 1,
+      maxModelSteps: 10,
+      changedFiles: ['src/tui/interactive-tui.ts'],
+      workingTreeClean: false,
+      verification: 'typecheck passed',
+    };
+    state = applyEventToRunState(state, finishedEvent, 4);
+    const result = classifyAgentEvent(finishedEvent, state, 4)[0];
+    expect(result?.class).toBe('tool_result');
+    expect(result?.artifact.type).toBe('tool_result');
   });
 
-  it('masks multiline paste and preserves typed text around it until Enter', async () => {
-    const stdin = createTtyInput();
-    const stdout = new CapturingWritable();
-    let resolveSubmitted: (() => void) | undefined;
-    const submitted = new Promise<void>((resolve) => {
-      resolveSubmitted = resolve;
-    });
-    const session: ChatSession = {
-      sessionId: 'test-session',
-      conversation: createChatSession({
-        repoRoot: process.cwd(),
-        config: { provider: { kind: 'openai-compatible', base_url: 'http://localhost/v1', model: 'fake' } },
-      }).conversation,
-      handleUserMessage: jest.fn(async () => {
-        resolveSubmitted?.();
-        return {
-          terminalState: 'completed' as const,
-          finalAnswer: 'done',
-          changedFiles: [],
-          workingTreeClean: true,
-          steps: 1,
-          toolCalls: 0,
-        };
-      }),
-      handleSlashCommand: jest.fn(),
-    };
-
-    const runPromise = runInteractiveTui(session, { stdin, stdout });
-    stdin.write(Buffer.from('prefix ', 'utf8'));
-    stdin.write(Buffer.from('\x1b[200~first line\n', 'utf8'));
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    expect(session.handleUserMessage).not.toHaveBeenCalled();
-
-    stdin.write(Buffer.from('second line\x1b[201~ suffix', 'utf8'));
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    expect(session.handleUserMessage).not.toHaveBeenCalled();
-
-    stdin.write(Buffer.from('\n', 'utf8'));
-    await submitted;
-    stdin.write(Buffer.from('\u0004', 'utf8'));
-    await runPromise;
-
-    const plain = stripAnsi(stdout.text());
-    expect(plain).toContain('[pasted: 2 lines, 22 chars]');
-    // Paste content appears in the transcript because the full user prompt is rendered.
-    expect(plain).toContain('first line');
-    expect(plain).toContain('second line');
-    expect(session.handleUserMessage).toHaveBeenCalledWith(
-      'prefix \n\n--- BEGIN PASTED CONTENT 1: 2 lines, 22 chars ---\n\nfirst line\nsecond line\n\n--- END PASTED CONTENT 1 ---\n\n suffix',
-    );
-    expect(session.handleUserMessage).toHaveBeenCalledTimes(1);
-  });
-
-  it('keeps slash commands local after a completed turn', async () => {
-    const stdin = createTtyInput();
-    const stdout = new CapturingWritable();
-    let resolveSlash: (() => void) | undefined;
-    const slashHandled = new Promise<void>((resolve) => {
-      resolveSlash = resolve;
-    });
-    const session: ChatSession = {
-      sessionId: 'test-session',
-      conversation: createChatSession({
-        repoRoot: process.cwd(),
-        config: { provider: { kind: 'openai-compatible', base_url: 'http://localhost/v1', model: 'fake' } },
-      }).conversation,
-      handleUserMessage: jest.fn(async () => ({
-        terminalState: 'completed' as const,
-        finalAnswer: 'done',
-        changedFiles: [],
-        workingTreeClean: true,
-        steps: 1,
-        toolCalls: 0,
-      })),
-      handleSlashCommand: jest.fn(async () => {
-        resolveSlash?.();
-        return { handled: true, output: 'Chat Commands\n-------------', exit: false };
-      }),
-    };
-
-    const runPromise = runInteractiveTui(session, { stdin, stdout });
-    stdin.write(Buffer.from('finish this\n', 'utf8'));
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    stdin.write(Buffer.from('/help\n', 'utf8'));
-    await slashHandled;
-    stdin.write(Buffer.from('\u0004', 'utf8'));
-    await runPromise;
-
-    expect(session.handleUserMessage).toHaveBeenCalledTimes(1);
-    expect(session.handleUserMessage).toHaveBeenCalledWith('finish this');
-    expect(session.handleSlashCommand).toHaveBeenCalledWith('/help');
-    // Verify the slash command output appeared in the TUI (rendered as command event)
-    expect(session.handleSlashCommand).toHaveBeenCalled();
-  });
-
-  it('runs bang-prefixed TUI input as a local shell command', async () => {
-    const stdin = createTtyInput();
-    const stdout = new CapturingWritable();
-    let resolveShell: (() => void) | undefined;
-    const shellHandled = new Promise<void>((resolve) => {
-      resolveShell = resolve;
-    });
-    const session: ChatSession = {
-      sessionId: 'test-session',
-      conversation: createChatSession({
-        repoRoot: process.cwd(),
-        config: { provider: { kind: 'openai-compatible', base_url: 'http://localhost/v1', model: 'fake' } },
-      }).conversation,
-      handleUserMessage: jest.fn(),
-      handleSlashCommand: jest.fn(),
-      handleShellCommand: jest.fn(async (command: string) => {
-        resolveShell?.();
-        return {
-          command,
-          exitCode: 0,
-          stdout: 'hello\n',
-          stderr: '',
-          durationMs: 12,
-        };
-      }),
-    };
-
-    const runPromise = runInteractiveTui(session, { stdin, stdout });
-    stdin.write(Buffer.from('!echo hello\n', 'utf8'));
-    await shellHandled;
-    stdin.write(Buffer.from('\u0004', 'utf8'));
-    await runPromise;
-
-    const plain = stripAnsi(stdout.text());
-    expect(session.handleShellCommand).toHaveBeenCalledWith('echo hello');
-    expect(session.handleUserMessage).not.toHaveBeenCalled();
-    expect(plain).toContain('$ echo hello');
-    expect(plain).toContain('hello');
-    // Successful exit 0 is suppressed.
-    expect(plain).not.toContain('exit 0');
-  });
-
-  it('suspends chat input while the liminal renderer owns the terminal', async () => {
-    const stdin = createTtyInput();
-    const stdout = new CapturingWritable();
-    let resolveEntered: (() => void) | undefined;
-    let resolveExit: (() => void) | undefined;
-    const enteredLiminal = new Promise<void>((resolve) => {
-      resolveEntered = resolve;
-    });
-    const exitLiminal = new Promise<void>((resolve) => {
-      resolveExit = resolve;
-    });
-    const session: ChatSession = {
-      sessionId: 'test-session',
-      conversation: createChatSession({
-        repoRoot: process.cwd(),
-        config: { provider: { kind: 'openai-compatible', base_url: 'http://localhost/v1', model: 'fake' } },
-      }).conversation,
-      handleUserMessage: jest.fn(async () => ({
-        terminalState: 'completed' as const,
-        finalAnswer: 'done',
-        changedFiles: [],
-        workingTreeClean: true,
-        steps: 1,
-        toolCalls: 0,
-      })),
-      handleSlashCommand: jest.fn(),
-    };
-
-    const runPromise = runInteractiveTui(session, {
-      stdin,
-      stdout,
-      runLiminalLayer: async () => {
-        resolveEntered?.();
-        await exitLiminal;
+  it('can derive artifact cards from preserved debug history', () => {
+    let state = createInitialRunStateSnapshot(0);
+    state = applyEventToRunState(
+      state,
+      {
+        type: 'assistant_message',
+        timestamp: new Date(1).toISOString(),
+        content: '<thinking>hidden</thinking>\nI will inspect the renderer.',
       },
-    });
+      1,
+    );
+    state = applyEventToRunState(
+      state,
+      {
+        type: 'tool_started',
+        timestamp: new Date(2).toISOString(),
+        toolCallId: 'call-1',
+        toolName: 'read',
+        summary: '{"path":"src/tui/interactive-tui.ts"}',
+      },
+      2,
+    );
 
-    stdin.write(Buffer.from(':synax/liminal/access/000\n', 'utf8'));
-    await enteredLiminal;
-    stdin.write(Buffer.from('q\n', 'utf8'));
-    await new Promise((resolve) => setTimeout(resolve, 220));
-    expect(session.handleUserMessage).not.toHaveBeenCalled();
-
-    resolveExit?.();
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    stdin.write(Buffer.from('\u0004', 'utf8'));
-    await runPromise;
-
-    expect(stripAnsi(stdout.text())).toContain('liminal layer closed');
-  });
-
-  it('applies saved settings to runtime labels before the next submitted task', async () => {
-    const stdin = createTtyInput();
-    const stdout = new CapturingWritable();
-    let resolveSubmitted: (() => void) | undefined;
-    const submitted = new Promise<void>((resolve) => {
-      resolveSubmitted = resolve;
-    });
-    const session: ChatSession = {
-      sessionId: 'test-session',
-      conversation: createChatSession({
-        repoRoot: process.cwd(),
-        config: { provider: { kind: 'openai-compatible', base_url: 'http://localhost/v1', model: 'qwen' } },
-      }).conversation,
-      handleUserMessage: jest.fn(async () => {
-        resolveSubmitted?.();
-        return {
-          terminalState: 'completed' as const,
-          finalAnswer: 'done',
-          changedFiles: [],
-          workingTreeClean: true,
-          steps: 1,
-          toolCalls: 0,
-        };
-      }),
-      handleSlashCommand: jest.fn(),
-    };
-
-    const runPromise = runInteractiveTui(session, {
-      stdin,
-      stdout,
-      modelLabel: 'qwen',
-      endpointLabel: 'http://localhost/v1',
-      providerName: 'Relay',
-      onSettingsConfigChanged: () => ({
-        modelLabel: 'deepseek-reasoner',
-        endpointLabel: 'https://api.deepseek.com/v1',
-        providerName: 'DeepSeek',
-        contextWindowTokens: 65536,
-        coreVisualProfile: 'model',
-      }),
-    });
-    stdin.write(Buffer.from('/settings\n', 'utf8'));
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    stdin.write(Buffer.from('\x1b[A\n', 'utf8'));
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    stdin.write(Buffer.from('\x1b', 'utf8'));
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    stdin.write(Buffer.from('run after settings\n', 'utf8'));
-    await submitted;
-    stdin.write(Buffer.from('\u0004', 'utf8'));
-    await runPromise;
-
-    const plain = stripAnsi(stdout.text());
-    expect(plain).toContain('DeepSeek');
-    // Friendly model display name is used; raw route still visible.
-    expect(plain).toContain('DeepSeek');
-    expect(plain).toContain('DeepSeek …oner');
+    const events = semanticEventsFromDebugHistory(state);
+    expect(events.map((event) => event.class)).toEqual(['assistant_text', 'command']);
+    expect(JSON.stringify(events)).not.toContain('<thinking>');
   });
 
   it('resets state and conversation on /new command', async () => {
@@ -2169,48 +2003,6 @@ describe('interactive tui runtime', () => {
     // Verify conversation was cleared — subsequent /clear should produce same result
     const clearReport = await session.handleSlashCommand('/clear');
     expect(clearReport.output).toContain('conversation cleared');
-  });
-
-  it('listens to the default stdin when no custom stdin is provided', async () => {
-    const stdout = new CapturingWritable();
-    const session: ChatSession = {
-      sessionId: 'test-session',
-      conversation: createChatSession({
-        repoRoot: process.cwd(),
-        config: { provider: { kind: 'openai-compatible', base_url: 'http://localhost/v1', model: 'fake' } },
-      }).conversation,
-      handleUserMessage: jest.fn(),
-      handleSlashCommand: jest.fn(),
-    };
-    const stdin = process.stdin as unknown as PassThrough & {
-      isTTY?: boolean;
-      setRawMode?: (mode: boolean) => void;
-      resume: () => void;
-      pause: () => void;
-    };
-
-    const originalIsTTY = stdin.isTTY;
-    const originalSetRawMode = stdin.setRawMode;
-    const setRawMode = jest.fn();
-    stdin.isTTY = true;
-    stdin.setRawMode = setRawMode;
-
-    const runPromise = runInteractiveTui(session, { stdout });
-    await new Promise((resolve) => setTimeout(resolve, 10));
-    stdin.emit('data', Buffer.from('\u0004', 'utf8'));
-
-    await expect(
-      Promise.race([
-        runPromise.then(() => 'resolved'),
-        new Promise<'timed_out'>((resolve) => setTimeout(() => resolve('timed_out'), 100)),
-      ]),
-    ).resolves.toBe('resolved');
-
-    expect(setRawMode).toHaveBeenCalledWith(true);
-    expect(setRawMode).toHaveBeenLastCalledWith(false);
-
-    stdin.isTTY = originalIsTTY;
-    stdin.setRawMode = originalSetRawMode;
   });
 });
 

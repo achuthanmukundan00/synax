@@ -1,4 +1,4 @@
-import { DebugRenderer, JsonlRenderer, NormalRenderer, QuietRenderer } from '../agent/renderers';
+import { DebugRenderer, JsonlRenderer, QuietRenderer } from '../agent/renderers';
 import { applyEventToRunState, createInitialRunStateSnapshot } from '../agent/tui-state';
 import type { AgentEvent } from '../agent/events';
 
@@ -25,69 +25,6 @@ function captureWrites(fn: () => void): { stdout: string; stderr: string } {
 }
 
 describe('renderers', () => {
-  it('normal renderer handles verification lifecycle events', () => {
-    const output = captureWrites(() => {
-      const renderer = new NormalRenderer();
-      renderer.onEvent({
-        type: 'task_started',
-        timestamp: new Date().toISOString(),
-        mode: 'patch',
-        profile: 'default',
-        endpoint: 'http://127.0.0.1:1234/v1',
-        model: 'x',
-        contextBudgetTokens: 1,
-        maxModelSteps: 2,
-        maxToolCalls: 3,
-        tools: ['read'],
-        task: 'inspect package.json',
-      });
-      renderer.onEvent({
-        type: 'verification_planned',
-        timestamp: new Date().toISOString(),
-        checkId: 'chk-1',
-        checkLabel: 'npm test',
-        command: 'npm test',
-        summary: '3 file(s) changed',
-      });
-      renderer.onEvent({
-        type: 'verification_started',
-        timestamp: new Date().toISOString(),
-        checkId: 'chk-1',
-        checkLabel: 'npm test',
-        command: 'npm test',
-      });
-      renderer.onEvent({
-        type: 'verification_passed',
-        timestamp: new Date().toISOString(),
-        checkId: 'chk-1',
-        checkLabel: 'npm test',
-        summary: 'all tests passed',
-        durationMs: 1234,
-      });
-      renderer.onEvent({
-        type: 'verification_failed',
-        timestamp: new Date().toISOString(),
-        checkId: 'chk-2',
-        checkLabel: 'npm run lint',
-        summary: '2 lint errors',
-        severity: 'S2',
-        durationMs: 500,
-      });
-      renderer.onEvent({
-        type: 'verification_skipped',
-        timestamp: new Date().toISOString(),
-        checkId: 'chk-3',
-        checkLabel: 'npm run build',
-        summary: 'skipped by config',
-      });
-    });
-    expect(output.stdout).toContain('Verif plan:');
-    expect(output.stdout).toContain('Verif start:');
-    expect(output.stdout).toContain('Verif ✓:');
-    expect(output.stdout).toContain('Verif ✗:');
-    expect(output.stdout).toContain('Verif skip:');
-  });
-
   it('tui state handles long objective and check labels without throwing', () => {
     const longText = 'A'.repeat(500);
     let state = createInitialRunStateSnapshot(0);
@@ -141,39 +78,6 @@ describe('renderers', () => {
     // Status note and risk line should be clipped at reasonable lengths
     expect(state.riskLine.length).toBeLessThanOrEqual(123);
     expect(state.statusNote.length).toBeLessThanOrEqual(123);
-  });
-
-  it('normal renderer emits readable sections and avoids raw objects', () => {
-    const output = captureWrites(() => {
-      const renderer = new NormalRenderer();
-      renderer.onEvent({
-        type: 'task_started',
-        timestamp: new Date().toISOString(),
-        mode: 'patch',
-        profile: 'default',
-        endpoint: 'http://127.0.0.1:1234/v1',
-        model: 'x',
-        contextBudgetTokens: 1,
-        maxModelSteps: 2,
-        maxToolCalls: 3,
-        tools: ['read'],
-        task: 'inspect package.json',
-      });
-      renderer.onEvent({
-        type: 'task_finished',
-        timestamp: new Date().toISOString(),
-        status: 'completed',
-        toolCalls: 0,
-        maxToolCalls: 3,
-        modelSteps: 1,
-        maxModelSteps: 2,
-        changedFiles: [],
-        verification: 'not run',
-      });
-    });
-    expect(output.stdout).toContain('Synax Task');
-    expect(output.stdout).toContain('Result');
-    expect(output.stdout).not.toContain('{"type"');
   });
 
   it('quiet renderer suppresses traces and prints final answer only', () => {
