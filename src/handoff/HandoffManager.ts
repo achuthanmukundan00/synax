@@ -90,12 +90,23 @@ export class HandoffManager {
     // Collect key findings from memory manifest and conversation
     const keyFindings = (memoryManifest?.keyFindings ?? []).slice(0, 10);
 
-    // If no key findings from memory, extract from conversation messages
+    // If no key findings from memory, extract from conversation messages.
+    // Look for substantive assistant messages with completions or decisions.
     if (keyFindings.length === 0 && params.conversationMessages) {
       for (const msg of params.conversationMessages) {
-        if (msg.role === 'assistant' && msg.content.length > 30 && msg.content.length < 500) {
-          keyFindings.push(msg.content.trim());
+        if (msg.role === 'assistant' && msg.content.length > 30) {
+          // Truncate very long messages to a reasonable size
+          const content = msg.content.length > 800 ? msg.content.slice(0, 800) + '...' : msg.content;
+          keyFindings.push(content.trim());
           if (keyFindings.length >= 5) break;
+        }
+      }
+
+      // Add task context when no specific findings exist
+      if (keyFindings.length === 0) {
+        const taskMsg = params.conversationMessages.find((m) => m.role === 'user');
+        if (taskMsg && taskMsg.content.length > 0) {
+          keyFindings.push(`Task: ${taskMsg.content.slice(0, 500)}`);
         }
       }
     }
