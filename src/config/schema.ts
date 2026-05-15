@@ -77,11 +77,15 @@ export interface TuiConfig {
   /** Use alternate screen buffer. Default true. When false, prefer append-style output. */
   alternateScreen?: boolean;
   alternate_screen?: boolean;
+  /** Reduce TUI frame rate, event churn, and live nodes for cmux/high-load sessions. */
+  cmuxMode?: boolean;
+  cmux_mode?: boolean;
 }
 
 export interface ResolvedTuiConfig {
   mouse: boolean;
   alternateScreen: boolean;
+  cmuxMode: boolean;
 }
 
 // ─── Full project config (extended) ────────────────────────
@@ -93,6 +97,7 @@ export interface SynaxConfig {
   skills?: SkillsConfig;
   mcp?: McpConfig;
   tui?: TuiConfig;
+  /** @deprecated No longer consumed by the TUI. Kept for config compatibility. */
   coreVisualProfile?: string;
 }
 
@@ -147,6 +152,7 @@ export interface EffectiveSynaxConfig {
   skills: ResolvedSkillsConfig;
   mcp: ResolvedMcpConfig;
   tui?: ResolvedTuiConfig;
+  /** @deprecated No longer consumed by the TUI. Kept for config compatibility. */
   coreVisualProfile?: string;
   /** The source path that provided the effective config, or null for defaults. */
   source: string | null;
