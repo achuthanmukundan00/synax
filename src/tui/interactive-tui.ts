@@ -1,63 +1,18 @@
-import { applyEventToRunState, createInitialRunStateSnapshot, type RunStateSnapshot } from '../agent/tui-state';
 import {
-  classifyInlineSubmission,
-  createInlinePasteInputSession,
-  draftPlainText,
-  flattenInlinePasteDraft,
-  type ChatSession,
-} from '../commands/chat';
+  applyEventToRunState,
+  advanceClock,
+  createInitialRunStateSnapshot,
+  type RunStateSnapshot,
+} from '../agent/tui-state';
 import { isSecretTrigger } from '../backrooms/trigger';
-import { stdin as defaultStdin } from 'node:process';
-import { DiffRenderer } from './diff-renderer';
-import { inputCursorPosition, maxHistoryScrollOffset, renderLayout, type InteractiveViewState } from './layout';
-import { createInputParser, MAX_INPUT_CHARS } from './input';
-import { createTerminalSession, type InputStreamLike, type TerminalSession } from './terminal';
-import { terminalWriteWidth, padAnsi } from './text-utils';
-import { LayerStack } from './layer-manager';
-import type { Writable } from 'node:stream';
-import type { CoreMode } from './ai-core';
-import {
-  filterCommands,
-  getCommand,
-  type SlashCommand,
-  type SlashCommandResult,
-} from '../settings/slash-command-registry';
-import { createSettingsState, settingsReducer, type SettingsState } from '../settings/settings-state';
-import { renderSettings } from '../settings/settings-renderer';
-import {
-  createResumePickerState,
-  resumePickerReducer,
-  renderResumePicker,
-  type ResumePickerState,
-} from '../sessions/resume-renderer';
-import {
-  listSessionsSorted,
-  readSessionEvents,
-  generateSessionSummary,
-  generateSessionTitle,
-  type SessionMetadata,
-} from '../sessions/session-store';
-import { loadSynaxConfig, persistConfig } from '../config/load-config';
+import type { ChatSession } from '../commands/chat';
 import type { EffectiveSynaxConfig } from '../config/schema';
+import type { InputStreamLike } from './terminal';
+import type { Writable } from 'node:stream';
+import { renderArtifactRoot, renderArtifactCard, type ArtifactRailState, type FooterState } from './opentui-artifact-renderer';
+import { classifyAgentEvent, semanticEventsFromDebugHistory, type SemanticEvent } from './semantic-events';
 
-/** Return overlay lines for the autocomplete list (composited by LayerStack). */
-function renderAutocompleteOverlayLines(
-  ac: { visible: boolean; selection: number; filtered: SlashCommand[] },
-  width: number,
-): string[] {
-  if (!ac.visible || ac.filtered.length === 0) return [];
-
-  const renderWidth = terminalWriteWidth(width);
-  const overlayLines: string[] = [];
-  overlayLines.push(padAnsi(dim('  -- commands --'), renderWidth));
-  for (let i = 0; i < Math.min(ac.filtered.length, 8); i += 1) {
-    const cmd = ac.filtered[i];
-    const desc = cmd.description ? ` - ${cmd.description}` : '';
-    const text = `${i === ac.selection ? bold(` -> /${cmd.name}${desc}`) : dim(`    /${cmd.name}${desc}`)}`;
-    overlayLines.push(padAnsi(text, renderWidth));
-  }
-  return overlayLines;
-}
+type OpenTuiCore = typeof import('@opentui/core');
 
 export async function runInteractiveTui(
   session: ChatSession,
@@ -65,38 +20,20 @@ export async function runInteractiveTui(
     stdin?: InputStreamLike;
     stdout?: Writable & { isTTY?: boolean; columns?: number; rows?: number };
     blockedMessage?: string;
-    /** Returns the last model output text for real-time observability. */
     lastModelOutput?: () => string;
-    /** Called when a /new or /clear session reset happens so stale preview text clears. */
     resetLastModelOutput?: () => void;
-    /** Active model ID for input panel label. */
     modelLabel?: string;
-    /** Whether provider-level thinking is enabled in the active model profile. */
     thinkingEnabled?: boolean;
-    /** Active endpoint for state display. */
     endpointLabel?: string;
-    /** Provider label from config when available. */
     providerName?: string;
-    /** Working directory label for the input dock. */
     cwdLabel?: string;
-    /** Current git branch when known. */
     gitBranch?: string;
-    /** Configured total context window when known. */
     contextWindowTokens?: number;
-    /** Names of loaded skills currently active for the session. */
     activeSkills?: string[];
-    /** Whether the active provider/model can be queried right now. */
     coreLoaded?: boolean;
-    /** Price per 1M input tokens for cost display. */
     inputPricePer1MTokens?: number;
-    /** Price per 1M output tokens for cost display. */
     outputPricePer1MTokens?: number;
-    /** Test seam for the hidden liminal layer. Defaults to the real renderer. */
     runLiminalLayer?: () => Promise<void>;
-    /**
-     * Optional callback invoked after settings are persisted.
-     * Return updated runtime labels to apply immediately in the TUI.
-     */
     onSettingsConfigChanged?: (settingsConfig: EffectiveSynaxConfig) => {
       modelLabel?: string;
       thinkingEnabled?: boolean;
@@ -108,1226 +45,382 @@ export async function runInteractiveTui(
       inputPricePer1MTokens?: number;
       outputPricePer1MTokens?: number;
     };
-    /** Enable SGR mouse tracking for app-managed wheel scrolling. Default false. */
     enableMouse?: boolean;
-    /** Use alternate screen buffer. Default true. */
     alternateScreen?: boolean;
   },
 ): Promise<void> {
-  const terminal = createTerminalSession(
-    { stdin: options?.stdin, stdout: options?.stdout },
-    { enableMouse: options?.enableMouse ?? false, alternateScreen: options?.alternateScreen ?? true },
-  );
-  if (!terminal.isTTY) return;
+  const stdout = options?.stdout ?? process.stdout;
+  if (stdout.isTTY === false) return;
 
-  let inputDraft = createInlinePasteInputSession();
+  const core = await loadOpenTuiCore();
+  const renderer = await core.createCliRenderer({
+    stdin: (options?.stdin ?? process.stdin) as NodeJS.ReadStream,
+    stdout: stdout as NodeJS.WriteStream,
+    screenMode: options?.alternateScreen === false ? 'main-screen' : 'alternate-screen',
+    exitOnCtrlC: false,
+    targetFps: 30,
+    maxFps: 60,
+    useMouse: options?.enableMouse ?? false,
+    backgroundColor: '#050505',
+    consoleMode: 'disabled',
+  });
+
   let state: RunStateSnapshot = createInitialRunStateSnapshot(Date.now());
-  // Autocomplete state
-  let autocomplete: { active: boolean; selection: number; filtered: SlashCommand[]; visible: boolean } = {
-    active: false,
-    selection: 0,
-    filtered: [],
-    visible: false,
-  };
-  // Settings modal state
-  let settingsState: SettingsState | null = null;
-  // Resume picker state
-  let resumeState: ResumePickerState | null = null;
-  let exiting = false;
+  let events: SemanticEvent[] = [];
+  let prompt = '';
   let busy = false;
-  let externalRendererActive = false;
-  let historyScrollOffset = 0;
-  // Ctrl+C double-press tracking: first press clears input, second within 800ms exits.
-  let lastCtrlCTime = 0;
-  let ctrlCClearedInput = false;
-  // Active provider warning — only surfaced when user tries to submit.
-  let providerWarning = options?.blockedMessage;
-  // ── Steering state ───────────────────────────────────────────────
-  /** Message queued to inject after the next tool-call result. */
-  let steeringMessage = '';
-  /** Whether we're in steering-input mode (user typed while bot is working). */
-  let steeringActive = false;
-  /** Whether the current turn was interrupted via Escape. Cleared on second Escape or new prompt. */
-  let interrupted = false;
-  const diff = new DiffRenderer();
+  let exiting = false;
+  let statusOverride = options?.blockedMessage ? `! Blocked: ${options.blockedMessage}` : '';
+  let tickTimer: ReturnType<typeof setInterval> | null = null;
 
-  // Adaptive render loop — 60 FPS when active, 0 when idle.
-  const TARGET_FRAME_MS = 1000 / 60;
-  let renderLoopActive = false;
-  let lastFrameTime = 0;
-  let idleTimer: ReturnType<typeof setTimeout> | null = null;
-  const IDLE_GRACE_MS = 2000;
-
-  const needsRenderLoop = (): boolean =>
-    busy || state.terminal === 'running' || (settingsState?.active ?? false) || (resumeState?.active ?? false);
-
-  // startRenderLoop is assigned after paint() is defined.
-  let startRenderLoop: () => void = () => {};
-  let runtimeLabels = {
-    modelLabel: options?.modelLabel,
-    thinkingEnabled: options?.thinkingEnabled,
-    endpointLabel: options?.endpointLabel,
-    providerName: options?.providerName,
-    contextWindowTokens: options?.contextWindowTokens,
-    coreLoaded: true,
-    inputPricePer1MTokens: options?.inputPricePer1MTokens,
-    outputPricePer1MTokens: options?.outputPricePer1MTokens,
-  };
   const applyOptionsToState = (): void => {
     state = {
       ...state,
-      modelId: runtimeLabels.modelLabel ?? '',
-      providerName: runtimeLabels.providerName ?? providerNameFromEndpoint(runtimeLabels.endpointLabel ?? ''),
-      contextWindowTokens: runtimeLabels.contextWindowTokens,
-      thinkingEnabled: runtimeLabels.thinkingEnabled,
+      modelId: options?.modelLabel ?? state.modelId,
+      providerName:
+        options?.providerName ?? providerNameFromEndpoint(options?.endpointLabel ?? '') ?? state.providerName,
+      contextWindowTokens: options?.contextWindowTokens ?? state.contextWindowTokens,
+      thinkingEnabled: options?.thinkingEnabled,
       activeSkills: options?.activeSkills ?? [],
-      coreLoaded: true,
-      inputPricePer1MTokens: runtimeLabels.inputPricePer1MTokens,
-      outputPricePer1MTokens: runtimeLabels.outputPricePer1MTokens,
-      sessionSpendLabel: isLocalEndpoint(runtimeLabels.endpointLabel ?? '') ? 'local' : undefined,
+      coreLoaded: options?.coreLoaded ?? true,
+      inputPricePer1MTokens: options?.inputPricePer1MTokens,
+      outputPricePer1MTokens: options?.outputPricePer1MTokens,
+      sessionSpendLabel: isLocalEndpoint(options?.endpointLabel ?? '') ? 'local' : state.sessionSpendLabel,
     };
   };
   applyOptionsToState();
+  let treeBuilt = false;
+  let renderPending = false;
+  let eventsVersion = 0;
+  let lastRenderedEventsVersion = -1;
 
-  // Wire the runtime event stream from ChatSession → TUI state reducer.
-  // This ensures the TUI reflects REAL runtime state, not fake animation.
-  session.setEventSink?.((event) => {
-    if (exiting) return;
-    // Clear steering state when the session auto-injects the steering message.
-    if (event.type === 'command_output' && event.command === 'steering') {
-      steeringMessage = '';
-      steeringActive = false;
-    }
-    state = applyEventToRunState(state, event, Date.now());
-    startRenderLoop();
-    paint(true);
-  });
-
-  const coreMode = (): CoreMode => {
-    if (!state.coreLoaded) return 'unloaded';
-    if (state.phase === 'error') return 'failure';
-    if (state.phase === 'budget_exhausted') return 'blocked';
-    if (state.phase === 'blocked') return 'blocked';
-    if (state.phase === 'completed') return 'completed';
-    if (state.phase === 'verifying') return 'verifying';
-    if (state.phase === 'tool_execution') return inferToolExecutionMode(state);
-    if (state.phase === 'thinking') return inferThinkingMode(state);
-    return 'idle';
-  };
-
-  const viewState = (): InteractiveViewState => ({
-    run: { ...state, nowMs: Date.now() },
-    objectiveInput: inputDraft.getVisibleBody(),
-    blockedMessage: options?.blockedMessage,
-    coreMode: coreMode(),
-    nowMs: Date.now(),
-    lastModelOutput: options?.lastModelOutput?.(),
-    modelLabel: runtimeLabels.modelLabel,
-    endpointLabel: runtimeLabels.endpointLabel,
-    cwdLabel: options?.cwdLabel ?? process.cwd(),
-    gitBranch: options?.gitBranch,
-    historyScrollOffset,
-    inputCursorOffset: inputDraft.getCursorOffset(),
-    steeringMessage: steeringActive ? steeringMessage : undefined,
-  });
-
-  const clampHistoryScroll = (): void => {
-    historyScrollOffset = Math.min(
-      maxHistoryScrollOffset(viewState(), terminal.columns, terminal.rows),
-      Math.max(0, historyScrollOffset),
-    );
-  };
-
-  const paint = (force = false): void => {
-    if (exiting) return;
-    if (externalRendererActive) return;
-    clampHistoryScroll();
-
-    // Use LayerStack for compositing base layout + overlays + modals
-    const viewStateSnapshot = viewState();
-    const cols = terminal.columns;
-    const rows = terminal.rows;
-    const layerStack = new LayerStack();
-
-    // Settings modal takes over the entire screen (z=2 replace layer)
-    if (settingsState?.active) {
-      const modal = settingsState; // non-null after active guard
-      layerStack.set('settings', 2, {
-        render: () => renderSettings(modal, cols, rows),
-      });
-    } else {
-      layerStack.remove('settings');
-    }
-
-    // Resume picker takes over the entire screen (z=2 replace layer)
-    if (resumeState?.active) {
-      const picker = resumeState; // non-null after active guard
-      layerStack.set('resume', 2, {
-        render: () => renderResumePicker(picker, cols, rows),
-      });
-    } else {
-      layerStack.remove('resume');
-    }
-
-    // Base layout only renders when no modal is active
-    if (!settingsState?.active && !resumeState?.active) {
-      layerStack.set('base', 0, {
-        render: () => renderLayout(viewStateSnapshot, cols, rows),
-      });
-
-      // Render autocomplete overlay at the bottom of the input area
-      if (autocomplete.visible && autocomplete.filtered.length > 0) {
-        const acOverlayLines = renderAutocompleteOverlayLines(autocomplete, cols);
-        layerStack.set('autocomplete', 1, {
-          render: () => acOverlayLines,
-          region: { start: Math.max(0, rows - acOverlayLines.length - 2), end: rows },
-        });
-      } else {
-        layerStack.remove('autocomplete');
-      }
-    } else {
-      layerStack.remove('base');
-      layerStack.remove('autocomplete');
-    }
-
-    const lines = layerStack.render(rows, cols);
-    const out = diff.render(lines, cols, rows);
-    if (out || force) {
-      terminal.synchronizedWrite(out || '');
-    }
-
-    // Reposition cursor only when no modal is active (modals have their own cursor handling)
-    if (!settingsState?.active && !resumeState?.active) {
-      const cursor = inputCursorPosition(
-        viewStateSnapshot.objectiveInput,
-        cols,
-        rows,
-        undefined,
-        viewStateSnapshot.inputCursorOffset,
-        steeringActive,
+  const doRender = (): void => {
+    if (exiting || renderer.isDestroyed) return;
+    state = advanceClock(state, Date.now());
+    const rail = railState(state, options);
+    const footer = footerState(state, prompt, busy, statusOverride);
+    if (!treeBuilt) {
+      renderer.root.add(
+        renderArtifactRoot(core, visibleEvents(events, state), rail, footer, renderer.width, (value) => {
+          void submit(value);
+        }),
       );
-      // Terminal cursor positions are 1-indexed. Use beam cursor style to avoid
-      // overwriting the first character of placeholder text.
-      terminal.write(`\u001b[${cursor.row + 1};${cursor.col + 1}H\u001b[5 q\u001b[?25h`);
+      treeBuilt = true;
     } else {
-      terminal.write('\u001b[?25l');
+      setNodeContent('synax-status', footer.status);
+      setNodeContent('synax-hints', footer.hints);
+      setNodeContent('synax-rail-model', rail.model ?? 'model n/a');
+      setNodeContent('synax-rail-branch', rail.branch ?? 'no branch');
+      setNodeContent('synax-rail-files', `Files (${rail.filesTouched.length})`);
+      setNodeContent('synax-rail-approvals', `Approvals (${rail.approvals.length})`);
+      setNodeContent('synax-rail-cost', `Cost: ${rail.costLabel ?? 'local'}`);
+      setNodeContent('synax-rail-context', `Context: ${rail.contextLabel ?? 'n/a'}`);
+      setNodeContent('synax-rail-uptime', `Uptime: ${rail.uptimeLabel}`);
+      const input = findNode('synax-input');
+      if (input) {
+        (input as any).value = footer.prompt;
+        (input as any).placeholder = footer.placeholder;
+      }
+      rebuildEvents();
     }
-  };
+    findNode('synax-input')?.focus();
+    renderer.requestRender();
 
-  const finish = (): void => {
-    exiting = true;
-    // Abort any running turn before tearing down.
-    session.abortCurrentTurn?.();
-    steeringMessage = '';
-    steeringActive = false;
-    // Disconnect the event sink immediately so no further state updates
-    // trigger paint() after terminal cleanup.
-    session.setEventSink?.(null);
-  };
-
-  const submit = async (): Promise<void> => {
-    const currentDraft = inputDraft.getDraft();
-    const plainText = draftPlainText(currentDraft).trim();
-    const kind = classifyInlineSubmission(currentDraft);
-    if (kind === 'empty' || busy) return;
-
-    // Secret trigger: Synax Backrooms easter egg
-    const submittedText = flattenInlinePasteDraft(currentDraft).trim();
-    if (isSecretTrigger(submittedText)) {
-      inputDraft = createInlinePasteInputSession();
-      paint(true);
-      externalRendererActive = true;
-      stdin?.off('data', onData);
-      terminal.stop();
-      let liminalOutput = 'liminal layer closed';
-      try {
-        if (options?.runLiminalLayer) {
-          await options.runLiminalLayer();
-        } else {
-          const { runSynaxBackrooms } = await import('../backrooms/runBackrooms');
-          await runSynaxBackrooms();
+    function findNode(id: string): any {
+      return renderer.root.findDescendantById(id);
+    }
+    function setNodeContent(id: string, content: string): void {
+      const node = findNode(id);
+      if (node && typeof node === 'object' && 'content' in node) {
+        (node as any).content = content;
+      }
+    }
+    function rebuildEvents(): void {
+      if (eventsVersion === lastRenderedEventsVersion) return;
+      lastRenderedEventsVersion = eventsVersion;
+      const scrollBox = findNode('synax-artifacts');
+      if (!scrollBox) return;
+      const visible = visibleEvents(events, state);
+      const newCards = visible.map((ev) => renderArtifactCard(core, ev));
+      if (typeof (scrollBox as any).clear === 'function' && typeof (scrollBox as any).add === 'function') {
+        (scrollBox as any).clear();
+        for (const card of newCards) {
+          (scrollBox as any).add(card);
         }
-      } catch (error) {
-        liminalOutput = `liminal layer error: ${error instanceof Error ? error.message : String(error)}`;
-      } finally {
-        externalRendererActive = false;
-        terminal.start();
-        stdin?.on('data', onData);
-        diff.reset();
+      } else if (typeof (scrollBox as any).setChildren === 'function') {
+        (scrollBox as any).setChildren(newCards);
+      } else if ((scrollBox as any).children !== undefined) {
+        (scrollBox as any).children = newCards;
+      } else {
+        /* Fallback: rebuild entire tree via remove+add.
+         * Only hit for unknown openTUI versions that support none of the
+         * above child‑replacement APIs.  Still throttled by the microtask
+         * batching so listener accumulation stays bounded. */
+        treeBuilt = false;
+        renderer.root.remove('synax-root');
+        doRender();
       }
-      state = applyEventToRunState(
-        state,
-        {
-          type: 'command_output',
-          timestamp: new Date().toISOString(),
-          command: 'liminal',
-          content: liminalOutput,
-        },
-        Date.now(),
-      );
-      paint(true);
+    }
+  };
+
+  const render = (): void => {
+    if (exiting || renderer.isDestroyed) return;
+    if (renderPending) return;
+    renderPending = true;
+    queueMicrotask(() => {
+      renderPending = false;
+      doRender();
+    });
+  };
+
+  const submit = async (rawValue: string): Promise<void> => {
+    const value = rawValue.trim();
+    if (!value || busy) return;
+    if (isSecretTrigger(value)) {
+      await options?.runLiminalLayer?.();
+      prompt = '';
+      render();
       return;
     }
-
-    const text = kind === 'slash' ? plainText : flattenInlinePasteDraft(currentDraft);
-    inputDraft = createInlinePasteInputSession();
+    prompt = '';
+    statusOverride = '';
     busy = true;
-    startRenderLoop();
-    paint(true);
-
-    if (kind === 'slash') {
-      // /mouse is handled locally to toggle terminal mouse tracking.
-      if (plainText === '/mouse') {
-        const toggled = toggleMouseMode(terminal);
-        state = applyEventToRunState(
-          state,
-          {
-            type: 'command_output',
-            timestamp: new Date().toISOString(),
-            command: '/mouse',
-            content: toggled
-              ? '[synax] Mouse mode enabled — SGR wheel scrolling active. Native text selection is disabled.'
-              : '[synax] Mouse mode disabled — native text selection and copy work normally. Use keyboard or PageUp/PageDown to scroll.',
-          },
-          Date.now(),
-        );
-        busy = false;
-        paint(true);
-        return;
-      }
-      // Check if this command opens the settings modal (or resume picker).
-      // The slash-command-registry is the source of truth for modal-triggering commands.
-      const slashCmd = getCommand(plainText.slice(1));
-      if (slashCmd?.opensSettings) {
-        openSettingsModal();
-        busy = false;
-        paint(true);
-        return;
-      }
-      if (slashCmd?.opensResume) {
-        openResumePicker();
-        busy = false;
-        paint(true);
-        return;
-      }
-
-      const slash = await session.handleSlashCommand(text);
-      if (slash.newSession) {
-        session.resetConversation?.();
-        options?.resetLastModelOutput?.();
-        state = createInitialRunStateSnapshot(Date.now());
-        applyOptionsToState();
-        historyScrollOffset = 0;
-        diff.reset();
-      }
-      if (slash.output) {
-        state = applyEventToRunState(
-          state,
-          { type: 'command_output', timestamp: new Date().toISOString(), command: text, content: slash.output },
-          Date.now(),
-        );
-      }
-      if (slash.exit) finish();
-      busy = false;
-      paint(true);
-      return;
-    }
-
-    if (text.startsWith('!')) {
-      const command = text.slice(1).trim();
-      if (!command) {
-        state = applyEventToRunState(
-          state,
-          {
-            type: 'command_output',
-            timestamp: new Date().toISOString(),
-            command: '!',
-            content: '[synax] shell command required after !',
-          },
-          Date.now(),
-        );
-      } else if (session.handleShellCommand) {
+    render();
+    try {
+      if (value.startsWith('/')) {
+        const report = await session.handleSlashCommand(value);
+        if (report.exit) {
+          exiting = true;
+          renderer.destroy();
+          return;
+        }
+        if (report.output.trim()) {
+          eventsVersion++; events.push(noteEvent('slash', report.output));
+        }
+        if (report.newSession) {
+          events = [];
+          eventsVersion = 0;
+          state = createInitialRunStateSnapshot(Date.now());
+          options?.resetLastModelOutput?.();
+        }
+      } else if (value.startsWith('!') && session.handleShellCommand) {
+        const command = value.slice(1).trim();
         const report = await session.handleShellCommand(command);
-        state = applyEventToRunState(
-          state,
-          {
-            type: 'local_shell_command',
-            timestamp: new Date().toISOString(),
+        eventsVersion++; events.push({
+          id: `shell-${Date.now()}`,
+          class: 'command',
+          timestamp: Date.now(),
+          artifact: {
+            type: 'command',
             command: report.command,
-            exitCode: report.exitCode,
-            durationMs: report.durationMs,
+            cwd: process.cwd(),
+            riskLevel: 'medium',
             stdout: report.stdout,
             stderr: report.stderr,
+            exitCode: report.exitCode,
           },
-          Date.now(),
-        );
+          metadata: { duration: report.durationMs },
+        });
       } else {
-        state = applyEventToRunState(
-          state,
-          {
-            type: 'command_output',
-            timestamp: new Date().toISOString(),
-            command: text,
-            content: '[synax] local shell commands are unavailable in this session',
-          },
-          Date.now(),
-        );
+        await session.handleUserMessage(value);
       }
-      busy = false;
-      paint(true);
-      return;
-    }
-
-    if (providerWarning) {
-      state = applyEventToRunState(
-        state,
-        {
-          type: 'command_output',
-          timestamp: new Date().toISOString(),
-          command: 'submit',
-          content: `[synax] ${providerWarning}`,
-        },
-        Date.now(),
-      );
-      busy = false;
-      paint(true);
-      return;
-    }
-
-    // Clear any lingering steering state when starting a fresh turn.
-    steeringMessage = '';
-    steeringActive = false;
-    interrupted = false;
-    session.setSteeringMessage?.('');
-
-    state = applyEventToRunState(
-      state,
-      {
-        type: 'task_started',
-        timestamp: new Date().toISOString(),
-        mode: 'interactive',
-        profile: 'default',
-        endpoint: runtimeLabels.endpointLabel ?? 'local',
-        model: runtimeLabels.modelLabel ?? 'local model',
-        providerName: runtimeLabels.providerName,
-        contextBudgetTokens: 0,
-        contextWindowTokens: runtimeLabels.contextWindowTokens,
-        maxModelSteps: 0,
-        maxToolCalls: 0,
-        tools: [],
-        task: text,
-        inputPricePer1MTokens: runtimeLabels.inputPricePer1MTokens,
-        outputPricePer1MTokens: runtimeLabels.outputPricePer1MTokens,
-      },
-      Date.now(),
-    );
-    paint(true);
-
-    try {
-      const report = await session.handleUserMessage(text);
-      // The event sink already applied intermediate events (tool_started,
-      // verifying, etc). Apply the terminal event only to override phase.
-      state = applyEventToRunState(
-        state,
-        {
-          type: 'task_finished',
-          timestamp: new Date().toISOString(),
-          status: report.terminalState,
-          toolCalls: report.toolCalls ?? 0,
-          maxToolCalls: 0,
-          modelSteps: report.steps,
-          maxModelSteps: report.steps,
-          changedFiles: report.changedFiles,
-          workingTreeClean: report.workingTreeClean,
-          verification: report.terminalState === 'completed' ? 'passed' : (report.error ?? report.terminalState),
-          error: report.error,
-        },
-        Date.now(),
-      );
     } catch (error) {
-      state = applyEventToRunState(
-        state,
-        {
-          type: 'error',
-          timestamp: new Date().toISOString(),
-          message: error instanceof Error ? error.message : String(error),
-        },
-        Date.now(),
-      );
+      const message = error instanceof Error ? error.message : String(error);
+      eventsVersion++; events.push(noteEvent('error', message));
+      statusOverride = `x ${message}`;
     } finally {
       busy = false;
-      paint(true);
+      render();
     }
   };
 
-  // ─── Autocomplete ───────────────────────────────────────────
-
-  const updateAutocomplete = (): void => {
-    const plainText = draftPlainText(inputDraft.getDraft());
-    if (!inputDraft.hasPaste() && plainText.startsWith('/') && !plainText.includes(' ')) {
-      const query = plainText.slice(1);
-      const filtered = filterCommands(query);
-      autocomplete = {
-        active: true,
-        visible: filtered.length > 0,
-        selection: 0,
-        filtered: filtered.slice(0, 10),
-      };
-    } else {
-      autocomplete = { active: false, visible: false, selection: 0, filtered: [] };
-    }
-  };
-
-  const executeAutocompleteCommand = async (cmd: SlashCommand): Promise<void> => {
-    inputDraft = createInlinePasteInputSession();
-    autocomplete = { active: false, visible: false, selection: 0, filtered: [] };
-
-    const result: SlashCommandResult = await Promise.resolve(cmd.handler());
-
-    // /mouse is handled locally to toggle terminal mouse tracking.
-    if (cmd.name === 'mouse') {
-      const toggled = toggleMouseMode(terminal);
-      state = applyEventToRunState(
-        state,
-        {
-          type: 'command_output',
-          timestamp: new Date().toISOString(),
-          command: '/mouse',
-          content: toggled
-            ? '[synax] Mouse mode enabled — SGR wheel scrolling active. Native text selection is disabled.'
-            : '[synax] Mouse mode disabled — native text selection and copy work normally. Use keyboard or PageUp/PageDown to scroll.',
-        },
-        Date.now(),
-      );
-      return;
-    }
-
-    if (result.openSettings) {
-      openSettingsModal();
-      paint(true);
-      return;
-    }
-
-    if (result.openResume) {
-      openResumePicker();
-      paint(true);
-      return;
-    }
-
-    if (result.exit) {
-      finish();
-      return;
-    }
-
-    // For commands that return handled:false, pass through to the session
-    if (!result.handled && session.handleSlashCommand) {
-      const slashReport = await session.handleSlashCommand(`/${cmd.name}`);
-      if (slashReport.exit) {
-        finish();
-        return;
-      }
-      if (slashReport.newSession) {
-        session.resetConversation?.();
-        options?.resetLastModelOutput?.();
-        state = createInitialRunStateSnapshot(Date.now());
-        applyOptionsToState();
-        historyScrollOffset = 0;
-        diff.reset();
-      }
-      if (slashReport.output) {
-        state = applyEventToRunState(
-          state,
-          {
-            type: 'command_output',
-            timestamp: new Date().toISOString(),
-            command: `/${cmd.name}`,
-            content: slashReport.output,
-          },
-          Date.now(),
-        );
-      }
-      return;
-    }
-
-    if (result.newSession) {
-      options?.resetLastModelOutput?.();
-      state = createInitialRunStateSnapshot(Date.now());
-      applyOptionsToState();
-      historyScrollOffset = 0;
-      diff.reset();
-    }
-
-    if (result.output) {
-      state = applyEventToRunState(
-        state,
-        {
-          type: 'command_output',
-          timestamp: new Date().toISOString(),
-          command: `/${cmd.name}`,
-          content: result.output,
-        },
-        Date.now(),
-      );
-    }
-  };
-
-  // ─── Settings modal ────────────────────────────────────────
-
-  const openSettingsModal = (): void => {
-    const config = loadSettingsConfig();
-    settingsState = settingsReducer(createSettingsState(config), { type: 'open' });
-    resumeState = null;
-  };
-
-  const closeSettingsModal = (): void => {
-    if (!settingsState) return;
-    diff.reset();
-    settingsState = settingsReducer(settingsState, { type: 'close' });
-    if (settingsState?.dirty) {
-      persistSettingsConfig(settingsState.config);
-      const updates = options?.onSettingsConfigChanged?.(settingsState.config);
-      if (updates) {
-        runtimeLabels = {
-          ...runtimeLabels,
-          ...updates,
-        };
-        if (updates.providerWarning !== undefined) {
-          providerWarning = updates.providerWarning;
-        }
-        applyOptionsToState();
-      }
-    }
-    settingsState = null;
-  };
-
-  const handleSettingsInput = (event: { type: string; value?: string }): void => {
-    if (!settingsState) return;
-    if (event.type === 'escape') {
-      closeSettingsModal();
-      return;
-    }
-    if (event.type === 'arrow_up' || event.type === 'scroll_history_up') {
-      settingsState = settingsReducer(settingsState, { type: 'move_up' });
-      return;
-    }
-    if (event.type === 'arrow_down' || event.type === 'scroll_history_down') {
-      settingsState = settingsReducer(settingsState, { type: 'move_down' });
-      return;
-    }
-    if (event.type === 'tab') {
-      settingsState = settingsReducer(settingsState, { type: 'next_tab' });
-      return;
-    }
-    if (event.type === 'shift_tab') {
-      settingsState = settingsReducer(settingsState, { type: 'prev_tab' });
-      return;
-    }
-    if (event.type === 'submit') {
-      settingsState = settingsReducer(settingsState, { type: 'select_row' });
-      return;
-    }
-    if (event.type === 'text' && event.value === ' ') {
-      settingsState = settingsReducer(settingsState, { type: 'toggle' });
-      return;
-    }
-    if (event.type === 'text' && event.value === 'e') {
-      settingsState = settingsReducer(settingsState, { type: 'start_edit' });
-      return;
-    }
-    if (event.type === 'text' && event.value) {
-      if (settingsState.textInput) {
-        settingsState = settingsReducer(settingsState, { type: 'text_input', char: event.value });
-      } else if (event.value === '/') closeSettingsModal();
-      else if (event.value === 'q') closeSettingsModal();
-      return;
-    }
-    if (event.type === 'backspace' && settingsState.textInput) {
-      settingsState = settingsReducer(settingsState, { type: 'text_backspace' });
-    }
-  };
-
-  // ─── Resume picker ──────────────────────────────────────────
-
-  const openResumePicker = (): void => {
-    const sessions = listSessionsSorted('updated');
-    resumeState = resumePickerReducer(createResumePickerState(sessions), { type: 'open' });
-    settingsState = null;
-  };
-
-  const closeResumePicker = (): void => {
-    if (!resumeState) return;
-    diff.reset();
-    resumeState = resumePickerReducer(resumeState, { type: 'close' });
-    resumeState = null;
-  };
-
-  const handleResumeInput = (event: { type: string; value?: string }): void => {
-    if (!resumeState) return;
-    if (event.type === 'escape') {
-      closeResumePicker();
-      return;
-    }
-    if (event.type === 'arrow_up' || event.type === 'scroll_history_up') {
-      resumeState = resumePickerReducer(resumeState, { type: 'move_up' });
-      return;
-    }
-    if (event.type === 'arrow_down' || event.type === 'scroll_history_down') {
-      resumeState = resumePickerReducer(resumeState, { type: 'move_down' });
-      return;
-    }
-    if (event.type === 'tab') {
-      resumeState = resumePickerReducer(resumeState, { type: 'toggle_sort' });
-      return;
-    }
-    if (event.type === 'submit') {
-      const selected = resumeState.filtered[resumeState.selectedRow];
-      if (selected) void resumeSelectedSession(selected);
-      return;
-    }
-    if (event.type === 'backspace' && resumeState.searchQuery.length > 0) {
-      resumeState = resumePickerReducer(resumeState, { type: 'search', query: resumeState.searchQuery.slice(0, -1) });
-      return;
-    }
-    if (event.type === 'text' && event.value) {
-      resumeState = resumePickerReducer(resumeState, { type: 'search', query: resumeState.searchQuery + event.value });
-    }
-  };
-
-  const resumeSelectedSession = async (meta: SessionMetadata): Promise<void> => {
-    closeResumePicker();
-
-    // Load actual session events to build a rich resume summary.
-    const events = readSessionEvents(meta.id);
-    const title = events.length > 0 ? generateSessionTitle(events) : (meta.title ?? 'Untitled');
-    const summary = events.length > 0 ? generateSessionSummary(events, 200) : (meta.summary ?? 'No messages');
-    const userMessages = events.filter((e) => e.type === 'user_message').length;
-    const assistantMessages = events.filter((e) => e.type === 'assistant_message').length;
-    const toolEvents = events.filter((e) => e.type === 'tool_call' || e.type === 'tool_result').length;
-
-    // Restore context window values from the last state snapshot
-    const lastSnapshot = events.filter((e) => e.type === 'state_snapshot').pop();
-    const snapData = (lastSnapshot?.snapshot ?? {}) as Record<string, unknown>;
-    if (typeof snapData.contextWindowTokens === 'number') {
-      state = applyEventToRunState(
-        state,
-        {
-          type: 'context_budget_updated',
-          timestamp: new Date().toISOString(),
-          estimatedInputTokens: typeof snapData.contextUsedTokens === 'number' ? snapData.contextUsedTokens : 0,
-          inputLimit: (snapData.contextWindowTokens as number) - 8192,
-          contextWindowTokens: snapData.contextWindowTokens as number,
-          reservedOutputTokens: 8192,
-          step: 0,
-        },
-        Date.now(),
-      );
-    }
-
-    const contentLines = [
-      `Resumed session: ${title}`,
-      `Branch: ${meta.branch ?? 'unknown'}  ·  Model: ${meta.activeModel ?? 'unknown'}`,
-      `Updated: ${meta.updatedAt}`,
-      `Messages: ${userMessages} user, ${assistantMessages} assistant, ${toolEvents} tool events`,
-      '',
-      `Summary: ${summary}`,
-    ];
-
-    state = applyEventToRunState(
-      state,
-      {
-        type: 'command_output',
-        timestamp: new Date().toISOString(),
-        command: '/resume',
-        content: contentLines.join('\n'),
-      },
-      Date.now(),
-    );
-  };
-
-  // ─── Config bridge ──────────────────────────────────────────
-
-  const loadSettingsConfig = (): EffectiveSynaxConfig => {
-    try {
-      return loadSynaxConfig();
-    } catch {
-      return {
-        active: { provider: 'relay', model: '', thinking: 'off' },
-        providers: {},
-        skills: { enabled: [], disabled: [] },
-        mcp: { servers: {} },
-        source: null,
-        errors: [],
-      };
-    }
-  };
-
-  const persistSettingsConfig = (config: EffectiveSynaxConfig): void => {
-    try {
-      persistConfig(config, process.cwd());
-    } catch {
-      /* best-effort */
-    }
-  };
-
-  const stdin = options?.stdin ?? (defaultStdin as unknown as InputStreamLike);
-  const inputParser = createInputParser();
-  const onData = (chunk: Buffer): void => {
-    const events = inputParser.parse(chunk.toString('utf8'));
-    for (const event of events) {
-      // Exit always works
-      if (event.type === 'exit') {
-        if (settingsState?.active) {
-          closeSettingsModal();
-          paint(true);
-          continue;
-        }
-        if (resumeState?.active) {
-          resumeState = resumePickerReducer(resumeState, { type: 'close' });
-          paint(true);
-          continue;
-        }
-        finish();
-        break;
-      }
-
-      // Ctrl+C: first press clears input, second press within 800ms exits.
-      // During active generation: abort turn and clear steering.
-      if (event.type === 'ctrl_c') {
-        if (settingsState?.active) {
-          closeSettingsModal();
-          paint(true);
-          continue;
-        }
-        if (resumeState?.active) {
-          closeResumePicker();
-          paint(true);
-          continue;
-        }
-        if (busy) {
-          session.abortCurrentTurn?.();
-          session.setSteeringMessage?.('');
-          steeringMessage = '';
-          steeringActive = false;
-          continue;
-        }
-        const now = Date.now();
-        if (inputDraft.getVisibleBody().length > 0 || ctrlCClearedInput) {
-          if (ctrlCClearedInput && now - lastCtrlCTime < 800) {
-            finish();
-            break;
-          }
-          inputDraft = createInlinePasteInputSession();
-          autocomplete = { active: false, visible: false, selection: 0, filtered: [] };
-          lastCtrlCTime = now;
-          ctrlCClearedInput = true;
-        } else {
-          ctrlCClearedInput = false;
-        }
-        continue;
-      }
-
-      // Modal input routing
-      if (settingsState?.active) {
-        handleSettingsInput(event);
-        continue;
-      }
-
-      if (resumeState?.active) {
-        handleResumeInput(event);
-        continue;
-      }
-
-      // ── Steering input routing (model actively generating) ──────
-      if (busy) {
-        if (event.type === 'escape') {
-          // Escape interrupts the current turn and returns to idle so the
-          // user can type a new prompt. It does NOT exit the Synax session
-          // (use Ctrl+D for that, as documented in the input dock help).
-          session.abortCurrentTurn?.();
-          session.setSteeringMessage?.('');
-          steeringMessage = '';
-          steeringActive = false;
-          interrupted = true;
-          // Inject an error event to show the red interrupted banner.
-          state = applyEventToRunState(
-            state,
-            { type: 'error', timestamp: new Date().toISOString(), message: '⏻ Interrupted' },
-            Date.now(),
-          );
-          // submit()'s finally block will reset busy=false and repaint when
-          // the aborted turn settles.
-          continue;
-        }
-        if (event.type === 'submit') {
-          if (steeringMessage.trim()) {
-            const trimmed = steeringMessage.trim();
-            // ── Slash commands during generation ──────────────────
-            // Route /commands through the slash-command path instead of
-            // the steering buffer, so users can open settings, switch
-            // models, inspect state, etc. without waiting for the model
-            // to finish.
-            if (trimmed.startsWith('/')) {
-              const cmdName = trimmed.slice(1);
-              const slashCmd = getCommand(cmdName);
-              session.abortCurrentTurn?.();
-              session.setSteeringMessage?.('');
-              steeringMessage = '';
-              steeringActive = false;
-
-              // Modal-triggering commands open immediately.
-              if (slashCmd?.opensSettings) {
-                openSettingsModal();
-                paint(true);
-                continue;
-              }
-              if (slashCmd?.opensResume) {
-                openResumePicker();
-                paint(true);
-                continue;
-              }
-
-              // Non-modal slash commands: wait for turn to settle,
-              // then dispatch through the session.
-              setTimeout(() => {
-                void (async () => {
-                  const deadline = Date.now() + 5000;
-                  while (busy) {
-                    if (Date.now() > deadline) return;
-                    await new Promise((r) => setTimeout(r, 25));
-                  }
-                  if (session.handleSlashCommand) {
-                    const result = await session.handleSlashCommand(trimmed);
-                    if (result.output) {
-                      state = applyEventToRunState(
-                        state,
-                        {
-                          type: 'command_output',
-                          timestamp: new Date().toISOString(),
-                          command: trimmed,
-                          content: result.output,
-                        },
-                        Date.now(),
-                      );
-                    }
-                    if (result.newSession) {
-                      session.resetConversation?.();
-                      options?.resetLastModelOutput?.();
-                      state = createInitialRunStateSnapshot(Date.now());
-                      applyOptionsToState();
-                      historyScrollOffset = 0;
-                      diff.reset();
-                    }
-                    if (result.exit) finish();
-                  }
-                  paint(true);
-                })();
-              }, 0);
-              continue;
-            }
-
-            // ── Regular steering text ─────────────────────────────
-            // Enter with queued steering: interrupt bot, submit steering.
-            session.abortCurrentTurn?.();
-            const msg = session.consumeSteeringMessage?.() ?? trimmed;
-            steeringMessage = '';
-            steeringActive = false;
-            // busy will be cleared when the aborted turn resolves.
-            // Schedule the steering message submission after a brief tick.
-            setTimeout(() => {
-              void (async () => {
-                // Wait for the aborted turn to settle.
-                const deadline = Date.now() + 5000; // 5s safety timeout
-                while (busy) {
-                  if (Date.now() > deadline) {
-                    // Turn didn't settle in time — bail out gracefully.
-                    state = applyEventToRunState(
-                      state,
-                      {
-                        type: 'command_output',
-                        timestamp: new Date().toISOString(),
-                        command: 'steering',
-                        content: '[synax] timed out waiting for turn to abort — steering message lost',
-                      },
-                      Date.now(),
-                    );
-                    return;
-                  }
-                  await new Promise((r) => setTimeout(r, 25));
-                }
-                // Submit the steering message.
-                inputDraft = createInlinePasteInputSession();
-                inputDraft.handleText(msg);
-                void submit();
-              })();
-            }, 0);
-            continue;
-          }
-          // Enter with empty steering during busy: ignore.
-          continue;
-        }
-        if (event.type === 'backspace') {
-          if (steeringMessage.length > 0) {
-            steeringMessage = steeringMessage.slice(0, -1);
-            if (steeringMessage.length === 0) {
-              steeringActive = false;
-            }
-          }
-          continue;
-        }
-        if (event.type === 'text' && event.value) {
-          // Steering text is held locally until Enter. We deliberately do NOT
-          // forward each keystroke to session.setSteeringMessage because the
-          // session would auto-consume the pending message between tool calls
-          // (onSteeringCheck), clearing the in-progress text from the steering
-          // bar mid-type. Submission happens explicitly on Enter via the
-          // busy-mode submit handler above.
-          if (steeringMessage.length < MAX_INPUT_CHARS) {
-            steeringMessage += event.value;
-            steeringActive = true;
-          }
-          continue;
-        }
-        // Arrow keys during busy: scroll history normally.
-        if (event.type === 'arrow_up' || event.type === 'scroll_history_up') {
-          historyScrollOffset += 3;
-          clampHistoryScroll();
-          continue;
-        }
-        if (event.type === 'arrow_down' || event.type === 'scroll_history_down') {
-          historyScrollOffset = Math.max(0, historyScrollOffset - 3);
-          clampHistoryScroll();
-          continue;
-        }
-        continue;
-      }
-
-      // ── Normal input routing (model idle) ──────────────────────
-      if (event.type === 'arrow_up' || event.type === 'scroll_history_up') {
-        if (autocomplete.visible) {
-          autocomplete.selection = Math.max(0, autocomplete.selection - 1);
-        } else if (inputDraft.getVisibleBody().includes('\n')) {
-          inputDraft.handleCursorUp();
-        } else {
-          historyScrollOffset += 3;
-          clampHistoryScroll();
-        }
-        continue;
-      }
-      if (event.type === 'arrow_down' || event.type === 'scroll_history_down') {
-        if (autocomplete.visible) {
-          autocomplete.selection = Math.min(autocomplete.filtered.length - 1, autocomplete.selection + 1);
-        } else if (inputDraft.getVisibleBody().includes('\n')) {
-          inputDraft.handleCursorDown();
-        } else {
-          historyScrollOffset = Math.max(0, historyScrollOffset - 3);
-          clampHistoryScroll();
-        }
-        continue;
-      }
-      if (event.type === 'arrow_left') {
-        if (!autocomplete.visible) {
-          inputDraft.handleCursorLeft();
-        }
-        continue;
-      }
-      if (event.type === 'arrow_right') {
-        if (!autocomplete.visible) {
-          inputDraft.handleCursorRight();
-        }
-        continue;
-      }
-      if (event.type === 'home') {
-        if (!autocomplete.visible) {
-          inputDraft.handleHome();
-        }
-        continue;
-      }
-      if (event.type === 'end') {
-        if (!autocomplete.visible) {
-          inputDraft.handleEnd();
-        }
-        continue;
-      }
-      if (event.type === 'backspace') {
-        inputDraft.handleBackspace();
-        updateAutocomplete();
-        continue;
-      }
-      if (event.type === 'escape') {
-        if (autocomplete.visible) {
-          autocomplete.visible = false;
-          continue;
-        }
-        // Clear interrupted state to "allow the process to continue" (return to idle).
-        if (interrupted) {
-          interrupted = false;
-          state = createInitialRunStateSnapshot(Date.now());
-          applyOptionsToState();
-          diff.reset();
-          continue;
-        }
-        continue;
-      }
-      if (event.type === 'tab') {
-        if (autocomplete.visible && autocomplete.filtered.length > 0) {
-          // Auto-complete to first match
-          const cmd = autocomplete.filtered[autocomplete.selection] ?? autocomplete.filtered[0];
-          inputDraft = createInlinePasteInputSession();
-          inputDraft.handleText(`/${cmd.name} `);
-          autocomplete.visible = false;
-          continue;
-        }
-        continue;
-      }
-      if (event.type === 'submit') {
-        if (autocomplete.visible && autocomplete.filtered.length > 0) {
-          const cmd = autocomplete.filtered[autocomplete.selection] ?? autocomplete.filtered[0];
-          void executeAutocompleteCommand(cmd);
-          continue;
-        }
-        void submit();
-        continue;
-      }
-      if (event.type === 'newline') {
-        if (inputDraft.getVisibleBody().length < MAX_INPUT_CHARS) inputDraft.handleText('\n');
-        updateAutocomplete();
-        continue;
-      }
-      if (event.type === 'paste' && event.value) {
-        if (inputDraft.getVisibleBody().length < MAX_INPUT_CHARS) {
-          inputDraft.handlePasteStart();
-          inputDraft.handlePasteChunk(event.value);
-          inputDraft.handlePasteEnd();
-        }
-        updateAutocomplete();
-        continue;
-      }
-      if (event.type === 'text' && event.value) {
-        if (inputDraft.getVisibleBody().length < MAX_INPUT_CHARS) inputDraft.handleText(event.value);
-        updateAutocomplete();
-      }
-    }
-    paint();
-  };
-
-  // ── Assign real render loop implementation (needs paint() in scope) ──
-
-  const scheduleFrame = (): void => {
-    if (exiting || !renderLoopActive) return;
-    const now = performance.now();
-    const elapsed = now - lastFrameTime;
-    if (elapsed >= TARGET_FRAME_MS) {
-      lastFrameTime = now;
-      paint();
-      if (!needsRenderLoop()) {
-        if (!idleTimer) idleTimer = setTimeout(() => stopRenderLoop(), IDLE_GRACE_MS);
-      } else if (idleTimer) {
-        clearTimeout(idleTimer);
-        idleTimer = null;
-      }
-    }
-    const delay = Math.max(1, TARGET_FRAME_MS - (performance.now() - lastFrameTime));
-    setTimeout(scheduleFrame, delay);
-  };
-
-  startRenderLoop = (): void => {
+  session.setEventSink?.((event) => {
     if (exiting) return;
-    if (idleTimer) {
-      clearTimeout(idleTimer);
-      idleTimer = null;
+    state = applyEventToRunState(state, event, Date.now());
+    eventsVersion++; events.push(...classifyAgentEvent(event, state, Date.now()));
+    events = events.slice(Math.max(0, events.length - 500));
+    render();
+  });
+
+  renderer.keyInput.on('keypress', (key) => {
+    if (key.ctrl && key.name === 'c') {
+      exiting = true;
+      session.abortCurrentTurn?.();
+      renderer.destroy();
+      return;
     }
-    if (renderLoopActive) return;
-    renderLoopActive = true;
-    lastFrameTime = performance.now();
-    setTimeout(scheduleFrame, 0);
-  };
-
-  const stopRenderLoop = (): void => {
-    renderLoopActive = false;
-    if (idleTimer) {
-      clearTimeout(idleTimer);
-      idleTimer = null;
+    if (key.name === 'escape') {
+      session.abortCurrentTurn?.();
+      statusOverride = '! Turn interrupted';
+      busy = false;
+      render();
     }
-  };
+  });
 
-  // ── Main event loop ──────────────────────────────────────────
+  renderer.on('resize', () => {
+    // Layout may change with terminal width (right rail visibility, etc.)
+    treeBuilt = false;
+    doRender();
+  });
+  renderer.start();
+  tickTimer = setInterval(render, 1000);
+  doRender();
 
-  // Terminal resize handling — forces a full redraw so the layout
-  // adapts to the new columns/rows immediately.
-  let resizeDebounce: ReturnType<typeof setTimeout> | null = null;
-  const onResize = (): void => {
-    if (exiting) return;
-    if (resizeDebounce) clearTimeout(resizeDebounce);
-    resizeDebounce = setTimeout(() => {
-      resizeDebounce = null;
-      if (exiting) return;
-      diff.reset();
-      historyScrollOffset = 0;
-      startRenderLoop();
-      paint(true);
-    }, 50);
-  };
-  const stdoutStream =
-    options?.stdout ?? (process.stdout as unknown as Writable & { isTTY?: boolean; columns?: number; rows?: number });
-  stdoutStream.on?.('resize', onResize);
+  await new Promise<void>((resolve) => {
+    renderer.on('destroy', resolve);
+  });
 
-  terminal.start();
+  if (tickTimer) clearInterval(tickTimer);
+  session.setEventSink?.(null);
+}
+
+async function loadOpenTuiCore(): Promise<OpenTuiCore> {
+  const importer = new Function('specifier', 'return import(specifier)') as (specifier: string) => Promise<OpenTuiCore>;
   try {
-    startRenderLoop();
-    paint(true);
-    stdin?.on('data', onData);
-    while (!exiting) {
-      await new Promise((resolve) => setTimeout(resolve, 25));
+    return await importer('@opentui/core');
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (message.includes('bun-ffi-structs') || message.includes('node:ffi')) {
+      throw new Error(
+        [
+          'OpenTUI is installed, but this JavaScript runtime cannot load its native core.',
+          'Run Synax with Bun, or with a Node build that supports node:ffi and the flags --experimental-ffi --allow-ffi.',
+          'Installing Zig is only needed when building OpenTUI native artifacts; it does not add node:ffi support to Node.',
+        ].join(' '),
+      );
     }
-  } finally {
-    stopRenderLoop();
-    stdoutStream.off?.('resize', onResize);
-    stdin?.off('data', onData);
-    terminal.stop();
+    throw error;
   }
 }
 
-function toggleMouseMode(terminal: TerminalSession): boolean {
-  if (terminal.mouseEnabled) {
-    terminal.disableMouse();
-    return false;
+function visibleEvents(events: SemanticEvent[], state: RunStateSnapshot): SemanticEvent[] {
+  if (events.length > 0) return events;
+  return semanticEventsFromDebugHistory(state);
+}
+
+function railState(
+  state: RunStateSnapshot,
+  options:
+    | {
+        modelLabel?: string;
+        endpointLabel?: string;
+        providerName?: string;
+        cwdLabel?: string;
+        gitBranch?: string;
+      }
+    | undefined,
+): ArtifactRailState {
+  const contextLabel =
+    state.contextUsedTokens !== undefined && state.contextWindowTokens
+      ? `${Math.round((state.contextUsedTokens / state.contextWindowTokens) * 100)}%`
+      : undefined;
+  return {
+    model: options?.modelLabel ?? state.modelId,
+    branch: options?.gitBranch,
+    cwd: options?.cwdLabel,
+    filesTouched: unique([...state.filesChangedThisRun, ...state.changes.items.map((item) => item.path)]),
+    approvals: state.phase === 'blocked' ? [{ action: state.objective.nextCheckpoint, riskLevel: 'medium' }] : [],
+    costLabel: state.sessionSpendLabel ?? formatCost(state.sessionCostUsd),
+    contextLabel,
+    uptimeLabel: elapsed(state.startedAtMs, state.nowMs),
+    provider: options?.providerName ?? state.providerName,
+    endpoint: options?.endpointLabel,
+  };
+}
+
+function footerState(state: RunStateSnapshot, prompt: string, busy: boolean, statusOverride: string): FooterState {
+  if (statusOverride) {
+    return {
+      status: statusOverride,
+      prompt,
+      placeholder: 'Ask Synax...',
+      hints: '[Enter] submit  [Esc] cancel  [Ctrl+C] quit',
+    };
   }
-  terminal.enableMouse();
-  return true;
+  if (state.phase === 'tool_execution') {
+    return {
+      status: `$ Running tool (${elapsed(state.startedAtMs, state.nowMs)})`,
+      prompt,
+      placeholder: 'Steer Synax after the next tool result...',
+      hints: '[Esc] interrupt  [Ctrl+C] quit',
+    };
+  }
+  if (busy || state.phase === 'thinking') {
+    return {
+      status: `... Thinking${state.modelId ? ` (${state.modelId})` : ''}`,
+      prompt,
+      placeholder: 'Working...',
+      hints: '[Esc] interrupt  [Ctrl+C] quit',
+    };
+  }
+  if (state.phase === 'error') {
+    return {
+      status: `x ${state.terminalIssue ?? 'Error'}`,
+      prompt,
+      placeholder: 'Ask Synax how to recover...',
+      hints: '[Enter] submit  [Esc] clear  [Ctrl+C] quit',
+    };
+  }
+  if (state.phase === 'completed') {
+    return {
+      status: `✓ Task complete. ${state.filesChangedThisRun.length} files, ${state.toolInvocationCount} tools.`,
+      prompt,
+      placeholder: 'Continue...',
+      hints: '[Enter] submit  [/new] new session  [Ctrl+C] quit',
+    };
+  }
+  if (state.phase === 'blocked' || state.phase === 'budget_exhausted') {
+    return {
+      status: `! Needs attention: ${state.objective.nextCheckpoint}`,
+      prompt,
+      placeholder: 'Respond or adjust settings...',
+      hints: '[Enter] submit  [Ctrl+C] quit',
+    };
+  }
+  return {
+    status: 'Ready.',
+    prompt,
+    placeholder: 'Ask Synax to inspect, edit, test, or commit...',
+    hints: '[Enter] submit  [Esc] cancel  [Ctrl+C] quit',
+  };
+}
+
+function noteEvent(kind: 'slash' | 'error', body: string): SemanticEvent {
+  return {
+    id: `${kind}-${Date.now()}`,
+    class: kind === 'error' ? 'error' : 'note',
+    timestamp: Date.now(),
+    artifact: {
+      type: 'text',
+      title: kind === 'error' ? 'Error' : 'Command',
+      body,
+    },
+    metadata: {},
+  };
+}
+
+function unique(values: string[]): string[] {
+  return Array.from(new Set(values.filter(Boolean)));
+}
+
+function elapsed(startedAtMs: number, nowMs: number): string {
+  const seconds = Math.max(0, Math.floor((nowMs - startedAtMs) / 1000));
+  const minutes = Math.floor(seconds / 60);
+  return `${minutes}m${String(seconds % 60).padStart(2, '0')}s`;
+}
+
+function formatCost(cost?: number): string | undefined {
+  if (cost === undefined) return undefined;
+  return `$${cost.toFixed(4)}`;
+}
+
+function providerNameFromEndpoint(endpoint: string): string | undefined {
+  if (!endpoint) return undefined;
+  if (endpoint.includes('127.0.0.1') || endpoint.includes('localhost')) return 'local';
+  if (endpoint.includes('openai')) return 'openai';
+  return 'openai-compatible';
 }
 
 function isLocalEndpoint(endpoint: string): boolean {
-  return /(?:^|\/\/)(?:127\.0\.0\.1|localhost)(?::|\/|$)/i.test(endpoint);
-}
-
-function providerNameFromEndpoint(endpoint: string): string {
-  if (isLocalEndpoint(endpoint)) return 'Relay';
-  if (/api\.openai\.com/i.test(endpoint)) return 'OpenAI';
-  if (/anthropic/i.test(endpoint)) return 'Anthropic';
-  if (/openrouter/i.test(endpoint)) return 'OpenRouter';
-  return endpoint ? 'OpenAI-compatible' : 'unknown';
-}
-
-function inferThinkingMode(state: RunStateSnapshot): CoreMode {
-  const latest = state.timeline[state.timeline.length - 1]?.summary.toLowerCase() ?? '';
-  if (latest.includes('objective registered') || latest.includes('task started') || latest.includes('planned:')) {
-    return 'planning';
-  }
-  return 'reasoning';
-}
-
-function bold(text: string): string {
-  return `\u001b[1;37m${text}\u001b[0m`;
-}
-
-function dim(text: string): string {
-  return `\u001b[90m${text}\u001b[0m`;
-}
-
-function inferToolExecutionMode(state: RunStateSnapshot): CoreMode {
-  const hint = `${state.statusNote} ${state.timeline[state.timeline.length - 1]?.summary ?? ''}`.toLowerCase();
-  if (hint.includes('read')) return 'reading';
-  if (hint.includes('write') || hint.includes('edit') || hint.includes('replace')) return 'writing';
-  if (hint.includes('bash') || hint.includes('git') || hint.includes('command')) return 'bash';
-  return 'reasoning';
+  return endpoint.includes('127.0.0.1') || endpoint.includes('localhost') || endpoint.includes('0.0.0.0');
 }

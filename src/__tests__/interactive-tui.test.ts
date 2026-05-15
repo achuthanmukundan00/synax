@@ -1,19 +1,17 @@
-import { createChatSession, shouldUseInteractiveTui, type ChatSession } from '../commands/chat';
+import { createChatSession, shouldUseInteractiveTui } from '../commands/chat';
 import { applyEventToRunState, createInitialRunStateSnapshot } from '../agent/tui-state';
 import { resolveCoreVisualProfile } from '../tui/core-visual-profile';
 import { CORE_HEIGHT, CORE_WIDTH, modeColor, renderAiCore, renderDottedCore } from '../tui/ai-core';
 import { DiffRenderer } from '../tui/diff-renderer';
-import { runInteractiveTui } from '../tui/interactive-tui';
 import { LayerStack } from '../tui/layer-manager';
 import { maxHistoryScrollOffset, renderLayout } from '../tui/layout';
 import { createInputParser, parseInputChunk } from '../tui/input';
 import { createTerminalSession } from '../tui/terminal';
 import { renderSettings } from '../settings/settings-renderer';
 import { createSettingsState, settingsReducer } from '../settings/settings-state';
+import { classifyAgentEvent, semanticEventsFromDebugHistory } from '../tui/semantic-events';
 import type { EffectiveSynaxConfig } from '../config/schema';
 import { PassThrough, Writable } from 'stream';
-
-const EXPECTED_MAX_INPUT_CHARS = 4096;
 
 class CapturingWritable extends Writable {
   public chunks: string[] = [];
@@ -1779,286 +1777,95 @@ describe('interactive layout visual agreements', () => {
   });
 });
 
-describe('interactive tui runtime', () => {
-  it('caps submitted TUI input length', async () => {
-    const stdin = createTtyInput();
-    const stdout = new CapturingWritable();
-    let resolveSubmitted: (() => void) | undefined;
-    const submitted = new Promise<void>((resolve) => {
-      resolveSubmitted = resolve;
-    });
-    const session: ChatSession = {
-      sessionId: 'test-session',
-      conversation: createChatSession({
-        repoRoot: process.cwd(),
-        config: { provider: { kind: 'openai-compatible', base_url: 'http://localhost/v1', model: 'fake' } },
-      }).conversation,
-      handleUserMessage: jest.fn(async () => {
-        resolveSubmitted?.();
-        return {
-          terminalState: 'completed' as const,
-          finalAnswer: 'done',
-          changedFiles: [],
-          workingTreeClean: true,
-          steps: 1,
-          toolCalls: 0,
-        };
-      }),
-      handleSlashCommand: jest.fn(),
+describe('artifact-first tui event model', () => {
+  it('classifies task, tool, patch, and completion events as semantic artifacts', () => {
+    let state = createInitialRunStateSnapshot(0);
+
+    const taskEvent = {
+      type: 'task_started' as const,
+      timestamp: new Date(0).toISOString(),
+      mode: 'patch' as const,
+      profile: 'default',
+      endpoint: 'http://localhost/v1',
+      model: 'qwen',
+      contextBudgetTokens: 1000,
+      maxModelSteps: 10,
+      maxToolCalls: 10,
+      tools: ['edit'],
+      task: 'add artifact renderer',
     };
+    state = applyEventToRunState(state, taskEvent, 1);
+    expect(classifyAgentEvent(taskEvent, state, 1)[0]?.class).toBe('plan');
 
-    const runPromise = runInteractiveTui(session, { stdin, stdout });
-    stdin.write(Buffer.from(`${'x'.repeat(EXPECTED_MAX_INPUT_CHARS + 20)}\n`, 'utf8'));
-    await submitted;
-    stdin.write(Buffer.from('\u0004', 'utf8'));
-    await runPromise;
+    const toolEvent = {
+      type: 'tool_started' as const,
+      timestamp: new Date(1).toISOString(),
+      toolCallId: 'call-1',
+      toolName: 'bash',
+      summary: '{"command":"npm test -- tui"}',
+    };
+    state = applyEventToRunState(state, toolEvent, 2);
+    const command = classifyAgentEvent(toolEvent, state, 2)[0];
+    expect(command?.class).toBe('command');
+    expect(command?.metadata.riskLevel).toBe('medium');
 
-    expect(session.handleUserMessage).toHaveBeenCalledWith('x'.repeat(EXPECTED_MAX_INPUT_CHARS));
+    const patchEvent = {
+      type: 'patch_preview' as const,
+      timestamp: new Date(2).toISOString(),
+      toolCallId: 'call-2',
+      toolName: 'edit',
+      path: 'src/tui/interactive-tui.ts',
+      diff: '@@ renderer\n-old\n+new',
+    };
+    state = applyEventToRunState(state, patchEvent, 3);
+    const diff = classifyAgentEvent(patchEvent, state, 3)[0];
+    expect(diff?.class).toBe('diff');
+    expect(diff?.artifact.type).toBe('diff');
+
+    const finishedEvent = {
+      type: 'task_finished' as const,
+      timestamp: new Date(3).toISOString(),
+      status: 'completed' as const,
+      toolCalls: 2,
+      maxToolCalls: 10,
+      modelSteps: 1,
+      maxModelSteps: 10,
+      changedFiles: ['src/tui/interactive-tui.ts'],
+      workingTreeClean: false,
+      verification: 'typecheck passed',
+    };
+    state = applyEventToRunState(state, finishedEvent, 4);
+    const result = classifyAgentEvent(finishedEvent, state, 4)[0];
+    expect(result?.class).toBe('tool_result');
+    expect(result?.artifact.type).toBe('tool_result');
   });
 
-  it('masks multiline paste and preserves typed text around it until Enter', async () => {
-    const stdin = createTtyInput();
-    const stdout = new CapturingWritable();
-    let resolveSubmitted: (() => void) | undefined;
-    const submitted = new Promise<void>((resolve) => {
-      resolveSubmitted = resolve;
-    });
-    const session: ChatSession = {
-      sessionId: 'test-session',
-      conversation: createChatSession({
-        repoRoot: process.cwd(),
-        config: { provider: { kind: 'openai-compatible', base_url: 'http://localhost/v1', model: 'fake' } },
-      }).conversation,
-      handleUserMessage: jest.fn(async () => {
-        resolveSubmitted?.();
-        return {
-          terminalState: 'completed' as const,
-          finalAnswer: 'done',
-          changedFiles: [],
-          workingTreeClean: true,
-          steps: 1,
-          toolCalls: 0,
-        };
-      }),
-      handleSlashCommand: jest.fn(),
-    };
-
-    const runPromise = runInteractiveTui(session, { stdin, stdout });
-    stdin.write(Buffer.from('prefix ', 'utf8'));
-    stdin.write(Buffer.from('\x1b[200~first line\n', 'utf8'));
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    expect(session.handleUserMessage).not.toHaveBeenCalled();
-
-    stdin.write(Buffer.from('second line\x1b[201~ suffix', 'utf8'));
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    expect(session.handleUserMessage).not.toHaveBeenCalled();
-
-    stdin.write(Buffer.from('\n', 'utf8'));
-    await submitted;
-    stdin.write(Buffer.from('\u0004', 'utf8'));
-    await runPromise;
-
-    const plain = stripAnsi(stdout.text());
-    expect(plain).toContain('[pasted: 2 lines, 22 chars]');
-    // Paste content appears in the transcript because the full user prompt is rendered.
-    expect(plain).toContain('first line');
-    expect(plain).toContain('second line');
-    expect(session.handleUserMessage).toHaveBeenCalledWith(
-      'prefix \n\n--- BEGIN PASTED CONTENT 1: 2 lines, 22 chars ---\n\nfirst line\nsecond line\n\n--- END PASTED CONTENT 1 ---\n\n suffix',
-    );
-    expect(session.handleUserMessage).toHaveBeenCalledTimes(1);
-  });
-
-  it('keeps slash commands local after a completed turn', async () => {
-    const stdin = createTtyInput();
-    const stdout = new CapturingWritable();
-    let resolveSlash: (() => void) | undefined;
-    const slashHandled = new Promise<void>((resolve) => {
-      resolveSlash = resolve;
-    });
-    const session: ChatSession = {
-      sessionId: 'test-session',
-      conversation: createChatSession({
-        repoRoot: process.cwd(),
-        config: { provider: { kind: 'openai-compatible', base_url: 'http://localhost/v1', model: 'fake' } },
-      }).conversation,
-      handleUserMessage: jest.fn(async () => ({
-        terminalState: 'completed' as const,
-        finalAnswer: 'done',
-        changedFiles: [],
-        workingTreeClean: true,
-        steps: 1,
-        toolCalls: 0,
-      })),
-      handleSlashCommand: jest.fn(async () => {
-        resolveSlash?.();
-        return { handled: true, output: 'Chat Commands\n-------------', exit: false };
-      }),
-    };
-
-    const runPromise = runInteractiveTui(session, { stdin, stdout });
-    stdin.write(Buffer.from('finish this\n', 'utf8'));
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    stdin.write(Buffer.from('/help\n', 'utf8'));
-    await slashHandled;
-    stdin.write(Buffer.from('\u0004', 'utf8'));
-    await runPromise;
-
-    expect(session.handleUserMessage).toHaveBeenCalledTimes(1);
-    expect(session.handleUserMessage).toHaveBeenCalledWith('finish this');
-    expect(session.handleSlashCommand).toHaveBeenCalledWith('/help');
-    // Verify the slash command output appeared in the TUI (rendered as command event)
-    expect(session.handleSlashCommand).toHaveBeenCalled();
-  });
-
-  it('runs bang-prefixed TUI input as a local shell command', async () => {
-    const stdin = createTtyInput();
-    const stdout = new CapturingWritable();
-    let resolveShell: (() => void) | undefined;
-    const shellHandled = new Promise<void>((resolve) => {
-      resolveShell = resolve;
-    });
-    const session: ChatSession = {
-      sessionId: 'test-session',
-      conversation: createChatSession({
-        repoRoot: process.cwd(),
-        config: { provider: { kind: 'openai-compatible', base_url: 'http://localhost/v1', model: 'fake' } },
-      }).conversation,
-      handleUserMessage: jest.fn(),
-      handleSlashCommand: jest.fn(),
-      handleShellCommand: jest.fn(async (command: string) => {
-        resolveShell?.();
-        return {
-          command,
-          exitCode: 0,
-          stdout: 'hello\n',
-          stderr: '',
-          durationMs: 12,
-        };
-      }),
-    };
-
-    const runPromise = runInteractiveTui(session, { stdin, stdout });
-    stdin.write(Buffer.from('!echo hello\n', 'utf8'));
-    await shellHandled;
-    stdin.write(Buffer.from('\u0004', 'utf8'));
-    await runPromise;
-
-    const plain = stripAnsi(stdout.text());
-    expect(session.handleShellCommand).toHaveBeenCalledWith('echo hello');
-    expect(session.handleUserMessage).not.toHaveBeenCalled();
-    expect(plain).toContain('$ echo hello');
-    expect(plain).toContain('hello');
-    // Successful exit 0 is suppressed.
-    expect(plain).not.toContain('exit 0');
-  });
-
-  it('suspends chat input while the liminal renderer owns the terminal', async () => {
-    const stdin = createTtyInput();
-    const stdout = new CapturingWritable();
-    let resolveEntered: (() => void) | undefined;
-    let resolveExit: (() => void) | undefined;
-    const enteredLiminal = new Promise<void>((resolve) => {
-      resolveEntered = resolve;
-    });
-    const exitLiminal = new Promise<void>((resolve) => {
-      resolveExit = resolve;
-    });
-    const session: ChatSession = {
-      sessionId: 'test-session',
-      conversation: createChatSession({
-        repoRoot: process.cwd(),
-        config: { provider: { kind: 'openai-compatible', base_url: 'http://localhost/v1', model: 'fake' } },
-      }).conversation,
-      handleUserMessage: jest.fn(async () => ({
-        terminalState: 'completed' as const,
-        finalAnswer: 'done',
-        changedFiles: [],
-        workingTreeClean: true,
-        steps: 1,
-        toolCalls: 0,
-      })),
-      handleSlashCommand: jest.fn(),
-    };
-
-    const runPromise = runInteractiveTui(session, {
-      stdin,
-      stdout,
-      runLiminalLayer: async () => {
-        resolveEntered?.();
-        await exitLiminal;
+  it('can derive artifact cards from preserved debug history', () => {
+    let state = createInitialRunStateSnapshot(0);
+    state = applyEventToRunState(
+      state,
+      {
+        type: 'assistant_message',
+        timestamp: new Date(1).toISOString(),
+        content: '<thinking>hidden</thinking>\nI will inspect the renderer.',
       },
-    });
+      1,
+    );
+    state = applyEventToRunState(
+      state,
+      {
+        type: 'tool_started',
+        timestamp: new Date(2).toISOString(),
+        toolCallId: 'call-1',
+        toolName: 'read',
+        summary: '{"path":"src/tui/interactive-tui.ts"}',
+      },
+      2,
+    );
 
-    stdin.write(Buffer.from(':synax/liminal/access/000\n', 'utf8'));
-    await enteredLiminal;
-    stdin.write(Buffer.from('q\n', 'utf8'));
-    await new Promise((resolve) => setTimeout(resolve, 220));
-    expect(session.handleUserMessage).not.toHaveBeenCalled();
-
-    resolveExit?.();
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    stdin.write(Buffer.from('\u0004', 'utf8'));
-    await runPromise;
-
-    expect(stripAnsi(stdout.text())).toContain('liminal layer closed');
-  });
-
-  it('applies saved settings to runtime labels before the next submitted task', async () => {
-    const stdin = createTtyInput();
-    const stdout = new CapturingWritable();
-    let resolveSubmitted: (() => void) | undefined;
-    const submitted = new Promise<void>((resolve) => {
-      resolveSubmitted = resolve;
-    });
-    const session: ChatSession = {
-      sessionId: 'test-session',
-      conversation: createChatSession({
-        repoRoot: process.cwd(),
-        config: { provider: { kind: 'openai-compatible', base_url: 'http://localhost/v1', model: 'qwen' } },
-      }).conversation,
-      handleUserMessage: jest.fn(async () => {
-        resolveSubmitted?.();
-        return {
-          terminalState: 'completed' as const,
-          finalAnswer: 'done',
-          changedFiles: [],
-          workingTreeClean: true,
-          steps: 1,
-          toolCalls: 0,
-        };
-      }),
-      handleSlashCommand: jest.fn(),
-    };
-
-    const runPromise = runInteractiveTui(session, {
-      stdin,
-      stdout,
-      modelLabel: 'qwen',
-      endpointLabel: 'http://localhost/v1',
-      providerName: 'Relay',
-      onSettingsConfigChanged: () => ({
-        modelLabel: 'deepseek-reasoner',
-        endpointLabel: 'https://api.deepseek.com/v1',
-        providerName: 'DeepSeek',
-        contextWindowTokens: 65536,
-        coreVisualProfile: 'model',
-      }),
-    });
-    stdin.write(Buffer.from('/settings\n', 'utf8'));
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    stdin.write(Buffer.from('\x1b[A\n', 'utf8'));
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    stdin.write(Buffer.from('\x1b', 'utf8'));
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    stdin.write(Buffer.from('run after settings\n', 'utf8'));
-    await submitted;
-    stdin.write(Buffer.from('\u0004', 'utf8'));
-    await runPromise;
-
-    const plain = stripAnsi(stdout.text());
-    // Model ID appears in the info bar after settings change.
-    expect(plain).toContain('deepseek-reasoner');
+    const events = semanticEventsFromDebugHistory(state);
+    expect(events.map((event) => event.class)).toEqual(['assistant_text', 'command']);
+    expect(JSON.stringify(events)).not.toContain('<thinking>');
   });
 
   it('resets state and conversation on /new command', async () => {
@@ -2077,48 +1884,6 @@ describe('interactive tui runtime', () => {
     // Verify conversation was cleared — subsequent /clear should produce same result
     const clearReport = await session.handleSlashCommand('/clear');
     expect(clearReport.output).toContain('conversation cleared');
-  });
-
-  it('listens to the default stdin when no custom stdin is provided', async () => {
-    const stdout = new CapturingWritable();
-    const session: ChatSession = {
-      sessionId: 'test-session',
-      conversation: createChatSession({
-        repoRoot: process.cwd(),
-        config: { provider: { kind: 'openai-compatible', base_url: 'http://localhost/v1', model: 'fake' } },
-      }).conversation,
-      handleUserMessage: jest.fn(),
-      handleSlashCommand: jest.fn(),
-    };
-    const stdin = process.stdin as unknown as PassThrough & {
-      isTTY?: boolean;
-      setRawMode?: (mode: boolean) => void;
-      resume: () => void;
-      pause: () => void;
-    };
-
-    const originalIsTTY = stdin.isTTY;
-    const originalSetRawMode = stdin.setRawMode;
-    const setRawMode = jest.fn();
-    stdin.isTTY = true;
-    stdin.setRawMode = setRawMode;
-
-    const runPromise = runInteractiveTui(session, { stdout });
-    await new Promise((resolve) => setTimeout(resolve, 10));
-    stdin.emit('data', Buffer.from('\u0004', 'utf8'));
-
-    await expect(
-      Promise.race([
-        runPromise.then(() => 'resolved'),
-        new Promise<'timed_out'>((resolve) => setTimeout(() => resolve('timed_out'), 100)),
-      ]),
-    ).resolves.toBe('resolved');
-
-    expect(setRawMode).toHaveBeenCalledWith(true);
-    expect(setRawMode).toHaveBeenLastCalledWith(false);
-
-    stdin.isTTY = originalIsTTY;
-    stdin.setRawMode = originalSetRawMode;
   });
 });
 
