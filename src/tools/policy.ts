@@ -1,7 +1,7 @@
 import { extname, isAbsolute, normalize, relative, resolve, sep } from 'path';
 
 const BLOCKED_SEGMENTS = new Set(['.git', 'node_modules', 'dist', 'build', 'coverage', '.next', '.cache', '.vite']);
-const BLOCKED_BASENAMES = new Set(['package-lock.json', 'pnpm-lock.yaml', 'yarn.lock']);
+const BLOCKED_BASENAMES = new Set(['package-lock.json', 'pnpm-lock.yaml', 'yarn.lock', 'bun.lock', 'bun.lockb']);
 const BLOCKED_EXTENSIONS = new Set([
   '.png',
   '.jpg',
