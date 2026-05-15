@@ -258,10 +258,23 @@ async function dispatchStreamingRequest(
   externalSignal?: AbortSignal,
 ): Promise<{ status: number; bodyText: string; headers: Record<string, string> }> {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  let response: Response | undefined;
+
+  const onTimeout = (): void => {
+    controller.abort();
+    // Cancel the response body stream if fetch already completed, so that
+    // readOpenAIStream's reader.read() unblocks. In bun, aborting the fetch
+    // AbortSignal after the response body is being consumed does NOT always
+    // propagate to the body stream reader — the read can hang indefinitely.
+    response?.body?.cancel().catch(() => {});
+  };
+  const timer = setTimeout(onTimeout, timeoutMs);
 
   // Wire external signal (e.g. user abort) into the fetch controller.
-  const onExternalAbort = (): void => controller.abort();
+  const onExternalAbort = (): void => {
+    controller.abort();
+    response?.body?.cancel().catch(() => {});
+  };
   if (externalSignal) {
     if (externalSignal.aborted) {
       clearTimeout(timer);
@@ -271,26 +284,26 @@ async function dispatchStreamingRequest(
   }
 
   try {
-    const res = await fetch(url, {
+    response = await fetch(url, {
       method: 'POST',
       headers: { ...headers, Accept: 'text/event-stream, application/json' },
       body: JSON.stringify(body),
       signal: controller.signal,
     });
     const respHeaders: Record<string, string> = {};
-    res.headers.forEach((v, k) => {
+    response.headers.forEach((v, k) => {
       respHeaders[k] = v;
     });
-    if (!res.ok || !res.body) {
+    if (!response.ok || !response.body) {
       clearTimeout(timer);
       externalSignal?.removeEventListener('abort', onExternalAbort);
-      return { status: res.status, bodyText: await res.text(), headers: respHeaders };
+      return { status: response.status, bodyText: await response.text(), headers: respHeaders };
     }
 
-    const parsed = await readOpenAIStream(res.body, onDelta);
+    const parsed = await readOpenAIStream(response.body, onDelta);
     clearTimeout(timer);
     externalSignal?.removeEventListener('abort', onExternalAbort);
-    return { status: res.status, bodyText: JSON.stringify(parsed), headers: respHeaders };
+    return { status: response.status, bodyText: JSON.stringify(parsed), headers: respHeaders };
   } catch (err) {
     clearTimeout(timer);
     externalSignal?.removeEventListener('abort', onExternalAbort);
