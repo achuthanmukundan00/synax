@@ -1,4 +1,6 @@
-const ESC = '\u001b[';
+import { charWidthAt, visibleLength, closeAnsi, terminalWriteWidth } from './text-utils';
+
+const CSI = '[';
 
 export class DiffRenderer {
   private previous: string[] = [];
@@ -20,7 +22,7 @@ export class DiffRenderer {
 
     if (sizeChanged || this.previous.length === 0) {
       this.previous = next;
-      return `${ESC}H\u001b[2J${next.map((line, i) => renderLine(i, line)).join('')}`;
+      return `${CSI}H[2J${next.map((line, i) => renderLine(i, line)).join('')}`;
     }
 
     let firstChanged = -1;
@@ -43,50 +45,28 @@ export class DiffRenderer {
 }
 
 function renderLine(index: number, line: string): string {
-  return `${ESC}${index + 1};1H\u001b[0m\u001b[2K${line}\u001b[0m`;
+  return `${CSI}${index + 1};1H[0m[2K${line}[0m`;
 }
 
 function clip(line: string, width: number): string {
-  const visible = stripAnsi(line);
-  if (visible.length <= width) return closeAnsi(line);
-
+  if (visibleLength(line) <= width) return closeAnsi(line);
   let visibleCount = 0;
   let out = '';
-  for (let i = 0; i < line.length; i += 1) {
-    if (line[i] === '\u001b') {
+  for (let i = 0; i < line.length; ) {
+    if (line[i] === '') {
       // eslint-disable-next-line no-control-regex
-      const match = /\u001b\[[0-9;]*m/.exec(line.slice(i));
+      const match = /\[[0-9;]*[a-zA-Z]/.exec(line.slice(i));
       if (match) {
         out += match[0];
-        i += match[0].length - 1;
+        i += match[0].length;
         continue;
       }
     }
-
-    if (visibleCount >= width) break;
-    out += line[i];
-    visibleCount += 1;
+    const [w, advance] = charWidthAt(line, i);
+    if (visibleCount + w > width) break;
+    out += line.slice(i, i + advance);
+    visibleCount += w;
+    i += advance;
   }
-
-  // Ensure truncated lines don't leave ANSI codes open — open colours can
-  // bleed past the written content and shift or stain adjacent screen regions.
   return closeAnsi(out);
-}
-
-function closeAnsi(input: string): string {
-  return hasAnsi(input) && !input.endsWith('\u001b[0m') ? `${input}\u001b[0m` : input;
-}
-
-function hasAnsi(input: string): boolean {
-  // eslint-disable-next-line no-control-regex
-  return /\u001b\[[0-9;]*m/.test(input);
-}
-
-function stripAnsi(line: string): string {
-  // eslint-disable-next-line no-control-regex
-  return line.replace(/\u001b\[[0-9;]*m/g, '');
-}
-
-function terminalWriteWidth(width: number): number {
-  return width > 1 ? width - 1 : width;
 }
