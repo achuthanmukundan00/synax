@@ -1,11 +1,11 @@
 # Synax SDK API
 
-Synax can be consumed as a library (SDK) in your own TypeScript or Node.js applications. This allows you to build custom agents, UI clients, or long-running daemons around the core agent logic.
+Synax can be consumed as a library (SDK) in your own TypeScript or Bun applications. This allows you to build custom agents, UI clients, or long-running daemons around the core agent logic.
 
 ## Installation
 
 ```bash
-npm install synax
+bun add synax
 ```
 
 Ensure your project uses TypeScript and supports ES modules or CommonJS appropriate for your target environment.

@@ -1,4 +1,4 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 
 import { readFileSync, readdirSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
@@ -30,7 +30,7 @@ for (let iteration = 1; iteration <= maxIterations; iteration += 1) {
 
 function parseMaxIterations(rawValue) {
   if (!rawValue) {
-    throw new Error('Usage: node scripts/codex-prd-loop.mjs <max_iterations>');
+    throw new Error('Usage: bun scripts/codex-prd-loop.mjs <max_iterations>');
   }
 
   const parsed = Number(rawValue);

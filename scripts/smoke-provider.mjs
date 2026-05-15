@@ -1,14 +1,14 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 /**
  * Live provider smoke test.
  *
  * Usage (from project root):
- *   SYNAX_LIVE_PROVIDER=relay node scripts/smoke-provider.mjs
- *   SYNAX_LIVE_PROVIDER=custom SYNAX_CUSTOM_BASE_URL=http://127.0.0.1:1234/v1 node scripts/smoke-provider.mjs
- *   SYNAX_LIVE_PROVIDER=deepseek node scripts/smoke-provider.mjs
- *   SYNAX_LIVE_PROVIDER=openrouter node scripts/smoke-provider.mjs
- *   SYNAX_LIVE_PROVIDER=groq node scripts/smoke-provider.mjs
- *   SYNAX_LIVE_PROVIDER=anthropic node scripts/smoke-provider.mjs
+ *   SYNAX_LIVE_PROVIDER=relay bun scripts/smoke-provider.mjs
+ *   SYNAX_LIVE_PROVIDER=custom SYNAX_CUSTOM_BASE_URL=http://127.0.0.1:1234/v1 bun scripts/smoke-provider.mjs
+ *   SYNAX_LIVE_PROVIDER=deepseek bun scripts/smoke-provider.mjs
+ *   SYNAX_LIVE_PROVIDER=openrouter bun scripts/smoke-provider.mjs
+ *   SYNAX_LIVE_PROVIDER=groq bun scripts/smoke-provider.mjs
+ *   SYNAX_LIVE_PROVIDER=anthropic bun scripts/smoke-provider.mjs
  *
  * Each smoke test:
  *  1. Resolves the provider preset and API key from environment.

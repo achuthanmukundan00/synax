@@ -1,0 +1,5 @@
+{
+  "prompt": "Add --json flag support to the todo CLI app. The 'todo list' command currently outputs formatted text via src/todo.js formatList(). It needs a --json option that outputs valid JSON instead. Implement the feature by updating src/todo.js to handle { json: true } in formatList() and ensuring src/cli.js passes the flag correctly. The text output must continue to work unchanged. Run 'npm test' to verify your work. All tests must pass.",
+  "testCommand": "npm test",
+  "description": "Add --json output flag to todo CLI list command"
+}

@@ -18,7 +18,7 @@ import { createEventStore } from '../store/EventStore';
 import { SpanTracer } from '../telemetry/SpanTracer';
 import { TokenCounter } from '../metrics/TokenCounter';
 import { CostTracker } from '../metrics/CostTracker';
-import { resolveStrategy, getStrategy } from '../context/ContextStrategy';
+import { resolveStrategy, getStrategy, type ContextStrategyMode } from '../context/ContextStrategy';
 import { createLogger, type Logger } from '../logging/index';
 import { discoverSkills, buildSkillMessages } from '../skills/SkillLoader';
 import { loadSkills } from '../agent/skills';
@@ -52,6 +52,10 @@ export interface SessionComponents {
   /** Context strategy based on model window. */
   strategyReserveTokens: number;
   strategyWindowOverride?: number;
+  /** Context strategy mode for tuning compaction behavior. */
+  strategyMode: ContextStrategyMode;
+  /** The model's actual context window in tokens (used for budget sizing). */
+  modelContextWindow: number;
 }
 
 // ─── Options ─────────────────────────────────────────────────────────────────
@@ -136,6 +140,8 @@ export function createSessionComponents(options: CreateSessionComponentsOptions)
     skillMessages,
     strategyReserveTokens: strategy.reserveTokens,
     strategyWindowOverride: strategy.contextWindowOverride,
+    strategyMode: strategy.mode,
+    modelContextWindow,
   };
 }
 
@@ -247,13 +253,17 @@ export function createAgentSession(options: CreateAgentSessionOptions): AgentSes
     contextBudget: {
       contextBudgetTokens: options.config.contextBudgetTokens,
       contextWindowTokens:
-        components.strategyWindowOverride ?? options.config.contextWindowTokens ?? options.config.contextBudgetTokens,
+        components.strategyWindowOverride ??
+        components.modelContextWindow ??
+        options.config.contextWindowTokens ??
+        options.config.contextBudgetTokens,
       reservedOutputTokens: options.config.reservedOutputTokens ?? components.strategyReserveTokens,
       keepRecentTokens: options.config.keepRecentTokens,
       maxSingleReadResultTokens: options.config.maxSingleReadResultTokens,
       maxTotalReadResultTokensPerTurn: options.config.maxTotalReadResultTokensPerTurn,
       strategyReserveTokens: components.strategyReserveTokens,
       strategyWindowOverride: components.strategyWindowOverride,
+      strategyMode: components.strategyMode,
     },
     onActivity: options.onActivity,
     onEvent: wrappedOnEvent,
@@ -279,51 +289,112 @@ export function createAgentSession(options: CreateAgentSessionOptions): AgentSes
   return { session, wrappedOnEvent };
 }
 
-// ─── Helpers ─────────────────────────────────────────────────────────────────
+// ─── Event → session-event handlers ──────────────────────────────────────────
 
 /**
  * Convert an AgentEvent to a SessionEvent for JSONL persistence.
  * Returns null for event types that shouldn't be stored in JSONL.
+ *
+ * New event types register handlers in the map below — no switch editing needed.
  */
+type EventHandler = (event: AgentEvent, at: string) => SessionEvent | null;
+
+const EVENT_HANDLERS: Record<string, EventHandler> = {
+  assistant_message: (event, at) => {
+    const content = 'content' in event ? (event as { content?: string }).content : undefined;
+    if (!content) return null;
+    return { type: 'assistant_message', at, content };
+  },
+
+  tool_started: (event, at) => {
+    const toolEvent = event as { toolName: string; summary: string; toolCallId: string };
+    return {
+      type: 'tool_call',
+      at,
+      name: toolEvent.toolName,
+      args: { summary: toolEvent.summary, toolCallId: toolEvent.toolCallId },
+    };
+  },
+
+  tool_finished: (event, at) => {
+    const toolFinishedEvent = event as {
+      toolName: string;
+      summary: string;
+      status: 'ok' | 'error';
+      detail?: string;
+      toolCallId: string;
+    };
+    return {
+      type: 'tool_result',
+      at,
+      name: toolFinishedEvent.toolName,
+      result: {
+        status: toolFinishedEvent.status,
+        summary: toolFinishedEvent.summary,
+        detail: toolFinishedEvent.detail,
+        toolCallId: toolFinishedEvent.toolCallId,
+      },
+    };
+  },
+
+  orchestration_plan_generated: (event, at) => {
+    const planEvent = event as unknown as Record<string, unknown>;
+    if (!planEvent || typeof planEvent !== 'object') return null;
+    const payload = planEvent.payload as unknown as Record<string, unknown> | undefined;
+    const plan = payload?.plan as
+      | { inline?: boolean; subTasks?: Array<{ id: string; description: string }> }
+      | undefined;
+    if (!plan || plan.inline) return null;
+    const count = plan.subTasks?.length ?? 0;
+    return {
+      type: 'assistant_message',
+      at,
+      content: `Planned orchestration across ${count} sub-task${count === 1 ? '' : 's'}.`,
+    };
+  },
+
+  child_session_spawned: (event, at) => {
+    const childEvent = event as unknown as Record<string, unknown>;
+    return {
+      type: 'assistant_message',
+      at,
+      content: `Started sub-agent ${childEvent.subtaskId ?? childEvent.childSessionId ?? 'unknown'}.`,
+    };
+  },
+
+  child_session_completed: (event, at) => {
+    const childEvent = event as unknown as Record<string, unknown>;
+    const result = childEvent.result as unknown as Record<string, unknown> | undefined;
+    return {
+      type: 'assistant_message',
+      at,
+      content: `Sub-agent ${childEvent.subtaskId ?? childEvent.childSessionId ?? 'unknown'} completed with ${result?.terminalState ?? 'unknown'} (${result?.toolCalls ?? 0} tool calls, ${(result?.changedFiles as unknown[] | undefined)?.length ?? 0} files changed).`,
+    };
+  },
+
+  child_session_failed: (event, at) => {
+    const childEvent = event as unknown as Record<string, unknown>;
+    const partialResult = childEvent.partialResult as unknown as Record<string, unknown> | undefined;
+    return {
+      type: 'assistant_message',
+      at,
+      content: `Sub-agent ${childEvent.subtaskId ?? childEvent.childSessionId ?? 'unknown'} failed with ${partialResult?.terminalState ?? 'unknown'} after ${partialResult?.toolCalls ?? 0} tool calls: ${childEvent.error ?? 'unknown error'}`,
+    };
+  },
+
+  task_finished: (event, at) => {
+    const taskEvent = event as unknown as Record<string, unknown>;
+    if (!taskEvent.error) return null;
+    return {
+      type: 'assistant_message',
+      at,
+      content: `Task finished with ${taskEvent.status ?? 'unknown'} after ${taskEvent.modelSteps ?? 0} steps and ${taskEvent.toolCalls ?? 0} tool calls: ${taskEvent.error}`,
+    };
+  },
+};
+
 function agentEventToSessionEvent(event: AgentEvent): SessionEvent | null {
   const at = event.timestamp || new Date().toISOString();
-
-  switch (event.type) {
-    case 'assistant_message': {
-      const content = 'content' in event ? (event as { content?: string }).content : undefined;
-      if (!content) return null;
-      return { type: 'assistant_message', at, content };
-    }
-    case 'tool_started': {
-      const toolEvent = event as { toolName: string; summary: string; toolCallId: string };
-      return {
-        type: 'tool_call',
-        at,
-        name: toolEvent.toolName,
-        args: { summary: toolEvent.summary, toolCallId: toolEvent.toolCallId },
-      };
-    }
-    case 'tool_finished': {
-      const toolFinishedEvent = event as {
-        toolName: string;
-        summary: string;
-        status: 'ok' | 'error';
-        detail?: string;
-        toolCallId: string;
-      };
-      return {
-        type: 'tool_result',
-        at,
-        name: toolFinishedEvent.toolName,
-        result: {
-          status: toolFinishedEvent.status,
-          summary: toolFinishedEvent.summary,
-          detail: toolFinishedEvent.detail,
-          toolCallId: toolFinishedEvent.toolCallId,
-        },
-      };
-    }
-    default:
-      return null;
-  }
+  const handler = EVENT_HANDLERS[event.type];
+  return handler ? handler(event, at) : null;
 }

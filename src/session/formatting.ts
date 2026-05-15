@@ -226,6 +226,7 @@ export function isRecoverableToolError(call: ParsedToolCall, result: { success: 
   if (result.success) return false;
   if (call.name === 'bash') return !isBashLoopError(result.error);
   if (call.name === 'edit' || call.name === 'replace_in_file') return isEditRecoverableError(result.error);
+  if (call.name === 'write') return isWriteRecoverableError(result.error);
   if (call.name !== 'read') return false;
   return isEnoentError(result.error) || isReadPolicyLimitError(result.error);
 }
@@ -246,6 +247,11 @@ export function isBashLoopError(error: string | undefined): boolean {
 export function isEditRecoverableError(error: string | undefined): boolean {
   if (error === undefined) return false;
   return error.includes('oldStr no longer matches') || error.includes('oldStr must match exactly once');
+}
+
+export function isWriteRecoverableError(error: string | undefined): boolean {
+  if (error === undefined) return false;
+  return error.includes('file already exists');
 }
 
 // ─── Event emission ──────────────────────────────────────────────────────────

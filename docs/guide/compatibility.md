@@ -48,7 +48,7 @@ Use this page as the public format until Synax grows a generated `doctor` report
 
 Diagnostics:
 
-- `npm run synax -- doctor --full`: not run
+- `bun run synax -- doctor --full`: not run
 - `synax chat` smoke test: not run
 - `synax ask` smoke test: not run
 - `synax run` edit smoke test: not run

@@ -208,7 +208,7 @@ export function runInspectCommand(program: Command): void {
           console.log(`  single read cap:    ${settings.maxSingleReadResultTokens} tokens`);
           console.log(`  per-turn read cap:  ${settings.maxTotalReadResultTokensPerTurn} tokens`);
           console.log(`  compaction at:      ~${Math.floor(0.6 * effectiveInputLimit)} tokens (60%)`);
-          console.log(`  estimator:          chars / 3 (approximate)`);
+          console.log(`  estimator:          chars / 4 with dense-text fallback (approximate)`);
         }
         return;
       }

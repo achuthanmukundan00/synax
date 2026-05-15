@@ -25,7 +25,7 @@ enabled = false
 mode = "sequential"
 
 [verification]
-defaultCommand = "npm run typecheck"
+defaultCommand = "bun run typecheck"
 
 [provider]
 preset = "relay"
@@ -88,7 +88,7 @@ Synax does not log API keys.
 ## Testing Relay From Synax
 
 ```sh
-npm run synax -- doctor --full
+bun run synax -- doctor --full
 ```
 
 Or inside chat:

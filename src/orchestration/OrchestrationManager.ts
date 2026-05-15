@@ -64,6 +64,8 @@ export class OrchestrationManager {
     handoffManager: HandoffManager,
     options?: {
       maxParallelChildren?: number;
+      /** Force a specific execution mode, bypassing automatic detection. */
+      forcedMode?: 'parallel' | 'sequential';
     },
   ): Promise<OrchestrationResult> {
     const subTasks = plan.subTasks ?? [];
@@ -93,8 +95,8 @@ export class OrchestrationManager {
       };
     }
 
-    // Determine execution mode
-    const mode = determineExecutionMode(plan.strategy, subTasks);
+    // Determine execution mode — respect forced mode when user specifies trigger phrases
+    const mode = options?.forcedMode ?? determineExecutionMode(plan.strategy, subTasks);
 
     let result: OrchestrationResult;
     try {

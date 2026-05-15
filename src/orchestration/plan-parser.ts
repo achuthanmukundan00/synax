@@ -1,5 +1,6 @@
 import { repairJson } from '../llm/repair/json-repair';
-import type { PlanParseResult, OrchestrationPlan } from '../session/types';
+import type { PlanParseResult, OrchestrationPlan, OrchestratedSubtask, SubTask } from '../session/types';
+import type { VerificationContract } from '../session/verification-contracts';
 
 /**
  * Validates that an object conforms to the structural requirements of an
@@ -21,6 +22,40 @@ function isValidPlan(obj: any): obj is OrchestrationPlan {
   return true;
 }
 
+export interface PlanNormalizationDefaults {
+  /** Default token budget per sub-task when the planner doesn't specify one. */
+  defaultBudget?: number;
+  /** Default verification contract when neither the planner nor the subtask specifies one. */
+  defaultVerification?: VerificationContract;
+}
+
+function normalizeSubTask(task: OrchestratedSubtask, defaults?: PlanNormalizationDefaults): SubTask {
+  return {
+    id: task.id,
+    description: task.description,
+    fileScope: task.fileScope ?? [],
+    dependencies: task.dependencies ?? [],
+    estimatedBudget: task.estimatedTokens ?? defaults?.defaultBudget ?? 4000,
+    verification: task.verification ??
+      defaults?.defaultVerification ?? { level: 'files_changed', label: 'Verify files changed' },
+  };
+}
+
+function normalizePlan(parsed: any, defaults?: PlanNormalizationDefaults): OrchestrationPlan {
+  const subtasks = parsed.subtasks as OrchestratedSubtask[];
+  const defaultBudget = defaults?.defaultBudget ?? 4000;
+  return {
+    ...parsed,
+    subtasks,
+    subTasks: subtasks.map((t) => normalizeSubTask(t, defaults)),
+    strategy: parsed.strategy ?? 'orchestrate',
+    estimatedTotalTokens:
+      parsed.estimatedTotalTokens ?? subtasks.reduce((sum, task) => sum + (task.estimatedTokens ?? defaultBudget), 0),
+    repoMetadata: parsed.repoMetadata ?? { fileCount: 0, totalKB: 0, sourceKB: 0 },
+    contextWindowTokens: parsed.contextWindowTokens ?? 0,
+  };
+}
+
 /**
  * Parses and validates a model-generated task decomposition plan.
  * Employs JSON repair capabilities for malformed model output.
@@ -29,7 +64,7 @@ function isValidPlan(obj: any): obj is OrchestrationPlan {
  * @param jsonText Raw output string from the model
  * @returns Parsed and validated OrhcestrationPlan or inline fallback
  */
-export function parseOrchestrationPlan(jsonText: string): PlanParseResult {
+export function parseOrchestrationPlan(jsonText: string, defaults?: PlanNormalizationDefaults): PlanParseResult {
   try {
     let parsed: any;
     try {
@@ -49,7 +84,7 @@ export function parseOrchestrationPlan(jsonText: string): PlanParseResult {
     }
 
     if (isValidPlan(parsed)) {
-      return { success: true, plan: parsed } as any;
+      return { success: true, plan: normalizePlan(parsed, defaults) };
     }
 
     // Invalid schema structure even after successful parse

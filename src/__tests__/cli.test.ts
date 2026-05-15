@@ -8,7 +8,7 @@ const SYNAX_BIN = path.resolve(__dirname, '../../dist/cli.js');
 
 function runSynax(args: string[], options: { cwd?: string; timeout?: number } = {}): string {
   try {
-    const cmd = `node "${SYNAX_BIN}" ${args.map((a) => `'${a}'`).join(' ')}`;
+    const cmd = `bun "${SYNAX_BIN}" ${args.map((a) => `'${a}'`).join(' ')}`;
     const home = options.cwd ? path.join(options.cwd, '.home') : process.env.HOME;
     return execSync(cmd, {
       cwd: options.cwd,
@@ -32,7 +32,7 @@ function runSynaxDetailed(args: string[], options: { cwd?: string; timeout?: num
   const home = options.cwd ? path.join(options.cwd, '.home') : process.env.HOME;
   return new Promise<{ status: number; stdout: string; stderr: string }>((resolve) => {
     execFile(
-      'node',
+      'bun',
       [SYNAX_BIN, ...args],
       {
         cwd: options.cwd,
@@ -204,8 +204,8 @@ describe('CLI', () => {
         );
         const result = await runSynaxDetailed(['ask', '--question', 'Reply with exactly: synax-ok'], { cwd });
         expect(result.status).toBe(0);
-        expect(result.stdout).toContain('Synax Task');
-        expect(result.stdout).toContain('Tools:       read, write, edit, bash, search_memory');
+        expect(result.stdout).toContain('[model] test-model');
+        expect(result.stdout).toContain('[mode]');
         expect(result.stdout).toContain('synax-ok');
         expect(result.stderr).toBe('');
       } finally {
@@ -375,7 +375,7 @@ describe('CLI', () => {
         const result = await runSynaxDetailed(['ask', '--question', 'hello'], { cwd });
         const combined = `${result.stdout}\n${result.stderr}`;
         expect(result.status).not.toBe(0);
-        expect(combined).toContain('Status:      model_error');
+        expect(combined).toContain('Status: model_error');
         expect(combined).toContain('Provider error (403)');
         expect(combined).toContain('access denied');
         expect(combined).not.toContain('secret-api-key');
@@ -419,9 +419,8 @@ describe('CLI', () => {
         );
         const result = await runSynaxDetailed(['run', '--task', 'test task'], { cwd });
         expect(result.status).toBe(0);
-        expect(result.stdout).toContain('test task');
-        expect(result.stdout).toContain('Synax Run Report');
         expect(result.stdout).toContain('run complete');
+        expect(result.stdout).toContain('[summary] Status: completed');
 
         const parsed = JSON.parse(requestBody) as {
           tools: Array<{ function: { name: string } }>;

@@ -160,6 +160,8 @@ export interface OrchestratedSubtask {
   dependencies?: string[];
   parallelizable?: boolean;
   estimatedTokens?: number;
+  /** Optional verification contract override (when absent, defaults to files_changed). */
+  verification?: VerificationContract;
 }
 
 /**

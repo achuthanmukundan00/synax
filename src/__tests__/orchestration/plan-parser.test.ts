@@ -20,6 +20,15 @@ describe('plan-parser', () => {
     if (result.success) {
       expect(result.plan.planId).toBe('plan-xyz');
       expect(result.plan.subtasks).toHaveLength(1);
+      expect(result.plan.subTasks).toEqual([
+        expect.objectContaining({
+          id: 'task-1',
+          description: 'do the thing',
+          estimatedBudget: 4000,
+          fileScope: ['src/a.ts'],
+          dependencies: [],
+        }),
+      ]);
     }
   });
 

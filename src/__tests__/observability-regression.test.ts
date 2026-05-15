@@ -621,7 +621,7 @@ describe('token_usage event shape', () => {
 describe('inspect --metrics CLI contract', () => {
   const hasDist = (() => {
     try {
-      execSync('node dist/cli.js --version', { stdio: 'ignore' });
+      execSync('bun dist/cli.js --version', { stdio: 'ignore' });
       return true;
     } catch {
       return false;
@@ -629,7 +629,7 @@ describe('inspect --metrics CLI contract', () => {
   })();
 
   const runCli = (args: string): string => {
-    return execSync(`node dist/cli.js ${args}`, {
+    return execSync(`bun dist/cli.js ${args}`, {
       encoding: 'utf-8',
       stdio: ['pipe', 'pipe', 'ignore'],
     });

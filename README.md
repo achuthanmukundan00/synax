@@ -39,8 +39,8 @@ See the [Architecture Guide](/docs/guide/architecture) for module diagrams and d
 
 ## Requirements
 
-- Node.js 18 or newer.
-- npm.
+- Bun 1.2 or newer.
+- Bun.
 - Git.
 - Relay or another OpenAI-compatible `/v1/chat/completions` server.
 
@@ -49,14 +49,14 @@ See the [Architecture Guide](/docs/guide/architecture) for module diagrams and d
 ```sh
 git clone git@github.com:achuthanmukundan00/synax.git
 cd synax
-npm install
-npm run build
+bun install
+bun run build
 ```
 
-Run the local built CLI through npm:
+Run the local built CLI through Bun:
 
 ```sh
-npm run synax -- --help
+bun run synax -- --help
 ```
 
 After package linking or publishing, the command name is:
@@ -104,8 +104,8 @@ Built-in presets: `relay`, `deepseek`, `anthropic`, `openrouter`, `groq`, `mistr
 Check setup:
 
 ```sh
-npm run synax -- doctor
-npm run synax -- doctor --full
+bun run synax -- doctor
+bun run synax -- doctor --full
 ```
 
 Compatibility claims should be recorded against an exact provider, model, and Synax version. Use `docs/guide/compatibility.md` for the current compatibility report format and matrix.
@@ -114,37 +114,39 @@ Compatibility claims should be recorded against an exact provider, model, and Sy
 
 ```sh
 # Inspect repository and config context
-npm run synax -- inspect
+bun run synax -- inspect
 
 # Show context budget configuration
-npm run synax -- inspect --budget
+bun run synax -- inspect --budget
 
 # Show current working context state (after a chat session)
-npm run synax -- inspect --ledger
+bun run synax -- inspect --ledger
 
 # List or read bounded local docs/spec context
-npm run synax -- inspect --docs
-npm run synax -- inspect --doc specs/PRD.md
+bun run synax -- inspect --docs
+bun run synax -- inspect --doc specs/PRD.md
 
 # Ask one bounded question
-npm run synax -- ask --question "Where is provider config normalized?"
+bun run synax -- ask --question "Where is provider config normalized?"
 
 # Start an interactive coding session (full-screen TUI on TTY)
-npm run synax -- chat
+bun run synax -- chat
 
 # Plain fallback
-npm run synax -- chat --plain
+bun run synax -- chat --plain
 
 # Run one bounded edit-capable task; --yes accepts previewed replacement edits
-npm run synax -- run --task "Fix the failing test" --yes
+bun run synax -- run --task "Fix the failing test" --yes
 
 # Constrain the task surface
-npm run synax -- run --mode read-only --task "Inspect the command registry and identify one safe improvement. Do not modify files."
-npm run synax -- run --mode patch --task "Make one minimal docs-only wording improvement in README.md, then run npm run typecheck."
+bun run synax -- run --mode read-only --task "Inspect the command registry and identify one safe improvement. Do not modify files."
+bun run synax -- run --mode patch --task "Make one minimal docs-only wording improvement in README.md, then run bun run typecheck."
 
 # Show config
-npm run synax -- config show
+bun run synax -- config show
 ```
+
+The full-screen chat TUI uses OpenTUI and runs under Bun. Use `--plain` when you need the non-TUI fallback.
 
 Inside `synax chat`:
 
@@ -192,7 +194,7 @@ context_budget_tokens = 131072
 max_tool_calls = 96
 
 [verification]
-defaultCommand = "npm run typecheck"
+defaultCommand = "bun run typecheck"
 
 [active]
 provider = "relay"
@@ -296,9 +298,9 @@ The model loop stops when the model returns a final answer, hits the configured 
 The formatted documentation lives in `docs/` and is built with VitePress:
 
 ```sh
-npm run docs:dev
-npm run docs:build
-npm run docs:preview
+bun run docs:dev
+bun run docs:build
+bun run docs:preview
 ```
 
 GitHub Pages deployment is configured in `.github/workflows/pages.yml`. In the GitHub repository settings, set Pages source to GitHub Actions.
@@ -312,18 +314,18 @@ Quick start:
 ```sh
 git clone git@github.com:achuthanmukundan00/synax.git
 cd synax
-npm ci
-npm run build
-npm test
+bun install --frozen-lockfile
+bun run build
+bun run test
 ```
 
 ## Development
 
 ```sh
-npm run typecheck
-npm run lint
-npm test
-npm run build
+bun run typecheck
+bun run lint
+bun run test
+bun run build
 ```
 
 ## Provider Smoke Tests
@@ -331,20 +333,20 @@ npm run build
 Live smoke tests verify end-to-end connectivity. Requires API keys for cloud providers:
 
 ```sh
-SYNAX_LIVE_PROVIDER=relay npm run smoke:provider
-SYNAX_LIVE_PROVIDER=deepseek npm run smoke:provider
-SYNAX_LIVE_PROVIDER=anthropic npm run smoke:provider
-SYNAX_LIVE_PROVIDER=openrouter npm run smoke:provider
-SYNAX_LIVE_PROVIDER=groq npm run smoke:provider
+SYNAX_LIVE_PROVIDER=relay bun run smoke:provider
+SYNAX_LIVE_PROVIDER=deepseek bun run smoke:provider
+SYNAX_LIVE_PROVIDER=anthropic bun run smoke:provider
+SYNAX_LIVE_PROVIDER=openrouter bun run smoke:provider
+SYNAX_LIVE_PROVIDER=groq bun run smoke:provider
 ```
 
 ## Self-Development Smoke Tests
 
 ```sh
-npm run synax -- run --mode read-only --task "Inspect README.md and summarize Synax in 5 bullets. Do not modify files."
-npm run synax -- run --mode patch --task "Make one minimal docs-only wording improvement in README.md, then run npm run typecheck."
-npm run synax -- inspect
-npm run synax -- doctor --full
+bun run synax -- run --mode read-only --task "Inspect README.md and summarize Synax in 5 bullets. Do not modify files."
+bun run synax -- run --mode patch --task "Make one minimal docs-only wording improvement in README.md, then run bun run typecheck."
+bun run synax -- inspect
+bun run synax -- doctor --full
 ```
 
 ## License

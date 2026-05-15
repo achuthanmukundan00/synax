@@ -593,7 +593,7 @@ describe('shared bounded agent runner', () => {
 
   it('does not end in tool_error when the model reads the repository root', async () => {
     writeFileSync(join(TMP, 'README.md'), '# Synax\n', 'utf-8');
-    writeFileSync(join(TMP, 'package.json'), '{"scripts":{"synax":"node dist/cli.js"}}\n', 'utf-8');
+    writeFileSync(join(TMP, 'package.json'), '{"scripts":{"synax":"bun dist/cli.js"}}\n', 'utf-8');
     const client = fakeClient([
       { toolCalls: [{ id: 'call_1', name: 'read', arguments: { path: '.' } }] },
       { content: 'Available CLI commands are documented in the repository.' },
@@ -1150,6 +1150,48 @@ describe('shared bounded agent runner', () => {
     expect(result.steps).toBeLessThan(32);
   });
 
+  it('resets bash repetition counter after successful edit so edit-verify workflows survive', async () => {
+    writeFileSync(join(TMP, 'a.txt'), 'hello\n', 'utf-8');
+    const client = fakeClient([
+      { toolCalls: [{ id: 'b1', name: 'bash', arguments: { command: 'cat a.txt' } }] },
+      { toolCalls: [{ id: 'e1', name: 'edit', arguments: { path: 'a.txt', oldStr: 'hello', newStr: 'hi' } }] },
+      { toolCalls: [{ id: 'b2', name: 'bash', arguments: { command: 'cat a.txt' } }] },
+      { toolCalls: [{ id: 'b3', name: 'bash', arguments: { command: 'cat a.txt' } }] },
+      { toolCalls: [{ id: 'b4', name: 'bash', arguments: { command: 'cat a.txt' } }] },
+      { content: 'verified' },
+    ]);
+
+    const result = await runTurn({ repoRoot: TMP, task: 'edit and verify', client, maxSteps: 32 });
+
+    // After the edit resets the counter, the 3 subsequent identical bash
+    // calls (b2-b4) stay under the threshold of 3 (b2=1, b3=2, b4=3).
+    // The model completes normally.
+    expect(result.terminalState).toBe('completed');
+    expect(result.finalAnswer).toBe('verified');
+    expect(readFileSync(join(TMP, 'a.txt'), 'utf-8')).toBe('hi\n');
+  });
+
+  it('does not reset bash counter on failed edits — loop detection still fires', async () => {
+    writeFileSync(join(TMP, 'a.txt'), 'hello\n', 'utf-8');
+    const client = fakeClient([
+      { toolCalls: [{ id: 'b1', name: 'bash', arguments: { command: 'git status --short' } }] },
+      { toolCalls: [{ id: 'e1', name: 'edit', arguments: { path: 'a.txt', oldStr: 'missing', newStr: 'x' } }] },
+      { toolCalls: [{ id: 'b2', name: 'bash', arguments: { command: 'git status --short' } }] },
+      { toolCalls: [{ id: 'b3', name: 'bash', arguments: { command: 'git status --short' } }] },
+      { toolCalls: [{ id: 'b4', name: 'bash', arguments: { command: 'git status --short' } }] },
+      { content: 'should not be reached' },
+    ]);
+
+    const result = await runTurn({ repoRoot: TMP, task: 'edit and verify', client, maxSteps: 32 });
+
+    // The failed edit does NOT reset the counter. b1 counts as 1.
+    // b2+b3+b4 make 4 total, triggering the loop detector on b4.
+    expect(result).toMatchObject({
+      terminalState: 'tool_error',
+      error: expect.stringContaining('Bash loop detected'),
+    });
+  });
+
   it('continues after stale edit mismatches and allows a corrected retry', async () => {
     writeFileSync(join(TMP, 'a.txt'), 'hello\n', 'utf-8');
     const client = fakeClient([
@@ -1253,7 +1295,7 @@ describe('shared bounded agent runner', () => {
   });
 
   it('finalizes before exceeding budget after a bounded inspection sequence', async () => {
-    writeFileSync(join(TMP, 'package.json'), '{"scripts":{"synax":"node dist/cli.js"}}\n', 'utf-8');
+    writeFileSync(join(TMP, 'package.json'), '{"scripts":{"synax":"bun dist/cli.js"}}\n', 'utf-8');
     mkdirSync(join(TMP, 'src', 'commands'), { recursive: true });
     writeFileSync(join(TMP, 'src', 'cli.ts'), 'cli\n', 'utf-8');
     writeFileSync(join(TMP, 'src', 'commands', 'chat.ts'), 'chat\n', 'utf-8');
@@ -1261,14 +1303,14 @@ describe('shared bounded agent runner', () => {
       { toolCalls: [{ id: '1', name: 'read', arguments: { path: 'package.json' } }] },
       { toolCalls: [{ id: '2', name: 'read', arguments: { path: 'src/cli.ts' } }] },
       { toolCalls: [{ id: '3', name: 'read', arguments: { path: 'src/commands/chat.ts' } }] },
-      { content: 'npm run synax invokes the CLI, which dispatches chat.' },
+      { content: 'bun run synax invokes the CLI, which dispatches chat.' },
     ]);
 
     const result = await runTurn({ repoRoot: TMP, task: 'explain flow', client, maxSteps: 4 });
 
     expect(result).toMatchObject({
       terminalState: 'completed',
-      finalAnswer: 'npm run synax invokes the CLI, which dispatches chat.',
+      finalAnswer: 'bun run synax invokes the CLI, which dispatches chat.',
       steps: 4,
     });
     expect(result.toolCalls).toHaveLength(3);

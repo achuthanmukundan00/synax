@@ -757,7 +757,7 @@ describe('transcript rendering', () => {
     expect(text).toContain('context line');
   });
 
-  it('right panel title is Synax Core', () => {
+  it('info bar shows cwd and completed phase label', () => {
     const run = createInitialRunStateSnapshot(0);
     const lines = renderLayout(
       {
@@ -773,8 +773,8 @@ describe('transcript rendering', () => {
     ).map(stripAll);
 
     const text = lines.join('\n');
-    expect(text).toContain('Synax Core');
-    expect(text).not.toContain('Core Module');
+    expect(text).toContain('/test');
+    expect(text).toContain('Ready');
   });
 
   it('idle input is compact after completed run', () => {
@@ -790,14 +790,13 @@ describe('transcript rendering', () => {
       24,
     ).map(stripAll);
 
-    // The input dock should be compact: 3 lines (blank + border-top + body + border-bottom = 4)
-    // but after the blank line prefix, the actual panel is 3 lines.
-    const panelStart = lines.findIndex((l: string) => l.includes('┌'));
+    // The input dock is now flat: hr line + prompt line
+    const panelStart = lines.findIndex((l: string) => l.trimStart().startsWith('─'));
     expect(panelStart).toBeGreaterThan(-1);
 
-    // Bottom border contains help text
+    // Should end with the prompt line
     const lastLine = lines[lines.length - 1];
-    expect(lastLine).toContain('Enter submit');
+    expect(lastLine).toContain('Ask Synax');
   });
 
   it('multiline input still expands', () => {
@@ -814,11 +813,11 @@ describe('transcript rendering', () => {
       24,
     ).map(stripAll);
 
-    // With multiline input, the panel expands
-    const multiPanelStart = lines.findIndex((l: string) => l.includes('┌'));
+    // With multiline input, the panel expands past the prompt line
+    const multiPanelStart = lines.findIndex((l: string) => l.trimStart().startsWith('─'));
     const multiPanelLines = lines.slice(multiPanelStart);
-    // Should have more than 3 lines (top + at least 2 body + bottom = 4+)
-    expect(multiPanelLines.length).toBeGreaterThanOrEqual(4);
+    // Should have more than 2 lines (hr + at least 1 prompt line + continuation)
+    expect(multiPanelLines.length).toBeGreaterThanOrEqual(3);
   });
 
   it('bracketed paste does not submit prematurely', () => {

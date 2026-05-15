@@ -115,7 +115,7 @@ Pre-programmed recipes for failure scenarios. Each recipe injects a nudge messag
 
 ### CostTracker & TokenCounter (`src/metrics/`)
 
-Track token usage and cost in real time. Token counting uses approximate character-based estimation (chars/3) for local providers and API-reported counts for cloud providers. Cost tracking uses provider-specific pricing tables.
+Track token usage and cost in real time. Token counting uses approximate character-based estimation for local providers and API-reported counts for cloud providers. Cost tracking uses provider-specific pricing tables.
 
 ### SkillLoader (`src/skills/SkillLoader.ts`)
 

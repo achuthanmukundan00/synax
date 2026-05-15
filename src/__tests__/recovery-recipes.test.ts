@@ -4,6 +4,7 @@
 
 import { RecoveryManager } from '../recovery/RecoveryManager';
 import { RecoverableError } from '../recovery/types';
+import { classifyResultForRecovery } from '../session/message-assembly';
 import type { RecoveryConversation } from '../recovery/types';
 
 function makeConversation(): RecoveryConversation {
@@ -150,6 +151,36 @@ describe('RecoveryManager', () => {
     });
 
     expect(fourth).toBeNull(); // total cap hit
+  });
+});
+
+describe('recovery classification', () => {
+  test('classifies bash stderr failures without requiring an exit-code marker', () => {
+    expect(
+      classifyResultForRecovery({
+        terminalState: 'tool_error',
+        finalAnswer: '',
+        steps: 1,
+        changedFiles: [],
+        toolCalls: [{ name: 'bash', success: false, error: 'make: *** [test] Error 1' }],
+        conversation: {} as never,
+        error: 'make: *** [test] Error 1',
+      }),
+    ).toBe('bash_failure');
+  });
+
+  test('keeps repeated bash failures classified as an infinite loop', () => {
+    expect(
+      classifyResultForRecovery({
+        terminalState: 'tool_error',
+        finalAnswer: '',
+        steps: 4,
+        changedFiles: [],
+        toolCalls: [{ name: 'bash', success: false, error: 'Bash loop detected' }],
+        conversation: {} as never,
+        error: 'too many consecutive recoverable tool errors: 3',
+      }),
+    ).toBe('infinite_loop');
   });
 });
 
