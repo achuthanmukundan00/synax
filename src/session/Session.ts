@@ -32,7 +32,7 @@ import {
   type ContextBudgetSettings,
 } from '../agent/context-budget';
 import { orchestrationPlanPrompt } from '../agent/prompts/orchestration-plan';
-import { parseOrchestrationPlan } from '../orchestration/plan-parser';
+import { parseOrchestrationPlan, type PlanNormalizationDefaults } from '../orchestration/plan-parser';
 import type { PlanParseResult } from './types';
 import { eventNow, type AgentEvent, type TerminalState } from '../agent/events';
 import { describeToolCall, guardBroadTask, guardUnsupportedTask, type RunMode } from '../agent/task-policy';
@@ -118,6 +118,7 @@ const AGENT_EVENT_TYPES: Set<string> = new Set([
   'task_finished',
   'error',
   'token_usage',
+  'orchestration_plan_generated',
   'child_session_spawned',
   'child_session_completed',
   'child_session_failed',
@@ -408,6 +409,9 @@ export class Session {
         tracer: this.tracer,
         tokenCounter: this.tokenCounter,
         costTracker: this.costTracker,
+        onEvent: (event) => {
+          this.onEvent?.(event as import('../agent/events').AgentEvent);
+        },
       });
 
       // 4. Map to SubAgentResult and emit completion/failure
@@ -539,11 +543,15 @@ export class Session {
       return fallback;
     }
 
-    const parsed = parseOrchestrationPlan(content);
+    const planDefaults: PlanNormalizationDefaults = {
+      defaultVerification: this._verificationContract ?? undefined,
+      defaultBudget: Math.floor(this.contextBudget.contextWindowTokens / 16),
+    };
+    const parsed = parseOrchestrationPlan(content, planDefaults);
 
     this.eventBus.emit({
       type: 'orchestration_plan_generated',
-      timestamp: Date.now(),
+      timestamp: eventNow(),
       payload: {
         sessionId: this.sessionId,
         task,
@@ -797,6 +805,27 @@ export class Session {
                   tokensAfter: guarded.compaction.tokensAfter,
                   stepIndex: step,
                 });
+
+                // ── Proactive handoff: aggressive compaction (stage >= 3) ──────
+                // If compaction reached Stage 3 (aggressive summarization), try
+                // handoff preemptively. Aggressive compaction degrades context quality,
+                // so a child session with fresh context often produces better results.
+                if (guarded.compaction.stage >= 3) {
+                  this.logger?.info('Aggressive compaction stage reached — attempting preemptive handoff', {
+                    stage: guarded.compaction.stage,
+                    stepIndex: step,
+                  });
+                  const preemptiveHandoff = await this.tryHandoffRecovery(
+                    guarded.compaction.stage,
+                    conversation,
+                    step,
+                    toolCalls,
+                    changedFiles,
+                    turnSpan,
+                  );
+                  if (preemptiveHandoff) return preemptiveHandoff;
+                  // Handoff unavailable or failed — continue with compacted context
+                }
               }
 
               const postCompactTokens = estimateRequestTokens(guarded.messages);
@@ -1035,7 +1064,15 @@ export class Session {
             // and pure-content first-step completions are accepted as-is.
             // Inject the nudge at most once per turn.
             const hasMutationAttempts = toolCalls.some((tc) => tc.name === 'write' || tc.name === 'edit');
-            if (hasMutationAttempts && !verificationNudgeInjected) {
+            // If we are in a mode that requires verification, check the contract even if no tools were called this turn
+            // (e.g., the model just provided a text response claiming to be done).
+            const isChattyCompletion =
+              (mode === 'patch' || mode === 'verify') &&
+              toolCalls.length === 0 &&
+              changedFiles.length === 0 &&
+              step > 1;
+            const needsVerification = hasMutationAttempts || changedFiles.length > 0 || isChattyCompletion;
+            if (needsVerification && !verificationNudgeInjected) {
               const contract = this._verificationContract ?? resolveVerificationContract(mode);
               const nudge = checkCompletionAgainstContract(
                 contract,
@@ -1476,9 +1513,38 @@ export class Session {
 
     // ── Strategy 2: Context compaction (existing behavior) ────────────
     const manifest = this.memory?.handoff();
-    if (!manifest || manifest.keyFindings.length === 0) {
+    if (!manifest) {
       this.logger?.warn('Handoff recovery not possible — no memory available', { stage, stepIndex: step });
       return null;
+    }
+
+    // If memory has no key findings, supplement from conversation messages.
+    // This ensures handoff still works when memory hasn't indexed enough content.
+    if (manifest.keyFindings.length === 0) {
+      this.logger?.info('Memory manifest has no key findings — extracting from conversation', {
+        stage,
+        stepIndex: step,
+        turnCount: manifest.turnCount,
+        filesTouched: manifest.filesTouched.length,
+      });
+
+      // Extract from recent substantive assistant messages
+      for (const msg of conversation.messages) {
+        if (msg.role === 'assistant' && typeof msg.content === 'string' && msg.content.length > 30) {
+          manifest.keyFindings.push(msg.content.trim().slice(0, 800));
+          if (manifest.keyFindings.length >= 5) break;
+        }
+      }
+
+      // If still empty, add task context from the most recent user message
+      if (manifest.keyFindings.length === 0) {
+        const lastUserMsg = [...conversation.messages]
+          .reverse()
+          .find((m) => m.role === 'user' && !m.content.startsWith('Context was compacted'));
+        if (lastUserMsg && typeof lastUserMsg.content === 'string') {
+          manifest.keyFindings.push(`Task: ${lastUserMsg.content.slice(0, 500)}`);
+        }
+      }
     }
 
     this.logger?.info('Attempting handoff recovery via context compaction', {
