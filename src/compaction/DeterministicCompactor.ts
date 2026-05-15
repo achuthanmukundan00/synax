@@ -212,7 +212,7 @@ function collapseWhitespace(text: string): { text: string; changed: boolean } {
 
 // ─── Chars-to-tokens estimation ──────────────────────────────────────────────
 
-const CHARS_PER_TOKEN = 3;
+const CHARS_PER_TOKEN = 4;
 
 function estimateTokens(text: string): number {
   return Math.ceil(text.length / CHARS_PER_TOKEN);
