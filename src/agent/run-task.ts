@@ -1,8 +1,8 @@
-import { loadProjectConfig, toProviderFactoryInput } from '../config/project';
+import { loadProjectConfig, toProviderFactoryInput, type ProjectConfig } from '../config/project';
 import { loadSynaxConfig } from '../config/load-config';
 import { createLLMClient } from '../llm/provider-factory';
 import { Session, type AgentActivity, type AgentTerminalState } from '../session/Session';
-import { createSessionComponents, createAgentSession } from '../session/SessionFactory';
+import { createSessionComponents, createAgentSession, type SessionComponents } from '../session/SessionFactory';
 import type { Logger } from '../logging/Logger';
 import { runVerification, type VerificationResult } from './verification';
 import { eventNow, type AgentEvent } from './events';
@@ -38,6 +38,26 @@ export interface RunTaskOptions {
   verify?: string;
   /** Disable all skill injection. */
   noSkills?: boolean;
+  /**
+   * Pre-created Session to use instead of creating a new one.
+   *
+   * When provided, the setup phase (config loading, LLM client creation,
+   * component/session construction) is skipped. The caller owns lifecycle:
+   *   - Caller must also provide: components, client, metadata, projectConfigOverride
+   *   - Caller emits task_started/task_finished events (runAgentTask skips them)
+   *   - Caller handles EventStore.closeSession and session-store upsert
+   *   - Caller handles writeRunLog (runAgentTask skips recordRunArtifacts)
+   *   - Files changed include commit-introduced files (beforeHead is captured)
+   */
+  session?: Session;
+  /** Pre-created SessionComponents (required with session). */
+  components?: SessionComponents;
+  /** Pre-created LLM client (required with session). */
+  client?: ReturnType<typeof createLLMClient>['client'];
+  /** Pre-loaded ProjectConfig (required with session). */
+  projectConfigOverride?: ProjectConfig;
+  /** Provider metadata (required with session for task_started event fields). */
+  metadata?: ReturnType<typeof createLLMClient>['metadata'];
 }
 
 export interface RunTaskReport {
@@ -54,131 +74,225 @@ export interface RunTaskReport {
   contextBudgetTokens: number;
   maxModelSteps: number;
   maxToolCalls: number;
+  /** Whether the working tree is clean after the task completes. */
+  workingTreeClean?: boolean;
   checkpoint?: { id: string; statusPath: string; diffPath: string } | null;
   error?: string;
 }
 
 const execFileAsync = promisify(execFile);
 
-export async function runAgentTask(options: RunTaskOptions): Promise<RunTaskReport> {
-  const projectConfig = loadProjectConfig(options.repoRoot);
-  const mode = normalizeRunMode(options.mode);
-  if (projectConfig.errors.length > 0) {
-    return {
-      task: options.task,
-      mode,
-      terminalState: 'blocked',
-      finalAnswer: '',
-      filesChanged: [],
-      filesRead: [],
-      verification: { state: 'skipped', stdout: '', stderr: '' },
-      steps: 0,
-      toolCalls: [],
-      messages: projectConfig.errors.map((error) => `${error.path}: ${error.message}`),
-      contextBudgetTokens: projectConfig.config.contextBudgetTokens ?? 131072,
-      maxModelSteps: projectConfig.config.maxModelSteps ?? 64,
-      maxToolCalls: projectConfig.config.maxToolCalls ?? 192,
-      error: 'config validation failed',
-    };
+/** Detected subagent trigger from user task text. */
+interface SubagentTrigger {
+  active: boolean;
+  mode: 'parallel' | 'sequential' | 'auto';
+  cleanTask: string;
+}
+
+const SUBAGENT_TRIGGERS: Array<{ pattern: RegExp; mode: SubagentTrigger['mode'] }> = [
+  { pattern: /parallel\s+sub-?agents?\b/i, mode: 'parallel' },
+  { pattern: /sequential\s+sub-?agents?\b/i, mode: 'sequential' },
+  { pattern: /\bsub-?agents?\b/i, mode: 'auto' },
+];
+
+/**
+ * Detect explicit subagent trigger phrases in the user's task.
+ * Returns the trigger mode and the cleaned task text (trigger phrase removed).
+ * If no trigger is found, returns active=false.
+ */
+function detectSubagentTrigger(task: string): SubagentTrigger {
+  for (const trigger of SUBAGENT_TRIGGERS) {
+    if (trigger.pattern.test(task)) {
+      const cleanTask = task
+        .replace(trigger.pattern, '')
+        .replace(/\s{2,}/g, ' ')
+        .trim();
+      return { active: true, mode: trigger.mode, cleanTask: cleanTask || task };
+    }
   }
+  return { active: false, mode: 'auto', cleanTask: task };
+}
 
-  const providerInput = toProviderFactoryInput(projectConfig.config);
+function buildExplicitOrchestrationTask(task: string, mode: SubagentTrigger['mode']): string {
+  const modeInstruction =
+    mode === 'parallel'
+      ? 'Use parallel sub-agents. Return independent sub-tasks with no dependencies when possible.'
+      : mode === 'sequential'
+        ? 'Use sequential sub-agents. Return ordered sub-tasks with dependencies where needed.'
+        : 'Use sub-agents. Return a non-inline orchestration plan.';
 
-  // Load effective config once for thinking level and skills.
-  let effectiveConfig;
-  try {
-    effectiveConfig = loadSynaxConfig(options.repoRoot);
-  } catch {
-    effectiveConfig = undefined;
-  }
-  if (effectiveConfig?.active.thinking && effectiveConfig.active.thinking !== 'off') {
-    providerInput.thinkingLevel = effectiveConfig.active.thinking;
-  }
+  return [
+    task,
+    '',
+    'Planner directive: the user explicitly requested sub-agent orchestration.',
+    modeInstruction,
+    'Do not return {"inline": true} unless the request is impossible to delegate safely.',
+  ].join('\n');
+}
 
-  let factoryResult;
-  try {
-    factoryResult = createLLMClient(providerInput);
-  } catch (err) {
-    return {
-      task: options.task,
-      mode,
-      terminalState: 'blocked',
-      finalAnswer: '',
-      filesChanged: [],
-      filesRead: [],
-      verification: { state: 'skipped', stdout: '', stderr: '' },
-      steps: 0,
-      toolCalls: [],
-      messages: [(err as Error).message],
-      contextBudgetTokens: projectConfig.config.contextBudgetTokens ?? 131072,
-      maxModelSteps: projectConfig.config.maxModelSteps ?? 64,
-      maxToolCalls: projectConfig.config.maxToolCalls ?? 192,
-      error: (err as Error).message,
-    };
-  }
-
-  const { client, metadata } = factoryResult;
-
-  // ── Create shared observability components via factory ──
-  const modelContextWindow =
-    metadata.contextWindow ??
-    projectConfig.config.contextWindowTokens ??
-    projectConfig.config.contextBudgetTokens ??
-    131072;
-
-  const components = createSessionComponents({
-    repoRoot: options.repoRoot,
-    modelId: metadata.modelId ?? '',
-    contextWindow: modelContextWindow,
-    modelContextWindow,
-    noSkills: options.noSkills,
-    strategyOverride: options.strategy,
-    title: options.task.slice(0, 80),
-  });
-
-  const { session, wrappedOnEvent } = createAgentSession({
-    repoRoot: options.repoRoot,
-    client,
-    config: projectConfig.config,
-    components,
+function blockedReport(options: RunTaskOptions, mode: RunMode, messages: string[], error: string): RunTaskReport {
+  return {
+    task: options.task,
     mode,
-    onActivity: options.onActivity,
-    onEvent: options.onEvent,
-    maxBudget: options.maxBudget,
-    approvePatch: () => (options.yes ? 'accept' : 'reject'),
-    ensureCheckpoint: async () => {
-      if (options.recordRunArtifacts === false) return null;
-      if (checkpoint) return checkpoint;
-      checkpoint = await createSafetyCheckpoint(options.repoRoot);
-      return checkpoint;
-    },
-  });
+    terminalState: 'blocked',
+    finalAnswer: '',
+    filesChanged: [],
+    filesRead: [],
+    verification: { state: 'skipped', stdout: '', stderr: '' },
+    steps: 0,
+    toolCalls: [],
+    messages,
+    contextBudgetTokens: options.projectConfigOverride?.contextBudgetTokens ?? 131072,
+    maxModelSteps: options.projectConfigOverride?.maxModelSteps ?? 64,
+    maxToolCalls: options.projectConfigOverride?.maxToolCalls ?? 192,
+    error,
+  };
+}
+
+export async function runAgentTask(options: RunTaskOptions): Promise<RunTaskReport> {
+  // ── Fast path: caller provided pre-created session ────────────────────────
+  const usePreCreated = options.session !== undefined;
+
+  let projectConfig: ReturnType<typeof loadProjectConfig>;
+  let mode: RunMode;
+  let client: ReturnType<typeof createLLMClient>['client'];
+  let metadata: ReturnType<typeof createLLMClient>['metadata'];
+  let components: SessionComponents;
+  let session: Session;
+  let wrappedOnEvent: (event: AgentEvent) => void;
+
+  if (usePreCreated) {
+    // Caller manages lifecycle — skip setup.
+    if (
+      !options.projectConfigOverride ||
+      !options.components ||
+      !options.client ||
+      !options.metadata ||
+      !options.session
+    ) {
+      return blockedReport(
+        options,
+        'patch',
+        [
+          'runAgentTask: session provided without required companion fields (components, client, metadata, projectConfigOverride)',
+        ],
+        'runAgentTask called with pre-created session but missing companion fields',
+      );
+    }
+    projectConfig = { config: options.projectConfigOverride, errors: [], path: null, source: 'explicit' };
+    mode = normalizeRunMode(options.mode) || 'patch';
+    client = options.client;
+    metadata = options.metadata;
+    components = options.components;
+    session = options.session;
+    // Use the session's own event callback (already wired to EventStore / TUI sink).
+    wrappedOnEvent = (event: AgentEvent) => {
+      session.onEvent?.(event);
+    };
+  } else {
+    // ── Standard path: full setup (ask, run --no-tui) ───────────────────────
+    const loaded = loadProjectConfig(options.repoRoot);
+    projectConfig = loaded;
+    mode = normalizeRunMode(options.mode);
+    if (projectConfig.errors.length > 0) {
+      return blockedReport(
+        options,
+        mode,
+        projectConfig.errors.map((error) => `${error.path}: ${error.message}`),
+        'config validation failed',
+      );
+    }
+
+    const providerInput = toProviderFactoryInput(projectConfig.config);
+
+    // Load effective config once for thinking level and skills.
+    let effectiveConfig;
+    try {
+      effectiveConfig = loadSynaxConfig(options.repoRoot);
+    } catch {
+      effectiveConfig = undefined;
+    }
+    if (effectiveConfig?.active.thinking && effectiveConfig.active.thinking !== 'off') {
+      providerInput.thinkingLevel = effectiveConfig.active.thinking;
+    }
+
+    let factoryResult;
+    try {
+      factoryResult = createLLMClient(providerInput);
+    } catch (err) {
+      return blockedReport(options, mode, [(err as Error).message], (err as Error).message);
+    }
+
+    client = factoryResult.client;
+    metadata = factoryResult.metadata;
+
+    // ── Create shared observability components via factory ──
+    const modelContextWindow =
+      metadata.contextWindow ??
+      projectConfig.config.contextWindowTokens ??
+      projectConfig.config.contextBudgetTokens ??
+      131072;
+
+    components = createSessionComponents({
+      repoRoot: options.repoRoot,
+      modelId: metadata.modelId ?? '',
+      contextWindow: modelContextWindow,
+      modelContextWindow,
+      noSkills: options.noSkills,
+      strategyOverride: options.strategy,
+      title: options.task.slice(0, 80),
+    });
+
+    const agentSession = createAgentSession({
+      repoRoot: options.repoRoot,
+      client,
+      config: projectConfig.config,
+      components,
+      mode,
+      onActivity: options.onActivity,
+      onEvent: options.onEvent,
+      maxBudget: options.maxBudget,
+      approvePatch: () => (options.yes ? 'accept' : 'reject'),
+      ensureCheckpoint: async () => {
+        if (options.recordRunArtifacts === false) return null;
+        if (checkpoint) return checkpoint;
+        checkpoint = await createSafetyCheckpoint(options.repoRoot);
+        return checkpoint;
+      },
+    });
+
+    session = agentSession.session;
+    wrappedOnEvent = agentSession.wrappedOnEvent;
+  }
 
   const dirtyTree = await detectDirtyTree(options.repoRoot);
   const beforeHead = await gitHead(options.repoRoot);
   let checkpoint: { id: string; statusPath: string; diffPath: string } | null = null;
 
-  // Emit task_started event
-  const tools = Session.buildModelTools({ bashEnabled: projectConfig.config.tools?.bash?.enabled, mode }).map(
-    (tool) => tool.name,
-  );
-  wrappedOnEvent({
-    type: 'task_started',
-    timestamp: eventNow(),
-    mode,
-    profile: projectConfig.config.activeProfile ?? 'default',
-    endpoint: metadata.baseUrl,
-    model: metadata.modelId,
-    providerName: metadata.displayName,
-    contextBudgetTokens: projectConfig.config.contextBudgetTokens ?? 131072,
-    contextWindowTokens: projectConfig.config.contextWindowTokens ?? projectConfig.config.contextBudgetTokens ?? 131072,
-    maxModelSteps: projectConfig.config.maxModelSteps ?? 64,
-    maxToolCalls: projectConfig.config.maxToolCalls ?? 192,
-    tools,
-    task: options.task,
-    inputPricePer1MTokens: metadata.inputPricePer1MTokens,
-    outputPricePer1MTokens: metadata.outputPricePer1MTokens,
-  });
+  // Emit task_started event (skip when caller handles lifecycle, e.g. TUI)
+  if (!usePreCreated) {
+    const tools = Session.buildModelTools({ bashEnabled: projectConfig.config.tools?.bash?.enabled, mode }).map(
+      (tool) => tool.name,
+    );
+    wrappedOnEvent({
+      type: 'task_started',
+      timestamp: eventNow(),
+      mode,
+      profile: projectConfig.config.activeProfile ?? 'default',
+      endpoint: metadata.baseUrl,
+      model: metadata.modelId,
+      providerName: metadata.displayName,
+      contextBudgetTokens: projectConfig.config.contextBudgetTokens ?? 131072,
+      contextWindowTokens:
+        projectConfig.config.contextWindowTokens ?? projectConfig.config.contextBudgetTokens ?? 131072,
+      maxModelSteps: projectConfig.config.maxModelSteps ?? 64,
+      maxToolCalls: projectConfig.config.maxToolCalls ?? 192,
+      tools,
+      task: options.task,
+      inputPricePer1MTokens: metadata.inputPricePer1MTokens,
+      outputPricePer1MTokens: metadata.outputPricePer1MTokens,
+    });
+  }
 
   // Apply --verify override if specified
   if (options.verify) {
@@ -188,15 +302,41 @@ export async function runAgentTask(options: RunTaskOptions): Promise<RunTaskRepo
     }
   }
 
-  // ── Orchestration: estimate budget, plan decomposition, execute if needed ──
+  // ── Orchestration: detect explicit triggers, or auto-estimate budget ──
   let turn: AgentTurnResult;
   let orchestrationUsed = false;
 
-  const estimate = await session.estimateTaskBudget(options.task);
-  const strategy = estimate.strategy as string;
+  const subagentTrigger = detectSubagentTrigger(options.task);
+  const effectiveTask = subagentTrigger.cleanTask;
+  const planningTask = subagentTrigger.active
+    ? buildExplicitOrchestrationTask(options.task, subagentTrigger.mode)
+    : effectiveTask;
 
-  if (strategy === 'orchestrate' || strategy === 'decompose') {
-    const planResult = await session.planOrchestratedTurn(options.task);
+  // Determine strategy: explicit trigger phrase overrides auto-estimation
+  let strategy: string;
+  let forceOrchestrate = false;
+  let forcedMode: 'parallel' | 'sequential' | undefined;
+
+  if (subagentTrigger.active) {
+    // User explicitly requested subagents via trigger phrase — force orchestration
+    strategy =
+      subagentTrigger.mode === 'parallel'
+        ? 'orchestrate (parallel)'
+        : subagentTrigger.mode === 'sequential'
+          ? 'orchestrate (sequential)'
+          : 'orchestrate';
+    forceOrchestrate = true;
+    if (subagentTrigger.mode === 'parallel' || subagentTrigger.mode === 'sequential') {
+      forcedMode = subagentTrigger.mode;
+    }
+  } else {
+    // Auto-detect strategy via budget estimation
+    const estimate = await session.estimateTaskBudget(options.task);
+    strategy = estimate.strategy as string;
+  }
+
+  if (forceOrchestrate || strategy === 'orchestrate' || strategy === 'decompose') {
+    const planResult = await session.planOrchestratedTurn(planningTask);
 
     if (planResult.success && planResult.plan.subTasks && planResult.plan.subTasks.length > 0) {
       const handoffManager = new HandoffManager();
@@ -208,7 +348,9 @@ export async function runAgentTask(options: RunTaskOptions): Promise<RunTaskRepo
         content: `Orchestrating task across ${planResult.plan.subTasks.length} sub-tasks (strategy: ${strategy})...`,
       });
 
-      const orchestrationResult = await OrchestrationManager.execute(planResult.plan, session, handoffManager);
+      const orchestrationResult = await OrchestrationManager.execute(planResult.plan, session, handoffManager, {
+        forcedMode: forceOrchestrate ? forcedMode : undefined,
+      });
 
       orchestrationUsed = true;
 
@@ -234,8 +376,27 @@ export async function runAgentTask(options: RunTaskOptions): Promise<RunTaskRepo
         },
         error: orchestrationResult.error,
       };
+    } else if (forceOrchestrate) {
+      const reason = planResult.success
+        ? 'planner returned no sub-tasks'
+        : (planResult.error ?? 'planner returned inline');
+      const message = `Explicit ${strategy} was requested, but Synax could not generate a valid sub-agent plan (${reason}). Refusing to continue inline because that would ignore the requested execution mode.`;
+      wrappedOnEvent({
+        type: 'assistant_message',
+        timestamp: eventNow(),
+        content: message,
+      });
+      turn = {
+        terminalState: 'blocked',
+        finalAnswer: message,
+        steps: 0,
+        toolCalls: [],
+        changedFiles: [],
+        conversation: session.conversation,
+        error: message,
+      };
     } else {
-      // Plan failed or returned inline — fall through to inline execution
+      // Auto-detection: plan failed or returned inline — fall through to inline execution
       turn = await session.startTurnWithRecovery(options.task);
     }
   } else {
@@ -400,11 +561,13 @@ export async function runAgentTask(options: RunTaskOptions): Promise<RunTaskRepo
       : [];
   const filesChanged = unique([...turn.changedFiles, ...repairedTurn.changedFiles, ...changedByCommit]);
   const finalDirtyTree = await detectDirtyTree(options.repoRoot);
-  wrappedOnEvent({
-    type: 'assistant_message',
-    timestamp: eventNow(),
-    content: finalAnswer,
-  });
+  if (finalAnswer.trim().length > 0) {
+    wrappedOnEvent({
+      type: 'assistant_message',
+      timestamp: eventNow(),
+      content: finalAnswer,
+    });
+  }
   wrappedOnEvent({
     type: 'task_finished',
     timestamp: eventNow(),
@@ -424,8 +587,8 @@ export async function runAgentTask(options: RunTaskOptions): Promise<RunTaskRepo
     error: turn.error,
   });
 
-  // ─── Close observability session ───
-  if (components.eventStore) {
+  // ─── Close observability session (skip when caller owns lifecycle) ───
+  if (!usePreCreated && components.eventStore) {
     components.eventStore.closeSession(components.sessionId, terminalState, {
       steps: turn.steps + (repairedTurn === turn ? 0 : repairedTurn.steps),
       toolCalls: turn.toolCalls.length + (repairedTurn === turn ? 0 : repairedTurn.toolCalls.length),
@@ -433,26 +596,28 @@ export async function runAgentTask(options: RunTaskOptions): Promise<RunTaskRepo
     });
   }
 
-  // Finalize in session-store for /resume discoverability
-  try {
-    const existing = findSessionMeta(components.sessionId);
-    upsertSessionMeta({
-      id: components.sessionId,
-      createdAt: existing?.createdAt ?? new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-      workspacePath: options.repoRoot,
-      title: options.task.slice(0, 80),
-      summary: finalAnswer.slice(0, 120),
-      activeModel: metadata.modelId,
-      messageCount: 1,
-      eventCount: 1,
-      status: terminalState === 'completed' ? 'completed' : 'failed',
-    });
-  } catch {
-    // Best-effort
+  // Finalize in session-store for /resume discoverability (skip when caller owns lifecycle)
+  if (!usePreCreated) {
+    try {
+      const existing = findSessionMeta(components.sessionId);
+      upsertSessionMeta({
+        id: components.sessionId,
+        createdAt: existing?.createdAt ?? new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        workspacePath: options.repoRoot,
+        title: options.task.slice(0, 80),
+        summary: finalAnswer.slice(0, 120),
+        activeModel: metadata.modelId,
+        messageCount: 1,
+        eventCount: 1,
+        status: terminalState === 'completed' ? 'completed' : 'failed',
+      });
+    } catch {
+      // Best-effort
+    }
   }
 
-  if (options.recordRunArtifacts !== false) {
+  if (options.recordRunArtifacts !== false && !usePreCreated) {
     await writeRunLog(options.repoRoot, {
       task: options.task,
       mode,
@@ -483,6 +648,7 @@ export async function runAgentTask(options: RunTaskOptions): Promise<RunTaskRepo
     contextBudgetTokens: projectConfig.config.contextBudgetTokens ?? 131072,
     maxModelSteps: projectConfig.config.maxModelSteps ?? 64,
     maxToolCalls: projectConfig.config.maxToolCalls ?? 192,
+    workingTreeClean: !finalDirtyTree.dirty,
     checkpoint: checkpointRecord
       ? {
           id: checkpointRecord.id,
