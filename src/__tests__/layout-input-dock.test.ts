@@ -15,21 +15,22 @@ describe('layout input dock', () => {
       24,
     ).map(stripAnsi);
 
-    const dockTop = findLastIndex(lines, (line) => line.trimStart().startsWith('┌'));
+    // Find the dock by the hr line (starts with dashes after all content)
+    const dockTop = findLastIndex(lines, (line) => line.trimStart().startsWith('─'));
     const dock = dockTop >= 0 ? lines.slice(dockTop) : [];
 
-    expect(dock.length).toBeGreaterThan(4);
-    expect(dock[0]?.trimStart().startsWith('┌')).toBe(true);
-    expect(dock.at(-1)?.trimStart().startsWith('└ Enter submit')).toBe(true);
+    expect(dock.length).toBeGreaterThan(2);
+    expect(dock[0]?.trimStart().startsWith('─')).toBe(true);
+    expect(dock[1]?.trimStart().startsWith('>')).toBe(true);
     expect(lines.join('\n')).toContain('TAIL_MARKER');
   });
 
   it('places the cursor on the typed text row instead of the padded dock row', () => {
-    expect(inputCursorPosition('hi synax', 80, 24)).toEqual({ row: 21, col: 11 });
+    expect(inputCursorPosition('hi synax', 80, 24)).toEqual({ row: 22, col: 10 });
   });
 
   it('places the cursor after trailing input spaces', () => {
-    expect(inputCursorPosition('hi synax   ', 80, 24)).toEqual({ row: 21, col: 14 });
+    expect(inputCursorPosition('hi synax   ', 80, 24)).toEqual({ row: 22, col: 13 });
   });
 
   it('places the cursor on the final visible wrapped input line', () => {
@@ -47,7 +48,11 @@ describe('layout input dock', () => {
     const cursor = inputCursorPosition(objectiveInput, 54, 18);
 
     expect(lines[cursor.row]).toContain('TAIL_MARKER');
-    expect(cursor.col).toBe(lines[cursor.row].indexOf('TAIL_MARKER') + 'TAIL_MARKER'.length);
+    // Continuation line has no prefix, so cursor col = TAIL_MARKER position + length (both 0 and 11)
+    const tailIndex = lines[cursor.row].indexOf('TAIL_MARKER');
+    expect(tailIndex).toBe(0);
+    expect(cursor.col).toBe(0 + 'TAIL_MARKER'.length);
+    expect(lines[cursor.row].trimEnd()).toBe('TAIL_MARKER');
   });
 });
 
@@ -60,5 +65,5 @@ function findLastIndex<T>(items: T[], predicate: (item: T) => boolean): number {
 
 function stripAnsi(input: string): string {
   // eslint-disable-next-line no-control-regex
-  return input.replace(/\u001b\[[0-9;]*m/g, '');
+  return input.replace(/\[[0-9;]*m/g, '');
 }
