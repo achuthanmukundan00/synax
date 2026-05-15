@@ -329,6 +329,11 @@ describe('detectPackageManager', () => {
     expect(detectPackageManager(TMP).name).toBe('npm');
   });
 
+  it('detects bun from bun.lock', () => {
+    writeFileSync(join(TMP, 'bun.lock'), '', 'utf-8');
+    expect(detectPackageManager(TMP).name).toBe('bun');
+  });
+
   it('detects pnpm from pnpm-lock.yaml', () => {
     writeFileSync(join(TMP, 'pnpm-lock.yaml'), '', 'utf-8');
     expect(detectPackageManager(TMP).name).toBe('pnpm');

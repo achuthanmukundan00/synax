@@ -22,6 +22,7 @@ import {
   formatContextBudgetError,
   resolveContextBudgetSettings,
 } from '../agent/context-budget';
+import { resolveStrategy } from '../context/ContextStrategy';
 import { Session, type AgentClient, type AgentMessage, type AgentRunnerOptions } from '../session/Session';
 
 /** Local shim — Session.startTurn with the old options+task signature. */
@@ -426,7 +427,36 @@ describe('incremental token estimation', () => {
   });
 
   it('uses the configured chars-per-token estimate', () => {
-    expect(estimateTokens('x'.repeat(30))).toBe(10);
+    expect(estimateTokens('x'.repeat(30))).toBe(8);
+  });
+
+  it('uses a conservative estimate for dense long-token text', () => {
+    expect(estimateTokens('a'.repeat(100))).toBe(50);
+  });
+
+  it('uses tighter strategy bands for model context windows', () => {
+    expect(resolveStrategy(64_000).mode).toBe('aggressive');
+    expect(resolveStrategy(131_072).mode).toBe('moderate');
+    expect(resolveStrategy(300_000).mode).toBe('light');
+    expect(resolveStrategy(2_000_000).mode).toBe('none');
+  });
+
+  it('light strategy falls through to summarizing compaction when stage 0 is insufficient', () => {
+    const msgs = [
+      makeMsg('system', 'system prompt'),
+      ...makeBulkMessages(80, 'user', 500),
+      ...makeBulkMessages(80, 'assistant', 500),
+    ];
+
+    const result = compactMessagesMultiStage(msgs, {
+      ...resolveContextBudgetSettings({}),
+      contextWindowTokens: 12000,
+      reservedOutputTokens: 1000,
+      keepRecentTokens: 3000,
+      strategyMode: 'light',
+    });
+
+    expect(result.stage).toBeGreaterThanOrEqual(1);
   });
 
   it('full estimate on first call', () => {

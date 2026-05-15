@@ -221,12 +221,12 @@ describe('token counter integration', () => {
       contextWindow: 131072,
     });
 
-    // TokenCounter uses chars/3 while fallback uses chars/4
-    // So with Counter should produce different (likely larger) estimate
+    // TokenCounter serializes the message while fallback counts the raw task,
+    // so they should still differ even when both use the shared estimator.
     expect(withCounter.breakdown.taskTokens).not.toBe(withoutCounter.breakdown.taskTokens);
   });
 
-  it('TokenCounter-based estimation uses chars/3 for consistency with existing system', () => {
+  it('TokenCounter-based estimation uses the shared estimator for consistency with existing system', () => {
     const counter = new TokenCounter();
     const task = 'hello world';
     const result = estimateTaskBudget({
@@ -236,9 +236,7 @@ describe('token counter integration', () => {
       tokenCounter: counter,
     });
 
-    // TokenCounter serializes the message as JSON before counting:
-    // JSON.stringify({role:'user',content:'hello world'}) → chars/3
-    // This is more accurate than the simple chars/4 fallback.
+    // TokenCounter serializes the message as JSON before counting.
     const expectedTokens = counter.countInput([{ role: 'user', content: task }]);
     expect(result.breakdown.taskTokens).toBe(expectedTokens);
     expect(result.breakdown.taskTokens).toBeGreaterThan(0);

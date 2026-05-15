@@ -130,6 +130,26 @@ describe('runAgentTask patch approval', () => {
     expect(requests).toHaveLength(0);
   });
 
+  it('does not silently fall back to inline when explicit parallel sub-agents plan inline', async () => {
+    const events: AgentEvent[] = [];
+    responses = [{ content: JSON.stringify({ inline: true }) }];
+
+    const report = await runAgentTask({
+      repoRoot: TMP,
+      task: 'use parallel sub-agents to read docs and specs',
+      onEvent: (event) => events.push(event),
+    });
+
+    expect(report.terminalState).toBe('blocked');
+    expect(report.finalAnswer).toContain('Explicit orchestrate (parallel) was requested');
+    expect(report.finalAnswer).toContain('Refusing to continue inline');
+    expect(requests).toHaveLength(1);
+    expect(JSON.stringify(requests[0])).toContain('Do not return');
+    expect(JSON.stringify(requests[0])).toContain('use parallel sub-agents to read docs and specs');
+    expect(events.map((event) => event.type)).toContain('orchestration_plan_generated');
+    expect(events.map((event) => event.type)).toContain('assistant_message');
+  });
+
   it('emits verification lifecycle events in correct order', async () => {
     // Configure a verification command in the project config
     writeFileSync(
