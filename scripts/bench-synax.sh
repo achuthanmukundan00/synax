@@ -11,7 +11,7 @@
 #   SYNAX_BENCH_TIMEOUT_PER_TASK  Seconds per task (default: 300)
 #
 # Usage:
-#   npm run bench
+#   bun run bench
 #   scripts/bench-synax.sh
 #   SYNAX_BENCH_MODEL=qwen3-gguf SYNAX_BENCH_BASE_URL=http://127.0.0.1:1234/v1 scripts/bench-synax.sh
 
@@ -49,9 +49,9 @@ if [ ! -d "$FIXTURE_SRC" ]; then
 fi
 
 if [ ! -f "$REPO_ROOT/dist/cli.js" ]; then
-  echo "[bench] WARN: synax not built. Run 'npm run build' first."
+  echo "[bench] WARN: synax not built. Run 'bun run build' first."
   echo "[bench] Building synax..."
-  (cd "$REPO_ROOT" && npm run build) || {
+  (cd "$REPO_ROOT" && bun run build) || {
     echo "[bench] ERROR: Build failed. Cannot run benchmarks."
     exit 1
   }
@@ -185,15 +185,15 @@ EOF
   RUN_EXIT=0
   if command -v timeout &>/dev/null; then
     RUN_OUT="$(cd "$WORKSPACE" && timeout "$SYNAX_BENCH_TIMEOUT_PER_TASK" \
-      node "$REPO_ROOT/dist/cli.js" run -t "$TASK_PROMPT" -y 2>&1)" || RUN_EXIT=$?
+      bun "$REPO_ROOT/dist/cli.js" run -t "$TASK_PROMPT" -y 2>&1)" || RUN_EXIT=$?
   else
     # macOS: use perl-based timeout or just run without timeout
     if command -v perl &>/dev/null; then
       RUN_OUT="$(cd "$WORKSPACE" && perl -e 'alarm shift; exec @ARGV' "$SYNAX_BENCH_TIMEOUT_PER_TASK" \
-        node "$REPO_ROOT/dist/cli.js" run -t "$TASK_PROMPT" -y 2>&1)" || RUN_EXIT=$?
+        bun "$REPO_ROOT/dist/cli.js" run -t "$TASK_PROMPT" -y 2>&1)" || RUN_EXIT=$?
     else
       RUN_OUT="$(cd "$WORKSPACE" && \
-        node "$REPO_ROOT/dist/cli.js" run -t "$TASK_PROMPT" -y 2>&1)" || RUN_EXIT=$?
+        bun "$REPO_ROOT/dist/cli.js" run -t "$TASK_PROMPT" -y 2>&1)" || RUN_EXIT=$?
     fi
   fi
 
