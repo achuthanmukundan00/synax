@@ -52,10 +52,16 @@ export async function validateReplaceInFile(
   const before = await readFile(target.absolutePath, 'utf-8');
   const matchCount = countOccurrences(before, patch.oldStr);
   if (matchCount === 0) {
+    const snippetLen = Math.min(before.length, 800);
+    const snippet = before.slice(0, snippetLen);
+    const truncated = before.length > snippetLen ? '...(truncated)' : '';
     return {
       ok: false,
       failureState: 'stale-read',
-      message: `oldStr no longer matches the current contents of ${target.path}; re-read the file and retry with an exact snippet`,
+      message:
+        `oldStr no longer matches the current contents of ${target.path}. ` +
+        `Re-read the file and retry with an exact snippet. ` +
+        `File begins with${truncated ? ' (truncated)' : ''}:\n${snippet}${truncated}`,
     };
   }
   if (matchCount > 1) {
