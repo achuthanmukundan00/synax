@@ -14,6 +14,7 @@ import {
   type ProjectConfig,
 } from '../config/project';
 import { loadSynaxConfig } from '../config/load-config';
+import type { EffectiveSynaxConfig } from '../config/schema';
 import { loadSkills, type SkillDiagnostic } from '../agent/skills';
 import { discoverSkills, buildSkillMessages } from '../skills/SkillLoader';
 import { resetTokenLedger } from '../agent/context-budget';
@@ -25,7 +26,6 @@ import {
   type AgentTerminalState,
   type AgentBudgetSnapshot,
   type AgentActivity,
-  type AgentTurnResult,
 } from '../session/Session';
 import { createSessionComponents, createAgentSession } from '../session/SessionFactory';
 import { runVerification, type VerificationResult } from '../agent/verification';
@@ -34,8 +34,9 @@ import { buildInspectConfigProfile } from './inspect';
 import { join } from 'path';
 import { writeFileSync, mkdirSync } from 'fs';
 import type { NormalizedProviderConfig, ProviderMetadata } from '../llm/types';
-import { detectDirtyTree, readLatestCheckpoint, undoLastEdit } from '../agent/safety';
+import { readLatestCheckpoint, undoLastEdit } from '../agent/safety';
 import { runInteractiveTui } from '../tui/interactive-tui';
+import { runAgentTask, type RunTaskReport } from '../agent/run-task';
 import { isSecretTrigger } from '../backrooms/trigger';
 import {
   createSession,
@@ -329,7 +330,6 @@ export function createChatSession(options: {
       if (thinkingLevelRef) factoryInput.thinkingLevel = thinkingLevelRef;
       const factoryResult = createLLMClient(factoryInput);
       const client = factoryResult.client;
-      const beforeHead = await gitHead(options.repoRoot);
       // Create a fresh AbortController per turn.
       currentAbortController = new AbortController();
 
@@ -390,9 +390,21 @@ export function createChatSession(options: {
         }
       };
 
-      let result: AgentTurnResult;
+      // ── Route through runAgentTask for orchestration, verification, repair ──
+      let runReport: RunTaskReport;
       try {
-        result = await turnSession.startTurnWithRecovery(message);
+        runReport = await runAgentTask({
+          repoRoot: options.repoRoot,
+          task: message,
+          session: turnSession,
+          components,
+          client,
+          projectConfigOverride: config,
+          metadata: factoryResult.metadata,
+          onActivity: options.onActivity,
+          onEvent: (event) => eventSink?.(event),
+          logger: components.logger,
+        });
       } catch (error) {
         if (currentAbortController?.signal.aborted) {
           return {
@@ -408,54 +420,50 @@ export function createChatSession(options: {
       } finally {
         currentAbortController = null;
       }
-      const afterHead = await gitHead(options.repoRoot);
-      const changedByCommit =
-        beforeHead && afterHead && beforeHead !== afterHead
-          ? await changedFilesBetween(options.repoRoot, beforeHead, afterHead)
-          : [];
-      const finalDirtyTree = await detectDirtyTree(options.repoRoot);
-      saveContextState(options.repoRoot, result.conversation);
-      appendSessionEventFn({
-        type: 'assistant_message',
-        at: new Date().toISOString(),
-        content: result.finalAnswer || result.error || result.terminalState,
-      });
+
+      // Save context state for inspection (not handled by runAgentTask).
+      saveContextState(options.repoRoot, conversation);
+
+      // Append state snapshot for session logging.
       appendSessionEventFn({
         type: 'state_snapshot',
         at: new Date().toISOString(),
         snapshot: {
-          terminalState: result.terminalState,
-          steps: result.steps,
-          toolCalls: result.toolCalls.length,
-          changedFiles: result.changedFiles,
+          terminalState: runReport.terminalState,
+          steps: runReport.steps,
+          toolCalls: runReport.toolCalls.length,
+          changedFiles: runReport.filesChanged,
           contextWindowTokens: config.contextWindowTokens,
-          contextUsedTokens: result.conversation.tokenLedger.lastKnownTokenCount,
+          contextUsedTokens: conversation.tokenLedger.lastKnownTokenCount,
         },
       });
-      // Finalize session on terminal states
+
+      // Finalize session on terminal states.
       if (
-        result.terminalState === 'completed' ||
-        result.terminalState === 'blocked' ||
-        result.terminalState === 'budget_exhausted' ||
-        result.terminalState === 'model_error' ||
-        result.terminalState === 'tool_error' ||
-        result.terminalState === 'failed_verification'
+        runReport.terminalState === 'completed' ||
+        runReport.terminalState === 'blocked' ||
+        runReport.terminalState === 'budget_exhausted' ||
+        runReport.terminalState === 'model_error' ||
+        runReport.terminalState === 'tool_error' ||
+        runReport.terminalState === 'failed_verification'
       ) {
-        finalizeCurrentSession(result.terminalState === 'completed' ? 'completed' : 'failed');
+        finalizeCurrentSession(runReport.terminalState === 'completed' ? 'completed' : 'failed');
       }
-      // Only refresh title/summary on first turn to avoid O(n) disk reads every turn
+
+      // Only refresh title/summary on first turn to avoid O(n) disk reads every turn.
       const meta = findSessionMeta(sessionIdRef.current);
       if (!meta || meta.messageCount <= 1) {
         updateSessionTitle();
       }
+
       return {
-        terminalState: result.terminalState,
-        finalAnswer: result.finalAnswer,
-        changedFiles: unique([...result.changedFiles, ...changedByCommit]),
-        workingTreeClean: !finalDirtyTree.dirty,
-        steps: result.steps,
-        toolCalls: result.toolCalls.length,
-        error: result.error,
+        terminalState: runReport.terminalState,
+        finalAnswer: runReport.finalAnswer,
+        changedFiles: runReport.filesChanged,
+        workingTreeClean: runReport.workingTreeClean,
+        steps: runReport.steps,
+        toolCalls: runReport.toolCalls.length,
+        error: runReport.error,
       };
     },
     async handleSlashCommand(command: string): Promise<SlashCommandReport> {
@@ -808,6 +816,7 @@ export function chatCommand(program: Command): void {
     .option('--plain', 'Use plain line-mode chat instead of full-screen TUI')
     .option('--mouse', 'Enable SGR mouse tracking for app-managed wheel scrolling')
     .option('--no-alt-screen', 'Disable alternate screen buffer for better native scrollback/copy')
+    .option('--cmux-mode', 'Reduce TUI frame rate and live nodes for many parallel terminal sessions')
     .option('--no-skills', 'Disable auto-discovered skill injection (config-based persona skills are still loaded)')
     .action(
       async (options: {
@@ -815,6 +824,7 @@ export function chatCommand(program: Command): void {
         plain?: boolean;
         mouse?: boolean;
         altScreen?: boolean;
+        cmuxMode?: boolean;
         skills?: boolean;
       }) => {
         const repoRoot = process.cwd();
@@ -836,13 +846,17 @@ export function chatCommand(program: Command): void {
         let skillDiagnostics: SkillDiagnostic[] | undefined;
         let enableMouse = false;
         let alternateScreen = true;
+        let cmuxMode = false;
+        let effectiveSettingsConfig: EffectiveSynaxConfig | undefined;
         try {
           const effectiveConfig = loadSynaxConfig();
+          effectiveSettingsConfig = effectiveConfig;
           if (effectiveConfig.active.thinking && effectiveConfig.active.thinking !== 'off') {
             thinkingLevel = effectiveConfig.active.thinking;
           }
           enableMouse = effectiveConfig.tui?.mouse ?? false;
           alternateScreen = effectiveConfig.tui?.alternateScreen ?? true;
+          cmuxMode = effectiveConfig.tui?.cmuxMode ?? false;
 
           // Config-based skills (personas) — always loaded regardless of --no-skills.
           const configMessages: string[] = [];
@@ -876,6 +890,7 @@ export function chatCommand(program: Command): void {
         // CLI flags override config.
         if (options.mouse) enableMouse = true;
         if (options.altScreen === false) alternateScreen = false;
+        if (options.cmuxMode) cmuxMode = true;
         const useTui = shouldUseInteractiveTui({
           plain: Boolean(options.plain),
           message: options.message,
@@ -923,6 +938,7 @@ export function chatCommand(program: Command): void {
           await runInteractiveTui(session, {
             enableMouse,
             alternateScreen,
+            cmuxMode,
             blockedMessage,
             lastModelOutput: () => lastModelOutput,
             resetLastModelOutput: () => {
@@ -935,12 +951,13 @@ export function chatCommand(program: Command): void {
             cwdLabel,
             gitBranch,
             contextWindowTokens: loaded.config.contextWindowTokens ?? loaded.config.contextBudgetTokens,
-            coreVisualProfile: loaded.config.coreVisualProfile,
             coreLoaded: true,
             activeSkills: skillDiagnostics?.filter((d) => d.loaded).map((d) => d.id),
             inputPricePer1MTokens: metadata.inputPricePer1MTokens,
             outputPricePer1MTokens: metadata.outputPricePer1MTokens,
+            settingsConfig: effectiveSettingsConfig,
             onSettingsConfigChanged: (settingsConfig) => {
+              effectiveSettingsConfig = settingsConfig;
               loaded.config = applyEffectiveSynaxConfigToProjectConfig(loaded.config, settingsConfig);
               const nextThinkingLevel = settingsConfig.active.thinking ?? thinkingLevel;
               // Keep the session's config reference and thinking level in sync.
@@ -961,7 +978,6 @@ export function chatCommand(program: Command): void {
                   providerNameFromPreset(loaded.config.provider?.preset),
                 contextWindowTokens:
                   activeModel?.contextWindow ?? loaded.config.contextWindowTokens ?? loaded.config.contextBudgetTokens,
-                coreVisualProfile: loaded.config.coreVisualProfile,
                 thinkingEnabled: nextThinkingLevel !== 'off',
                 coreLoaded: true,
                 providerWarning: nextBlockedMessage,
@@ -1144,33 +1160,6 @@ export async function currentGitBranch(repoRoot: string): Promise<string | undef
     return stdout.trim() || undefined;
   } catch {
     return undefined;
-  }
-}
-
-async function gitHead(repoRoot: string): Promise<string | null> {
-  try {
-    const { stdout } = await execFileAsync('git', ['rev-parse', 'HEAD'], {
-      cwd: repoRoot,
-      maxBuffer: 64 * 1024,
-    });
-    return stdout.trim() || null;
-  } catch {
-    return null;
-  }
-}
-
-async function changedFilesBetween(repoRoot: string, before: string, after: string): Promise<string[]> {
-  try {
-    const { stdout } = await execFileAsync('git', ['diff', '--name-only', `${before}..${after}`], {
-      cwd: repoRoot,
-      maxBuffer: 256 * 1024,
-    });
-    return stdout
-      .split(/\r?\n/)
-      .map((line) => line.trim())
-      .filter(Boolean);
-  } catch {
-    return [];
   }
 }
 
