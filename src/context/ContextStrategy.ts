@@ -6,11 +6,16 @@
  * actual context window size.
  *
  * Strategy table:
- *   ≤32K    → aggressive  (deterministic + summarization + handoff, 8K reserve)
- *   32K–128K → moderate   (deterministic only, 16K reserve)
- *   128K–1M  → light      (dedup + strip noise, 32K reserve)
- *   1M+      → none       (no compaction, 64K reserve)
- *   unknown  → moderate   (safe default)
+ *   ≤64K     → aggressive  (full multi-stage + handoff, 8K reserve)
+ *   64K–256K → moderate    (deterministic + summarization, 16K reserve)
+ *   256K–1M  → light       (dedup/strip first, summarization fallback, 32K reserve)
+ *   >1M      → none        (no budget enforcement, 64K reserve)
+ *   unknown  → moderate    (safe default)
+ *
+ * Band rationale (v0.4): widened from ≤32K/32K–128K to ≤64K/64K–256K because
+ * local models running on consumer GPUs typically expose 64K–128K windows, and
+ * moderate compaction (deterministic+summarization) is safe for that range.
+ * Aggressive handoff is reserved for truly tiny windows (≤64K) where every token counts.
  */
 
 // ─── Strategy type ───────────────────────────────────────────────────────────
@@ -22,7 +27,7 @@ export interface ContextStrategy {
   /** Human-readable label for reporting. */
   label: string;
   /** Compaction approach. `false` means no compaction. */
-  compact: 'deterministic+summarization+handoff' | 'deterministic' | 'dedup+strip' | false;
+  compact: 'deterministic+summarization+handoff' | 'deterministic+summarization' | 'light+summarization' | false;
   /** Output tokens reserved for model responses. */
   reserveTokens: number;
   /** Override for contextWindowTokens (set only for 'off' mode). */
@@ -48,10 +53,10 @@ export function resolveStrategy(contextWindow: number): ContextStrategy {
       contextWindowOverride: Infinity,
     };
   }
-  if (contextWindow <= 32_768) {
+  if (contextWindow <= 64_000) {
     return STRATEGIES.aggressive;
   }
-  if (contextWindow <= 131_072) {
+  if (contextWindow <= 256_000) {
     return STRATEGIES.moderate;
   }
   if (contextWindow <= 1_000_000) {
@@ -65,25 +70,25 @@ export function resolveStrategy(contextWindow: number): ContextStrategy {
 const STRATEGIES: Record<Exclude<ContextStrategyMode, 'off'>, ContextStrategy> = {
   aggressive: {
     mode: 'aggressive',
-    label: 'Aggressive (≤32K window)',
+    label: 'Aggressive (≤64K window)',
     compact: 'deterministic+summarization+handoff',
     reserveTokens: 8192,
   },
   moderate: {
     mode: 'moderate',
-    label: 'Moderate (32K–128K window)',
-    compact: 'deterministic',
+    label: 'Moderate (64K–256K window)',
+    compact: 'deterministic+summarization',
     reserveTokens: 16384,
   },
   light: {
     mode: 'light',
-    label: 'Light (128K–1M window)',
-    compact: 'dedup+strip',
+    label: 'Light+ (256K–1M window)',
+    compact: 'light+summarization',
     reserveTokens: 32768,
   },
   none: {
     mode: 'none',
-    label: 'None (1M+ window)',
+    label: 'None (>1M window)',
     compact: false,
     reserveTokens: 65536,
   },
