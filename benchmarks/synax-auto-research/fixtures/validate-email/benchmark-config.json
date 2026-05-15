@@ -1,0 +1,5 @@
+{
+  "prompt": "Implement the validateEmail function in src/validate-email.js. The exported function should accept an email string and return true for valid emails and false for invalid ones. Run 'node test/validate-email.test.js' to check your work. All tests must pass.",
+  "testCommand": "node test/validate-email.test.js",
+  "description": "Implement validateEmail function to pass all tests"
+}
