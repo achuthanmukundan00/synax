@@ -41,6 +41,7 @@ export interface VerificationLifecycleEvent extends AgentEventBase {
 }
 
 import type { OrchestrationPlanGeneratedEvent } from '../session/types';
+import type { ChildSessionCompletedEvent, ChildSessionFailedEvent, ChildSessionSpawnedEvent } from '../events/types';
 
 export type AgentEvent =
   | (AgentEventBase & {
@@ -72,6 +73,9 @@ export type AgentEvent =
   | ToolEvent
   | VerificationLifecycleEvent
   | OrchestrationPlanGeneratedEvent
+  | ChildSessionSpawnedEvent
+  | ChildSessionCompletedEvent
+  | ChildSessionFailedEvent
   | (AgentEventBase &
       PatchPreview & {
         type: 'patch_preview';
