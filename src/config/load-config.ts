@@ -186,7 +186,7 @@ function defaultMcpConfig(): ResolvedMcpConfig {
 }
 
 function defaultTuiConfig(): ResolvedTuiConfig {
-  return { mouse: false, alternateScreen: true };
+  return { mouse: false, alternateScreen: true, cmuxMode: false };
 }
 
 function defaultEffectiveConfig(): EffectiveSynaxConfig {
@@ -434,6 +434,8 @@ export function configFromParsed(parsed: Record<string, unknown>): SynaxConfig {
     if (typeof raw.mouse === 'boolean') tui.mouse = raw.mouse;
     if (typeof raw.alternate_screen === 'boolean') tui.alternateScreen = raw.alternate_screen;
     if (typeof raw.alternateScreen === 'boolean') tui.alternateScreen = raw.alternateScreen;
+    if (typeof raw.cmux_mode === 'boolean') tui.cmuxMode = raw.cmux_mode;
+    if (typeof raw.cmuxMode === 'boolean') tui.cmuxMode = raw.cmuxMode;
     config.tui = tui;
   }
 
@@ -614,10 +616,11 @@ function mergeConfigs(
 
     // Merge TUI
     if (layer.config.tui) {
-      const prev = result.tui ?? { mouse: false, alternateScreen: true };
+      const prev = result.tui ?? { mouse: false, alternateScreen: true, cmuxMode: false };
       result.tui = {
         mouse: layer.config.tui.mouse ?? prev.mouse,
         alternateScreen: layer.config.tui.alternateScreen ?? layer.config.tui.alternate_screen ?? prev.alternateScreen,
+        cmuxMode: layer.config.tui.cmuxMode ?? layer.config.tui.cmux_mode ?? prev.cmuxMode,
       };
     }
 
@@ -836,10 +839,11 @@ export function serializeEffectiveConfig(config: EffectiveSynaxConfig): string {
   }
 
   // TUI
-  const tui = config.tui ?? { mouse: false, alternateScreen: true };
+  const tui = config.tui ?? { mouse: false, alternateScreen: true, cmuxMode: false };
   lines.push('[tui]');
   lines.push(`mouse = ${tui.mouse}`);
   lines.push(`alternate_screen = ${tui.alternateScreen}`);
+  lines.push(`cmux_mode = ${tui.cmuxMode}`);
   lines.push('');
 
   return lines.join('\n') + '\n';
