@@ -363,7 +363,7 @@ graph TD
 4. `dedupRepeatedPatterns` — merge identical compiler/linter messages
 5. `collapseWhitespace` — merge blank lines, trim indentation
 
-Skipped for `light`/`none` strategies (when strategyReserveTokens ≥ 32768).
+Skipped only when context management is disabled (`none`/`off`). Light+ mode still runs this deterministic pass before falling through to summarizing stages when needed.
 
 **Stages 1-3:** Traditional compaction — keep system prompt + structured summary of old messages + keep most recent N turns.
 
@@ -379,7 +379,7 @@ Skipped for `light`/`none` strategies (when strategyReserveTokens ≥ 32768).
 
 ### Token Estimation
 
-Uses a **chars/3** heuristic throughout. The `TokenLedger` provides incremental accounting to avoid full rescans on every budget check.
+Uses an approximate character heuristic throughout: chars/4 by default, with more conservative counting for dense long-token text and CJK-heavy content. The `TokenLedger` provides incremental accounting to avoid full rescans on every budget check.
 
 > ⚠️ **DO NOT touch casually:**
 > - **Compaction tool-call/tool-result pairing rules** — `adjustKeepFromForToolIntegrity()` enforces that tool-call and tool-result messages stay together. Breaking this means the model sees orphaned tool calls/results, causing protocol errors.
@@ -455,7 +455,7 @@ tracer.endSpan(turnSpan);
 
 ### TokenCounter
 
-Wraps the chars/3 estimator for per-turn token counting:
+Wraps the shared approximate estimator for per-turn token counting:
 
 - `countInput(messages)` — estimates total tokens in messages sent to the model
 - `countOutput(response)` — estimates output tokens from content + reasoning + tool call JSON

@@ -95,6 +95,17 @@ command = "npx"
 args = ["-y", "@upstash/context7-mcp"]
 ```
 
+### TUI
+
+```toml
+[tui]
+mouse = false
+alternate_screen = true
+cmux_mode = false
+```
+
+Set `cmux_mode = true` to reduce OpenTUI frame rate and retained live cards when running many parallel TUI sessions.
+
 ### AI Core Visual Profile
 
 ```toml

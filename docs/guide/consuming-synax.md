@@ -8,18 +8,18 @@ By installing Synax, you can instantiate an agent session, integrate it with cus
 
 As of version 0.1.0-alpha, Synax is not yet published to a public registry. You have a few options for consuming it locally in other applications.
 
-### 1. NPM Link
+### 1. Bun Link
 
-Use `npm link` to symbiotically manage your project and Synax while testing local changes.
+Use `bun link` to symbiotically manage your project and Synax while testing local changes.
 
 In the Synax project root:
 ```bash
-npm link
+bun link
 ```
 
 In your project root:
 ```bash
-npm link synax
+bun link synax
 ```
 
 ### 2. Local Folder Install
@@ -27,7 +27,7 @@ npm link synax
 Install Synax exactly where it sits on the disk. This locks your project to the local Synax codebase, updating when its local Git repo updates.
 
 ```bash
-npm install ../path/to/synax
+bun add ../path/to/synax
 ```
 
 ### 3. Tarball Pack
@@ -36,13 +36,13 @@ Create a compressed tarball mimicking a remote registry release, and lock that v
 
 In the Synax project root:
 ```bash
-npm pack
+bun pm pack
 ```
 This produces a file like `synax-0.1.0-alpha.1.tgz`.
 
 In your project root:
 ```bash
-npm install ../path/to/synax/synax-0.1.0-alpha.1.tgz
+bun add ../path/to/synax/synax-0.1.0-alpha.1.tgz
 ```
 
 ## Basic Consumption
@@ -81,8 +81,8 @@ check();
 
 ## Optional Dependencies
 
-Synax relies on `better-sqlite3` as an `.optionalDependencies` package. Products running on standard containerized and standard platforms will have no issues unpacking or compiling this dependency upon `npm install`.
+Synax relies on `better-sqlite3` as an `.optionalDependencies` package. Products running on standard containerized and standard platforms will have no issues unpacking or compiling this dependency upon `bun install`.
 
 However, some restricted environments, edge networks, browsers, or strictly statically analyzed bundlemaps may fail if a system build environment is unlinked.
 
-Since it is marked as `optionalDependencies`, you can install Synax using standard tools like NPM while ignoring compilation failures or excluding the dependency without breaking base functionality. Holographic storage tools that explicitly rely on `sqlite` adapters may gracefully fail in those restricted environments without bringing down normal Chat behavior.
+Since it is marked as `optionalDependencies`, you can install Synax using standard tools like Bun while ignoring compilation failures or excluding the dependency without breaking base functionality. Holographic storage tools that explicitly rely on `sqlite` adapters may gracefully fail in those restricted environments without bringing down normal Chat behavior.

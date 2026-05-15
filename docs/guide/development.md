@@ -3,11 +3,11 @@
 ## Local Commands
 
 ```sh
-npm install
-npm run build
-npm run typecheck
-npm test
-npm run lint
+bun install
+bun run build
+bun run typecheck
+bun run test
+bun run lint
 ```
 
 ## Docs
@@ -15,19 +15,19 @@ npm run lint
 Run VitePress locally:
 
 ```sh
-npm run docs:dev
+bun run docs:dev
 ```
 
 Build static docs:
 
 ```sh
-npm run docs:build
+bun run docs:build
 ```
 
 Preview the built site:
 
 ```sh
-npm run docs:preview
+bun run docs:preview
 ```
 
 ## GitHub Pages
@@ -37,7 +37,7 @@ The repository includes a GitHub Actions workflow at `.github/workflows/pages.ym
 On pushes to `main`, the workflow:
 
 1. Installs dependencies.
-2. Builds the VitePress site with `npm run docs:build`.
+2. Builds the VitePress site with `bun run docs:build`.
 3. Uploads `docs/.vitepress/dist`.
 4. Deploys the artifact to GitHub Pages.
 
@@ -60,7 +60,7 @@ When using Synax to modify Synax:
 - Inspect the relevant tests before editing.
 - Update the smallest code path that can satisfy the change.
 - Keep docs changes tied to behavior changes.
-- Run `npm run typecheck` after edits.
+- Run `bun run typecheck` after edits.
 - Run targeted tests when they exist, then the broader verification set if the change affects public behavior.
 - Summarize changed files and verification status at the end of the run.
 
@@ -71,26 +71,26 @@ These are the preferred bounded smoke checks for self-development work:
 Read-only:
 
 ```sh
-npm run synax -- run --mode read-only --task "Inspect the command registry and identify one safe improvement. Do not modify files."
+bun run synax -- run --mode read-only --task "Inspect the command registry and identify one safe improvement. Do not modify files."
 ```
 
 Patch:
 
 ```sh
-npm run synax -- run --mode patch --task "Make one minimal docs-only wording improvement in README.md, then run npm run typecheck."
+bun run synax -- run --mode patch --task "Make one minimal docs-only wording improvement in README.md, then run bun run typecheck."
 ```
 
 Verification:
 
 ```sh
-npm run synax -- run --mode verify --task "Inspect the recent patch and report whether verification looks safe to run."
+bun run synax -- run --mode verify --task "Inspect the recent patch and report whether verification looks safe to run."
 ```
 
 Manual checks:
 
 ```sh
-npm run synax -- inspect
-npm run synax -- doctor --full
+bun run synax -- inspect
+bun run synax -- doctor --full
 ```
 
 ## Verification Requirements
@@ -98,10 +98,10 @@ npm run synax -- doctor --full
 Run and pass these commands before landing behavior changes:
 
 ```sh
-npm test
-npm run typecheck
-npm run build
-npm run docs:build
+bun run test
+bun run typecheck
+bun run build
+bun run docs:build
 ```
 
 ## Extension Interfaces

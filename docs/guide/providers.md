@@ -181,22 +181,22 @@ They require user-supplied API keys and are not run in CI.
 
 ```bash
 # Test Relay (local)
-SYNAX_LIVE_PROVIDER=relay npm run smoke:provider
+SYNAX_LIVE_PROVIDER=relay bun run smoke:provider
 
 # Test DeepSeek
-SYNAX_LIVE_PROVIDER=deepseek npm run smoke:provider
+SYNAX_LIVE_PROVIDER=deepseek bun run smoke:provider
 
 # Test OpenRouter
-SYNAX_LIVE_PROVIDER=openrouter npm run smoke:provider
+SYNAX_LIVE_PROVIDER=openrouter bun run smoke:provider
 
 # Test Groq
-SYNAX_LIVE_PROVIDER=groq npm run smoke:provider
+SYNAX_LIVE_PROVIDER=groq bun run smoke:provider
 
 # Test Anthropic
-SYNAX_LIVE_PROVIDER=anthropic npm run smoke:provider
+SYNAX_LIVE_PROVIDER=anthropic bun run smoke:provider
 
 # Test custom endpoint
-SYNAX_LIVE_PROVIDER=custom SYNAX_CUSTOM_BASE_URL=http://127.0.0.1:1234/v1 npm run smoke:provider
+SYNAX_LIVE_PROVIDER=custom SYNAX_CUSTOM_BASE_URL=http://127.0.0.1:1234/v1 bun run smoke:provider
 ```
 
 Each smoke test sends a tiny prompt (`"Reply with exactly: synax-ok"`)

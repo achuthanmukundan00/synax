@@ -2,8 +2,8 @@
 
 ## Requirements
 
-- Node.js 18 or newer
-- npm
+- Bun 1.2 or newer
+- Bun
 - Git
 - Relay or another OpenAI-compatible local server
 
@@ -12,14 +12,14 @@
 ```sh
 git clone git@github.com:achuthanmukundan00/synax.git
 cd synax
-npm install
-npm run build
+bun install
+bun run build
 ```
 
 During local development, run the built CLI through the package script:
 
 ```sh
-npm run synax -- --help
+bun run synax -- --help
 ```
 
 After publishing or linking the package, the command name is:
@@ -73,13 +73,13 @@ Synax auto-detects the parser from your model name if you don't set it explicitl
 Run a quick local health check:
 
 ```sh
-npm run synax -- doctor
+bun run synax -- doctor
 ```
 
 Run the full provider check after Relay is running:
 
 ```sh
-npm run synax -- doctor --full
+bun run synax -- doctor --full
 ```
 
 Full doctor mode probes `/models` and sends a small `/chat/completions` request. Quick mode skips live provider calls.
@@ -87,9 +87,9 @@ Full doctor mode probes `/models` and sends a small `/chat/completions` request.
 ## First Session
 
 ```sh
-npm run synax -- inspect
-npm run synax -- ask --question "Summarize this repository in five bullets."
-npm run synax -- chat
+bun run synax -- inspect
+bun run synax -- ask --question "Summarize this repository in five bullets."
+bun run synax -- chat
 ```
 
 Inside chat:
@@ -107,7 +107,7 @@ synax> /exit
 For one bounded edit-capable task:
 
 ```sh
-npm run synax -- run --task "Fix the failing test"
+bun run synax -- run --task "Fix the failing test"
 ```
 
 `synax run --plan plan.md` is accepted by the CLI, but the plan execution engine is still a placeholder.

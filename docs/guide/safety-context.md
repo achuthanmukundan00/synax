@@ -161,7 +161,7 @@ Configure one verification command:
 
 ```toml
 [verification]
-defaultCommand = "npm run typecheck"
+defaultCommand = "bun run typecheck"
 ```
 
 Run it inside chat:
