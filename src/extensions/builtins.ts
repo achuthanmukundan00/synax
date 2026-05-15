@@ -1,4 +1,4 @@
-import { NormalRenderer, QuietRenderer, JsonlRenderer, DebugRenderer } from '../agent/renderers';
+import { QuietRenderer, JsonlRenderer, DebugRenderer } from '../agent/renderers';
 import { runVerification } from '../agent/verification';
 import { Session, type ModelToolSurfaceOptions } from '../session/Session';
 import { discoverLocalDocs, readLocalDoc } from '../context/local-docs';
@@ -21,7 +21,7 @@ import type {
   Verifier,
 } from './interfaces';
 
-export type BuiltinRendererKind = 'normal' | 'quiet' | 'jsonl' | 'debug';
+export type BuiltinRendererKind = 'quiet' | 'jsonl' | 'debug';
 
 export interface BuiltinExtensions {
   toolCallParser: ToolCallParser;
@@ -82,8 +82,6 @@ function createProviderAdapter(config: NormalizedProviderConfig): ProviderAdapte
 
 function createRenderer(kind: BuiltinRendererKind): Renderer {
   switch (kind) {
-    case 'normal':
-      return new NormalRenderer();
     case 'quiet':
       return new QuietRenderer();
     case 'jsonl':
