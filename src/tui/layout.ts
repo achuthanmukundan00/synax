@@ -1,15 +1,8 @@
 import type { RunStateSnapshot } from '../agent/tui-state';
 import type { CoreMode } from './ai-core';
-import { CORE_HEIGHT, CORE_WIDTH, modeColor, modePromptColor, renderAiCore, renderDottedCore } from './ai-core';
-import {
-  resolveCoreVisualProfile,
-  type CoreVisualResolverOptions,
-  type CoreVisualProfileId,
-} from './core-visual-profile';
-import { renderTranscript, toolsUsed } from './transcript';
-import pkg from '../../package.json';
-
-const RESET = '\u001b[0m';
+import { CORE_HEIGHT, CORE_WIDTH, modeColor, modePromptColor, renderAiCore } from './ai-core';
+import { renderTranscript } from './transcript';
+import { charWidthAt, stripAnsi, visibleLength, terminalWriteWidth } from './text-utils';
 
 const INPUT_DOCK_MAX_BODY_LINES = 12;
 const INPUT_DOCK_MIN_NONEMPTY_BODY_LINES = 2;
@@ -33,8 +26,6 @@ export interface InteractiveViewState {
   cwdLabel?: string;
   /** Current git branch displayed in the input dock when available. */
   gitBranch?: string;
-  /** Override core visual profile: 'model' (auto-detect), 'default', 'qwen', 'openai', 'claude', 'deepseek', 'gemini'. */
-  coreVisualProfile?: string;
   /** Number of wrapped history lines hidden below the viewport. */
   historyScrollOffset?: number;
   /** 0-indexed character offset into objectiveInput for cursor placement. */
@@ -68,8 +59,7 @@ export function renderLayout(state: InteractiveViewState, cols: number, rows: nu
   if (!hasTranscript) {
     renderWelcome(lines, renderWidth, bodyHeight, state);
   } else {
-    renderHeader(lines, renderWidth, state);
-    renderOperationalSurface(lines, renderWidth, bodyHeight, state);
+    renderHistory(lines, renderWidth, bodyHeight, state);
   }
 
   if (state.blockedMessage) {
@@ -77,13 +67,13 @@ export function renderLayout(state: InteractiveViewState, cols: number, rows: nu
       lines,
       Math.max(2, bodyHeight - 2),
       2,
-      `\u001b[33mBlocked · ${clip(state.blockedMessage, renderWidth - 12)}\u001b[0m`,
+      `[33mBlocked · ${clip(state.blockedMessage, renderWidth - 12)}[0m`,
       renderWidth,
     );
   }
 
   const clipped = lines.slice(0, bodyHeight).map((line) => pad(clip(line, renderWidth), width));
-  // ── Steering message bar (shown above prompt box while bot is generating) ──
+  // Steering message bar (shown above prompt box while bot is generating)
   if (state.steeringMessage) {
     const steeringLabel = '  steering> ';
     const maxMsgWidth = width - steeringLabel.length - 4;
@@ -91,9 +81,8 @@ export function renderLayout(state: InteractiveViewState, cols: number, rows: nu
       state.steeringMessage.length > maxMsgWidth
         ? state.steeringMessage.slice(0, maxMsgWidth - 3) + '...'
         : state.steeringMessage;
-    // Steel blue (synax) + italic
-    const steelBlue = '\u001b[38;2;67;76;88m\u001b[3m';
-    clipped.push(pad(`${steelBlue}${steeringLabel}${truncated}\u001b[0m`, width));
+    const steelBlue = '[38;2;67;76;88m[3m';
+    clipped.push(pad(`${steelBlue}${steeringLabel}${truncated}[0m`, width));
   }
   clipped.push(...panel);
   return clipped.map((line) => pad(clip(line, width), width));
@@ -111,53 +100,48 @@ export function maxHistoryScrollOffset(state: InteractiveViewState, _cols: numbe
   );
   const bodyHeight = Math.max(1, height - panelHeight - steeringBarHeight);
   const visibleRows = Math.max(1, bodyHeight - 3);
-  const sideWidth = operationalSideWidth(renderWidth, bodyHeight);
-  const transcriptWidth = sideWidth > 0 ? renderWidth - sideWidth - 5 : renderWidth - 4;
-  const transcriptLines = renderTranscript({ ...state, nowMs: state.nowMs }, Math.max(24, transcriptWidth));
+  const transcriptWidth = Math.max(24, renderWidth - 4);
+  const transcriptLines = renderTranscript({ ...state, nowMs: state.nowMs }, transcriptWidth);
   return Math.max(0, transcriptLines.length - visibleRows);
 }
 
 function renderWelcome(lines: string[], width: number, bodyHeight: number, state: InteractiveViewState): void {
-  const core = renderAiCore(
-    state.coreMode,
-    state.nowMs / 1000,
-    resolveCoreVisualProfile(coreModelId(state), coreVisualOptions(state.coreVisualProfile)),
-  );
-  const coreX = Math.max(0, Math.floor(width * 0.45 - CORE_WIDTH / 2));
-  const coreY = Math.max(2, Math.floor((bodyHeight - CORE_HEIGHT) / 2) - 2);
-  const telemetryWidth = Math.min(34, Math.max(24, width - (coreX + CORE_WIDTH + 4)));
-  const telemetryX = Math.min(width - telemetryWidth, coreX + CORE_WIDTH + 3);
+  // Info bar at the top
+  put(lines, 0, 0, dim(infoBar(state)), width);
+  put(lines, 1, 0, dim('─'.repeat(Math.max(1, width))), width);
 
-  renderHeader(lines, width, state);
-  putBlock(lines, coreY, coreX, core, width);
-  putBlock(lines, coreY + 1, telemetryX, renderTelemetry(state, telemetryWidth), width);
+  // Animated AI core logo (centered) — only if we have room
+  if (bodyHeight >= 16) {
+    const core = renderAiCore(state.coreMode, state.nowMs / 1000);
+    const coreX = Math.max(0, Math.floor((width - CORE_WIDTH) / 2));
+    const coreY = Math.max(3, Math.floor((bodyHeight - CORE_HEIGHT) / 2) - 3);
+    putBlock(lines, coreY, coreX, core, width);
+
+    // Welcome text below the logo
+    const welcomeText = bold('Welcome');
+    const welcomeX = Math.max(0, Math.floor(width / 2) - Math.floor(welcomeText.length / 2));
+    put(lines, coreY + CORE_HEIGHT + 1, welcomeX, welcomeText, width);
+
+    // Tips section
+    const tipsY = coreY + CORE_HEIGHT + 3;
+    if (tipsY + 9 < bodyHeight) {
+      put(lines, tipsY, 4, boldDim('Tips'), width);
+      put(lines, tipsY + 1, 4, dim('─'.repeat(Math.min(40, width - 8))), width);
+      put(lines, tipsY + 2, 4, dim('Run /help to see available commands'), width);
+      put(lines, tipsY + 3, 4, dim('Type !<command> to run shell commands'), width);
+      put(lines, tipsY + 4, 4, dim('Use /settings to configure Synax'), width);
+    }
+  }
 }
 
-function renderHeader(lines: string[], width: number, state: InteractiveViewState): void {
-  const run = state.run;
-  const header = [
-    `\u001b[1;37mSynax v${pkg.version}\u001b[0m`,
-    `${modeColor(state.coreMode)}${phaseLabel(run.phase)}\u001b[0m`,
-    dim(elapsed(run.startedAtMs, elapsedEndMs(state))),
-  ].join('  ');
-  put(lines, 0, 2, clip(header, width - 4), width);
-}
+function renderHistory(lines: string[], width: number, bodyHeight: number, state: InteractiveViewState): void {
+  // Info bar with phase
+  put(lines, 0, 0, dim(infoBar(state, true)), width);
+  put(lines, 1, 0, dim('─'.repeat(Math.max(1, width))), width);
 
-function elapsedEndMs(state: InteractiveViewState): number {
-  return state.run.terminal === 'running' ? state.nowMs : state.run.nowMs;
-}
-
-function renderOperationalSurface(
-  lines: string[],
-  width: number,
-  bodyHeight: number,
-  state: InteractiveViewState,
-): void {
-  const sideWidth = operationalSideWidth(width, bodyHeight);
-  const showSideCore = sideWidth > 0;
-  const showHeaderCore = !showSideCore && width >= 70 && bodyHeight >= 14;
-  const transcriptWidth = operationalTranscriptWidth(width, bodyHeight);
-  const transcriptLines = renderTranscript({ ...state, nowMs: state.nowMs }, Math.max(24, transcriptWidth));
+  // Full-width transcript (no sidebar)
+  const transcriptWidth = Math.max(24, width - 4);
+  const transcriptLines = renderTranscript({ ...state, nowMs: state.nowMs }, transcriptWidth);
   const visibleRows = Math.max(1, bodyHeight - 3);
   const maxScrollOffset = Math.max(0, transcriptLines.length - visibleRows);
   const scrollOffset = Math.min(maxScrollOffset, Math.max(0, state.historyScrollOffset ?? 0));
@@ -166,35 +150,24 @@ function renderOperationalSurface(
     Math.max(0, transcriptLines.length - scrollOffset),
   );
 
-  const lineOffset = 2;
-  for (let i = 0; i < visibleTranscript.length && lineOffset + i < bodyHeight; i += 1) {
-    put(lines, lineOffset + i, 2, clip(visibleTranscript[i], transcriptWidth), width);
-  }
-
-  if (showSideCore) {
-    // x = width - sideWidth ensures right-aligned. The core module inner width
-    // is sideWidth - 2 (for its own borders).
-    putBlock(lines, 2, width - sideWidth, renderCoreModule(state, sideWidth - 2, bodyHeight - 2), width);
-  } else if (showHeaderCore) {
-    putBlock(lines, 1, Math.max(2, width - 34), renderCompactCoreModule(state), width);
+  for (let i = 0; i < visibleTranscript.length && i + 2 < bodyHeight; i += 1) {
+    put(lines, i + 2, 2, clip(visibleTranscript[i], transcriptWidth), width);
   }
 }
 
-/** The side panel is shown for wider terminals and scales adaptively.
- *  Below 110 cols it stays hidden, preserving the transcript-only layout
- *  that works well on narrow displays. */
-function operationalSideWidth(width: number, bodyHeight: number): number {
-  if (bodyHeight < 14) return 0;
-  if (width >= 140) return Math.min(44, Math.floor(width * 0.26));
-  if (width >= 120) return Math.min(42, Math.floor(width * 0.28));
-  if (width >= 110) return 38;
-  return 0;
-}
-
-function operationalTranscriptWidth(width: number, bodyHeight: number): number {
-  const sideWidth = operationalSideWidth(width, bodyHeight);
-  // Side panel: inner width + 2 border chars; leave 1 separator column.
-  return sideWidth > 0 ? width - (sideWidth + 2) - 1 : width - 2;
+/** Single-line info bar showing model, cwd, and optionally phase+elapsed. */
+function infoBar(state: InteractiveViewState, includePhase = false): string {
+  const parts: string[] = [];
+  const model = state.modelLabel || state.run.modelId;
+  if (model) parts.push(model);
+  if (state.cwdLabel) parts.push(state.cwdLabel);
+  if (includePhase) {
+    const phase = phaseLabel(state.run.phase);
+    const endMs = state.run.terminal === 'running' ? state.nowMs : state.run.nowMs;
+    const time = elapsed(state.run.startedAtMs, endMs);
+    parts.push(`${modeColor(state.coreMode)}${phase}  ${time}[0m`);
+  }
+  return parts.join('  │  ');
 }
 
 function elapsed(startedAtMs: number, nowMs: number): string {
@@ -211,26 +184,27 @@ function clip(text: string, width: number): string {
   let out = '';
   let activeAnsi = '';
 
-  for (let i = 0; i < text.length; i += 1) {
-    if (text[i] === '\u001b') {
+  for (let i = 0; i < text.length; ) {
+    if (text[i] === '') {
       // eslint-disable-next-line no-control-regex
-      const match = /\u001b\[[0-9;]*m/.exec(text.slice(i));
+      const match = /\[[0-9;]*m/.exec(text.slice(i));
       if (match) {
         out += match[0];
-        i += match[0].length - 1;
-        activeAnsi = match[0] === '\u001b[0m' ? '' : match[0];
+        i += match[0].length;
+        activeAnsi = match[0] === '[0m' ? '' : match[0];
         continue;
       }
     }
-
-    if (visibleCount >= target) break;
-    out += text[i];
-    visibleCount += 1;
+    const [w, advance] = charWidthAt(text, i);
+    if (visibleCount + w > target) break;
+    out += text.slice(i, i + advance);
+    visibleCount += w;
+    i += advance;
   }
 
   out += '…';
-  if (activeAnsi && !out.endsWith('\u001b[0m')) {
-    out += '\u001b[0m';
+  if (activeAnsi && !out.endsWith('[0m')) {
+    out += '[0m';
   }
   return out;
 }
@@ -248,93 +222,27 @@ function sliceVisible(line: string, start: number, end: number): string {
   let out = '';
   let writing = false;
 
-  for (let i = 0; i < line.length; i += 1) {
-    if (line[i] === '\u001b') {
+  for (let i = 0; i < line.length; ) {
+    if (line[i] === '') {
       // eslint-disable-next-line no-control-regex
-      const match = /\u001b\[[0-9;]*m/.exec(line.slice(i));
+      const match = /\[[0-9;]*m/.exec(line.slice(i));
       if (match) {
-        // Include ANSI codes that start at or after the slice targetStart, not only
-        // after writing has begun.  Without this, leading ANSI codes and codes at
-        // slice boundaries are dropped, causing color bleed and visual displacement
-        // when put() overlays the AI core next to the transcript.
         if (writing || visibleIndex >= targetStart) out += match[0];
-        i += match[0].length - 1;
+        i += match[0].length;
         continue;
       }
     }
-    if (visibleIndex >= targetEnd) break;
+    const [w, advance] = charWidthAt(line, i);
+    if (visibleIndex + w > targetEnd) break;
     if (visibleIndex >= targetStart) {
       writing = true;
-      out += line[i];
+      out += line.slice(i, i + advance);
     }
-    visibleIndex += 1;
+    visibleIndex += w;
+    i += advance;
   }
 
   return out;
-}
-
-function stripAnsi(input: string): string {
-  // eslint-disable-next-line no-control-regex
-  return input.replace(/\u001b\[[0-9;]*m/g, '');
-}
-
-/**
- * Calculate the visual (display) width of a string in a terminal.
- * Accounts for CJK ideographs, fullwidth forms, emoji, and other
- * characters that occupy two column positions.
- */
-function visibleLength(input: string): number {
-  const stripped = stripAnsi(input);
-  let len = 0;
-  for (let i = 0; i < stripped.length; i++) {
-    const code = stripped.charCodeAt(i);
-    let displayWidth = 1;
-
-    if (isSurrogateLead(code) && i + 1 < stripped.length && isSurrogateTrail(stripped.charCodeAt(i + 1))) {
-      // Supplementary-plane character (U+10000–U+10FFFF) — decode the surrogate pair.
-      const hi = code;
-      const lo = stripped.charCodeAt(i + 1);
-      const cp = ((hi & 0x3ff) << 10) | ((lo & 0x3ff) + 0x10000);
-      displayWidth = charDisplayWidth(cp);
-      i++;
-    } else if (!isSurrogateLead(code) && !isSurrogateTrail(code)) {
-      displayWidth = charDisplayWidth(code);
-    }
-    // Lone surrogates are invalid UTF-16, treat as single-width to avoid drift.
-    len += displayWidth;
-  }
-  return len;
-}
-
-function isSurrogateLead(code: number): boolean {
-  return code >= 0xd800 && code <= 0xdbff;
-}
-
-function isSurrogateTrail(code: number): boolean {
-  return code >= 0xdc00 && code <= 0xdfff;
-}
-
-/** Terminal display width for a Unicode code point.
- *  Covers CJK ideographs, fullwidth forms, Hangul, emoji, and symbols. */
-function charDisplayWidth(cp: number): number {
-  // CJK Unified Ideographs
-  if ((cp >= 0x4e00 && cp <= 0x9fff) || (cp >= 0x3400 && cp <= 0x4dbf)) return 2;
-  // CJK Compatibility Ideographs
-  if (cp >= 0xf900 && cp <= 0xfaff) return 2;
-  // CJK Compatibility Forms + CJK Radicals + Kangxi Radicals + Ideographic Description
-  if (cp >= 0x2e80 && cp <= 0x2fdf) return 2;
-  if (cp >= 0x2ff0 && cp <= 0x2fff) return 2;
-  // Fullwidth Forms
-  if ((cp >= 0xff01 && cp <= 0xff60) || (cp >= 0xffe0 && cp <= 0xffe6)) return 2;
-  // Hangul Syllables
-  if (cp >= 0xac00 && cp <= 0xd7a3) return 2;
-  // Miscellaneous Symbols and Dingbats (emoji-adjacent blocks)
-  if ((cp >= 0x2600 && cp <= 0x27bf) || (cp >= 0x2300 && cp <= 0x23ff)) return 2;
-  // Emoticons, Symbols & Pictographs, Transport & Map, Supplemental Symbols, Chess, etc.
-  if (cp >= 0x1f000) return 2;
-  // Supplementary Ideographic Plane (U+20000–U+2FFFF) and Tertiary (U+30000–U+3FFFF)
-  if (cp >= 0x20000 && cp <= 0x3ffff) return 2;
-  return 1;
 }
 
 function wrapInputText(text: string, maxWidth: number): string[] {
@@ -352,20 +260,48 @@ function wrapInputText(text: string, maxWidth: number): string[] {
     }
 
     current += ch;
-    if (current.length >= width) {
+    if (visibleLength(current) >= width) {
       const lastSpace = current.lastIndexOf(' ');
       if (lastSpace > width / 2 && lastSpace < current.length - 1) {
         lines.push(current.slice(0, lastSpace));
         current = current.slice(lastSpace + 1);
       } else {
-        lines.push(current.slice(0, width));
-        current = current.slice(width);
+        let truncLen = 0;
+        let visLen = 0;
+        for (let j = 0; j < current.length; j++) {
+          const cw = current.charCodeAt(j) >= 0x4e00 && current.charCodeAt(j) <= 0x9fff ? 2 : 1;
+          if (visLen + cw > width) break;
+          visLen += cw;
+          truncLen = j + 1;
+        }
+        lines.push(current.slice(0, truncLen));
+        current = current.slice(truncLen);
       }
     }
   }
 
   if (current.length > 0 || lines.length === 0) lines.push(current);
   return lines;
+}
+
+/**
+ * Shared helper: compute the wrapped input text and visible body-line count.
+ * Used by both renderDirectivePanel (rendering) and inputCursorPosition (cursor
+ * placement) so they derive from the same model and can't drift apart.
+ */
+interface InputBodyInfo {
+  wrapped: string[];
+  bodyLineCount: number;
+}
+
+function computeInputBodyInfo(objectiveInput: string, inner: number, maxBodyLines: number): InputBodyInfo {
+  const wrapWidth = inner - INPUT_DOCK_PADDING * 2;
+  const hasInput = objectiveInput.length > 0;
+  const wrapped = hasInput ? wrapInputText(objectiveInput, wrapWidth) : [];
+  const bodyLineCount = hasInput
+    ? Math.max(INPUT_DOCK_MIN_NONEMPTY_BODY_LINES, Math.min(maxBodyLines, wrapped.length))
+    : 1;
+  return { wrapped, bodyLineCount };
 }
 
 function renderInputDock(
@@ -376,7 +312,7 @@ function renderInputDock(
   metadataLabel?: string,
   maxBodyLines?: number,
 ): string[] {
-  return ['', '', ...renderDirectivePanel(objectiveInput, width, coreMode, nowMs, metadataLabel, maxBodyLines)];
+  return ['', ...renderDirectivePanel(objectiveInput, width, coreMode, nowMs, metadataLabel, maxBodyLines)];
 }
 
 export interface InputCursorPosition {
@@ -402,13 +338,9 @@ export function inputCursorPosition(
   const panelHeight = renderInputDock(objectiveInput, renderWidth, undefined, effectiveMaxBodyLines).length;
   const bodyHeight = Math.max(1, height - panelHeight - (hasSteering ? 1 : 0));
   const inner = Math.max(8, renderWidth - 2);
-  const wrapWidth = inner - INPUT_DOCK_PADDING * 2;
   const hasInput = objectiveInput.length > 0;
-  const wrapped = hasInput ? wrapInputText(objectiveInput, wrapWidth) : [''];
-  const renderedBodyLineCount = hasInput
-    ? Math.max(INPUT_DOCK_MIN_NONEMPTY_BODY_LINES, Math.min(effectiveMaxBodyLines, wrapped.length))
-    : 1;
-  const visibleInputLineCount = hasInput ? Math.min(renderedBodyLineCount, wrapped.length) : 1;
+  const { wrapped, bodyLineCount } = computeInputBodyInfo(objectiveInput, inner, effectiveMaxBodyLines);
+  const visibleInputLineCount = hasInput ? Math.min(bodyLineCount, wrapped.length) : 1;
 
   // Steering-aware dock offset (extra line for steering message bar)
   const steeringOffset = hasSteering ? 1 : 0;
@@ -418,8 +350,10 @@ export function inputCursorPosition(
     const lastBodyLine = wrapped[wrapped.length - 1] ?? '';
     // dockStartRow: where the input dock begins in the layout (after transcript + steering)
     const dockStartRow = bodyHeight + steeringOffset;
-    const row = dockStartRow + 2 + visibleInputLineCount;
-    const col = 1 + INPUT_DOCK_PADDING + lastBodyLine.length;
+    const row = dockStartRow + 1 + visibleInputLineCount;
+    // Flat dock: first body line has "> " prefix (2 chars), continuation has no prefix
+    const isContinuation = wrapped.length > 1;
+    const col = (isContinuation ? 0 : 2) + lastBodyLine.length;
     return { row, col };
   }
 
@@ -449,8 +383,9 @@ export function inputCursorPosition(
   if (cursorLine < visibleStart) cursorLine = visibleStart;
   const visibleLine = cursorLine - visibleStart;
   const dockStartRow = bodyHeight + steeringOffset;
-  const row = dockStartRow + 2 + visibleLine + 1;
-  const col = 1 + INPUT_DOCK_PADDING + cursorCol;
+  const row = dockStartRow + 1 + visibleLine + 1;
+  // Flat dock: first body line has "> " prefix (2 chars), continuation has no prefix (0)
+  const col = (visibleLine === 0 ? 2 : 0) + cursorCol;
   return { row, col };
 }
 
@@ -459,17 +394,12 @@ function renderDirectivePanel(
   width: number,
   coreMode: CoreMode,
   nowMs: number,
-  metadataLabel?: string,
+  _metadataLabel?: string,
   maxBodyLines = INPUT_DOCK_MAX_BODY_LINES,
 ): string[] {
   const inner = Math.max(8, width - 2);
   const hasInput = objectiveInput.length > 0;
-  const wrapWidth = inner - INPUT_DOCK_PADDING * 2;
-  const wrapped = hasInput ? wrapInputText(objectiveInput, wrapWidth) : [];
-  const bodyLineCount = hasInput
-    ? Math.max(INPUT_DOCK_MIN_NONEMPTY_BODY_LINES, Math.min(maxBodyLines, wrapped.length))
-    : 1;
-  // Keep the tail visible so active typing stays in view at larger input sizes.
+  const { wrapped, bodyLineCount } = computeInputBodyInfo(objectiveInput, inner, maxBodyLines);
   const body = hasInput
     ? wrapped
         .slice(-bodyLineCount)
@@ -477,138 +407,28 @@ function renderDirectivePanel(
     : [''];
 
   const promptColor = modePromptColor(coreMode, nowMs);
-  const label = metadataLabel ? ` ${truncateMiddle(metadataLabel, Math.max(4, inner - 6))} ` : '';
-  const topFill = Math.max(0, inner - label.length);
-  const helpText = 'Enter submit · Esc interrupt · Shift+↵ · Ctrl+D exit · Ctrl+C clear · /help · !cmd';
-  const bottomFill = Math.max(0, inner - helpText.length - 2);
-
   const placeholder = hasInput ? '' : dimI('Ask Synax to inspect, edit, test, or commit…');
   const displayBody = hasInput ? body : [placeholder || ''];
 
-  return [
-    `${promptColor}┌${'─'.repeat(topFill)}${label ? dim(label) : ''}${promptColor}┐${RESET}`,
-    ...displayBody.map(
-      (line) =>
-        `${promptColor}│${RESET}${' '.repeat(INPUT_DOCK_PADDING)}${pad(clip(line, inner - INPUT_DOCK_PADDING * 2), inner - INPUT_DOCK_PADDING * 2)}${' '.repeat(INPUT_DOCK_PADDING)}${promptColor}│${RESET}`,
-    ),
-    `${promptColor}└${RESET} ${dim(helpText)} ${promptColor}${'─'.repeat(bottomFill)}┘${RESET}`,
-  ];
-}
+  // Flatten dock: simple prompt line with horizontal rule above
+  if (width < 14) {
+    return [`${promptColor}>[0m ${displayBody[0]}`];
+  }
 
-function terminalWriteWidth(width: number): number {
-  return width > 1 ? width - 1 : width;
+  const hrWidth = Math.min(width - 2, 50);
+  return [dim(`─${'─'.repeat(hrWidth)}`), `${promptColor}>[0m ${displayBody[0]}`, ...displayBody.slice(1)];
 }
 
 function maxInputDockBodyLines(rows: number): number {
   const viewportLimit = Math.max(
     INPUT_DOCK_MIN_NONEMPTY_BODY_LINES,
-    rows - INPUT_DOCK_MIN_TRANSCRIPT_ROWS - 3, // spacer + top border + bottom border
+    rows - INPUT_DOCK_MIN_TRANSCRIPT_ROWS - 2, // hr line + prompt line
   );
   return Math.min(INPUT_DOCK_MAX_BODY_LINES, viewportLimit);
 }
 
 function inputDockHeight(objectiveInput: string, width: number, maxBodyLines: number): number {
   return renderInputDock(objectiveInput, width, undefined, maxBodyLines).length;
-}
-
-function renderCoreModule(state: InteractiveViewState, width: number, maxHeight: number): string[] {
-  const inner = Math.max(20, width - 2);
-  const coreWidth = Math.min(20, inner);
-  const core = renderDottedCore({
-    mode: state.coreMode,
-    frame: state.coreMode === 'unloaded' ? 0 : Math.floor((state.nowMs / 1000) * 8),
-    width: coreWidth,
-    height: 7,
-    unicode: true,
-    profile: resolveCoreVisualProfile(coreModelId(state), coreVisualOptions(state.coreVisualProfile)),
-  }).map((line) => centerVisible(line, inner));
-  const body = [
-    ...core,
-    '',
-    sectionLabel('Runtime'),
-    ...runtimeTelemetryRows(state, inner),
-    contextUsageBar(state.run, inner),
-    '',
-    sectionLabel('Session'),
-    ...sessionTelemetryRows(state.run, inner),
-  ];
-
-  if (width < 24 || body.length + 2 > maxHeight) return body.map((line) => clip(line, width));
-
-  return [
-    panelTop('Synax Core', inner),
-    ...body.map((line) => `${dim('│')}${pad(clip(line, inner), inner)}${dim('│')}`),
-    dim(`└${'─'.repeat(inner)}┘`),
-  ];
-}
-
-function renderCompactCoreModule(state: InteractiveViewState): string[] {
-  return renderDottedCore({
-    mode: state.coreMode,
-    frame: state.coreMode === 'unloaded' ? 0 : Math.floor((state.nowMs / 1000) * 8),
-    width: 24,
-    height: 1,
-    unicode: true,
-    profile: resolveCoreVisualProfile(coreModelId(state), coreVisualOptions(state.coreVisualProfile)),
-  });
-}
-
-function renderTelemetry(state: InteractiveViewState, width: number): string[] {
-  const inner = Math.max(20, width);
-  return [
-    sectionLabel('Runtime'),
-    ...runtimeTelemetryRows(state, inner),
-    contextUsageBar(state.run, inner),
-    '',
-    sectionLabel('Session'),
-    ...sessionTelemetryRows(state.run, inner),
-  ].map((line) => clip(line, width));
-}
-
-function runtimeTelemetryRows(state: InteractiveViewState, width: number): string[] {
-  const run = state.run;
-  const model = state.modelLabel || run.modelId || modelFromProvider(run.providerLabel);
-  const friendlyModel = model ? friendlyModelDisplayName(model) : '';
-  const route = routeDisplayLine(state.endpointLabel, state.modelLabel, run);
-  const provider = providerLabel(state.endpointLabel, run);
-  const context = contextLine(run);
-  const valueWidth = Math.max(4, width - 12);
-
-  const rows = [
-    instrumentRow('Core', coreStatusLabel(state), width, { color: modeColor(state.coreMode) }),
-    instrumentRow('Model', friendlyModel ? truncateMiddle(friendlyModel, valueWidth) : '—', width, {
-      dimValue: !model,
-    }),
-  ];
-  if (route && route !== model) {
-    rows.push(instrumentRow('Route', truncateMiddle(route, valueWidth), width, { dimValue: true }));
-  }
-  rows.push(
-    instrumentRow('Provider', provider === 'unknown' ? '—' : provider, width, { dimValue: provider === 'unknown' }),
-    instrumentRow('Context', context, width, { dimValue: context === '—' }),
-  );
-  return rows;
-}
-
-function sessionTelemetryRows(run: RunStateSnapshot, width: number): string[] {
-  const tools = toolsUsed(run);
-  const skills = run.activeSkills ?? [];
-
-  const rows: string[] = [];
-  if (skills.length > 0) {
-    rows.push(instrumentRow('Skills', skills.join(', '), width, { color: '\u001b[36m' }));
-  }
-  rows.push(
-    instrumentRow('Thinking', run.thinkingEnabled === undefined ? '—' : run.thinkingEnabled ? 'on' : 'off', width, {
-      dimValue: run.thinkingEnabled === undefined,
-    }),
-    instrumentRow('Spend', run.sessionSpendLabel ?? '—', width, {
-      dimValue: run.sessionSpendLabel === undefined,
-    }),
-    instrumentRow('Tools', tools.length > 0 ? tools.join(', ') : 'none', width, { dimValue: tools.length === 0 }),
-    instrumentRow('Steps', modelSteps(run.statusNote), width, { dimValue: modelSteps(run.statusNote) === '—' }),
-  );
-  return rows;
 }
 
 function putBlock(lines: string[], y: number, x: number, block: string[], width: number): void {
@@ -634,120 +454,6 @@ function phaseLabel(phase: string): string {
   return `${phase.slice(0, 1).toUpperCase()}${phase.slice(1)}`;
 }
 
-function modelFromProvider(provider: string): string {
-  const [model] = provider.split(' @ ');
-  return model === 'n/a' ? '' : model;
-}
-
-function providerLabel(endpointLabel: string | undefined, run: RunStateSnapshot): string {
-  if (run.providerName && run.providerName !== 'unknown') return run.providerName;
-  const endpoint = endpointLabel || run.providerLabel.split(' @ ')[1] || '';
-  if (/(?:^|\/\/)(?:127\.0\.0\.1|localhost)(?::|\/|$)/i.test(endpoint)) return 'Relay';
-  if (/api\.openai\.com/i.test(endpoint)) return 'OpenAI';
-  if (/anthropic/i.test(endpoint)) return 'Anthropic';
-  if (/openrouter/i.test(endpoint)) return 'OpenRouter';
-  return endpoint ? 'OpenAI-compatible' : 'unknown';
-}
-
-function coreStatusLabel(state: InteractiveViewState): string {
-  if (state.run.terminal === 'completed' || state.run.phase === 'completed') return 'Complete';
-  if (state.run.coreLoaded) return 'Loaded';
-  const model = state.modelLabel || state.run.modelId || modelFromProvider(state.run.providerLabel);
-  return model ? 'Loaded' : 'Unloaded';
-}
-
-function coreModelId(state: InteractiveViewState): string {
-  return state.modelLabel || state.run.modelId || modelFromProvider(state.run.providerLabel);
-}
-
-function coreVisualOptions(profile?: string): CoreVisualResolverOptions {
-  if (!profile || profile === 'model') return {};
-  const valid: CoreVisualProfileId[] = ['default', 'qwen', 'openai', 'claude', 'deepseek', 'gemini'];
-  if (valid.includes(profile as CoreVisualProfileId)) {
-    return { profile: profile as CoreVisualProfileId };
-  }
-  return {};
-}
-
-function contextLine(run: RunStateSnapshot): string {
-  if (run.contextUsedTokens === undefined && run.contextWindowTokens === undefined) return '—';
-  const used = run.contextUsedTokens ?? 0;
-  const total = run.contextWindowTokens ?? 0;
-  const ratio = total > 0 ? ` (${Math.round((used / total) * 100)}%)` : '';
-  return `${formatTokens(used)} / ${formatTokens(total)}${ratio}`;
-}
-
-function contextUsageBar(run: RunStateSnapshot, width: number): string {
-  const total = run.contextWindowTokens;
-  const used = run.contextUsedTokens ?? 0;
-  const prefix = 'ctx ';
-  const barWidth = Math.max(1, width - prefix.length);
-  if (!total || total <= 0) return dim(`${prefix}${'░'.repeat(barWidth)}`);
-  const ratio = Math.max(0, Math.min(1, used / total));
-  // Hide the bar when usage is negligible (< 10 %) to reduce visual noise.
-  if (ratio < 0.1) return dim(`${prefix}${'░'.repeat(barWidth)}`);
-  const filled = Math.round(ratio * barWidth);
-  return `${dim(prefix)}${modeColorForRatio(ratio)}${'█'.repeat(filled)}\u001b[0m${dim('░'.repeat(barWidth - filled))}`;
-}
-
-function instrumentRow(
-  label: string,
-  value: string,
-  width: number,
-  options: { color?: string; dimValue?: boolean } = {},
-): string {
-  const labelWidth = 11;
-  const valueWidth = Math.max(1, width - labelWidth - 1);
-  const renderedValue = options.dimValue ? dim(truncateMiddle(value, valueWidth)) : truncateMiddle(value, valueWidth);
-  const prefix = `${dim(label.padEnd(labelWidth, ' '))} `;
-  if (!options.color) return `${prefix}${renderedValue}`;
-  return `${prefix}${options.color}${truncateMiddle(value, valueWidth)}\u001b[0m`;
-}
-
-function modelSteps(statusNote: string): string {
-  const ratio = /(\d+)\s*\/\s*(\d+)\s+model steps?/i.exec(statusNote);
-  if (ratio) return `${ratio[1]}/${ratio[2]}`;
-  const match = /(\d+)\s+model steps?/i.exec(statusNote);
-  return match ? match[1] : '—';
-}
-
-function panelTop(title: string, width: number): string {
-  const label = ` ${title} `;
-  const fill = Math.max(0, width - label.length);
-  return dim(`┌${label}${'─'.repeat(fill)}┐`);
-}
-
-function sectionLabel(label: string): string {
-  return dim(label);
-}
-
-function modeColorForRatio(ratio: number): string {
-  if (ratio > 0.85) return '\u001b[33m';
-  return '\u001b[34m';
-}
-
-function centerVisible(line: string, width: number): string {
-  const visible = visibleLength(line);
-  if (visible >= width) return clip(line, width);
-  const left = Math.floor((width - visible) / 2);
-  return `${' '.repeat(left)}${line}${' '.repeat(width - visible - left)}`;
-}
-
-function formatTokens(tokens: number): string {
-  if (tokens >= 1_000_000) return `${(tokens / 1_000_000).toFixed(1)}M`;
-  if (tokens >= 1000) return `${(tokens / 1000).toFixed(tokens >= 10_000 ? 1 : 1)}k`;
-  return String(tokens);
-}
-
-function truncateMiddle(value: string, maxLen: number): string {
-  if (value.length <= maxLen) return value;
-  if (maxLen <= 4) return value.slice(0, maxLen);
-  const keep = maxLen - 1;
-  const head = Math.ceil(keep * 0.62);
-  const tail = Math.max(1, keep - head);
-  return `${value.slice(0, head)}…${value.slice(value.length - tail)}`;
-}
-
 function locationLabel(cwdLabel?: string, gitBranch?: string): string | undefined {
   if (!cwdLabel && !gitBranch) return undefined;
   if (!gitBranch) return cwdLabel;
@@ -755,44 +461,18 @@ function locationLabel(cwdLabel?: string, gitBranch?: string): string | undefine
   return `${cwdLabel}  ${gitBranch}`;
 }
 
-/** Derive a friendly human-readable model name from a raw model ID.
- *  e.g. "baidu/cobuddy:free" → "Cobuddy: Free" */
-function friendlyModelDisplayName(modelId: string): string {
-  if (!modelId) return '';
-  let name = modelId;
-  // Strip provider namespace prefix
-  const lastSlash = name.lastIndexOf('/');
-  if (lastSlash >= 0 && lastSlash < name.length - 1) {
-    name = name.slice(lastSlash + 1);
-  }
-  // Make separators readable
-  name = name.replace(/-/g, ' ');
-  name = name.replace(/_/g, ' ');
-  name = name.replace(/:/g, ': ');
-  // Capitalize first letter of each word
-  name = name.replace(/\b\w/g, (c) => c.toUpperCase());
-  // Collapse multiple spaces
-  name = name.replace(/\s+/g, ' ').trim();
-  return name;
+function bold(text: string): string {
+  return `[1;37m${text}[0m`;
 }
 
-/** Build a route display line showing provider and raw model ID. */
-function routeDisplayLine(
-  _endpointLabel: string | undefined,
-  modelLabel: string | undefined,
-  run: RunStateSnapshot,
-): string {
-  const providerName = run.providerName && run.providerName !== 'unknown' ? run.providerName : '';
-  const model = modelLabel || run.modelId || '';
-  if (!model) return '';
-  if (providerName) return `${providerName} · ${model}`;
-  return model;
+function boldDim(text: string): string {
+  return `[1;90m${text}[0m`;
 }
 
 function dim(text: string): string {
-  return `\u001b[90m${text}\u001b[0m`;
+  return `[90m${text}[0m`;
 }
 
 function dimI(text: string): string {
-  return `\u001b[3;90m${text}\u001b[0m`;
+  return `[3;90m${text}[0m`;
 }
