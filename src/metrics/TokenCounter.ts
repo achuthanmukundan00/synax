@@ -1,12 +1,12 @@
 /**
  * TokenCounter — wraps existing token estimation for per-turn metrics.
  *
- * Uses the character-based estimator (chars / 3) from context-budget.ts
+ * Uses the character-based estimator from context-budget.ts
  * for consistency. Counts input tokens (messages sent to model) and
  * output tokens (response content + tool call JSON).
  */
 
-import { estimateMessageTokens } from '../agent/context-budget';
+import { estimateMessageTokens, estimateTokens } from '../agent/context-budget';
 import type { AgentMessage } from '../session/Session';
 
 /** Approximate token count for a single model turn. */
@@ -37,13 +37,13 @@ export class TokenCounter {
     toolCalls?: Array<{ name: string; arguments: Record<string, unknown> }>;
   }): number {
     let total = 0;
-    total += Math.ceil(response.content.length / 3);
+    total += estimateTokens(response.content);
     if (response.reasoningContent) {
-      total += Math.ceil(response.reasoningContent.length / 3);
+      total += estimateTokens(response.reasoningContent);
     }
     if (response.toolCalls) {
       for (const call of response.toolCalls) {
-        total += Math.ceil(JSON.stringify(call.arguments).length / 3);
+        total += estimateTokens(JSON.stringify(call.arguments));
       }
     }
     return total;
