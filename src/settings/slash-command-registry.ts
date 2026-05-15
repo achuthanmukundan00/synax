@@ -221,6 +221,30 @@ export function registerBuiltinCommands(): void {
       handler: () => ({ handled: false }),
     },
     {
+      name: 'theme',
+      description: 'Switch TUI theme',
+      category: 'settings',
+      handler: () => ({ handled: false }),
+    },
+    {
+      name: 'checkpoint',
+      description: 'Create a manual checkpoint',
+      category: 'session',
+      handler: () => ({ handled: false }),
+    },
+    {
+      name: 'checkpoints',
+      description: 'List recent checkpoints',
+      category: 'session',
+      handler: () => ({ handled: false }),
+    },
+    {
+      name: 'restore',
+      description: 'Restore a checkpoint',
+      category: 'session',
+      handler: () => ({ handled: false }),
+    },
+    {
       name: 'mouse',
       description: 'Toggle mouse mode (SGR tracking for wheel scroll)',
       category: 'navigation',

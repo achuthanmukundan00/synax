@@ -25,6 +25,7 @@ const FRAME_MS = Math.floor(1000 / FPS);
 
 type CoreState = 'idle' | 'thinking' | 'tool_execution' | 'verifying' | 'blocked';
 
+/** @deprecated Use the presentation pipeline (PresentationState + renderPlainText) instead. */
 export class TuiRenderer implements AgentRenderer {
   private state: RunStateSnapshot = createInitialRunStateSnapshot(Date.now());
   private prevBuffer: Cell[][] = [];
