@@ -17,7 +17,7 @@ import {
   scrollArtifactHistory,
   slashAutocompleteItems,
 } from '../tui/interactive-tui';
-import { formatEventCrown, promptInputHeight, renderSplashLogo } from '../tui/opentui-artifact-renderer';
+import { formatEventCrown, promptInputHeight, renderSplashLogo } from '../tui/artifact-formatting';
 import { detectColorFgBgTheme, getPalette } from '../tui/theme';
 import type { EffectiveSynaxConfig } from '../config/schema';
 import { PassThrough, Writable } from 'stream';
@@ -262,8 +262,8 @@ describe('terminal session', () => {
   });
 });
 
-describe('OpenTUI artifact scrolling', () => {
-  it('scrolls the artifact history with OpenTUI delta as the first argument', () => {
+describe('artifact scrolling helpers', () => {
+  it('scrolls the artifact history with delta as the first argument', () => {
     const scrollBy = jest.fn();
     const scrollBox = { scrollBy, stickyScroll: true };
     const renderer = {
@@ -290,12 +290,12 @@ describe('OpenTUI artifact scrolling', () => {
   });
 });
 
-describe('OpenTUI polish helpers', () => {
+describe('TUI polish helpers', () => {
   it('adds breathing room around event crown glyphs and labels', () => {
-    expect(formatEventCrown('assistant_text')).toBe('  →  Note  ');
-    expect(formatEventCrown('tool_result')).toBe('  ✓  Result  ');
-    expect(formatEventCrown('command')).toBe('  ⌘  Command  ');
-    expect(formatEventCrown('error')).toBe('  ✗  Error  ');
+    expect(formatEventCrown('assistant_text')).toBe('  >  Note  ');
+    expect(formatEventCrown('tool_result')).toBe('  +  Result  ');
+    expect(formatEventCrown('command')).toBe('  $  Command  ');
+    expect(formatEventCrown('error')).toBe('  x  Error  ');
   });
 
   it('expands prompt height for multiline input without capping at 6', () => {

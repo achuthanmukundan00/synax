@@ -101,10 +101,9 @@ args = ["-y", "@upstash/context7-mcp"]
 [tui]
 mouse = false
 alternate_screen = true
-cmux_mode = false
 ```
 
-Set `cmux_mode = true` to reduce OpenTUI frame rate and retained live cards when running many parallel TUI sessions.
+The TUI uses Synax's built-in line renderer and preserves your terminal session colors by default.
 
 ### AI Core Visual Profile
 

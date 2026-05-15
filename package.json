@@ -75,7 +75,6 @@
   "type": "commonjs",
   "dependencies": {
     "@commander-js/extra-typings": "^14.0.0",
-    "@opentui/core": "^0.2.10",
     "commander": "^14.0.0",
     "toml": "^3.0.0"
   },

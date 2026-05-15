@@ -2,7 +2,7 @@
  * Pure key-handler and utility functions extracted from interactive-tui.ts.
  *
  * These are stateless — they don't close over any TUI runtime state.
- * Moving them here lets them be unit-tested in isolation (no OpenTUI
+ * Moving them here lets them be unit-tested in isolation (no terminal
  * dependency) and reduces the token cost of editing interactive-tui.ts.
  */
 

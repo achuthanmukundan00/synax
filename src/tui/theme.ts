@@ -189,7 +189,7 @@ export function detectColorFgBgTheme(value: string | undefined): 'dark' | 'light
   if (!Number.isFinite(background)) return undefined;
 
   // Common COLORFGBG values use 0-7/8-15 ANSI indexes. Treat white/bright
-  // backgrounds as light when OpenTUI cannot query terminal theme directly.
+  // backgrounds as light when the terminal cannot report theme mode directly.
   if (background === 7 || background === 15) return 'light';
   if (background >= 0 && background <= 6) return 'dark';
   if (background >= 8 && background <= 14) return 'dark';

@@ -16,8 +16,7 @@ Interactive agent shell (full-screen TUI by default on TTY):
 bun run synax -- chat
 ```
 
-The full-screen TUI uses OpenTUI and runs under Bun. Use `--plain` when you need the non-TUI fallback.
-Use `--cmux-mode` when running many parallel TUI sessions and you want lower frame churn.
+The full-screen TUI uses Synax's built-in TypeScript line renderer. Use `--plain` when you need the non-TUI fallback.
 
 Plain fallback:
 
@@ -119,7 +118,7 @@ Run control-surface TUI (stable frame, no log spam):
 
 ```sh
 bun run synax -- run --task "Fix the failing auth test" --tui
-bun run synax -- run --task "Fix the failing auth test" --tui --cmux-mode
+bun run synax -- run --task "Fix the failing auth test" --tui
 ```
 
 The TUI is an opt-in MVP that shows a fixed-frame control surface during `synax run`:

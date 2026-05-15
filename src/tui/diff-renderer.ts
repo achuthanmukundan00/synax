@@ -1,6 +1,8 @@
 import { charWidthAt, visibleLength, closeAnsi, terminalWriteWidth } from './text-utils';
 
 const CSI = '[';
+const SYNC_START = '[?2026h';
+const SYNC_END = '[?2026l';
 
 export class DiffRenderer {
   private previous: string[] = [];
@@ -22,30 +24,36 @@ export class DiffRenderer {
 
     if (sizeChanged || this.previous.length === 0) {
       this.previous = next;
-      return `${CSI}H[2J${next.map((line, i) => renderLine(i, line)).join('')}`;
+      return sync(`${CSI}H[2J${next.map((line, i) => renderLine(i, line)).join('')}`);
     }
 
     let firstChanged = -1;
-    for (let i = 0; i < next.length; i += 1) {
+    let lastChanged = -1;
+    const maxLines = Math.max(next.length, this.previous.length);
+    for (let i = 0; i < maxLines; i += 1) {
       if (next[i] !== (this.previous[i] ?? '')) {
-        firstChanged = i;
-        break;
+        if (firstChanged < 0) firstChanged = i;
+        lastChanged = i;
       }
     }
     if (firstChanged < 0) return '';
 
     const chunks: string[] = [];
-    for (let i = firstChanged; i < next.length; i += 1) {
+    for (let i = firstChanged; i <= lastChanged && i < next.length; i += 1) {
       if (next[i] === (this.previous[i] ?? '')) continue;
       chunks.push(renderLine(i, next[i]));
     }
     this.previous = next;
-    return chunks.join('');
+    return sync(chunks.join(''));
   }
 }
 
 function renderLine(index: number, line: string): string {
   return `${CSI}${index + 1};1H[0m[2K${line}[0m`;
+}
+
+function sync(output: string): string {
+  return output ? `${SYNC_START}${output}${SYNC_END}` : '';
 }
 
 function clip(line: string, width: number): string {

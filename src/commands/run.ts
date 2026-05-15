@@ -26,7 +26,6 @@ export function runCommand(program: Command): void {
     .option('--verification-profile <profile>', 'Verification profile: quick or full')
     .option('--repair-attempts <count>', 'Bounded verification repair attempts')
     .option('--tui', 'Render run control surface TUI')
-    .option('--cmux-mode', 'Reduce OpenTUI frame rate and live nodes for many parallel terminal sessions')
     .option('--budget <amount>', 'Maximum API cost budget in USD (e.g. 0.50)')
     .option('--strategy <mode>', 'Context strategy override: aggressive, moderate, light, none, or off')
     .option('--verify <level>', 'Verification contract level: none, files-changed, verification-ran, tests-passing')
@@ -40,7 +39,6 @@ export function runCommand(program: Command): void {
         verificationProfile?: 'quick' | 'full';
         repairAttempts?: string;
         tui?: boolean;
-        cmuxMode?: boolean;
         budget?: string;
         strategy?: string;
         verify?: string;
@@ -141,7 +139,6 @@ export function runCommand(program: Command): void {
           let skillDiagnostics: SkillDiagnostic[] | undefined;
           let enableMouse = false;
           let alternateScreen = true;
-          let cmuxMode = false;
           try {
             const effectiveConfig = loadSynaxConfig();
             if (effectiveConfig.active.thinking && effectiveConfig.active.thinking !== 'off') {
@@ -149,7 +146,6 @@ export function runCommand(program: Command): void {
             }
             enableMouse = effectiveConfig.tui?.mouse ?? false;
             alternateScreen = effectiveConfig.tui?.alternateScreen ?? true;
-            cmuxMode = effectiveConfig.tui?.cmuxMode ?? false;
 
             // Config-based skills (personas) — always loaded.
             const configMessages: string[] = [];
@@ -200,7 +196,6 @@ export function runCommand(program: Command): void {
           await runInteractiveTui(session, {
             enableMouse,
             alternateScreen,
-            cmuxMode: options.cmuxMode ?? cmuxMode,
             blockedMessage,
             lastModelOutput: () => lastModelOutput,
             modelLabel,

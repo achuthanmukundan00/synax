@@ -146,7 +146,7 @@ bun run synax -- run --mode patch --task "Make one minimal docs-only wording imp
 bun run synax -- config show
 ```
 
-The full-screen chat TUI uses OpenTUI and runs under Bun. Use `--plain` when you need the non-TUI fallback.
+The full-screen chat TUI uses Synax's built-in TypeScript line renderer. Use `--plain` when you need the non-TUI fallback.
 
 Inside `synax chat`:
 

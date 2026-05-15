@@ -77,15 +77,11 @@ export interface TuiConfig {
   /** Use alternate screen buffer. Default true. When false, prefer append-style output. */
   alternateScreen?: boolean;
   alternate_screen?: boolean;
-  /** Reduce TUI frame rate, event churn, and live nodes for cmux/high-load sessions. */
-  cmuxMode?: boolean;
-  cmux_mode?: boolean;
 }
 
 export interface ResolvedTuiConfig {
   mouse: boolean;
   alternateScreen: boolean;
-  cmuxMode: boolean;
 }
 
 // ─── Full project config (extended) ────────────────────────

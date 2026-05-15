@@ -1,8 +1,4 @@
-import {
-  AdaptiveRenderScheduler,
-  IncrementalFeedModel,
-  DEFAULT_LIVE_CARD_LIMIT,
-} from '../tui/opentui-render-scheduler';
+import { AdaptiveRenderScheduler, IncrementalFeedModel, DEFAULT_LIVE_CARD_LIMIT } from '../tui/render-scheduler';
 import type { SemanticEvent } from '../tui/semantic-events';
 
 function event(id: string, body = id): SemanticEvent {
@@ -15,7 +11,7 @@ function event(id: string, body = id): SemanticEvent {
   };
 }
 
-describe('OpenTUI incremental feed model', () => {
+describe('incremental feed model', () => {
   it('appends initial cards without removals', () => {
     const model = new IncrementalFeedModel();
 
@@ -69,7 +65,7 @@ describe('OpenTUI incremental feed model', () => {
   });
 });
 
-describe('OpenTUI adaptive render scheduler', () => {
+describe('adaptive render scheduler', () => {
   beforeEach(() => {
     jest.useFakeTimers();
   });

@@ -816,7 +816,6 @@ export function chatCommand(program: Command): void {
     .option('--plain', 'Use plain line-mode chat instead of full-screen TUI')
     .option('--mouse', 'Enable SGR mouse tracking for app-managed wheel scrolling')
     .option('--no-alt-screen', 'Disable alternate screen buffer for better native scrollback/copy')
-    .option('--cmux-mode', 'Reduce TUI frame rate and live nodes for many parallel terminal sessions')
     .option('--no-skills', 'Disable auto-discovered skill injection (config-based persona skills are still loaded)')
     .action(
       async (options: {
@@ -824,7 +823,6 @@ export function chatCommand(program: Command): void {
         plain?: boolean;
         mouse?: boolean;
         altScreen?: boolean;
-        cmuxMode?: boolean;
         skills?: boolean;
       }) => {
         const repoRoot = process.cwd();
@@ -846,7 +844,6 @@ export function chatCommand(program: Command): void {
         let skillDiagnostics: SkillDiagnostic[] | undefined;
         let enableMouse = false;
         let alternateScreen = true;
-        let cmuxMode = false;
         let effectiveSettingsConfig: EffectiveSynaxConfig | undefined;
         try {
           const effectiveConfig = loadSynaxConfig();
@@ -856,7 +853,6 @@ export function chatCommand(program: Command): void {
           }
           enableMouse = effectiveConfig.tui?.mouse ?? false;
           alternateScreen = effectiveConfig.tui?.alternateScreen ?? true;
-          cmuxMode = effectiveConfig.tui?.cmuxMode ?? false;
 
           // Config-based skills (personas) — always loaded regardless of --no-skills.
           const configMessages: string[] = [];
@@ -890,7 +886,6 @@ export function chatCommand(program: Command): void {
         // CLI flags override config.
         if (options.mouse) enableMouse = true;
         if (options.altScreen === false) alternateScreen = false;
-        if (options.cmuxMode) cmuxMode = true;
         const useTui = shouldUseInteractiveTui({
           plain: Boolean(options.plain),
           message: options.message,
@@ -938,7 +933,6 @@ export function chatCommand(program: Command): void {
           await runInteractiveTui(session, {
             enableMouse,
             alternateScreen,
-            cmuxMode,
             blockedMessage,
             lastModelOutput: () => lastModelOutput,
             resetLastModelOutput: () => {

@@ -1,7 +1,7 @@
 /** Maximum events kept in the transcript ring buffer. */
 export const MAX_TRANSCRIPT_EVENTS = 500;
 
-/** Magic string IDs for DOM-like OpenTUI nodes. */
+/** Stable IDs used by Synax TUI renderers. */
 export const ROOT_ID = 'synax-root';
 export const ARTIFACTS_ID = 'synax-artifacts';
 export const INPUT_ID = 'synax-input';
