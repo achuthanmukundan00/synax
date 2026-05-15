@@ -87,20 +87,31 @@ export class ActionExecutor {
     // Convert to typed action
     const action = toAgentAction(call);
 
+    let result: AgentToolExecutionResult;
+
     if (action) {
       const handler = this.handlers.get(action.kind);
       if (handler) {
-        return handler(action, context);
+        result = await handler(action, context);
+      } else {
+        // Fallback: unknown or unhandled tool — use registry
+        const toolResult = await this.registry.execute(call.name, call.arguments);
+        result = { success: toolResult.success, toolResult, error: toolResult.error };
       }
+    } else {
+      const toolResult = await this.registry.execute(call.name, call.arguments);
+      result = { success: toolResult.success, toolResult, error: toolResult.error };
     }
 
-    // Fallback: unknown or unhandled tool — use registry
-    const toolResult = await this.registry.execute(call.name, call.arguments);
-    return {
-      success: toolResult.success,
-      toolResult,
-      error: toolResult.error,
-    };
+    // Reset bash repetition counter after meaningful progress (edit/write).
+    // A successful file mutation indicates the task is advancing, so identical
+    // bash commands after this point are part of a new mini-workflow (e.g.
+    // edit → make test → edit → make test) rather than a stuck loop.
+    if (bashCounts && result.success && (call.name === 'edit' || call.name === 'write')) {
+      bashCounts.clear();
+    }
+
+    return result;
   }
 }
 
