@@ -1,6 +1,8 @@
 import { Command } from 'commander';
 import { runAgentTask } from '../agent/run-task';
-import { DebugRenderer, JsonlRenderer, NormalRenderer, QuietRenderer, type AgentRenderer } from '../agent/renderers';
+import { DebugRenderer, JsonlRenderer, QuietRenderer, type AgentRenderer } from '../agent/renderers';
+import type { AgentEvent } from '../agent/events';
+import { reduceEvents, renderPlainText } from '../presentation';
 
 export interface AskOptions {
   question?: string;
@@ -9,10 +11,10 @@ export interface AskOptions {
   debug?: boolean;
 }
 
-function resolveRenderer(options: AskOptions): AgentRenderer {
+function resolveRenderer(options: AskOptions): AgentRenderer | null {
   if (options.json) return options.debug ? new DebugRenderer() : new JsonlRenderer();
   if (options.quiet) return new QuietRenderer();
-  return new NormalRenderer();
+  return null; // Use presentation pipeline (default)
 }
 
 function validateOutputFlags(options: AskOptions): string | null {
@@ -35,16 +37,26 @@ export async function handleAskCommand(options: AskOptions): Promise<void> {
   }
 
   const renderer = resolveRenderer(options);
+  const events: AgentEvent[] = [];
   const report = await runAgentTask({
     repoRoot: process.cwd(),
     task: options.question,
     repairAttempts: 0,
     recordRunArtifacts: false,
     onEvent(event) {
-      renderer.onEvent(event);
+      if (renderer) {
+        renderer.onEvent(event);
+      } else {
+        events.push(event);
+      }
     },
   });
-  renderer.finish?.();
+  if (renderer) {
+    renderer.finish?.();
+  } else {
+    const state = reduceEvents(events);
+    process.stdout.write(renderPlainText(state, { showPatchPreviews: true }));
+  }
   if (report.terminalState !== 'completed') {
     process.exitCode = 1;
   }
