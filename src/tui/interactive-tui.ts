@@ -170,6 +170,8 @@ export async function runInteractiveTui(
   let interrupted = false;
   let pasteBuffer = '';
   let pasteActive = false;
+  let pasteBlockCount = 0;
+  const pasteBlocks: { blockNumber: number; charCount: number }[] = [];
   let expandCollapseVersion = 0;
   let promptDirty = false;
   let layoutDirty = false;
@@ -299,7 +301,7 @@ export async function runInteractiveTui(
       recentCheckpoints.map((c) => ({ title: c.title, hash: c.hash })),
       pendingApprovals,
     );
-    const footer = footerState({
+    const baseFooter = footerState({
       state,
       prompt,
       busy,
@@ -309,6 +311,14 @@ export async function runInteractiveTui(
       options,
       busyAnimationFrame,
     });
+    const footer = {
+      ...baseFooter,
+      hints:
+        pasteBlocks.length > 0
+          ? pasteBlocks.map((pb) => `[Paste #${pb.blockNumber} · ${pb.charCount} chars]`).join('  ') +
+            `  ${baseFooter.hints}`
+          : baseFooter.hints,
+    };
     const renderedEvents = visibleEvents(events, state);
     const footerSignature = stableFooterSignature(footer);
     const rootLayoutSignature = rootLayoutModeSignature({
@@ -1511,15 +1521,19 @@ export async function runInteractiveTui(
     if (key.name === 'paste' || (key.sequence && key.sequence.startsWith('\x1b[200~'))) {
       pasteActive = true;
       pasteBuffer = '';
+      key.preventDefault();
       return;
     }
     if (pasteActive && key.sequence && key.sequence.startsWith('\x1b[201~')) {
       pasteActive = false;
-      const lines = pasteBuffer.split('\n');
-      if (lines.length > 1) {
-        prompt = `[pasted: ${lines.length} lines, ${pasteBuffer.length} chars]`;
-      } else {
-        prompt = pasteBuffer;
+      const input = renderer.root.findDescendantById('synax-input');
+      if (pasteBuffer.length > 0) {
+        pasteBlockCount++;
+        pasteBlocks.push({ blockNumber: pasteBlockCount, charCount: pasteBuffer.length });
+        const currentPrompt = input ? readPromptValue(input) : prompt;
+        const newPrompt = currentPrompt + pasteBuffer;
+        if (input) setPromptValue(input, newPrompt);
+        prompt = prompt + pasteBuffer;
       }
       autocompleteDraft = null;
       promptDirty = true;
@@ -1527,8 +1541,17 @@ export async function runInteractiveTui(
       render();
       return;
     }
-    if (pasteActive && key.name && key.name.length === 1) {
-      pasteBuffer += key.name;
+    if (pasteActive) {
+      if (isEnterKey(key.name) || key.name === 'enter') {
+        pasteBuffer += '\n';
+        key.preventDefault();
+        return;
+      }
+      if (key.name && key.name.length === 1) {
+        pasteBuffer += key.name;
+        return;
+      }
+      // Eat all other keys during paste
       return;
     }
 
@@ -1556,7 +1579,7 @@ export async function runInteractiveTui(
     }
 
     // --- Enter: submit prompt ---
-    if (isEnterKey(key.name) && !busy && !autocompleteVisible && !key.shift) {
+    if (isEnterKey(key.name) && !busy && !autocompleteVisible && !pasteActive && !key.shift) {
       const input = renderer.root.findDescendantById('synax-input');
       const value = input ? readPromptValue(input) : prompt;
       if (value.trim()) {
@@ -1961,7 +1984,8 @@ function rootLayoutModeSignature(args: {
     args.footer.status === 'Ready.' &&
     args.footer.prompt.length === 0;
   const mode = compactStartup ? 'compact' : 'full';
-  return [mode, String(args.terminalWidth), String(args.terminalHeight)].join('\0');
+  const inputHeight = args.footer.inputHeight ?? promptInputHeight(args.footer.prompt, args.terminalWidth);
+  return [mode, String(args.terminalWidth), String(args.terminalHeight), String(inputHeight)].join('\0');
 }
 
 function elapsed(startedAtMs: number, nowMs: number): string {
