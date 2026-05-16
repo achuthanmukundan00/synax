@@ -35,6 +35,8 @@ export interface ProviderConfig {
   inputPricePer1MTokens?: number;
   output_price_per_1m_tokens?: number;
   outputPricePer1MTokens?: number;
+  max_output_tokens?: number;
+  maxOutputTokens?: number;
 }
 
 export interface AgentBudgetConfig {
@@ -113,6 +115,7 @@ export interface ProviderFactoryInput {
   inputPricePer1MTokens?: number;
   outputPricePer1MTokens?: number;
   thinkingLevel?: ThinkingLevel;
+  maxOutputTokens?: number;
 }
 
 export function toProviderFactoryInput(config: ProjectConfig): ProviderFactoryInput {
@@ -173,6 +176,7 @@ export function toProviderFactoryInput(config: ProjectConfig): ProviderFactoryIn
     kind: kind ?? undefined,
     inputPricePer1MTokens: p.inputPricePer1MTokens ?? p.input_price_per_1m_tokens,
     outputPricePer1MTokens: p.outputPricePer1MTokens ?? p.output_price_per_1m_tokens,
+    maxOutputTokens: p.maxOutputTokens ?? p.max_output_tokens,
   };
 }
 
@@ -199,7 +203,8 @@ export function normalizeProviderConfig(
   const model = p.model ?? presetDefaults.model ?? '';
   const timeoutMs = p.timeout_ms ?? p.timeoutMs ?? (p.timeout_seconds ?? p.timeoutSeconds ?? 120) * 1000;
   const toolCallParser = p.tool_call_parser ?? p.toolCallParser;
-  return { kind, baseUrl, model, toolCallParser, apiKey, customHeaders, timeoutMs, thinkingLevel: opts?.thinkingLevel };
+  const maxOutputTokens = p.max_output_tokens ?? p.maxOutputTokens;
+  return { kind, baseUrl, model, toolCallParser, apiKey, customHeaders, timeoutMs, thinkingLevel: opts?.thinkingLevel, maxOutputTokens };
 }
 
 export interface ProjectConfig {
@@ -539,6 +544,11 @@ export function validateConfig(config: ProjectConfig): ValidationError[] {
       for (const timeoutKey of ['timeoutSeconds', 'timeout_seconds', 'timeoutMs', 'timeout_ms'] as const) {
         if (p[timeoutKey] !== undefined && typeof p[timeoutKey] !== 'number') {
           errors.push({ path: `provider.${timeoutKey}`, message: 'must be a number' });
+        }
+      }
+      for (const tk of ['maxOutputTokens', 'max_output_tokens'] as const) {
+        if (p[tk] !== undefined && (typeof p[tk] !== 'number' || !Number.isInteger(p[tk]) || p[tk] <= 0)) {
+          errors.push({ path: `provider.${tk}`, message: 'must be a positive integer' });
         }
       }
     }

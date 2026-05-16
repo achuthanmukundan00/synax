@@ -37,6 +37,8 @@ export interface ProviderFactoryInput {
   outputPricePer1MTokens?: number;
   /** Thinking level for providers that support extended reasoning (e.g. DeepSeek). */
   thinkingLevel?: import('../config/schema').ThinkingLevel;
+  /** Per-provider max output token limit. */
+  maxOutputTokens?: number;
 }
 
 // ─── Factory result ────────────────────────────────────
@@ -142,6 +144,7 @@ function resolveProviderConfig(input: ProviderFactoryInput): ResolvedProviderFac
     customHeaders: Object.keys(mergedHeaders).length > 0 ? mergedHeaders : undefined,
     timeoutMs: input.timeoutMs ?? 120000,
     thinkingLevel: input.thinkingLevel,
+    maxOutputTokens: input.maxOutputTokens,
   };
 
   // Build metadata for TUI/status display

@@ -86,6 +86,7 @@ export interface ChatSession {
 export interface ChatTurnReport {
   terminalState: AgentTerminalState;
   finalAnswer: string;
+  reasoningContent?: string;
   changedFiles: string[];
   workingTreeClean?: boolean;
   steps: number;
@@ -172,7 +173,13 @@ export function createChatSession(options: {
 
   // ── Create shared observability components via factory (once per session) ──
   const modelContextWindow = options.config.contextWindowTokens ?? options.config.contextBudgetTokens ?? 131072;
-  const sessionId = options.resumeSessionId ?? generateSessionId();
+  let sessionId: string;
+
+  if (options.resumeSessionId) {
+    sessionId = options.resumeSessionId;
+  } else {
+    sessionId = generateSessionId();
+  }
 
   const components = createSessionComponents({
     repoRoot: options.repoRoot,
@@ -182,15 +189,27 @@ export function createChatSession(options: {
     sessionId,
   });
 
-  // Register in EventStore
-  if (components.eventStore) {
-    components.eventStore.startSession({
-      id: sessionId,
-      repoRoot: options.repoRoot,
-      mode: 'patch',
-      model: configRef.current.provider?.model ?? '',
-      createdAt: new Date().toISOString(),
-    });
+  // Register in EventStore with retry on ID collision
+  if (components.eventStore && !options.resumeSessionId) {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        components.eventStore.startSession({
+          id: sessionId,
+          repoRoot: options.repoRoot,
+          mode: 'patch',
+          model: configRef.current.provider?.model ?? '',
+          createdAt: new Date().toISOString(),
+        });
+        break; // success
+      } catch (err: unknown) {
+        if (err instanceof Error && err.message.startsWith('Session ID collision:') && attempt < 2) {
+          sessionId = generateSessionId();
+          (components as { sessionId: string }).sessionId = sessionId;
+          continue; // retry with new ID
+        }
+        throw err; // non-collision error or exhausted retries
+      }
+    }
   }
 
   // ── Conversation + session persistence ───────────────────────────
@@ -246,19 +265,30 @@ export function createChatSession(options: {
 
   const startNewSessionId = (): string => {
     finalizeCurrentSession('cancelled');
-    const newId = generateSessionId();
+    let newId = generateSessionId();
+    // Register new session in EventStore with retry on collision
+    if (components.eventStore) {
+      for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+          components.eventStore.startSession({
+            id: newId,
+            repoRoot: options.repoRoot,
+            mode: 'patch',
+            model: configRef.current.provider?.model ?? '',
+            createdAt: new Date().toISOString(),
+          });
+          break; // success
+        } catch (err: unknown) {
+          if (err instanceof Error && err.message.startsWith('Session ID collision:') && attempt < 2) {
+            newId = generateSessionId();
+            continue; // retry with new ID
+          }
+          throw err; // non-collision error or exhausted retries
+        }
+      }
+    }
     // Update the shared component's sessionId
     (components as { sessionId: string }).sessionId = newId;
-    // Register new session in EventStore
-    if (components.eventStore) {
-      components.eventStore.startSession({
-        id: newId,
-        repoRoot: options.repoRoot,
-        mode: 'patch',
-        model: configRef.current.provider?.model ?? '',
-        createdAt: new Date().toISOString(),
-      });
-    }
     try {
       createSession({
         id: newId,
@@ -945,6 +975,8 @@ export function chatCommand(program: Command): void {
             endpointLabel: metadata.baseUrl !== '(not set)' ? metadata.baseUrl : undefined,
             providerName: metadata.displayName,
             cwdLabel,
+            cwd: repoRoot,
+            repoRoot,
             gitBranch,
             contextWindowTokens: loaded.config.contextWindowTokens ?? loaded.config.contextBudgetTokens,
             coreLoaded: true,

@@ -8,6 +8,7 @@
  * and verification to focused modules. This file is the wiring layer.
  */
 
+import { randomBytes } from 'crypto';
 import { type Logger } from '../logging/index.js';
 import { EventBus } from '../events/index';
 import type { HolographicMemory, HandoffManifest } from '../memory/HolographicMemory';
@@ -153,6 +154,7 @@ export class Session {
   private mode: RunMode;
   private bashEnabled: boolean;
   private contextBudget: ContextBudgetSettings;
+  private maxOutputTokens: number | undefined;
 
   // ── Callbacks (subscribed through EventBus) ──────────────────────────
   onActivity?: (activity: AgentActivity) => void;
@@ -220,6 +222,8 @@ export class Session {
     memory?: HolographicMemory | null;
     abortSignal?: AbortSignal;
     onSteeringCheck?: () => string | undefined;
+    /** Per-provider max output token limit. */
+    maxOutputTokens?: number;
   }) {
     this.repoRoot = options.repoRoot;
     this.client = options.client;
@@ -229,6 +233,7 @@ export class Session {
     this.bashEnabled = options.bashEnabled ?? true;
     this.env = options.env ?? new NodeExecutionEnv();
     this.sessionId = options.sessionId ?? generatePersistentSessionId();
+    this.maxOutputTokens = options.maxOutputTokens;
 
     // Memory: accept from constructor (preferred) or set externally later
     if (options.memory !== undefined) {
@@ -404,6 +409,7 @@ export class Session {
         bashEnabled: this.bashEnabled,
         maxToolCalls: options?.maxToolCalls ?? this.maxToolCalls,
         maxModelSteps: options?.maxModelSteps ?? this.maxModelSteps,
+        maxOutputTokens: this.maxOutputTokens,
         contextBudget: options?.contextBudget ?? this.contextBudget,
         logger: this.logger,
         tracer: this.tracer,
@@ -869,6 +875,7 @@ export class Session {
                 messages: assembled,
                 tools,
                 temperature: 0,
+                maxTokens: this.maxOutputTokens,
                 signal: this.abortSignal,
                 onDelta: (delta) => emitAssistantDelta(this, delta),
               });
@@ -884,6 +891,7 @@ export class Session {
                 messages: assembled,
                 tools,
                 temperature: 0,
+                maxTokens: this.maxOutputTokens,
                 signal: this.abortSignal,
                 onDelta: (delta) => emitAssistantDelta(this, delta),
               });
@@ -995,7 +1003,8 @@ export class Session {
             if (!isSafeToolPreamble(response.content)) {
               return {
                 terminalState: 'model_error',
-                finalAnswer: response.content.trim(),
+                finalAnswer: response.content.trim() || response.reasoningContent || '',
+                reasoningContent: response.reasoningContent,
                 steps: step,
                 toolCalls,
                 changedFiles,
@@ -1059,6 +1068,21 @@ export class Session {
               continue;
             }
 
+            // ── Step-threshold guard: in patch mode, if the model runs 5+ steps
+            // without changing any files, inject a nudge to use write/edit tools.
+            // This prevents infinite read-only loops that never trigger the
+            // verification contract.
+            if (mode === 'patch' && step > 5 && changedFiles.length === 0 && !verificationNudgeInjected) {
+              verificationNudgeInjected = true;
+              const nudge = 'You have not changed any files yet. You must use write or edit to make changes.';
+              conversation.messages.push({ role: 'user', content: nudge });
+              this.logger?.info('Model exceeded step threshold without changing files', {
+                stepIndex: step,
+                mode,
+              });
+              continue;
+            }
+
             // Verification contract check — only enforce when the model has already
             // attempted mutation tool calls (write, edit). Read-only investigations
             // and pure-content first-step completions are accepted as-is.
@@ -1088,7 +1112,8 @@ export class Session {
 
             return {
               terminalState: 'completed',
-              finalAnswer: response.content.trim(),
+              finalAnswer: response.content.trim() || response.reasoningContent || '',
+              reasoningContent: response.reasoningContent,
               steps: step,
               toolCalls,
               changedFiles,
@@ -1107,7 +1132,8 @@ export class Session {
             if (this.abortSignal?.aborted) {
               return {
                 terminalState: 'blocked',
-                finalAnswer: response.content.trim(),
+                finalAnswer: response.content.trim() || response.reasoningContent || '',
+                reasoningContent: response.reasoningContent,
                 steps: step,
                 toolCalls,
                 changedFiles,
@@ -1141,7 +1167,8 @@ export class Session {
               });
               return {
                 terminalState: 'budget_exhausted',
-                finalAnswer: response.content.trim(),
+                finalAnswer: response.content.trim() || response.reasoningContent || '',
+                reasoningContent: response.reasoningContent,
                 steps: step,
                 toolCalls,
                 changedFiles,
@@ -1321,7 +1348,8 @@ export class Session {
 
               return {
                 terminalState: 'budget_exhausted',
-                finalAnswer: response.content.trim(),
+                finalAnswer: response.content.trim() || response.reasoningContent || '',
+                reasoningContent: response.reasoningContent,
                 steps: step,
                 toolCalls,
                 changedFiles,
@@ -1352,7 +1380,8 @@ export class Session {
               flushContentToolResults(conversation, response, contentToolResults);
               return {
                 terminalState: 'tool_error',
-                finalAnswer: response.content.trim(),
+                finalAnswer: response.content.trim() || response.reasoningContent || '',
+                reasoningContent: response.reasoningContent,
                 steps: step,
                 toolCalls,
                 changedFiles,
@@ -1363,7 +1392,8 @@ export class Session {
               flushContentToolResults(conversation, response, contentToolResults);
               return {
                 terminalState: result.terminalState ?? 'tool_error',
-                finalAnswer: response.content.trim(),
+                finalAnswer: response.content.trim() || response.reasoningContent || '',
+                reasoningContent: response.reasoningContent,
                 steps: step,
                 toolCalls,
                 changedFiles,
@@ -1460,6 +1490,7 @@ export class Session {
           client: this.client,
           mode: this.mode,
           bashEnabled: this.bashEnabled,
+          maxOutputTokens: this.maxOutputTokens,
           contextBudget: this.contextBudget,
           onEvent: (event) => {
             if (this.onEvent) {
@@ -1679,9 +1710,10 @@ function generatePersistentSessionId(): string {
   const hh = now.getHours().toString().padStart(2, '0');
   const min = now.getMinutes().toString().padStart(2, '0');
   const ss = now.getSeconds().toString().padStart(2, '0');
-  const rand = Math.random().toString(36).slice(2, 6);
+  const pid = process.pid.toString(36);
+  const rand = randomBytes(4).toString('hex');
   globalSessionCounter += 1;
-  return `syn-${yyyy}${mm}${dd}-${hh}${min}${ss}-${rand}-${globalSessionCounter}`;
+  return `syn-${yyyy}${mm}${dd}-${hh}${min}${ss}-${pid}-${rand}-${globalSessionCounter}`;
 }
 
 // ─── Repo metadata collection ─────────────────────────────────────────────────

@@ -163,6 +163,8 @@ export interface NormalizedProviderConfig {
   timeoutMs?: number;
   /** Thinking level from active config. When not 'off', providers may enable extended reasoning. */
   thinkingLevel?: ThinkingLevel;
+  /** Per-provider output token limit. When unset the client default (8192) is used. */
+  maxOutputTokens?: number;
 }
 
 export interface ChatResponse {

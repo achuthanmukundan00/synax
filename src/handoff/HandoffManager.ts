@@ -205,6 +205,7 @@ export class HandoffManager {
     bashEnabled?: boolean;
     maxToolCalls?: number;
     maxModelSteps?: number;
+    maxOutputTokens?: number;
     contextBudget?: Partial<ContextBudgetSettings>;
     logger?: Logger;
     tracer?: SpanTracer;
@@ -250,6 +251,7 @@ export class HandoffManager {
       memory: params.memory, // Inherit parent's FTS5
       maxToolCalls: params.maxToolCalls,
       maxModelSteps: params.maxModelSteps,
+      maxOutputTokens: params.maxOutputTokens,
       bashEnabled: params.bashEnabled,
       skillMessages: params.skillMessages,
       conversation: {
@@ -319,6 +321,7 @@ export class HandoffManager {
     bashEnabled?: boolean;
     maxToolCalls?: number;
     maxModelSteps?: number;
+    maxOutputTokens?: number;
     contextBudget?: Partial<ContextBudgetSettings>;
     logger?: Logger;
     tracer?: SpanTracer;
@@ -344,6 +347,7 @@ export class HandoffManager {
     filesRead: string[];
     contextWindowUsed: number;
     skillMessages?: string[];
+    maxOutputTokens?: number;
     onEvent?: (event: unknown) => void;
     repoRoot: string;
     client: AgentClient;
@@ -400,6 +404,7 @@ export class HandoffManager {
       memory: params.parentSession.memory,
       skillMessages: params.skillMessages,
       bashEnabled: params.bashEnabled,
+      maxOutputTokens: params.maxOutputTokens,
       contextBudget: params.contextBudget,
       logger: params.parentSession['logger'],
       tracer: params.parentSession['tracer'],
