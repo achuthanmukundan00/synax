@@ -21,6 +21,7 @@ import {
   RAIL_MAX_CHECKPOINTS,
   CLIP_SINGLE_LINE_WIDTH,
   PERSISTENT_STATUS_CARD_ID,
+  AUTOCOMPLETE_MAX_ROWS,
 } from './tui-constants';
 
 type OpenTuiCore = typeof import('@opentui/core');
@@ -61,6 +62,7 @@ export interface AutocompleteState {
   visible: boolean;
   items: string[];
   selectedIndex: number;
+  maxVisibleItems?: number;
 }
 
 export type ExpandedState = Record<string, boolean>;
@@ -76,12 +78,14 @@ const COLORS: Record<SemanticEventClass, string> = {
   diff: '#bd93f9',
   command: '#8be9fd',
   tool_result: '#00ff87',
+  result_error: '#ff5555',
   review: '#ffb86c',
   commit: '#bd93f9',
   checkpoint: '#00ff87',
   approval: '#ffb86c',
   status: '#6272a4',
   error: '#ff5555',
+  prompt: '#8a8f98',
   note: '#6272a4',
   assistant_text: '#6272a4',
 };
@@ -92,12 +96,14 @@ const GLYPHS: Record<SemanticEventClass, string> = {
   diff: '≠',
   command: '⌘',
   tool_result: '✓',
+  result_error: '✗',
   review: '⚠',
   commit: '⎇',
   checkpoint: '✓',
   approval: '!',
   status: '…',
   error: '✗',
+  prompt: '↳',
   note: '→',
   assistant_text: '→',
 };
@@ -112,8 +118,10 @@ export function renderArtifactRoot(
   onToggleExpand?: (id: string) => void,
   palette?: TuiPalette,
   autocomplete?: AutocompleteState,
+  settingsLines?: string[],
+  settingsActiveLabel?: string,
   onSubmit?: (value: string) => void,
-  onPromptChange?: (value: string) => void,
+  onPromptChange?: (value: string, input: unknown) => void,
   splash?: SplashOptions,
 ): OpenTuiNode {
   const pal = palette ?? getPalette();
@@ -123,6 +131,7 @@ export function renderArtifactRoot(
       ? events.map((event) => renderArtifactCard(core, event, expanded?.[event.id] ?? false, onToggleExpand, pal))
       : [renderEmptyState(core, pal, splash)];
   const inputHeight = footer.inputHeight ?? promptInputHeight(footer.prompt);
+  const footerHeight = 3 + (footer.location ? 1 : 0) + inputHeight;
   const input = core.h(core.TextareaRenderable, {
     id: 'synax-input',
     initialValue: footer.prompt,
@@ -137,6 +146,7 @@ export function renderArtifactRoot(
     focusedBackgroundColor: pal.surface,
     focusedTextColor: pal.text,
     placeholderColor: pal.textAccent,
+    cursorStyle: { style: 'line', blinking: true },
     keyBindings: [
       { name: 'return', action: 'submit' },
       { name: 'linefeed', action: 'submit' },
@@ -144,7 +154,7 @@ export function renderArtifactRoot(
       { name: 'linefeed', shift: true, action: 'newline' },
     ],
     onContentChange: function () {
-      onPromptChange?.(readPromptValue(this));
+      onPromptChange?.(readPromptValue(this), this);
     },
     onSubmit: function () {
       onSubmit?.(readPromptValue(this));
@@ -175,11 +185,14 @@ export function renderArtifactRoot(
       ),
       ...(rightRailWidth > 0 ? [renderRightRail(core, rail, rightRailWidth, pal)] : []),
     ),
-    renderAutocompleteOverlay(core, autocomplete, pal),
+    ...(settingsLines && settingsLines.length > 0
+      ? [renderSettingsOverlay(core, settingsLines, pal, settingsActiveLabel)]
+      : []),
+    renderAutocompleteOverlay(core, autocomplete, pal, footerHeight),
     core.Box(
       {
         id: 'synax-footer',
-        height: 3 + (footer.location ? 1 : 0) + inputHeight,
+        height: footerHeight,
         width: '100%',
         flexDirection: 'column',
         border: ['top'],
@@ -192,6 +205,54 @@ export function renderArtifactRoot(
       core.Text({ id: 'synax-hints', content: footer.hints, fg: pal.textAccent }),
     ),
   );
+}
+
+function renderSettingsOverlay(
+  core: OpenTuiCore,
+  lines: string[],
+  palette: TuiPalette,
+  activeLabel?: string,
+): OpenTuiNode {
+  return core.Box(
+    {
+      id: 'synax-settings',
+      width: '100%',
+      height: lines.length,
+      position: 'absolute',
+      top: 0,
+      left: 0,
+      zIndex: 100,
+      flexDirection: 'column',
+      backgroundColor: palette.background,
+    },
+    ...lines.map((line, index) =>
+      core.Text({
+        id: `synax-settings-line-${index}`,
+        content: index === 1 && activeLabel ? styledActiveSettingsLine(core, line, activeLabel, palette) : line,
+        ...(index === 1 && activeLabel ? {} : { fg: palette.text }),
+      }),
+    ),
+  );
+}
+
+function styledActiveSettingsLine(
+  core: OpenTuiCore,
+  line: string,
+  activeLabel: string,
+  palette: TuiPalette,
+): string | InstanceType<(typeof import('@opentui/core'))['StyledText']> {
+  const plain = stripAnsi(line);
+  const activeSegment = ` ${activeLabel} `;
+  const start = plain.indexOf(activeSegment);
+  if (start < 0) return plain;
+  const before = plain.slice(0, start);
+  const active = plain.slice(start, start + activeSegment.length);
+  const after = plain.slice(start + activeSegment.length);
+  return new core.StyledText([
+    { __isChunk: true, text: before },
+    core.bg(palette.text)(core.fg(palette.background)(active)),
+    { __isChunk: true, text: after },
+  ] as any);
 }
 
 export function renderArtifactCard(
@@ -444,12 +505,15 @@ function renderPayloadRows(
       core.Text({ content: payload.detail ?? '', fg: pal.textAccent }),
     ];
   }
-  // For tool_result text events (e.g., final model output), render with markdown
-  if (eventClass === 'tool_result' && payload.type === 'text') {
+  // For result text events (e.g., final model output), render with markdown.
+  if ((eventClass === 'tool_result' || eventClass === 'result_error') && payload.type === 'text') {
     return [
       core.Text({ content: payload.title, fg: eventColor(eventClass, pal) }),
       ...renderResultMarkdown(core, payload.body, pal),
     ];
+  }
+  if (eventClass === 'prompt' && payload.type === 'text') {
+    return textPayloadRows(core, payload.body, eventClass, expanded, pal);
   }
   return [
     core.Text({ content: payload.title, fg: eventColor(eventClass, pal) }),
@@ -619,19 +683,26 @@ function renderAutocompleteOverlay(
   core: OpenTuiCore,
   autocomplete: AutocompleteState | undefined,
   palette: TuiPalette,
+  footerHeight: number,
 ): OpenTuiNode {
   const visible = autocomplete?.visible === true && autocomplete.items.length > 0;
-  const items = autocomplete?.items.slice(0, 10) ?? [];
+  const allItems = autocomplete?.items ?? [];
   const selectedIndex = autocomplete?.selectedIndex ?? 0;
+  const maxVisibleItems = Math.max(1, autocomplete?.maxVisibleItems ?? allItems.length);
+  const windowSize = Math.min(allItems.length, maxVisibleItems);
+  const windowStart = autocompleteWindowStart(selectedIndex, allItems.length, windowSize);
+  const items = allItems.slice(windowStart, windowStart + windowSize);
   const rows: OpenTuiNode[] = [];
-  for (let i = 0; i < 10; i++) {
-    const isSelected = i === selectedIndex;
+  for (let i = 0; i < AUTOCOMPLETE_MAX_ROWS; i++) {
     const item = items[i] ?? '';
+    const absoluteIndex = windowStart + i;
+    const isSelected = absoluteIndex === selectedIndex;
     rows.push(
       core.Text({
-        id: `synax-autocomplete-row-${i}`,
-        content: item ? (isSelected ? `> ${item}` : `  ${item}`) : '',
+        id: `synax-ac-row-${i}`,
+        content: item ? (isSelected ? `→ ${item}` : `  ${item}`) : '',
         fg: isSelected ? palette.brand : palette.textAccent,
+        visible: i < items.length,
       }),
     );
   }
@@ -640,16 +711,26 @@ function renderAutocompleteOverlay(
       id: 'synax-autocomplete',
       visible,
       width: '100%',
+      position: 'absolute',
+      bottom: footerHeight,
+      left: 0,
+      zIndex: 50,
       flexDirection: 'column',
-      border: true,
-      borderStyle: 'single',
+      border: ['top'],
       borderColor: palette.brand,
-      paddingX: 1,
+      backgroundColor: palette.background,
+      paddingX: 2,
       paddingY: 0,
     },
-    core.Text({ content: 'Commands', fg: palette.textMuted }),
     ...rows,
   );
+}
+
+function autocompleteWindowStart(selectedIndex: number, itemCount: number, windowSize: number): number {
+  if (itemCount <= windowSize) return 0;
+  const clampedSelected = Math.max(0, Math.min(selectedIndex, itemCount - 1));
+  const halfWindow = Math.floor(windowSize / 2);
+  return Math.max(0, Math.min(clampedSelected - halfWindow, itemCount - windowSize));
 }
 
 function renderEmptyState(core: OpenTuiCore, palette?: TuiPalette, splash?: SplashOptions): OpenTuiNode {
@@ -683,7 +764,7 @@ function railWidthFor(width: number): number {
 
 function labelFor(eventClass: SemanticEventClass): string {
   if (eventClass === 'assistant_text') return 'Note';
-  if (eventClass === 'tool_result') return 'Result';
+  if (eventClass === 'tool_result' || eventClass === 'result_error') return 'Result';
   return eventClass.replace(/_/g, ' ').replace(/^\w/, (char) => char.toUpperCase());
 }
 

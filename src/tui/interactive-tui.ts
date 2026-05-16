@@ -8,7 +8,13 @@ import { isSecretTrigger } from '../backrooms/trigger';
 import type { ChatSession } from '../commands/chat';
 import type { EffectiveSynaxConfig } from '../config/schema';
 import { renderSettings } from '../settings/settings-renderer';
-import { createSettingsState, settingsReducer } from '../settings/settings-state';
+import {
+  createSettingsState,
+  settingsReducer,
+  tabLabel,
+  type SettingsAction,
+  type SettingsTab,
+} from '../settings/settings-state';
 import { getCommand } from '../settings/slash-command-registry';
 import type { InputStreamLike } from './terminal';
 import type { Writable } from 'node:stream';
@@ -43,7 +49,14 @@ import {
   type DirtyReason,
 } from './opentui-render-scheduler';
 import { gitCreateCheckpoint, gitListCheckpoints, gitRestoreCheckpoint, type CheckpointInfo } from './git-helpers';
-import { MAX_TRANSCRIPT_EVENTS, TRANSIENT_EVENT_TYPES, SCROLL_STEP_ROWS, SCROLL_PAGE_FACTOR } from './tui-constants';
+import {
+  AUTOCOMPLETE_MAX_ROWS,
+  MAX_TRANSCRIPT_EVENTS,
+  TRANSIENT_EVENT_TYPES,
+  SCROLL_STEP_ROWS,
+  SCROLL_PAGE_FACTOR,
+} from './tui-constants';
+import { padAnsi, visibleLength } from './text-utils';
 
 type OpenTuiCore = typeof import('@opentui/core');
 
@@ -55,6 +68,7 @@ import {
   scrollArtifactHistory,
   readPromptValue,
   setPromptValue,
+  placePromptCursorAtEnd,
   splashFrame,
   clip,
   stripAnsi,
@@ -138,12 +152,15 @@ export async function runInteractiveTui(
   let autocompleteItems: string[] = [];
   let autocompleteIndex = 0;
   let autocompleteVisible = false;
+  let autocompleteDraft: string | null = null;
+  let autocompleteVisibleRows = 0;
   let interrupted = false;
   let pasteBuffer = '';
   let pasteActive = false;
   let expandCollapseVersion = 0;
   let promptDirty = false;
   let layoutDirty = false;
+  let settingsState = options?.settingsConfig ? createSettingsState(options.settingsConfig) : undefined;
 
   // --- Expanded state for cards ---
   const expandedState: ExpandedState = {};
@@ -178,6 +195,7 @@ export async function runInteractiveTui(
   let eventsVersion = 0;
   let lastRenderedEventsVersion = -1;
   let lastRenderedSplashFrame = -1;
+  let lastRenderedFooterSignature = '';
   const feedModel = new IncrementalFeedModel(liveCardLimit);
 
   const removeRenderedRoot = (): void => {
@@ -202,6 +220,7 @@ export async function runInteractiveTui(
     const text = value.trim();
     if (!text) return;
     prompt = '';
+    autocompleteDraft = null;
     promptDirty = true;
     void submit(text);
   };
@@ -215,16 +234,25 @@ export async function runInteractiveTui(
 
     // Keep autocomplete in sync with every prompt edit, including backspace.
     const inputForAutocomplete = renderer.root.findDescendantById('synax-input');
-    const currentInputValue = inputForAutocomplete ? readPromptValue(inputForAutocomplete) : prompt;
+    const currentInputValue =
+      autocompleteDraft ?? (promptDirty || !inputForAutocomplete ? prompt : readPromptValue(inputForAutocomplete));
     if (currentInputValue.startsWith('/') && !busy) {
+      autocompleteDraft = currentInputValue;
       autocompleteItems = slashAutocompleteItems(currentInputValue);
       autocompleteIndex = Math.min(autocompleteIndex, Math.max(0, autocompleteItems.length - 1));
       autocompleteVisible = autocompleteItems.length > 0;
     } else {
+      autocompleteDraft = null;
       autocompleteItems = [];
       autocompleteIndex = 0;
       autocompleteVisible = false;
     }
+    const nextAutocompleteVisibleRows = autocompleteVisible
+      ? Math.min(
+          autocompleteItems.length,
+          autocompleteMaxVisibleRows(renderer.height, promptInputHeight(prompt, renderer.width)),
+        )
+      : 0;
 
     const pendingApprovals = events.filter((e) => e.class === 'approval').length;
     const rail = railState(
@@ -242,8 +270,21 @@ export async function runInteractiveTui(
       terminalWidth: renderer.width,
       options,
     });
+    const footerSignature = stableFooterSignature(footer);
+    if (treeBuilt && footerSignature !== lastRenderedFooterSignature) {
+      treeBuilt = false;
+    }
     const acState: AutocompleteState | undefined = autocompleteVisible
-      ? { visible: true, items: autocompleteItems, selectedIndex: autocompleteIndex }
+      ? {
+          visible: true,
+          items: autocompleteItems,
+          selectedIndex: autocompleteIndex,
+          maxVisibleItems: nextAutocompleteVisibleRows,
+        }
+      : undefined;
+    autocompleteVisibleRows = nextAutocompleteVisibleRows;
+    const settingsLines = settingsState?.active
+      ? renderSettings(settingsState, renderer.width, renderer.height).map(stripAnsi)
       : undefined;
     if (!treeBuilt) {
       removeRenderedRoot();
@@ -263,10 +304,20 @@ export async function runInteractiveTui(
           },
           currentPalette,
           acState,
+          settingsLines,
+          settingsState?.active ? tabLabel(settingsState.tab) : undefined,
           handleInputSubmit,
-          (value) => {
+          (value, input) => {
+            if (autocompleteDraft !== null) return;
+            const previousPrompt = prompt;
             prompt = value;
-            render('input');
+            placePromptCursorAtEnd(input, value);
+            const autocompleteChanged = previousPrompt.startsWith('/') || value.startsWith('/');
+            const heightChanged =
+              promptInputHeight(previousPrompt, renderer.width) !== promptInputHeight(value, renderer.width);
+            if (autocompleteChanged || heightChanged) {
+              render('input', { immediate: true });
+            }
           },
           { frame: splashFrame(state.nowMs) },
         ),
@@ -274,11 +325,17 @@ export async function runInteractiveTui(
       treeBuilt = true;
       lastRenderedEventsVersion = eventsVersion;
       lastRenderedSplashFrame = splashFrame(state.nowMs);
+      lastRenderedFooterSignature = footerSignature;
       expandCollapseVersion = 0;
       feedModel.reset();
       feedModel.plan(visibleEvents(events, state), expandedState);
-      // Focus the Input once after initial tree build
-      queueMicrotask(() => renderer.root.findDescendantById('synax-input')?.focus());
+      // Focus and position the input after rebuilds. OpenTUI applies initialValue
+      // without guaranteeing the cursor is at the end of that value.
+      queueMicrotask(() => {
+        const input = renderer.root.findDescendantById('synax-input');
+        input?.focus();
+        placePromptCursorAtEnd(input, prompt);
+      });
     } else {
       setNodeContent('synax-status', footer.status);
       setNodeContent('synax-hints', footer.hints);
@@ -303,7 +360,12 @@ export async function runInteractiveTui(
       }
       const footerNode = findNode('synax-footer');
       if (footerNode && 'height' in (footerNode as any)) {
-        const newFooterHeight = 3 + (footer.inputHeight ?? promptInputHeight(prompt, renderer.width));
+        const newFooterHeight =
+          3 + (footer.location ? 1 : 0) + (footer.inputHeight ?? promptInputHeight(prompt, renderer.width));
+        const autocompleteNode = findNode('synax-autocomplete');
+        if (autocompleteNode && 'bottom' in (autocompleteNode as any)) {
+          (autocompleteNode as any).bottom = newFooterHeight;
+        }
         if ((footerNode as any).height !== newFooterHeight) {
           (footerNode as any).height = newFooterHeight;
           layoutDirty = true;
@@ -318,6 +380,7 @@ export async function runInteractiveTui(
       }
       updateAutocompleteNode();
       rebuildEvents();
+      lastRenderedFooterSignature = footerSignature;
     }
     tuiStats.recordRepaint();
     tuiStats.recordFrame(renderScheduler.getStats());
@@ -344,7 +407,9 @@ export async function runInteractiveTui(
     function setNodeContent(id: string, content: string): void {
       const node = findNode(id);
       if (node && typeof node === 'object' && 'content' in node) {
-        (node as any).content = content;
+        const previous = typeof (node as any).content === 'string' ? (node as any).content : '';
+        const clearWidth = Math.max(visibleLength(previous), visibleLength(content));
+        (node as any).content = padAnsi(content, clearWidth);
       }
     }
     function rebuildEvents(): void {
@@ -403,15 +468,17 @@ export async function runInteractiveTui(
       const acNode = findNode('synax-autocomplete');
       if (!acNode) return;
       (acNode as any).visible = autocompleteVisible && autocompleteItems.length > 0;
-      for (let i = 0; i < 10; i++) {
-        const row = findNode(`synax-autocomplete-row-${i}`);
+      const windowStart = autocompleteWindowStart(autocompleteIndex, autocompleteItems.length, autocompleteVisibleRows);
+      for (let i = 0; i < AUTOCOMPLETE_MAX_ROWS; i++) {
+        const row = findNode(`synax-ac-row-${i}`);
         if (!row) continue;
-        const item = autocompleteItems[i] ?? '';
-        const isSelected = i === autocompleteIndex;
-        (row as any).content = item ? (isSelected ? `> ${item}` : `  ${item}`) : '';
-        if ('fg' in (row as any)) {
-          (row as any).fg = isSelected ? currentPalette.brand : currentPalette.textAccent;
-        }
+        const absoluteIndex = windowStart + i;
+        const item = autocompleteItems[absoluteIndex] ?? '';
+        const rowVisible = autocompleteVisible && i < autocompleteVisibleRows && item !== '';
+        (row as any).visible = rowVisible;
+        const isSelected = rowVisible && absoluteIndex === autocompleteIndex;
+        (row as any).content = rowVisible ? (isSelected ? `→ ${item}` : `  ${item}`) : '';
+        (row as any).fg = isSelected ? currentPalette.brand : currentPalette.textAccent;
       }
     }
   };
@@ -512,6 +579,108 @@ export async function runInteractiveTui(
     renderScheduler.markDirty(reason, options);
   };
 
+  const openSettings = (commandName: string): void => {
+    if (!options?.settingsConfig) {
+      eventsVersion++;
+      events.push(tuiNote('slash', 'Settings are unavailable in this session.'));
+      render();
+      return;
+    }
+    settingsState = settingsReducer(createSettingsState(options.settingsConfig), { type: 'open' });
+    const tab = settingsTabForCommand(commandName);
+    if (tab) {
+      settingsState = settingsReducer(settingsState, { type: 'select_tab', tab });
+    }
+    treeBuilt = false;
+    render('input', { immediate: true });
+  };
+
+  const applySettingsAction = (action: SettingsAction): void => {
+    if (!settingsState) return;
+    const previousConfig = settingsState.config;
+    settingsState = settingsReducer(settingsState, action);
+    if (settingsState.config !== previousConfig && options?.onSettingsConfigChanged) {
+      const changed = options.onSettingsConfigChanged(settingsState.config);
+      options.settingsConfig = settingsState.config;
+      options.modelLabel = changed.modelLabel;
+      options.thinkingEnabled = changed.thinkingEnabled;
+      options.endpointLabel = changed.endpointLabel;
+      options.providerName = changed.providerName;
+      options.contextWindowTokens = changed.contextWindowTokens;
+      options.coreLoaded = changed.coreLoaded;
+      options.inputPricePer1MTokens = changed.inputPricePer1MTokens;
+      options.outputPricePer1MTokens = changed.outputPricePer1MTokens;
+      statusOverride = changed.providerWarning ? `! ${changed.providerWarning}` : '';
+      applyOptionsToState();
+    }
+    treeBuilt = false;
+    render('input', { immediate: true });
+  };
+
+  const closeSettings = (): void => {
+    if (!settingsState) return;
+    settingsState = settingsReducer(settingsState, { type: 'close' });
+    treeBuilt = false;
+    render('input', { immediate: true });
+  };
+
+  const handleSettingsKey = (key: {
+    name?: string;
+    shift?: boolean;
+    ctrl?: boolean;
+    preventDefault?: () => void;
+  }): boolean => {
+    if (!settingsState?.active || key.ctrl) return false;
+    const textInput = settingsState.textInput;
+    if (key.name === 'escape') {
+      applySettingsAction({ type: textInput ? 'text_cancel' : 'close' });
+      key.preventDefault?.();
+      return true;
+    }
+    if (!textInput && key.name === 'q') {
+      closeSettings();
+      key.preventDefault?.();
+      return true;
+    }
+    if (key.name === 'tab') {
+      applySettingsAction({ type: key.shift ? 'prev_tab' : 'next_tab' });
+      key.preventDefault?.();
+      return true;
+    }
+    if (key.name === 'up' || (!textInput && key.name === 'k')) {
+      applySettingsAction({ type: 'move_up' });
+      key.preventDefault?.();
+      return true;
+    }
+    if (key.name === 'down' || (!textInput && key.name === 'j')) {
+      applySettingsAction({ type: 'move_down' });
+      key.preventDefault?.();
+      return true;
+    }
+    if (key.name === 'enter' || key.name === 'return') {
+      applySettingsAction({ type: 'select_row' });
+      key.preventDefault?.();
+      return true;
+    }
+    if (key.name === 'space') {
+      applySettingsAction(textInput ? { type: 'text_input', char: ' ' } : { type: 'toggle' });
+      key.preventDefault?.();
+      return true;
+    }
+    if (key.name === 'backspace') {
+      applySettingsAction({ type: 'text_backspace' });
+      key.preventDefault?.();
+      return true;
+    }
+    if (textInput && key.name && key.name.length === 1 && !key.shift) {
+      applySettingsAction({ type: 'text_input', char: key.name });
+      key.preventDefault?.();
+      return true;
+    }
+    key.preventDefault?.();
+    return true;
+  };
+
   const submitSteering = async (text: string): Promise<void> => {
     if (!text.trim()) return;
     steeringBuffer = '';
@@ -537,11 +706,13 @@ export async function runInteractiveTui(
     if (isSecretTrigger(value)) {
       await options?.runLiminalLayer?.();
       prompt = '';
+      autocompleteDraft = null;
       promptDirty = true;
       render();
       return;
     }
     prompt = '';
+    autocompleteDraft = null;
     promptDirty = true;
     statusOverride = '';
     busy = true;
@@ -627,9 +798,8 @@ export async function runInteractiveTui(
         }
 
         const registryCommand = getCommand(value.slice(1).split(/\s+/, 1)[0] ?? '');
-        if (registryCommand?.opensSettings && options?.settingsConfig) {
-          eventsVersion++;
-          events.push(settingsEvent(options.settingsConfig, renderer.width, renderer.height));
+        if (registryCommand?.opensSettings) {
+          openSettings(registryCommand.name);
           busy = false;
           render();
           return;
@@ -769,6 +939,7 @@ export async function runInteractiveTui(
     }
     if (behavior === 'clear_prompt') {
       prompt = '';
+      autocompleteDraft = null;
       promptDirty = true;
       setPromptValue(input, '');
       statusOverride = '';
@@ -782,6 +953,7 @@ export async function runInteractiveTui(
     }
     ctrlCPressedAt = Date.now();
     prompt = '';
+    autocompleteDraft = null;
     promptDirty = true;
     statusOverride = '';
     render();
@@ -818,6 +990,7 @@ export async function runInteractiveTui(
     }
     if (autocompleteVisible) {
       autocompleteVisible = false;
+      autocompleteDraft = null;
       render();
       return;
     }
@@ -833,9 +1006,9 @@ export async function runInteractiveTui(
   function handleTab(): void {
     if (autocompleteVisible && autocompleteItems.length > 0) {
       if (autocompleteItems.length === 1) {
-        prompt = autocompleteItems[0] ?? prompt;
-        promptDirty = true;
+        syncPromptValue(autocompleteItems[0] ?? prompt);
         autocompleteVisible = false;
+        autocompleteDraft = null;
       } else {
         autocompleteIndex = (autocompleteIndex + 1) % autocompleteItems.length;
       }
@@ -843,15 +1016,127 @@ export async function runInteractiveTui(
     }
   }
 
+  function promptValueFromInput(): string {
+    const input = renderer.root.findDescendantById('synax-input');
+    return input ? readPromptValue(input) : prompt;
+  }
+
+  function syncPromptValue(value: string): void {
+    prompt = value;
+    autocompleteDraft = value.startsWith('/') ? value : null;
+    promptDirty = true;
+    const input = renderer.root.findDescendantById('synax-input');
+    if (input) setPromptValue(input, value);
+  }
+
+  function slashAutocompleteInputActive(): boolean {
+    return autocompleteDraft !== null || autocompleteVisible || promptValueFromInput().startsWith('/');
+  }
+
+  function slashAutocompleteValue(): string {
+    if (autocompleteDraft !== null) return autocompleteDraft;
+    const inputValue = promptValueFromInput();
+    if (inputValue.startsWith('/')) return inputValue;
+    return prompt.startsWith('/') ? prompt : '';
+  }
+
+  function handleSlashAutocompleteEdit(key: {
+    name?: string;
+    sequence?: string;
+    ctrl?: boolean;
+    meta?: boolean;
+    shift?: boolean;
+    preventDefault?: () => void;
+  }): boolean {
+    if (busy || key.ctrl || key.meta || !slashAutocompleteInputActive()) return false;
+    if (key.name === 'backspace' || key.name === 'delete') {
+      syncPromptValue(slashAutocompleteValue().slice(0, -1));
+      autocompleteIndex = 0;
+      key.preventDefault?.();
+      render('input', { immediate: true });
+      return true;
+    }
+    if (key.name === 'space') {
+      syncPromptValue(`${slashAutocompleteValue()} `);
+      autocompleteIndex = 0;
+      key.preventDefault?.();
+      render('input', { immediate: true });
+      return true;
+    }
+    const typed = printableKeyValue(key);
+    if (typed) {
+      syncPromptValue(`${slashAutocompleteValue()}${typed}`);
+      autocompleteIndex = 0;
+      key.preventDefault?.();
+      render('input', { immediate: true });
+      return true;
+    }
+    return false;
+  }
+
+  function handleRawSlashAutocompleteInput(sequence: string): boolean {
+    if (busy || settingsState?.active) return false;
+    if (autocompleteDraft === null && (sequence !== '/' || promptValueFromInput().length > 0)) return false;
+
+    if (isRawUpSequence(sequence)) {
+      if (autocompleteVisible && autocompleteItems.length > 0) {
+        autocompleteIndex = (autocompleteIndex - 1 + autocompleteItems.length) % autocompleteItems.length;
+        render('input', { immediate: true });
+      }
+      return true;
+    }
+    if (isRawDownSequence(sequence)) {
+      if (autocompleteVisible && autocompleteItems.length > 0) {
+        autocompleteIndex = (autocompleteIndex + 1) % autocompleteItems.length;
+        render('input', { immediate: true });
+      }
+      return true;
+    }
+    if (sequence === '\r' || sequence === '\n') {
+      if (autocompleteVisible && autocompleteItems.length > 0) {
+        const selected = autocompleteItems[autocompleteIndex] ?? autocompleteDraft ?? '';
+        prompt = selected;
+        autocompleteDraft = null;
+        promptDirty = true;
+        autocompleteVisible = false;
+        handleInputSubmit(selected);
+      }
+      return true;
+    }
+    if (sequence === '\t') {
+      handleTab();
+      return true;
+    }
+    if (sequence === '\x1b') {
+      autocompleteVisible = false;
+      autocompleteDraft = null;
+      render('input', { immediate: true });
+      return true;
+    }
+    if (sequence === '\x7f' || sequence === '\b') {
+      syncPromptValue(slashAutocompleteValue().slice(0, -1));
+      autocompleteIndex = 0;
+      render('input', { immediate: true });
+      return true;
+    }
+    if (sequence.length === 1 && sequence >= ' ') {
+      syncPromptValue(`${slashAutocompleteValue()}${sequence}`);
+      autocompleteIndex = 0;
+      render('input', { immediate: true });
+      return true;
+    }
+    return false;
+  }
+
   /** Autocomplete up/down navigation */
   function handleAutocompleteNav(key: { name: string; preventDefault?: () => void }): void {
-    if (key.name === 'up') {
+    if (isUpKey(key.name)) {
       autocompleteIndex = (autocompleteIndex - 1 + autocompleteItems.length) % autocompleteItems.length;
     } else {
       autocompleteIndex = (autocompleteIndex + 1) % autocompleteItems.length;
     }
     key.preventDefault?.();
-    render();
+    render('input', { immediate: true });
   }
 
   /** Vertical arrow navigation: prompt cursor or artifact scroll */
@@ -891,6 +1176,8 @@ export async function runInteractiveTui(
     render();
   }
 
+  renderer.prependInputHandler(handleRawSlashAutocompleteInput);
+
   renderer.keyInput.on('keypress', (key) => {
     // --- Ctrl+C: double-press ---
     if (key.ctrl && key.name === 'c') {
@@ -918,6 +1205,10 @@ export async function runInteractiveTui(
       return;
     }
 
+    if (handleSettingsKey(key)) {
+      return;
+    }
+
     // --- Escape ---
     if (key.name === 'escape') {
       handleEscape();
@@ -925,7 +1216,7 @@ export async function runInteractiveTui(
     }
 
     // --- Tab: autocomplete ---
-    if (key.name === 'tab') {
+    if (isTabKey(key.name)) {
       handleTab();
       return;
     }
@@ -942,22 +1233,26 @@ export async function runInteractiveTui(
     }
 
     // --- Autocomplete navigation ---
-    if (key.name === 'up' && autocompleteVisible && autocompleteItems.length > 0) {
+    if (isUpKey(key.name) && autocompleteVisible && autocompleteItems.length > 0) {
       handleAutocompleteNav(key);
       return;
     }
-    if (key.name === 'down' && autocompleteVisible && autocompleteItems.length > 0) {
+    if (isDownKey(key.name) && autocompleteVisible && autocompleteItems.length > 0) {
       handleAutocompleteNav(key);
       return;
     }
 
+    if (handleSlashAutocompleteEdit(key)) {
+      return;
+    }
+
     // --- Prompt navigation / history scrolling ---
-    if (key.name === 'up') {
+    if (isUpKey(key.name)) {
       const input = renderer.root.findDescendantById('synax-input');
       handleVerticalNav(key, input);
       return;
     }
-    if (key.name === 'down') {
+    if (isDownKey(key.name)) {
       const input = renderer.root.findDescendantById('synax-input');
       handleVerticalNav(key, input);
       return;
@@ -973,23 +1268,28 @@ export async function runInteractiveTui(
 
     // --- Steering during busy ---
     if (busy) {
-      // Slash command detected in full
-      if (
-        steeringBuffer === '/help' ||
-        steeringBuffer === '/settings' ||
-        steeringBuffer === '/resume' ||
-        steeringBuffer === '/model' ||
-        steeringBuffer === '/doctor' ||
-        steeringBuffer === '/theme' ||
-        steeringBuffer === '/checkpoints'
-      ) {
-        handleSlashDuringBusy(steeringBuffer);
+      const dispatchBusySlashCommand = (): boolean => {
+        const steeringCommandName = steeringBuffer.startsWith('/')
+          ? (steeringBuffer.slice(1).split(/\s+/, 1)[0] ?? '')
+          : '';
+        const steeringCommand = steeringCommandName ? getCommand(steeringCommandName) : undefined;
+        if (!steeringCommand) return false;
+        if (steeringCommand.opensSettings) {
+          openSettings(steeringCommand.name);
+        } else {
+          handleSlashDuringBusy(steeringBuffer);
+        }
         steeringBuffer = '';
         render();
+        return true;
+      };
+
+      if (dispatchBusySlashCommand()) {
         return;
       }
       if (key.name === 'slash' || (key.shift && key.name === '7')) {
-        // Slash commands don't trigger steering while agent is running
+        steeringBuffer += '/';
+        if (dispatchBusySlashCommand()) return;
         render();
         return;
       }
@@ -1017,11 +1317,13 @@ export async function runInteractiveTui(
       }
       if (key.name === 'space') {
         steeringBuffer += ' ';
+        if (dispatchBusySlashCommand()) return;
         render();
         return;
       }
       if (key.name && key.name.length === 1 && !key.ctrl && !key.shift) {
         steeringBuffer += key.name;
+        if (dispatchBusySlashCommand()) return;
         render();
         return;
       }
@@ -1042,6 +1344,7 @@ export async function runInteractiveTui(
       } else {
         prompt = pasteBuffer;
       }
+      autocompleteDraft = null;
       promptDirty = true;
       pasteBuffer = '';
       render();
@@ -1053,19 +1356,21 @@ export async function runInteractiveTui(
     }
 
     // --- Enter with autocomplete visible: complete selection ---
-    if ((key.name === 'enter' || key.name === 'return') && autocompleteVisible && !busy) {
+    if (isEnterKey(key.name) && autocompleteVisible && !busy) {
       if (autocompleteItems.length > 0) {
-        prompt = autocompleteItems[autocompleteIndex] ?? prompt;
+        const selected = autocompleteItems[autocompleteIndex] ?? prompt;
+        prompt = selected;
+        autocompleteDraft = null;
         promptDirty = true;
         autocompleteVisible = false;
-        render();
+        handleInputSubmit(selected);
         key.preventDefault();
         return;
       }
     }
 
     // --- Enter: submit prompt ---
-    if ((key.name === 'enter' || key.name === 'return') && !busy && !autocompleteVisible && !key.shift) {
+    if (isEnterKey(key.name) && !busy && !autocompleteVisible && !key.shift) {
       const input = renderer.root.findDescendantById('synax-input');
       const value = input ? readPromptValue(input) : prompt;
       if (value.trim()) {
@@ -1283,19 +1588,102 @@ function footerState({
   };
 }
 
-function settingsEvent(config: EffectiveSynaxConfig, width: number, height: number): SemanticEvent {
-  const openState = settingsReducer(createSettingsState(config), { type: 'open' });
-  return {
-    id: `settings-${Date.now()}`,
-    class: 'note',
-    timestamp: Date.now(),
-    artifact: {
-      type: 'text',
-      title: 'Settings',
-      body: renderSettings(openState, width, height).map(stripAnsi).join('\n'),
-    },
-    metadata: {},
-  };
+function settingsTabForCommand(commandName: string): SettingsTab | undefined {
+  if (commandName === 'model') return 'model';
+  if (commandName === 'providers' || commandName === 'login') return 'providers';
+  if (commandName === 'skills') return 'skills';
+  if (commandName === 'mcp') return 'mcp';
+  return undefined;
+}
+
+function autocompleteMaxVisibleRows(terminalHeight: number, inputHeight?: number): number {
+  const footerRows = 3 + (inputHeight ?? 1);
+  return Math.max(4, Math.min(12, terminalHeight - footerRows - 4));
+}
+
+function autocompleteWindowStart(selectedIndex: number, itemCount: number, windowSize: number): number {
+  if (itemCount <= windowSize) return 0;
+  const clampedSelected = Math.max(0, Math.min(selectedIndex, itemCount - 1));
+  const halfWindow = Math.floor(windowSize / 2);
+  return Math.max(0, Math.min(clampedSelected - halfWindow, itemCount - windowSize));
+}
+
+function isUpKey(name: string | undefined): boolean {
+  return name === 'up' || name === 'arrow_up' || name === 'arrowup';
+}
+
+function isDownKey(name: string | undefined): boolean {
+  return name === 'down' || name === 'arrow_down' || name === 'arrowdown';
+}
+
+function isEnterKey(name: string | undefined): boolean {
+  return name === 'enter' || name === 'return' || name === 'linefeed';
+}
+
+function isTabKey(name: string | undefined): boolean {
+  return name === 'tab' || name === 'shift_tab' || name === 'shifttab';
+}
+
+function isRawUpSequence(sequence: string): boolean {
+  const withoutEsc = stripEscapePrefix(sequence);
+  return (
+    sequence === '\x1b[A' ||
+    sequence === '\x1bOA' ||
+    sequence === '\x1b[a' ||
+    sequence === '\x1bOa' ||
+    sequence === '\x1bp' ||
+    isCsiArrowSequence(withoutEsc, 'A') ||
+    isKittyArrowSequence(withoutEsc, '57352')
+  );
+}
+
+function isRawDownSequence(sequence: string): boolean {
+  const withoutEsc = stripEscapePrefix(sequence);
+  return (
+    sequence === '\x1b[B' ||
+    sequence === '\x1bOB' ||
+    sequence === '\x1b[b' ||
+    sequence === '\x1bOb' ||
+    sequence === '\x1bn' ||
+    isCsiArrowSequence(withoutEsc, 'B') ||
+    isKittyArrowSequence(withoutEsc, '57353')
+  );
+}
+
+function stripEscapePrefix(sequence: string): string {
+  return sequence.charCodeAt(0) === 27 ? sequence.slice(1) : sequence;
+}
+
+function isCsiArrowSequence(sequence: string, suffix: 'A' | 'B'): boolean {
+  if (!sequence.startsWith('[') || !sequence.endsWith(suffix)) return false;
+  const body = sequence.slice(1, -1);
+  return body === '' || body === '1;' || body.split(';').every((part) => part === '' || /^\d+$/.test(part));
+}
+
+function isKittyArrowSequence(sequence: string, code: '57352' | '57353'): boolean {
+  if (!sequence.startsWith('[') || !sequence.endsWith('u')) return false;
+  const body = sequence.slice(1, -1);
+  if (body === code) return true;
+  return (
+    body.startsWith(`${code};`) &&
+    body
+      .slice(code.length + 1)
+      .split(';')
+      .every((part) => /^\d+$/.test(part))
+  );
+}
+
+function printableKeyValue(key: { name?: string; sequence?: string; shift?: boolean }): string {
+  if (key.sequence && key.sequence.length === 1 && key.sequence >= ' ' && key.sequence !== '\x7f') {
+    return key.sequence;
+  }
+  if (key.name === 'slash') return '/';
+  if (!key.name || key.name.length !== 1) return '';
+  return key.shift ? key.name.toUpperCase() : key.name;
+}
+
+function stableFooterSignature(footer: FooterState): string {
+  return [footer.location ? 'location' : 'no-location'].join('\0');
 }
 
 function elapsed(startedAtMs: number, nowMs: number): string {

@@ -109,13 +109,30 @@ export function readPromptValue(input: unknown): string {
 }
 
 export function setPromptValue(input: unknown, value: string): void {
-  const promptInput = input as { setText?: (text: string) => void; value?: string };
+  const promptInput = input as {
+    cursorOffset?: number;
+    setText?: (text: string) => void;
+    value?: string;
+  };
   if (!promptInput) return;
   if (typeof promptInput.setText === 'function') {
     promptInput.setText(value);
+    placePromptCursorAtEnd(promptInput, value);
     return;
   }
   promptInput.value = value;
+  placePromptCursorAtEnd(promptInput, value);
+}
+
+export function placePromptCursorAtEnd(input: unknown, value?: string): void {
+  const promptInput = input as {
+    cursorOffset?: number;
+    plainText?: string;
+    value?: string;
+  };
+  if (!promptInput) return;
+  const text = value ?? readPromptValue(promptInput);
+  promptInput.cursorOffset = text.length;
 }
 
 // ─── Text/Cursor utilities ───────────────────────────────────────────────────
