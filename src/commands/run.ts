@@ -71,7 +71,7 @@ export function runCommand(program: Command): void {
               noSkills: options.skills === false,
               onActivity(activity) {
                 if (activity.kind === 'model_response') {
-                  const fullContent = activity.modelOutput || activity.message;
+                  const fullContent = activity.modelOutput ?? '';
                   if (fullContent.trim().length > 0) {
                     const event: AgentEvent = {
                       type: 'assistant_message',
