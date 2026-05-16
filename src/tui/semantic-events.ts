@@ -7,12 +7,14 @@ export type SemanticEventClass =
   | 'diff'
   | 'command'
   | 'tool_result'
+  | 'result_error'
   | 'review'
   | 'commit'
   | 'checkpoint'
   | 'approval'
   | 'status'
   | 'error'
+  | 'prompt'
   | 'note'
   | 'assistant_text';
 
@@ -151,8 +153,10 @@ export function classifyAgentEvent(event: AgentEvent, state: RunStateSnapshot, n
           detail: event.stepIndex === undefined ? undefined : `step ${event.stepIndex}`,
         }),
       ];
+    case 'user_message':
+      return textEvent('prompt', base, 'Prompt', event.content);
     case 'assistant_message':
-      return textEvent('assistant_text', base, 'Note', sanitizeAssistantText(event.content));
+      return textEvent('tool_result', base, 'Result', sanitizeAssistantText(event.content));
     case 'command_output':
       return [
         semantic('command', base, {
@@ -254,15 +258,11 @@ export function classifyAgentEvent(event: AgentEvent, state: RunStateSnapshot, n
           status: event.type === 'verification_failed' ? 'error' : 'ok',
         }),
       ];
-    case 'task_finished':
-      return [
-        semantic(event.status === 'completed' ? 'tool_result' : 'error', base, {
-          type: 'tool_result',
-          title: event.status === 'completed' ? 'Task complete' : 'Task stopped',
-          summary: event.error ?? event.verification,
-          status: event.status === 'completed' ? 'ok' : 'error',
-        }),
-      ];
+    case 'task_finished': {
+      const summary = terminalSummary(event.error ?? event.verification);
+      if (!summary) return [];
+      return textEvent(event.status === 'completed' ? 'tool_result' : 'result_error', base, 'Result', summary);
+    }
     case 'error':
       return textEvent('error', base, 'Error', event.message);
     default:
@@ -286,16 +286,15 @@ function semanticEventFromDebugItem(
       filesTouched: state.filesChangedThisRun.length > 0 ? state.filesChangedThisRun : undefined,
     },
   };
-  if (item.kind === 'user') return textEvent('note', base, 'Prompt', item.detail || item.summary, `history-${index}`);
-  if (item.kind === 'model') {
+  if (item.kind === 'user') return textEvent('prompt', base, 'Prompt', item.detail || item.summary, `history-${index}`);
+  if (item.kind === 'model')
     return textEvent(
-      'assistant_text',
+      'tool_result',
       base,
-      'Note',
+      'Result',
       sanitizeAssistantText(item.detail || item.summary),
       `history-${index}`,
     );
-  }
   if (item.kind === 'command' || item.kind === 'local_command') {
     return [
       semantic(
@@ -457,6 +456,12 @@ function sanitizeAssistantText(text: string): string {
     .replace(/<thinking>[\s\S]*?<\/thinking>/gi, '')
     .replace(/<tool_call>[\s\S]*?<\/tool_call>/gi, '')
     .trim();
+}
+
+function terminalSummary(text: string | undefined): string {
+  const clean = (text ?? '').trim();
+  if (!clean || clean.toLowerCase() === 'not run') return '';
+  return clean;
 }
 
 function summarizePlain(text: string, maxLength = 180): string {

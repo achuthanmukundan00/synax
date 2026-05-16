@@ -4,12 +4,14 @@ export type SemanticColorSlot =
   | 'diff'
   | 'command'
   | 'tool_result'
+  | 'result_error'
   | 'review'
   | 'commit'
   | 'checkpoint'
   | 'approval'
   | 'status'
   | 'error'
+  | 'prompt'
   | 'note'
   | 'assistant_text';
 
@@ -37,12 +39,14 @@ const DEFAULT_SEMANTIC: Record<SemanticColorSlot, RgbaHex> = {
   diff: '#bd93f9',
   command: '#8be9fd',
   tool_result: '#00ff87',
+  result_error: '#ff5555',
   review: '#ffb86c',
   commit: '#bd93f9',
   checkpoint: '#00ff87',
   approval: '#ffb86c',
   status: '#6272a4',
   error: '#ff5555',
+  prompt: '#8a8f98',
   note: '#6272a4',
   assistant_text: '#6272a4',
 };
@@ -86,12 +90,14 @@ const PALETTES: Record<string, TuiPalette> = {
       diff: '#8b5cf6',
       command: '#0891b2',
       tool_result: '#16a34a',
+      result_error: '#dc2626',
       review: '#d97706',
       commit: '#8b5cf6',
       checkpoint: '#16a34a',
       approval: '#d97706',
       status: '#6b7280',
       error: '#dc2626',
+      prompt: '#6b7280',
       note: '#6b7280',
       assistant_text: '#6b7280',
     },
@@ -115,12 +121,14 @@ const PALETTES: Record<string, TuiPalette> = {
       diff: '#ff79ff',
       command: '#66d9ef',
       tool_result: '#50fa70',
+      result_error: '#ff3333',
       review: '#f1fa8c',
       commit: '#ff79ff',
       checkpoint: '#50fa70',
       approval: '#f1fa8c',
       status: '#bbbbbb',
       error: '#ff3333',
+      prompt: '#bbbbbb',
       note: '#bbbbbb',
       assistant_text: '#bbbbbb',
     },
