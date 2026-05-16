@@ -8,7 +8,7 @@
 
 import { filterCommands } from '../settings/slash-command-registry';
 import { CTRL_C_QUIT_TIMEOUT_MS } from './tui-constants';
-import type { SemanticEvent } from './semantic-events';
+import type { SemanticEvent, SemanticEventClass } from './semantic-events';
 
 // ─── Ctrl+C double-press behavior resolver ───────────────────────────────────
 
@@ -45,7 +45,7 @@ export function latestExpandableEventId(events: SemanticEvent[]): string | undef
 
 // ─── Slash command autocomplete ──────────────────────────────────────────────
 
-const LOCAL_SLASH_COMMANDS = ['/theme', '/checkpoint', '/restore', '/checkpoints', '/doctor'];
+const LOCAL_SLASH_COMMANDS = ['/doctor'];
 
 export function slashAutocompleteItems(input: string): string[] {
   if (!input.startsWith('/')) return [];
@@ -202,4 +202,22 @@ export function tuiNote(kind: 'slash' | 'error', body: string): SemanticEvent {
     },
     metadata: {},
   };
+}
+
+/** Classify a slash command output string for appropriate semantic rendering.
+ *  Returns the semantic event class and suggested title for the card.
+ *  Provider checks get success/error/warning coloring instead of generic Note. */
+export function slashOutputClass(output: string): { eventClass: SemanticEventClass; title: string } {
+  // Provider check: parse the Status: line.
+  if (output.startsWith('Provider Check')) {
+    const statusMatch = /^Status:\s+(\S+)/m.exec(output);
+    const status = statusMatch?.[1] ?? '';
+    if (status === 'ready') return { eventClass: 'tool_result', title: 'Provider Ready' };
+    if (status === 'failed' || status === 'blocked')
+      return { eventClass: 'result_error', title: 'Provider Check Failed' };
+    if (status === 'degraded') return { eventClass: 'note', title: 'Provider Degraded' };
+    return { eventClass: 'note', title: 'Provider Check' };
+  }
+  // Default: render as a generic command note.
+  return { eventClass: 'note', title: 'Command' };
 }

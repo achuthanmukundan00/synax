@@ -56,8 +56,12 @@ import {
   SCROLL_STEP_ROWS,
   SCROLL_PAGE_FACTOR,
   SCROLL_INDICATOR_ID,
+  ACTIVITY_LINE_ID,
+  ACTIVITY_GLYPH_ID,
+  ACTIVITY_TEXT_ID,
 } from './tui-constants';
 import { padAnsi, visibleLength } from './text-utils';
+import { getModelPalette, type ModelPalette } from './model-palette';
 
 type OpenTuiCore = typeof import('@opentui/core');
 
@@ -74,9 +78,9 @@ import {
   clip,
   stripAnsi,
   truncateTitle,
-  getThemeNames,
   unique,
   tuiNote,
+  slashOutputClass,
 } from './key-handlers';
 
 export async function runInteractiveTui(
@@ -145,7 +149,7 @@ export async function runInteractiveTui(
 
   // --- Theme ---
   const themeMode: 'dark' | 'light' = (await detectThemeMode(renderer as any)) ?? 'dark';
-  let currentPalette: TuiPalette = getPalette(options?.blockedMessage ? 'default' : themeMode);
+  const currentPalette: TuiPalette = getPalette(options?.blockedMessage ? 'default' : themeMode);
 
   // --- Keyboard shortcut state ---
   let ctrlCPressedAt: number | null = null;
@@ -164,6 +168,31 @@ export async function runInteractiveTui(
   let settingsState = options?.settingsConfig ? createSettingsState(options.settingsConfig) : undefined;
   let busyAnimationFrame = 0;
   let userScrolledUp = false;
+  let modelPalette: ModelPalette = getModelPalette(options?.modelLabel ?? '');
+
+  /** Query the ScrollBox to determine if user has scrolled away from bottom. */
+  const isScrolledAwayFromBottom = (): boolean => {
+    const scrollBox = renderer.root.findDescendantById('synax-artifacts') as unknown as {
+      stickyScroll?: boolean;
+      scrollTop?: number;
+      contentHeight?: number;
+      viewportHeight?: number;
+    } | null;
+    if (!scrollBox) return false;
+    // When sticky scroll is active, user hasn't manually scrolled up.
+    if (scrollBox.stickyScroll === true) return false;
+    // Use content/viewport geometry to determine if there's content below.
+    const top = typeof scrollBox.scrollTop === 'number' ? scrollBox.scrollTop : 0;
+    const content = typeof scrollBox.contentHeight === 'number' ? scrollBox.contentHeight : 0;
+    const viewport = typeof scrollBox.viewportHeight === 'number' ? scrollBox.viewportHeight : 0;
+    if (content > 0 && viewport > 0) {
+      // User is at the bottom when scrollTop + viewportHeight >= contentHeight.
+      // Show indicator only when there is content below the visible viewport.
+      return top + viewport < content - 1;
+    }
+    // Fallback: if we can't read geometry, use the tracked flag.
+    return userScrolledUp;
+  };
 
   // --- Expanded state for cards ---
   const expandedState: ExpandedState = {};
@@ -172,11 +201,17 @@ export async function runInteractiveTui(
   let recentCheckpoints: CheckpointInfo[] = [];
   let lastCheckpointFileCount = 0;
 
-  // --- Persistent status card state ---
-  let statusEvent: SemanticEvent | null = null;
+  // --- Persistent status card state (removed — using activity line instead)
   const activeSubAgents: string[] = [];
-  let lastStatusLabel = '';
-  let lastStatusDetail = '';
+
+  /** Find a descendant OpenTUI node by ID. */
+  const findNode = (id: string): unknown => renderer.root.findDescendantById(id);
+
+  /** Set a property on a dynamic OpenTUI node. */
+  const setNodeProp = <K extends string, V>(id: string, prop: K, value: V): void => {
+    const node = findNode(id) as Record<string, unknown> | null;
+    if (node) node[prop] = value;
+  };
 
   const applyOptionsToState = (): void => {
     state = {
@@ -192,6 +227,7 @@ export async function runInteractiveTui(
       outputPricePer1MTokens: options?.outputPricePer1MTokens,
       sessionSpendLabel: isLocalEndpoint(options?.endpointLabel ?? '') ? 'local' : state.sessionSpendLabel,
     };
+    modelPalette = getModelPalette(options?.modelLabel ?? state.modelId);
   };
   applyOptionsToState();
   let treeBuilt = false;
@@ -234,7 +270,7 @@ export async function runInteractiveTui(
     busyAnimationFrame++;
 
     // Sync persistent status card at the bottom of the transcript
-    syncStatusCard();
+    syncActivityLine();
 
     // Keep autocomplete in sync with every prompt edit, including backspace.
     const inputForAutocomplete = renderer.root.findDescendantById('synax-input');
@@ -325,6 +361,7 @@ export async function runInteractiveTui(
             }
           },
           { frame: splashFrame(state.nowMs) },
+          state.modelId,
         ),
       );
       treeBuilt = true;
@@ -386,10 +423,10 @@ export async function runInteractiveTui(
       updateAutocompleteNode();
       rebuildEvents();
       lastRenderedFooterSignature = footerSignature;
-      // Update scroll continuation indicator
+      // Update scroll continuation indicator from actual viewport geometry
       const scrollIndicator = findNode(SCROLL_INDICATOR_ID);
       if (scrollIndicator) {
-        (scrollIndicator as any).visible = userScrolledUp && events.length > 0;
+        (scrollIndicator as any).visible = isScrolledAwayFromBottom() && events.length > 0;
       }
     }
     tuiStats.recordRepaint();
@@ -402,9 +439,6 @@ export async function runInteractiveTui(
       setTimeout(() => render('animation', { immediate: true }), 250);
     }
 
-    function findNode(id: string): any {
-      return renderer.root.findDescendantById(id);
-    }
     function removeNode(parent: unknown, id: string): void {
       const removable = parent as { remove?: (nodeId: string) => void };
       if (typeof removable.remove === 'function') {
@@ -499,94 +533,77 @@ export async function runInteractiveTui(
     }
   };
 
-  // ─── Persistent status card at bottom of transcript ──────────
+  // ─── Live activity line (replaces persistent status card) ──────
 
-  const removeStatusCard = (): void => {
-    if (!statusEvent) return;
-    const idx = events.indexOf(statusEvent);
-    if (idx >= 0) events.splice(idx, 1);
-    statusEvent = null;
-    lastStatusLabel = '';
-    lastStatusDetail = '';
-    eventsVersion++;
-  };
+  let lastActivityGlyph = '';
+  let lastActivityText = '';
 
-  const syncStatusCard = (): void => {
-    const needsCard =
+  /** Pick the animation glyph for the current frame. */
+  const frameGlyph = (glyphs: string[], frame: number): string => glyphs[frame % glyphs.length] ?? glyphs[0] ?? '·';
+
+  const syncActivityLine = (): void => {
+    const active =
       statusOverride !== '' || (state.terminal === 'running' && state.phase !== 'idle' && state.phase !== 'completed');
 
-    if (!needsCard) {
-      removeStatusCard();
+    const line = findNode(ACTIVITY_LINE_ID);
+    if (!line) return;
+
+    if (!active) {
+      setNodeProp(ACTIVITY_LINE_ID, 'visible', false);
+      lastActivityGlyph = '';
+      lastActivityText = '';
       return;
     }
 
-    // Animated spinner glyphs for active states.
-    const SPINNER_GLYPHS = ['◐', '◓', '◑', '◒'];
-    const spin = SPINNER_GLYPHS[busyAnimationFrame % SPINNER_GLYPHS.length];
-    const PULSE_GLYPHS = ['○', '◌', '●', '◌'];
-    const pulse = PULSE_GLYPHS[busyAnimationFrame % PULSE_GLYPHS.length];
+    const g = modelPalette.animationGlyphs;
 
-    let label: string;
-    let detail: string;
+    let glyph: string;
+    let text: string;
 
     if (statusOverride) {
-      label = statusOverride;
-      detail = '';
+      glyph = frameGlyph(g.error, busyAnimationFrame);
+      text = statusOverride;
     } else if (activeSubAgents.length > 0) {
-      label = `${spin} Orchestrating sub-agents: ${activeSubAgents.join(', ')}`;
-      detail = '';
+      glyph = frameGlyph(g.orchestrating, busyAnimationFrame);
+      text = `Orchestrating: ${activeSubAgents.join(', ')}`;
     } else if (state.phase === 'thinking') {
-      label = `${pulse} Thinking${state.modelId ? ` (${state.modelId})` : ''}`;
-      detail = '';
+      glyph = frameGlyph(g.thinking, busyAnimationFrame);
+      const summary = state.timeline[state.timeline.length - 1]?.summary ?? '';
+      text = summary ? `Reading · ${summary.slice(0, 58)}` : 'Thinking';
     } else if (state.phase === 'tool_execution') {
-      label = `${spin} Running tool (${elapsed(state.startedAtMs, state.nowMs)})`;
-      const lastTimelineItem = state.timeline[state.timeline.length - 1];
-      detail = lastTimelineItem?.summary
-        ? lastTimelineItem.summary.length > 50
-          ? `${lastTimelineItem.summary.slice(0, 47)}...`
-          : lastTimelineItem.summary
-        : '';
+      glyph = frameGlyph(g.working, busyAnimationFrame);
+      const toolSummary = state.timeline[state.timeline.length - 1]?.summary ?? '';
+      text = toolSummary
+        ? `Working · ${toolSummary.slice(0, 58)}`
+        : `Working (${elapsed(state.startedAtMs, state.nowMs)})`;
     } else if (state.phase === 'verifying') {
-      label = `${pulse} Verifying`;
-      detail = state.verification.currentCheckLabel || '';
+      glyph = frameGlyph(g.verifying, busyAnimationFrame);
+      text = state.verification.currentCheckLabel
+        ? `Verifying · ${state.verification.currentCheckLabel.slice(0, 58)}`
+        : 'Verifying';
     } else if (state.phase === 'error') {
-      label = '✗ Error';
-      detail = state.terminalIssue ?? '';
+      glyph = frameGlyph(g.error, busyAnimationFrame);
+      text = state.terminalIssue ? `Error · ${state.terminalIssue.slice(0, 78)}` : 'Error';
     } else if (state.phase === 'blocked') {
-      label = '! Blocked';
-      detail = state.objective.nextCheckpoint;
+      glyph = frameGlyph(g.error, busyAnimationFrame);
+      text = state.objective.nextCheckpoint.slice(0, 78) || 'Blocked';
     } else if (state.phase === 'budget_exhausted') {
-      label = '! Budget exhausted';
-      detail = state.objective.nextCheckpoint;
+      glyph = frameGlyph(g.error, busyAnimationFrame);
+      text = state.objective.nextCheckpoint.slice(0, 78) || 'Budget exhausted';
     } else {
-      label = `${spin} Working`;
-      detail = '';
+      glyph = frameGlyph(g.thinking, busyAnimationFrame);
+      text = 'Working';
     }
 
-    if (label === lastStatusLabel && detail === lastStatusDetail) return;
+    if (glyph === lastActivityGlyph && text === lastActivityText) return;
+    lastActivityGlyph = glyph;
+    lastActivityText = text;
 
-    lastStatusLabel = label;
-    lastStatusDetail = detail;
-
-    const newStatus: SemanticEvent = {
-      id: 'persistent-status-card',
-      class: 'status',
-      timestamp: state.nowMs,
-      artifact: {
-        type: 'status',
-        label,
-        detail,
-      },
-      metadata: {},
-    };
-
-    if (statusEvent) {
-      const existingIdx = events.indexOf(statusEvent);
-      if (existingIdx >= 0) events.splice(existingIdx, 1);
-    }
-    events.push(newStatus);
-    statusEvent = newStatus;
-    eventsVersion++;
+    setNodeProp(ACTIVITY_LINE_ID, 'visible', true);
+    const glyphNode = findNode(ACTIVITY_GLYPH_ID);
+    if (glyphNode) setNodeProp(ACTIVITY_GLYPH_ID, 'content', glyph);
+    const textNode = findNode(ACTIVITY_TEXT_ID);
+    if (textNode) setNodeProp(ACTIVITY_TEXT_ID, 'content', text);
   };
 
   const renderScheduler = new AdaptiveRenderScheduler(
@@ -741,25 +758,7 @@ export async function runInteractiveTui(
     render();
     try {
       if (value.startsWith('/')) {
-        // Handle /theme locally
-        if (value.startsWith('/theme')) {
-          const parts = value.split(/\s+/);
-          const themeName = parts[1] ?? '';
-          if (themeName) {
-            currentPalette = getPalette(themeName);
-            eventsVersion++;
-            events.push(tuiNote('slash', `Theme set to "${currentPalette.name}".`));
-          } else {
-            eventsVersion++;
-            events.push(
-              tuiNote('slash', `Available themes: ${getThemeNames().join(', ')}. Current: ${currentPalette.name}`),
-            );
-          }
-          busy = false;
-          render();
-          return;
-        }
-        // Handle /checkpoint locally
+        // Handle /checkpoint locally (still functional, not advertised)
         if (value === '/checkpoint') {
           const result = await gitCreateCheckpoint('manual checkpoint');
           if (result) {
@@ -835,7 +834,14 @@ export async function runInteractiveTui(
         }
         if (report.output.trim()) {
           eventsVersion++;
-          events.push(tuiNote('slash', report.output));
+          const classified = slashOutputClass(report.output);
+          events.push({
+            id: `slash-${Date.now()}`,
+            class: classified.eventClass,
+            timestamp: Date.now(),
+            artifact: { type: 'text', title: classified.title, body: report.output },
+            metadata: {},
+          });
         }
         if (report.newSession) {
           events = [];
@@ -901,9 +907,6 @@ export async function runInteractiveTui(
       // Still mark dirty so the status card gets updated
       eventsVersion++;
     } else {
-      if (event.type === 'task_finished') {
-        removeStatusCard();
-      }
       // New user-visible events reset scroll position to follow the feed.
       userScrolledUp = false;
       eventsVersion++;
@@ -942,7 +945,14 @@ export async function runInteractiveTui(
         if (report.exit) return;
         if (report.output.trim()) {
           eventsVersion++;
-          events.push(tuiNote('slash', report.output));
+          const classified = slashOutputClass(report.output);
+          events.push({
+            id: `slash-busy-${Date.now()}`,
+            class: classified.eventClass,
+            timestamp: Date.now(),
+            artifact: { type: 'text', title: classified.title, body: report.output },
+            metadata: {},
+          });
           render();
         }
       })
@@ -1407,10 +1417,17 @@ export async function runInteractiveTui(
     }
   });
 
+  let resizeDebounce: ReturnType<typeof setTimeout> | null = null;
+
   renderer.on('resize', () => {
-    treeBuilt = false;
-    feedModel.reset();
-    render('resize', { immediate: true });
+    // Coalesce rapid resize events (e.g. corner drag) to avoid flicker.
+    if (resizeDebounce) clearTimeout(resizeDebounce);
+    resizeDebounce = setTimeout(() => {
+      resizeDebounce = null;
+      treeBuilt = false;
+      feedModel.reset();
+      render('resize', { immediate: true });
+    }, 100);
   });
   renderer.start();
   doRender();
@@ -1420,6 +1437,7 @@ export async function runInteractiveTui(
   });
 
   renderScheduler.dispose();
+  if (resizeDebounce) clearTimeout(resizeDebounce);
   session.setEventSink?.(null);
 }
 

@@ -311,11 +311,11 @@ describe('OpenTUI artifact scrolling', () => {
 describe('OpenTUI polish helpers', () => {
   it('adds breathing room around event crown glyphs and labels', () => {
     expect(formatEventCrown('assistant_text')).toBe('  →  Note  ');
-    expect(formatEventCrown('prompt')).toBe('  ↳  Prompt  ');
-    expect(formatEventCrown('tool_result')).toBe('  ✓  Result  ');
-    expect(formatEventCrown('result_error')).toBe('  ✗  Result  ');
+    expect(formatEventCrown('prompt')).toBe('  ◆  Prompt  ');
+    expect(formatEventCrown('tool_result')).toBe('  ◇  Result  ');
+    expect(formatEventCrown('result_error')).toBe('  ✕  Result  ');
     expect(formatEventCrown('command')).toBe('  ⌘  Command  ');
-    expect(formatEventCrown('error')).toBe('  ✗  Error  ');
+    expect(formatEventCrown('error')).toBe('  ✕  Error  ');
   });
 
   it('expands prompt height for multiline input without capping at 6', () => {

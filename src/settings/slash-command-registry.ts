@@ -128,26 +128,6 @@ export function registerBuiltinCommands(): void {
       opensResume: true,
     },
     {
-      name: 'login',
-      description: 'Add/configure providers',
-      category: 'settings',
-      handler: () => ({ handled: true, openSettings: true }),
-      opensSettings: true,
-    },
-    {
-      name: 'export',
-      description: 'Export session',
-      category: 'session',
-      handler: () => ({ handled: true, output: '[synax] session export is not yet implemented' }),
-    },
-    {
-      name: 'import',
-      description: 'Import/resume session',
-      category: 'session',
-      handler: () => ({ handled: true, openResume: true }),
-      opensResume: true,
-    },
-    {
       name: 'status',
       description: 'Show runtime status',
       category: 'runtime',
@@ -218,30 +198,6 @@ export function registerBuiltinCommands(): void {
       name: 'verify',
       description: 'Run verification command',
       category: 'debug',
-      handler: () => ({ handled: false }),
-    },
-    {
-      name: 'theme',
-      description: 'Switch TUI theme',
-      category: 'settings',
-      handler: () => ({ handled: false }),
-    },
-    {
-      name: 'checkpoint',
-      description: 'Create a manual checkpoint',
-      category: 'session',
-      handler: () => ({ handled: false }),
-    },
-    {
-      name: 'checkpoints',
-      description: 'List recent checkpoints',
-      category: 'session',
-      handler: () => ({ handled: false }),
-    },
-    {
-      name: 'restore',
-      description: 'Restore a checkpoint',
-      category: 'session',
       handler: () => ({ handled: false }),
     },
     {

@@ -3,25 +3,18 @@ import { getPalette } from './theme';
 import type { ArtifactPayload, RiskLevel, SemanticEvent, SemanticEventClass } from './semantic-events';
 import { tuiStats } from './telemetry';
 import { renderAiCore } from './ai-core';
+import type { ModelPalette } from './model-palette';
+import { getModelPalette } from './model-palette';
 import {
   HUNK_PREVIEW_LINES,
-  HUNK_SCROLLBOX_THRESHOLD,
-  STDOUT_PREVIEW_LINES,
-  STDOUT_FULL_LINES,
-  STDERR_PREVIEW_LINES,
-  STDERR_FULL_LINES,
-  TOOL_RESULT_OUTPUT_LINES,
   TEXT_PREVIEW_LINES,
-  OUTPUT_SHOW_ALL_THRESHOLD,
-  PLAN_MAX_STEPS,
-  CONTEXT_CHIPS_MAX,
   RIGHT_RAIL_MIN_WIDTH,
   RIGHT_RAIL_WIDTH,
-  RAIL_MAX_FILES,
-  RAIL_MAX_CHECKPOINTS,
-  CLIP_SINGLE_LINE_WIDTH,
   PERSISTENT_STATUS_CARD_ID,
   SCROLL_INDICATOR_ID,
+  ACTIVITY_LINE_ID,
+  ACTIVITY_GLYPH_ID,
+  ACTIVITY_TEXT_ID,
   AUTOCOMPLETE_MAX_ROWS,
 } from './tui-constants';
 
@@ -94,17 +87,17 @@ const COLORS: Record<SemanticEventClass, string> = {
 const GLYPHS: Record<SemanticEventClass, string> = {
   plan: '…',
   edit: '✓',
-  diff: '≠',
+  diff: '⎇',
   command: '⌘',
-  tool_result: '✓',
-  result_error: '✗',
+  tool_result: '◇',
+  result_error: '✕',
   review: '⚠',
   commit: '⎇',
   checkpoint: '✓',
   approval: '!',
   status: '…',
-  error: '✗',
-  prompt: '↳',
+  error: '✕',
+  prompt: '◆',
   note: '→',
   assistant_text: '→',
 };
@@ -124,13 +117,15 @@ export function renderArtifactRoot(
   onSubmit?: (value: string) => void,
   onPromptChange?: (value: string, input: unknown) => void,
   splash?: SplashOptions,
+  modelId?: string,
 ): OpenTuiNode {
   const pal = palette ?? getPalette();
+  const modelPal = modelId ? getModelPalette(modelId) : getModelPalette('');
   const rightRailWidth = railWidthFor(terminalWidth);
   const mainChildren =
     events.length > 0
       ? events.map((event) => renderArtifactCard(core, event, expanded?.[event.id] ?? false, onToggleExpand, pal))
-      : [renderEmptyState(core, pal, splash)];
+      : [renderEmptyState(core, pal, splash, modelPal)];
   const inputHeight = footer.inputHeight ?? promptInputHeight(footer.prompt);
   const footerHeight = 3 + (footer.location ? 1 : 0) + inputHeight;
   const input = core.h(core.TextareaRenderable, {
@@ -184,7 +179,7 @@ export function renderArtifactRoot(
         },
         ...mainChildren,
       ),
-      ...(rightRailWidth > 0 ? [renderRightRail(core, rail, rightRailWidth, pal)] : []),
+      ...(rightRailWidth > 0 ? [renderRightRail(core, rail, rightRailWidth, pal, modelPal)] : []),
       core.Text({
         id: SCROLL_INDICATOR_ID,
         content: '↓ scroll down for more',
@@ -193,6 +188,19 @@ export function renderArtifactRoot(
         bottom: 0,
         left: 1,
       }),
+    ),
+    // Live activity line — single row between feed and footer
+    core.Box(
+      {
+        id: ACTIVITY_LINE_ID,
+        width: '100%',
+        flexDirection: 'row',
+        paddingX: 1,
+        paddingY: 0,
+        visible: false,
+      },
+      core.Text({ id: ACTIVITY_GLYPH_ID, content: '', width: 2 }),
+      core.Text({ id: ACTIVITY_TEXT_ID, content: 'Ready.', fg: pal.textAccent }),
     ),
     ...(settingsLines && settingsLines.length > 0
       ? [renderSettingsOverlay(core, settingsLines, pal, settingsActiveLabel)]
@@ -287,6 +295,29 @@ export function renderArtifactCard(
     pal,
   );
   tuiStats.recordCardRendered(children.length);
+
+  // Determine if this should be a full bordered card or a compact row.
+  const { artifact } = event;
+  const isFullCard =
+    ((event.class === 'tool_result' || event.class === 'result_error') && artifact.type === 'text') ||
+    (event.class === 'prompt' && artifact.type === 'text') ||
+    (event.class === 'error' && artifact.type === 'text') ||
+    artifact.type === 'approval';
+
+  if (!isFullCard) {
+    // Compact row: just the color bar + content row, no border.
+    return core.Box(
+      {
+        id: event.id,
+        width: '100%',
+        flexDirection: 'row',
+        marginBottom: 0,
+      },
+      core.Box({ width: 2, minWidth: 2, marginRight: 1 }, core.Text({ content: ' ', fg: color })),
+      core.Box({ flexGrow: 1, paddingY: 0 }, ...children),
+    );
+  }
+
   return core.Box(
     {
       id: event.id,
@@ -369,26 +400,6 @@ function statusCardColor(label: string, palette: TuiPalette): string {
   return palette.info;
 }
 
-function renderContextChips(core: OpenTuiCore, event: SemanticEvent): OpenTuiNode | null {
-  const files = event.metadata.filesTouched;
-  if (!files || files.length === 0) return null;
-  const chips: OpenTuiNode[] = [];
-  const maxChips = CONTEXT_CHIPS_MAX;
-  for (let i = 0; i < Math.min(files.length, maxChips); i++) {
-    const file = files[i]!;
-    const isDir = file.endsWith('/');
-    const chipLabel = isDir ? `@${file}` : `→ ${file.split('/').pop() ?? file}`;
-    chips.push(core.Text({ content: ` ${chipLabel}`, fg: '#6272a4' }));
-    if (i < Math.min(files.length, maxChips) - 1) {
-      chips.push(core.Text({ content: ' ', fg: '#333333' }));
-    }
-  }
-  if (files.length > maxChips) {
-    chips.push(core.Text({ content: ` +${files.length - maxChips} more`, fg: '#6272a4' }));
-  }
-  return core.Box({ flexDirection: 'row', paddingTop: 0, paddingBottom: 0 }, ...chips);
-}
-
 function renderPayloadRows(
   core: OpenTuiCore,
   payload: ArtifactPayload,
@@ -399,102 +410,20 @@ function renderPayloadRows(
   palette?: TuiPalette,
 ): OpenTuiNode[] {
   const pal = palette ?? getPalette();
-  if (payload.type === 'plan') {
-    return [
-      core.Text({ content: payload.title, fg: pal.text }),
-      ...(event ? ([renderContextChips(core, event)].filter(Boolean) as OpenTuiNode[]) : []),
-      ...payload.steps.slice(0, PLAN_MAX_STEPS).map((step) => core.Text({ content: step, fg: pal.textMuted })),
-      core.Text({ content: '[Execute plan] [Revise]', fg: pal.textAccent }),
-    ];
+  const color = eventColor(eventClass, pal);
+
+  // Full bordered cards only for: final results, prompts, errors, approvals.
+  const isFullCard = (eventClass === 'tool_result' || eventClass === 'result_error') && payload.type === 'text';
+  const isPromptCard = eventClass === 'prompt' && payload.type === 'text';
+  const isErrorCard = eventClass === 'error' && payload.type === 'text';
+  const isApprovalCard = payload.type === 'approval';
+  const useFullCard = isFullCard || isPromptCard || isErrorCard || isApprovalCard;
+
+  // Render compact band for everything else.
+  if (!useFullCard) {
+    return [renderCompactBand(core, payload, eventClass, pal, onToggle, expanded)];
   }
-  if (payload.type === 'edit') {
-    return [
-      core.Text({
-        content: `${payload.file}   +${payload.linesAdded} ~${payload.linesModified} -${payload.linesRemoved}`,
-        fg: pal.textMuted,
-      }),
-      ...(event ? ([renderContextChips(core, event)].filter(Boolean) as OpenTuiNode[]) : []),
-      core.Text({ content: payload.summary, fg: pal.text }),
-      core.Text({ content: '[View diff] [Open file]', fg: pal.textAccent }),
-    ];
-  }
-  if (payload.type === 'diff') {
-    const showAll = expanded;
-    const hunks = showAll ? payload.hunks : payload.hunks.slice(0, HUNK_PREVIEW_LINES);
-    const hunkNodes = hunks.map((line) => core.Text({ content: line, fg: diffLineColor(line) }));
-    const toggleLabel = showAll ? '[Collapse hunk]' : payload.hunks.length > HUNK_PREVIEW_LINES ? '[Expand hunk]' : '';
-    const toggleText = toggleLabel ? `${toggleLabel} [Accept] [Discard]` : '[Accept] [Discard]';
-    return [
-      core.Text({ content: payload.file, fg: pal.textMuted }),
-      ...(event ? ([renderContextChips(core, event)].filter(Boolean) as OpenTuiNode[]) : []),
-      ...(showAll && hunkNodes.length > HUNK_SCROLLBOX_THRESHOLD
-        ? [
-            core.ScrollBox(
-              { height: 20, viewportCulling: true, scrollY: true, border: true, borderColor: pal.border },
-              ...hunkNodes,
-            ),
-          ]
-        : hunkNodes),
-      actionText(core, toggleText, pal.textAccent, onToggle),
-    ];
-  }
-  if (payload.type === 'command') {
-    const status =
-      payload.exitCode === undefined
-        ? 'Running or queued'
-        : payload.exitCode === 0
-          ? 'exit 0'
-          : `failed exit ${payload.exitCode}`;
-    const stdoutLines = payload.stdout?.split('\n').filter(Boolean) ?? [];
-    const stderrLines = payload.stderr?.split('\n').filter(Boolean) ?? [];
-    const totalOut = stdoutLines.length + stderrLines.length;
-    const showFull = expanded;
-    const displayStdout = showFull
-      ? stdoutLines.slice(0, STDOUT_FULL_LINES)
-      : stdoutLines.slice(0, STDOUT_PREVIEW_LINES);
-    const displayStderr = showFull
-      ? stderrLines.slice(0, STDERR_FULL_LINES)
-      : stderrLines.slice(0, STDERR_PREVIEW_LINES);
-    let actionLabel: string;
-    if (!showFull && totalOut > OUTPUT_SHOW_ALL_THRESHOLD) {
-      actionLabel = `[Show full output (${totalOut} lines)] [Retry]`;
-    } else if (showFull && totalOut > 200) {
-      actionLabel = `[Show 200 of ${totalOut} lines] [Open in pager]`;
-    } else if (showFull) {
-      actionLabel = '[Collapse output] [Retry]';
-    } else {
-      actionLabel = '[Show full output] [Retry]';
-    }
-    return [
-      core.Text({ content: payload.command || 'command', fg: pal.text }),
-      ...(event ? ([renderContextChips(core, event)].filter(Boolean) as OpenTuiNode[]) : []),
-      core.Text({ content: status, fg: payload.exitCode && payload.exitCode !== 0 ? pal.error : pal.textAccent }),
-      ...outputRows(core, displayStdout, displayStderr, pal),
-      actionText(core, actionLabel, pal.textAccent, onToggle),
-    ];
-  }
-  if (payload.type === 'tool_result') {
-    const hasOutput = !!payload.output;
-    return [
-      core.Text({ content: payload.title, fg: payload.status === 'error' ? pal.error : pal.text }),
-      core.Text({ content: payload.summary || 'completed', fg: pal.textMuted }),
-      ...(hasOutput
-        ? expanded
-          ? [
-              actionText(core, '[Hide output]', pal.textAccent, onToggle),
-              ...payload
-                .output!.split('\n')
-                .filter(Boolean)
-                .slice(0, TOOL_RESULT_OUTPUT_LINES)
-                .map((line) => core.Text({ content: line, fg: pal.textAccent })),
-            ]
-          : [
-              core.Text({ content: clipSingleLine(payload.output!), fg: pal.textAccent }),
-              actionText(core, '[Show output]', pal.textAccent, onToggle),
-            ]
-        : []),
-    ];
-  }
+
   if (payload.type === 'approval') {
     return [
       core.Text({ content: payload.action, fg: pal.text }),
@@ -505,46 +434,35 @@ function renderPayloadRows(
       core.Text({ content: payload.choices.join('   '), fg: pal.textAccent }),
     ];
   }
-  if (payload.type === 'commit') {
-    return [
-      core.Text({ content: payload.message, fg: pal.text }),
-      core.Text({ content: `Files: ${payload.files.join(', ') || 'unknown'}`, fg: pal.textMuted }),
-      core.Text({ content: '[Amend] [Create PR]', fg: pal.textAccent }),
-    ];
-  }
-  if (payload.type === 'checkpoint') {
-    return [
-      core.Text({ content: payload.title, fg: pal.text }),
-      core.Text({ content: `Files: ${payload.files.length}   Git hash: ${payload.hash ?? 'n/a'}`, fg: pal.textMuted }),
-      core.Text({ content: '[Restore] [Diff against current]', fg: pal.textAccent }),
-    ];
-  }
-  if (payload.type === 'status') {
-    const color = eventColor(eventClass, pal);
-    return [
-      core.Text({ content: payload.label, fg: color }),
-      core.Text({ content: payload.detail ?? '', fg: pal.textAccent }),
-    ];
-  }
-  // For result text events (e.g., final model output), render with markdown.
+
+  // Full-card text rendering.
   if ((eventClass === 'tool_result' || eventClass === 'result_error') && payload.type === 'text') {
+    if (isDiagnosticTitle(payload.title)) {
+      return renderDiagnosticCard(core, payload, eventClass, pal);
+    }
     return [
-      core.Text({ content: payload.title, fg: eventColor(eventClass, pal) }),
+      core.Text({ content: payload.title, fg: color }),
       ...renderResultMarkdown(core, payload.body, pal),
+      ...(event ? [renderResultStats(core, event, pal)] : []),
     ];
   }
   if (eventClass === 'prompt' && payload.type === 'text') {
     return textPayloadRows(core, payload.body, eventClass, expanded, pal);
   }
+  // Error card: full bordered.
   return [
-    core.Text({ content: payload.title, fg: eventColor(eventClass, pal) }),
+    core.Text({ content: payload.title, fg: color }),
     ...textPayloadRows(core, payload.body, eventClass, expanded, pal),
-    ...(isExpandableText(payload.body, eventClass, expanded)
-      ? [actionText(core, '[Show full text]', pal.textAccent, onToggle)]
-      : []),
-    ...(expanded && isCollapsibleText(payload.body, eventClass)
-      ? [actionText(core, '[Collapse text]', pal.textAccent, onToggle)]
-      : []),
+    ...(eventClass === 'error'
+      ? [actionText(core, '[Retry] [Skip] [Show raw]', pal.textAccent)]
+      : [
+          ...(isExpandableText(payload.body, eventClass, expanded)
+            ? [actionText(core, '[Show full text]', pal.textAccent, onToggle)]
+            : []),
+          ...(expanded && isCollapsibleText(payload.body, eventClass)
+            ? [actionText(core, '[Collapse text]', pal.textAccent, onToggle)]
+            : []),
+        ]),
   ];
 }
 
@@ -566,9 +484,9 @@ function renderResultMarkdown(core: OpenTuiCore, body: string, palette: TuiPalet
 
     // Headings
     const hMatch = line.match(/^(#{1,4})\s+(.+)/);
-    if (hMatch) {
+    if (hMatch && hMatch[1] && hMatch[2]) {
       const level = hMatch[1].length;
-      const text = hMatch[2]!;
+      const text = hMatch[2];
       const hColor = level <= 2 ? palette.brand : palette.warning;
       nodes.push(core.Text({ content: text, fg: hColor }));
       continue;
@@ -590,8 +508,8 @@ function renderResultMarkdown(core: OpenTuiCore, body: string, palette: TuiPalet
 
     // Blockquotes
     const qMatch = line.match(/^>\s?(.+)/);
-    if (qMatch) {
-      nodes.push(core.Text({ content: qMatch[1]!, fg: palette.textMuted }));
+    if (qMatch && qMatch[1]) {
+      nodes.push(core.Text({ content: qMatch[1], fg: palette.textMuted }));
       continue;
     }
 
@@ -646,26 +564,15 @@ function isCollapsibleText(body: string, eventClass: SemanticEventClass): boolea
   return eventClass !== 'tool_result' && body.split('\n').length > TEXT_PREVIEW_LINES;
 }
 
-function outputRows(core: OpenTuiCore, stdout: string[], stderr: string[], palette: TuiPalette): OpenTuiNode[] {
-  const rows: OpenTuiNode[] = [];
-  if (stdout.length > 0)
-    rows.push(core.Text({ content: `stdout: ${stdout.join(' / ').slice(0, 300)}`, fg: palette.textAccent }));
-  if (stderr.length > 0)
-    rows.push(core.Text({ content: `stderr: ${stderr.join(' / ').slice(0, 300)}`, fg: palette.error }));
-  return rows;
-}
-
-function renderRightRail(core: OpenTuiCore, rail: ArtifactRailState, width: number, palette?: TuiPalette): OpenTuiNode {
+function renderRightRail(
+  core: OpenTuiCore,
+  rail: ArtifactRailState,
+  width: number,
+  palette?: TuiPalette,
+  modelPal?: ModelPalette,
+): OpenTuiNode {
   const pal = palette ?? getPalette();
-  const fileRows = rail.filesTouched
-    .slice(-RAIL_MAX_FILES)
-    .map((file) => core.Text({ content: `> ${compactPath(file, width - 2)}`, fg: pal.textAccent }));
-  const checkpointRows = (rail.recentCheckpoints ?? []).slice(-RAIL_MAX_CHECKPOINTS).map((cp) =>
-    core.Text({
-      content: `# ${clip(cp.title, width - 4)}`,
-      fg: pal.success,
-    }),
-  );
+  const color = modelPal?.primary ?? pal.brand;
   return core.Box(
     {
       id: 'synax-right-rail',
@@ -675,28 +582,17 @@ function renderRightRail(core: OpenTuiCore, rail: ArtifactRailState, width: numb
       borderColor: pal.border,
       paddingX: 1,
     },
-    core.Text({ id: 'synax-rail-files', content: `Files (${rail.filesTouched.length})`, fg: pal.text }),
-    ...(fileRows.length > 0 ? fileRows : [core.Text({ content: 'none', fg: pal.textAccent })]),
-    core.Text({ content: '' }),
-    ...(checkpointRows.length > 0
-      ? ([
-          core.Text({ content: `Checkpoints (${(rail.recentCheckpoints ?? []).length})`, fg: pal.text }),
-          ...checkpointRows,
-          core.Text({ content: '' }),
-        ] as OpenTuiNode[])
+    core.Text({ content: `${rail.filesTouched.length} files`, fg: pal.textAccent }),
+    ...(rail.contextLabel ? [core.Text({ content: `ctx ${rail.contextLabel}`, fg: pal.textAccent })] : []),
+    core.Text({ content: rail.uptimeLabel, fg: pal.textAccent }),
+    core.Text({ id: 'synax-rail-model', content: clip(rail.model ?? '—', width - 2), fg: color }),
+    ...(rail.branch ? [core.Text({ content: rail.branch, fg: pal.textMuted })] : []),
+    ...(rail.costLabel && rail.costLabel !== 'local'
+      ? [core.Text({ content: rail.costLabel, fg: pal.textAccent })]
       : []),
     ...(rail.pendingApprovals && rail.pendingApprovals > 0
-      ? ([
-          core.Text({ content: '' }),
-          core.Text({ content: `Pending approvals (${rail.pendingApprovals})`, fg: pal.warning }),
-        ] as OpenTuiNode[])
+      ? [core.Text({ content: `${rail.pendingApprovals} pending`, fg: pal.warning })]
       : []),
-    core.Text({ content: '' }),
-    core.Text({ content: 'Session', fg: pal.text }),
-    core.Text({ content: `Cost: ${rail.costLabel ?? 'local'}`, fg: pal.textAccent }),
-    core.Text({ id: 'synax-rail-context', content: `Context: ${rail.contextLabel ?? 'n/a'}`, fg: pal.textAccent }),
-    core.Text({ id: 'synax-rail-model', content: clip(rail.model ?? 'model n/a', width - 2), fg: pal.brand }),
-    core.Text({ id: 'synax-rail-uptime', content: `Uptime: ${rail.uptimeLabel}`, fg: pal.textAccent }),
   );
 }
 
@@ -754,7 +650,12 @@ function autocompleteWindowStart(selectedIndex: number, itemCount: number, windo
   return Math.max(0, Math.min(clampedSelected - halfWindow, itemCount - windowSize));
 }
 
-function renderEmptyState(core: OpenTuiCore, palette?: TuiPalette, splash?: SplashOptions): OpenTuiNode {
+function renderEmptyState(
+  core: OpenTuiCore,
+  palette?: TuiPalette,
+  splash?: SplashOptions,
+  modelPal?: ModelPalette,
+): OpenTuiNode {
   const pal = palette ?? getPalette();
   const logo = renderSplashLogo(splash?.frame ?? 0, { color: splash?.color ?? shouldUseSplashColor() });
   return core.Box(
@@ -764,17 +665,17 @@ function renderEmptyState(core: OpenTuiCore, palette?: TuiPalette, splash?: Spla
       flexDirection: 'column',
       border: true,
       borderStyle: 'single',
-      borderColor: pal.border,
+      borderColor: modelPal?.primary ?? pal.border,
       padding: 1,
     },
     ...logo.map((line, index) =>
       core.Text({
         content: line,
-        fg: splashLineColor(index, splash?.frame ?? 0, pal),
+        fg: splashLineColor(index, splash?.frame ?? 0, pal, modelPal),
       }),
     ),
     core.Text({ content: '' }),
-    core.Text({ content: 'synax', fg: pal.brand }),
+    core.Text({ content: 'synax', fg: modelPal?.primary ?? pal.brand }),
     core.Text({ content: 'local-first coding agent runtime', fg: pal.textMuted }),
   );
 }
@@ -810,6 +711,8 @@ export function renderSplashLogo(frame: number, options?: { color?: boolean }): 
     .map((line) => (useColor ? stripAnsi(line) : stripAnsi(line).replace(/[╭╮╰╯─│○◎●•·]/g, '.')));
 }
 
+const ANSI_PATTERN = new RegExp(String.fromCharCode(27) + '\\[[0-9;]*m', 'g');
+
 function stripAnsi(text: string): string {
   return text.replace(ANSI_PATTERN, '');
 }
@@ -818,10 +721,10 @@ function shouldUseSplashColor(): boolean {
   return !process.env.NO_COLOR && process.env.TERM !== 'dumb';
 }
 
-function splashLineColor(index: number, frame: number, palette: TuiPalette): string {
+function splashLineColor(index: number, frame: number, palette: TuiPalette, modelPal?: ModelPalette): string {
   if (!shouldUseSplashColor()) return palette.textMuted;
-  const colors = ['#4f8cff', '#47d7ff', '#7c6cff', '#82f7ff'];
-  return colors[(index + frame) % colors.length] ?? palette.brand;
+  const colors = modelPal?.splashAccents ?? ['#4f8cff', '#47d7ff', '#7c6cff', '#82f7ff'];
+  return colors[(index + frame) % colors.length] ?? modelPal?.primary ?? palette.brand;
 }
 
 function actionText(core: OpenTuiCore, content: string, fg: string, onToggle?: () => void): OpenTuiNode {
@@ -845,13 +748,6 @@ function readPromptValue(input: unknown): string {
   }
 }
 
-function diffLineColor(line: string): string {
-  if (line.startsWith('+') && !line.startsWith('+++')) return '#00ff87';
-  if (line.startsWith('-') && !line.startsWith('---')) return '#ff5555';
-  if (line.startsWith('@@')) return '#8be9fd';
-  return '#cccccc';
-}
-
 function riskColor(risk: RiskLevel): string {
   if (risk === 'high') return '#ff5555';
   if (risk === 'medium') return '#ffb86c';
@@ -870,27 +766,147 @@ function footerColor(status: string): string {
   return '#cccccc';
 }
 
-const ANSI_PATTERN = new RegExp(String.fromCharCode(27) + '\\[[0-9;]*m', 'g');
-
-function clipSingleLine(text: string): string {
-  return clip(
-    text
-      .replace(ANSI_PATTERN, '')
-      .split('\n')
-      .map((line) => line.trim())
-      .filter(Boolean)
-      .slice(0, 2)
-      .join(' / '),
-    CLIP_SINGLE_LINE_WIDTH,
-  );
-}
-
-function compactPath(path: string, width: number): string {
-  if (path.length <= width) return path;
-  const parts = path.split('/');
-  return clip(parts[parts.length - 1] ?? path, width);
-}
-
 function clip(text: string, width: number): string {
   return text.length <= width ? text : `${text.slice(0, Math.max(0, width - 1))}…`;
+}
+
+// ─── Diagnostic slash-command compact card rendering ────────────────────────
+
+/** Titles that should render as compact diagnostic bands instead of full cards. */
+const DIAGNOSTIC_TITLES = new Set([
+  'Provider Ready',
+  'Provider Check Failed',
+  'Provider Degraded',
+  'Provider Check',
+  'Command',
+]);
+
+function isDiagnosticTitle(title: string): boolean {
+  return DIAGNOSTIC_TITLES.has(title);
+}
+
+/** Render a single-line compact band for non-essential artifacts. */
+function renderCompactBand(
+  core: OpenTuiCore,
+  payload: ArtifactPayload,
+  eventClass: SemanticEventClass,
+  palette: TuiPalette,
+  _onToggle?: () => void,
+  expanded?: boolean,
+): OpenTuiNode {
+  const glyph = GLYPHS[eventClass] ?? '·';
+  const color = eventColor(eventClass, palette);
+
+  if (payload.type === 'plan') {
+    return core.Text({
+      content: `${glyph} ${payload.title}`,
+      fg: color,
+    });
+  }
+  if (payload.type === 'edit') {
+    return core.Text({
+      content: `${glyph} ${payload.file}   +${payload.linesAdded} ~${payload.linesModified} -${payload.linesRemoved}   ${payload.summary.slice(0, 50)}`,
+      fg: color,
+    });
+  }
+  if (payload.type === 'diff') {
+    const countLabel =
+      payload.hunks.length > HUNK_PREVIEW_LINES && !expanded
+        ? ` [${payload.hunks.length - HUNK_PREVIEW_LINES} more]`
+        : '';
+    return core.Text({
+      content: `${glyph} ${payload.file}${countLabel}`,
+      fg: color,
+    });
+  }
+  if (payload.type === 'command') {
+    const status = payload.exitCode === undefined ? '' : payload.exitCode === 0 ? ' ok' : ` exit ${payload.exitCode}`;
+    return core.Text({
+      content: `${glyph} ${(payload.command || 'command').slice(0, 60)}${status}`,
+      fg: payload.exitCode && payload.exitCode !== 0 ? palette.error : color,
+    });
+  }
+  if (payload.type === 'tool_result') {
+    return core.Text({
+      content: `${glyph} ${payload.summary || payload.title}`,
+      fg: payload.status === 'error' ? palette.error : palette.text,
+    });
+  }
+  if (payload.type === 'commit') {
+    return core.Text({
+      content: `${glyph} ${payload.message.slice(0, 70)}`,
+      fg: color,
+    });
+  }
+  if (payload.type === 'checkpoint') {
+    return core.Text({
+      content: `${glyph} ${payload.title}   ${payload.hash ?? ''}`,
+      fg: color,
+    });
+  }
+  if (payload.type === 'status') {
+    return core.Text({
+      content: payload.label,
+      fg: color,
+    });
+  }
+  // Default compact band for any other payload.
+  return core.Text({
+    content: `${glyph} ${payload.type}`,
+    fg: palette.textMuted,
+  });
+}
+
+/** Render a compact stats line for result cards (Duration / Files / Commands). */
+function renderResultStats(core: OpenTuiCore, event: SemanticEvent, palette: TuiPalette): OpenTuiNode {
+  const parts: string[] = [];
+  if (event.metadata.duration !== undefined) {
+    const s =
+      event.metadata.duration >= 1000
+        ? `${(event.metadata.duration / 1000).toFixed(0)}s`
+        : `${event.metadata.duration}ms`;
+    parts.push(`Duration ${s}`);
+  }
+  const fileCount = event.metadata.filesTouched?.length;
+  if (fileCount && fileCount > 0) parts.push(`Files ${fileCount}`);
+  // Commands count is not tracked directly — approximate from file count.
+  if (parts.length > 0) {
+    return core.Text({ content: parts.join('   '), fg: palette.textAccent });
+  }
+  return core.Text({ content: '', fg: palette.textAccent });
+}
+
+/** Render a compact horizontal diagnostic band for slash command output.
+ *  Uses a single status-line approach: colored title + first meaningful line. */
+function renderDiagnosticCard(
+  core: OpenTuiCore,
+  payload: { type: 'text'; title: string; body: string },
+  eventClass: SemanticEventClass,
+  palette: TuiPalette,
+): OpenTuiNode[] {
+  const color =
+    eventClass === 'tool_result' ? palette.success : eventClass === 'result_error' ? palette.error : palette.info;
+
+  // Extract a compact summary: first non-empty non-header line.
+  const lines = payload.body.split('\n').filter((l) => l.trim().length > 0);
+  const summaryLine =
+    lines.find(
+      (l) =>
+        !l.startsWith('Status:') &&
+        !l.startsWith('Profile:') &&
+        !l.startsWith('-') &&
+        !l.startsWith('=') &&
+        !l.startsWith('Provider') &&
+        !l.startsWith('Checks'),
+    ) ??
+    lines[1] ??
+    payload.title;
+  const summary = summaryLine.length > 80 ? `${summaryLine.slice(0, 77)}...` : summaryLine;
+
+  return [
+    core.Text({ content: `${payload.title}  —  ${summary}`, fg: color }),
+    ...(lines.length > 2
+      ? [core.Text({ content: `[${lines.length - 1} lines of detail]`, fg: palette.textAccent })]
+      : []),
+  ];
 }

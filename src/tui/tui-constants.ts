@@ -20,6 +20,9 @@ export const RAIL_MODEL_ID = 'synax-rail-model';
 export const RAIL_BRANCH_ID = 'synax-rail-branch';
 export const PERSISTENT_STATUS_CARD_ID = 'persistent-status-card';
 export const SCROLL_INDICATOR_ID = 'synax-scroll-indicator';
+export const ACTIVITY_LINE_ID = 'synax-activity-line';
+export const ACTIVITY_GLYPH_ID = 'synax-activity-glyph';
+export const ACTIVITY_TEXT_ID = 'synax-activity-text';
 
 /** Max autocomplete rows shown in the dropdown overlay. */
 export const AUTOCOMPLETE_MAX_ROWS = 10;

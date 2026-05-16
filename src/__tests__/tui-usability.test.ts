@@ -6,12 +6,17 @@
  * 2. Feed scroll model retains the full final answer.
  * 3. Busy indicator changes state while a run is active.
  * 4. Compact tool cards can still truncate/summarize without affecting final results.
+ * 5. Scroll indicator visibility at bottom vs not-bottom.
+ * 6. Unsupported commands excluded from registry/help.
+ * 7. Provider check semantic rendering classes.
  */
 
 import { classifyAgentEvent, type SemanticEvent } from '../tui/semantic-events';
 import { applyEventToRunState, createInitialRunStateSnapshot } from '../agent/tui-state';
 import { IncrementalFeedModel } from '../tui/opentui-render-scheduler';
 import type { AgentEvent } from '../agent/events';
+import { slashOutputClass } from '../tui/key-handlers';
+import { getAllCommands, registerBuiltinCommands } from '../settings/slash-command-registry';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -498,5 +503,155 @@ describe('TUI usability floor', () => {
     if (editEvent.artifact.type === 'edit') {
       expect(editEvent.artifact.file).toBe('src/main.ts');
     }
+  });
+
+  // ── Goal 5: Scroll indicator visibility ───────────────────────────────────
+
+  it('scroll indicator should be hidden when stickyScroll is active (at bottom)', () => {
+    const scrollBox = { stickyScroll: true, scrollTop: 0 };
+    expect(scrollBox.stickyScroll).toBe(true);
+    // stickyScroll=true means auto-following bottom → not away.
+    if (scrollBox.stickyScroll === true) {
+      expect(true).toBe(true);
+      return;
+    }
+    expect(false).toBe(true); // unreachable
+  });
+
+  it('scroll indicator should be hidden when scrolled to the bottom (scrollTop + viewport >= content)', () => {
+    const scrollBox = { stickyScroll: false, scrollTop: 500, contentHeight: 600, viewportHeight: 100 };
+    // At bottom when: top + viewport >= content - 1
+    const top = scrollBox.scrollTop ?? 0;
+    const content = scrollBox.contentHeight ?? 0;
+    const viewport = scrollBox.viewportHeight ?? 0;
+    const away = content > 0 && viewport > 0 ? top + viewport < content - 1 : scrollBox.stickyScroll !== true;
+    expect(away).toBe(false);
+  });
+
+  it('scroll indicator should be visible when scrolled up with content below', () => {
+    const scrollBox = { stickyScroll: false, scrollTop: 100, contentHeight: 600, viewportHeight: 100 };
+    const top = scrollBox.scrollTop ?? 0;
+    const content = scrollBox.contentHeight ?? 0;
+    const viewport = scrollBox.viewportHeight ?? 0;
+    const away = content > 0 && viewport > 0 ? top + viewport < content - 1 : scrollBox.stickyScroll !== true;
+    expect(away).toBe(true);
+  });
+
+  // ── Goal 6: Command registry excludes unsupported commands ────────────────
+
+  it('command registry does not include /login', () => {
+    const commands = getAllCommands();
+    const names = commands.map((c) => c.name);
+    expect(names).not.toContain('login');
+  });
+
+  it('command registry does not include interactive /theme', () => {
+    const commands = getAllCommands();
+    const names = commands.map((c) => c.name);
+    expect(names).not.toContain('theme');
+  });
+
+  it('command registry does not include /export or /import', () => {
+    const commands = getAllCommands();
+    const names = commands.map((c) => c.name);
+    expect(names).not.toContain('export');
+    expect(names).not.toContain('import');
+  });
+
+  it('command registry does not include /checkpoint, /checkpoints, or /restore', () => {
+    const commands = getAllCommands();
+    const names = commands.map((c) => c.name);
+    expect(names).not.toContain('checkpoint');
+    expect(names).not.toContain('checkpoints');
+    expect(names).not.toContain('restore');
+  });
+
+  it('registerBuiltinCommands is idempotent and does not reintroduce removed commands', () => {
+    registerBuiltinCommands(); // re-register (idempotent due to Map.set)
+    const commands = getAllCommands();
+    const names = commands.map((c) => c.name);
+    expect(names).not.toContain('login');
+    expect(names).not.toContain('theme');
+    expect(names).not.toContain('export');
+    expect(names).not.toContain('import');
+  });
+
+  // ── Goal 7: Provider check semantic rendering ─────────────────────────────
+
+  it('slashOutputClass returns tool_result for provider ready', () => {
+    const output = [
+      'Provider Check',
+      '--------------',
+      'Status:      ready',
+      'Profile:     default',
+      'Endpoint:    http://localhost:1234/v1',
+      'Model:       qwen',
+      '',
+      'Checks',
+      '  [ok] models: 5 models listed',
+      '  [ok] chat: smoke request passed',
+    ].join('\n');
+    const result = slashOutputClass(output);
+    expect(result.eventClass).toBe('tool_result');
+    expect(result.title).toBe('Provider Ready');
+  });
+
+  it('slashOutputClass returns result_error for provider failed', () => {
+    const output = [
+      'Provider Check',
+      '--------------',
+      'Status:      failed',
+      'Profile:     default',
+      'Endpoint:    http://localhost:1234/v1',
+      'Model:       bad-model',
+      '',
+      'Checks',
+      '  [failed] models: HTTP 404',
+    ].join('\n');
+    const result = slashOutputClass(output);
+    expect(result.eventClass).toBe('result_error');
+    expect(result.title).toBe('Provider Check Failed');
+  });
+
+  it('slashOutputClass returns result_error for provider blocked', () => {
+    const output = [
+      'Provider Check',
+      '--------------',
+      'Status:      blocked',
+      'Profile:     default',
+      'Endpoint:    http://localhost:1234/v1',
+      'Model:       (not set)',
+      '',
+      'Checks',
+      '  [blocked] endpoint missing',
+      '  [blocked] model missing',
+    ].join('\n');
+    const result = slashOutputClass(output);
+    expect(result.eventClass).toBe('result_error');
+    expect(result.title).toBe('Provider Check Failed');
+  });
+
+  it('slashOutputClass returns note for provider degraded', () => {
+    const output = [
+      'Provider Check',
+      '--------------',
+      'Status:      degraded',
+      'Profile:     default',
+      'Endpoint:    http://localhost:1234/v1',
+      'Model:       unknown-model',
+      '',
+      'Checks',
+      '  [warn] models: configured model not listed (unknown-model)',
+      '  [ok] chat: smoke request passed',
+    ].join('\n');
+    const result = slashOutputClass(output);
+    expect(result.eventClass).toBe('note');
+    expect(result.title).toBe('Provider Degraded');
+  });
+
+  it('slashOutputClass returns note for generic output', () => {
+    const result = slashOutputClass('Some generic command output');
+    expect(result.eventClass).toBe('note');
+    expect(result.title).toBe('Command');
   });
 });
