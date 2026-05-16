@@ -17,6 +17,7 @@ import {
   scrollArtifactHistory,
   slashAutocompleteItems,
 } from '../tui/interactive-tui';
+import { setPromptValue } from '../tui/key-handlers';
 import { formatEventCrown, promptInputHeight, renderSplashLogo } from '../tui/opentui-artifact-renderer';
 import { detectColorFgBgTheme, getPalette } from '../tui/theme';
 import type { EffectiveSynaxConfig } from '../config/schema';
@@ -165,6 +166,23 @@ describe('tui input parser', () => {
   });
 });
 
+describe('prompt value helpers', () => {
+  it('moves the cursor to the end after programmatic prompt updates', () => {
+    const input = {
+      cursorOffset: 0,
+      value: '',
+      setText(text: string): void {
+        this.value = text;
+      },
+    };
+
+    setPromptValue(input, '/settings');
+
+    expect(input.value).toBe('/settings');
+    expect(input.cursorOffset).toBe('/settings'.length);
+  });
+});
+
 describe('terminal session', () => {
   it('does not emit mouse-enable sequences by default (copy-safe)', () => {
     const stdout = new CapturingWritable();
@@ -293,7 +311,9 @@ describe('OpenTUI artifact scrolling', () => {
 describe('OpenTUI polish helpers', () => {
   it('adds breathing room around event crown glyphs and labels', () => {
     expect(formatEventCrown('assistant_text')).toBe('  →  Note  ');
+    expect(formatEventCrown('prompt')).toBe('  ↳  Prompt  ');
     expect(formatEventCrown('tool_result')).toBe('  ✓  Result  ');
+    expect(formatEventCrown('result_error')).toBe('  ✗  Result  ');
     expect(formatEventCrown('command')).toBe('  ⌘  Command  ');
     expect(formatEventCrown('error')).toBe('  ✗  Error  ');
   });
@@ -345,6 +365,8 @@ describe('OpenTUI polish helpers', () => {
   });
 
   it('refreshes slash autocomplete from the registry as input changes', () => {
+    expect(slashAutocompleteItems('/')).toContain('/settings');
+    expect(slashAutocompleteItems('/').length).toBeGreaterThan(10);
     expect(slashAutocompleteItems('/sett')).toContain('/settings');
     expect(slashAutocompleteItems('/set')).toContain('/settings');
     expect(slashAutocompleteItems('/skill')).toContain('/skills');
@@ -435,6 +457,8 @@ describe('settings renderer', () => {
 
     expect(plain).toContain('Tab tabs');
     expect(plain).not.toContain('←/→ tabs');
+    expect(plain).toContain('Settings  Model | Providers | Skills | MCP | Config | Help');
+    expect(renderSettings(state, 100, 24).join('\n')).toContain('\u001b[7m Model \u001b[0m');
   });
 });
 
@@ -1916,6 +1940,15 @@ describe('artifact-first tui event model', () => {
     state = applyEventToRunState(state, taskEvent, 1);
     expect(classifyAgentEvent(taskEvent, state, 1)[0]?.class).toBe('plan');
 
+    const promptEvent = {
+      type: 'user_message' as const,
+      timestamp: new Date(1).toISOString(),
+      content: 'please fix the tui',
+    };
+    const prompt = classifyAgentEvent(promptEvent, state, 1)[0];
+    expect(prompt?.class).toBe('prompt');
+    expect(prompt?.artifact).toEqual(expect.objectContaining({ type: 'text', title: 'Prompt' }));
+
     const toolEvent = {
       type: 'tool_started' as const,
       timestamp: new Date(1).toISOString(),
@@ -1956,7 +1989,7 @@ describe('artifact-first tui event model', () => {
     state = applyEventToRunState(state, finishedEvent, 4);
     const result = classifyAgentEvent(finishedEvent, state, 4)[0];
     expect(result?.class).toBe('tool_result');
-    expect(result?.artifact.type).toBe('tool_result');
+    expect(result?.artifact).toEqual(expect.objectContaining({ type: 'text', title: 'Result' }));
   });
 
   it('can derive artifact cards from preserved debug history', () => {
@@ -1983,7 +2016,7 @@ describe('artifact-first tui event model', () => {
     );
 
     const events = semanticEventsFromDebugHistory(state);
-    expect(events.map((event) => event.class)).toEqual(['assistant_text', 'command']);
+    expect(events.map((event) => event.class)).toEqual(['tool_result', 'command']);
     expect(JSON.stringify(events)).not.toContain('<thinking>');
   });
 

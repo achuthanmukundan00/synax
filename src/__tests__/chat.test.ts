@@ -96,6 +96,24 @@ describe('chat session', () => {
     expect(requests).toHaveLength(2);
   });
 
+  it('does not emit the empty-response display fallback as TUI assistant content', async () => {
+    responses = [{ content: '' }];
+    const events: Array<{ type: string; content?: string }> = [];
+    const session = createChatSession({
+      repoRoot: TMP,
+      tui: true,
+      config: { provider: { kind: 'openai-compatible', base_url: 'http://localhost/v1', model: 'fake' } },
+    });
+    session.setEventSink?.((event) => events.push(event as { type: string; content?: string }));
+
+    await session.handleUserMessage('say nothing');
+
+    expect(events).toContainEqual(expect.objectContaining({ type: 'user_message', content: 'say nothing' }));
+    expect(events.filter((event) => event.type === 'assistant_message').map((event) => event.content)).not.toContain(
+      '(empty response)',
+    );
+  });
+
   it('/clear resets conversation', async () => {
     responses = [{ content: 'first' }];
     const session = createChatSession({
