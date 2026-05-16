@@ -446,7 +446,7 @@ export async function runInteractiveTui(
 
     // Keep the spinner animation alive during active execution.
     // Re-render at ~3 fps when the run is active but no new events arrive.
-    if (state.terminal === 'running' && state.phase !== 'idle' && state.phase !== 'completed') {
+    if (busy || (state.terminal === 'running' && state.phase !== 'idle' && state.phase !== 'completed')) {
       setTimeout(() => render('animation', { immediate: true }), 333);
     }
 
@@ -569,8 +569,7 @@ export async function runInteractiveTui(
     ) as InstanceType<(typeof import('@opentui/core'))['StyledText']>;
   };
   const syncActivityLine = (force = false): void => {
-    const active =
-      statusOverride !== '' || (state.terminal === 'running' && state.phase !== 'idle' && state.phase !== 'completed');
+    const active = activityLineActive(state, busy, statusOverride);
 
     const line = findNode(ACTIVITY_LINE_ID);
     if (!line) return;
@@ -614,6 +613,9 @@ export async function runInteractiveTui(
     } else if (state.phase === 'budget_exhausted') {
       glyph = frameGlyph(modelPalette.animationGlyphs.error, busyAnimationFrame);
       text = state.objective.nextCheckpoint.slice(0, 78) || 'Budget exhausted';
+    } else if (busy) {
+      glyph = activityGlyph(busyAnimationFrame);
+      text = 'thinking · awaiting model response';
     } else {
       glyph = activityGlyph(busyAnimationFrame);
       text = 'working';
@@ -1653,6 +1655,18 @@ function activitySummary(state: RunStateSnapshot): string {
   }
 
   return clip(cleaned || state.objective.nextCheckpoint || 'working', 58);
+}
+
+export function activityLineActive(
+  state: Pick<RunStateSnapshot, 'terminal' | 'phase'>,
+  busy: boolean,
+  statusOverride: string,
+): boolean {
+  return (
+    statusOverride !== '' ||
+    busy ||
+    (state.terminal === 'running' && state.phase !== 'idle' && state.phase !== 'completed')
+  );
 }
 
 function cleanActivitySummary(summary: string): string {

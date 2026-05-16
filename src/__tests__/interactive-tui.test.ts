@@ -13,6 +13,7 @@ import { createSettingsState, settingsReducer } from '../settings/settings-state
 import { classifyAgentEvent, semanticEventsFromDebugHistory } from '../tui/semantic-events';
 import {
   latestExpandableEventId,
+  activityLineActive,
   movePromptCursorVertically,
   resolveCtrlCBehavior,
   scrollArtifactHistory,
@@ -272,6 +273,17 @@ describe('token stream activity indicator', () => {
     expect(tokenStreamFrameText('default', 0)).toBe('˙·.:●:.·˙');
     expect(tokenStreamFrameText('qwen', 0)).toBe('╱·:●:·╲');
     expect(renderAnsiTokenStreamFrame('default', 0)).toContain('\x1b[38;5;230m●');
+  });
+
+  it('stays active immediately after submitting a follow-up prompt from a completed run', () => {
+    const completed = {
+      ...createInitialRunStateSnapshot(0),
+      terminal: 'completed' as const,
+      phase: 'completed' as const,
+    };
+
+    expect(activityLineActive(completed, true, '')).toBe(true);
+    expect(activityLineActive(completed, false, '')).toBe(false);
   });
 });
 
