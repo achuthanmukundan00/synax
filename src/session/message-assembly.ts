@@ -232,6 +232,17 @@ export function classifyResultForRecovery(result: AgentTurnResult): import('../r
     return 'bash_failure';
   }
 
+  // Malformed tool call from model
+  if (
+    result.terminalState === 'model_error' &&
+    result.error &&
+    (result.error.toLowerCase().includes('malformed tool call') ||
+      result.error.toLowerCase().includes('tool_call block missing') ||
+      result.error.toLowerCase().includes('tool_call block contained malformed'))
+  ) {
+    return 'malformed_tool_call';
+  }
+
   // Budget exhaustion
   if (result.terminalState === 'budget_exhausted') {
     return 'context_exhaustion';

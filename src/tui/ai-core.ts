@@ -129,7 +129,7 @@ export function renderDottedCore(opts: {
   const visualProfile = opts.profile ?? resolveCoreVisualProfile('');
   const state: FieldState = {
     mode: normalized,
-    frame: Math.floor(opts.frame * visualProfile.breathingRate),
+    frame: Math.floor(opts.frame * visualProfile.motion.breathRate),
     profile: applyVisualProfile(profileForMode(normalized), visualProfile),
     visualProfile,
     palette: paletteForVisualProfile(paletteForMode(normalized, opts.frame), normalized, visualProfile),
@@ -237,12 +237,12 @@ function innerChamberGlyph(state: FieldState, x: number, y: number, width: numbe
 }
 
 function chamberHalfWidth(visualProfile: CoreVisualProfile, width: number): number {
-  const base = visualProfile.morphology === 'aperture' ? 0.2 : visualProfile.morphology === 'furnace' ? 0.14 : 0.16;
+  const base = visualProfile.geometry === 'organic' ? 0.2 : visualProfile.geometry === 'furnace' ? 0.14 : 0.16;
   return clamp(Math.round(width * base), 3, Math.max(3, Math.floor(width / 2) - 2));
 }
 
 function chamberHalfHeight(visualProfile: CoreVisualProfile, height: number): number {
-  const base = visualProfile.morphology === 'aperture' ? 0.24 : 0.2;
+  const base = visualProfile.geometry === 'organic' ? 0.24 : 0.2;
   return clamp(Math.round(height * base), 1, Math.max(1, Math.floor(height / 2) - 1));
 }
 
@@ -275,9 +275,9 @@ function glyphSet(
     return {
       small: '.',
       mid: '·',
-      large: '○',
+      large: '◎',
       stable: '◉',
-      compressed: '◆',
+      compressed: '═',
       sync: '━',
       stress: '×',
       line: (angle) => {
@@ -293,7 +293,7 @@ function glyphSet(
       mid: '·',
       large: '●',
       stable: '◎',
-      compressed: '◆',
+      compressed: '═',
       sync: '━',
       stress: '×',
       line: (angle) => {
@@ -323,8 +323,8 @@ function glyphSet(
     return {
       small: '˙',
       mid: ':',
-      large: '◆',
-      stable: '◆',
+      large: '◉',
+      stable: '◉',
       compressed: '═',
       sync: '━',
       stress: '×',
@@ -337,7 +337,7 @@ function glyphSet(
       mid: '·',
       large: '●',
       stable: '◉',
-      compressed: '◆',
+      compressed: '═',
       sync: '━',
       stress: '×',
       line: (angle) => {
@@ -350,9 +350,9 @@ function glyphSet(
   return {
     small: '.',
     mid: '·',
-    large: '•',
+    large: '●',
     stable: '◎',
-    compressed: '◆',
+    compressed: '═',
     sync: '━',
     stress: '×',
     line: (angle) => {
@@ -364,14 +364,29 @@ function glyphSet(
 }
 
 function applyVisualProfile(profile: CoreProfile, visualProfile: CoreVisualProfile): CoreProfile {
+  const bias = visualBiases(visualProfile);
   return {
     ...profile,
-    density: clamp(profile.density + visualProfile.densityBias, 0.04, 0.82),
-    flow: clamp(profile.flow + visualProfile.flowBias, 0, 2),
-    compression: clamp(profile.compression + visualProfile.compressionBias, 0, 0.7),
-    sync: clamp(profile.sync + visualProfile.syncBias, 0, 1.2),
+    density: clamp(profile.density + bias.density, 0.04, 0.82),
+    flow: clamp(profile.flow + bias.flow, 0, 2),
+    compression: clamp(profile.compression + bias.compression, 0, 0.7),
+    sync: clamp(profile.sync + bias.sync, 0, 1.2),
     stable: profile.stable || visualProfile.id === 'openai',
   };
+}
+
+function visualBiases(visualProfile: CoreVisualProfile): {
+  density: number;
+  flow: number;
+  compression: number;
+  sync: number;
+} {
+  if (visualProfile.geometry === 'lattice') return { density: 0.07, flow: 0.12, compression: 0.02, sync: 0.22 };
+  if (visualProfile.geometry === 'lens') return { density: -0.02, flow: -0.08, compression: -0.03, sync: 0.05 };
+  if (visualProfile.geometry === 'organic') return { density: 0.02, flow: -0.03, compression: -0.04, sync: -0.08 };
+  if (visualProfile.geometry === 'furnace') return { density: 0.11, flow: -0.12, compression: 0.16, sync: -0.03 };
+  if (visualProfile.geometry === 'twin') return { density: 0.04, flow: 0.08, compression: 0, sync: 0.14 };
+  return { density: 0, flow: 0, compression: 0, sync: 0 };
 }
 
 function paletteForVisualProfile(
@@ -380,41 +395,55 @@ function paletteForVisualProfile(
   visualProfile: CoreVisualProfile,
 ): [MaterialColor, MaterialColor, MaterialColor] {
   if (mode === 'blocked' || mode === 'failure' || mode === 'completed' || mode === 'verifying') return palette;
-  return [
-    mix(palette[0], visualProfile.accent, 0.08),
-    mix(palette[1], visualProfile.accent, 0.16),
-    mix(palette[2], visualProfile.accent, 0.2),
-  ];
+  const accent = accentForVisualProfile(visualProfile);
+  return [mix(palette[0], accent, 0.08), mix(palette[1], accent, 0.16), mix(palette[2], accent, 0.2)];
+}
+
+function accentForVisualProfile(visualProfile: CoreVisualProfile): MaterialColor {
+  if (visualProfile.colorRole === 'green') return { r: 83, g: 156, b: 108 };
+  if (visualProfile.colorRole === 'blue') return { r: 96, g: 136, b: 188 };
+  if (visualProfile.colorRole === 'violet') return { r: 118, g: 103, b: 184 };
+  if (visualProfile.colorRole === 'red') return { r: 183, g: 65, b: 52 };
+  if (visualProfile.colorRole === 'gold') return { r: 172, g: 126, b: 88 };
+  return { r: 58, g: 109, b: 176 };
 }
 
 function morphologyPhase(visualProfile: CoreVisualProfile): number {
-  if (visualProfile.morphology === 'lattice') return 0.42;
-  if (visualProfile.morphology === 'aperture') return -0.22;
-  if (visualProfile.morphology === 'furnace') return -0.38;
-  if (visualProfile.morphology === 'twin') return 0.28;
+  if (visualProfile.geometry === 'lattice') return 0.42;
+  if (visualProfile.geometry === 'organic') return -0.22;
+  if (visualProfile.geometry === 'furnace') return -0.38;
+  if (visualProfile.geometry === 'twin') return 0.28;
   return 0;
 }
 
 function morphologyShear(visualProfile: CoreVisualProfile, nx: number, ny: number): number {
-  if (visualProfile.morphology === 'lattice') return Math.sin((nx + ny) * 5.5) * 0.25;
-  if (visualProfile.morphology === 'aperture') return Math.sin(nx * ny * 3.2) * 0.18;
-  if (visualProfile.morphology === 'furnace') return -Math.abs(ny) * 0.35;
-  if (visualProfile.morphology === 'twin') return Math.sin(nx * 4.8) * 0.28;
+  if (visualProfile.geometry === 'lattice') return Math.sin((nx + ny) * 5.5) * 0.25;
+  if (visualProfile.geometry === 'organic') return Math.sin(nx * ny * 3.2) * 0.18;
+  if (visualProfile.geometry === 'furnace') return -Math.abs(ny) * 0.35;
+  if (visualProfile.geometry === 'twin') return Math.sin(nx * 4.8) * 0.28;
   return 0;
 }
 
 function centralDensity(visualProfile: CoreVisualProfile): number {
-  if (visualProfile.nucleusLayout === 'dense') return 0.46;
-  if (visualProfile.nucleusLayout === 'soft') return 0.24;
-  if (visualProfile.nucleusLayout === 'twin') return 0.2;
+  const layout = nucleusLayout(visualProfile);
+  if (layout === 'dense') return 0.46;
+  if (layout === 'soft') return 0.24;
+  if (layout === 'twin') return 0.2;
   return 0.3;
 }
 
 function containmentDensity(visualProfile: CoreVisualProfile): number {
-  if (visualProfile.morphology === 'lattice') return 0.42;
-  if (visualProfile.morphology === 'aperture') return 0.24;
-  if (visualProfile.morphology === 'furnace') return 0.36;
+  if (visualProfile.geometry === 'lattice') return 0.42;
+  if (visualProfile.geometry === 'organic') return 0.24;
+  if (visualProfile.geometry === 'furnace') return 0.36;
   return 0.32;
+}
+
+function nucleusLayout(visualProfile: CoreVisualProfile): 'single' | 'soft' | 'dense' | 'twin' {
+  if (visualProfile.geometry === 'organic') return 'soft';
+  if (visualProfile.geometry === 'furnace') return 'dense';
+  if (visualProfile.geometry === 'twin') return 'twin';
+  return 'single';
 }
 
 function innerMorphologyGlyph(
@@ -429,41 +458,37 @@ function innerMorphologyGlyph(
 ): string | undefined {
   if (!state.unicode) return undefined;
   const profile = state.visualProfile;
+  const layout = nucleusLayout(profile);
   const stableFrame = state.profile.stable ? 0 : state.frame;
-  if (profile.nucleusLayout === 'twin') {
+  if (layout === 'twin') {
     const phase = Math.sin(stableFrame * 0.22) * 0.025;
     const left = Math.hypot(nx + 0.2 + phase, ny);
     const right = Math.hypot(nx - 0.2 - phase, ny);
     if (left < 0.13 || right < 0.13) return stableFrame % 2 === 0 ? '●' : '◉';
     if (Math.abs(left - right) < 0.035 && radius < 0.55 && positiveModulo(x + y + stableFrame, 4) === 0) return '·';
   }
-  if (profile.nucleusLayout === 'soft' && central > 0.58) {
-    return central > 0.78 ? '◉' : '○';
+  if (layout === 'soft' && central > 0.58) {
+    return central > 0.78 ? '◉' : '◎';
   }
-  if (profile.nucleusLayout === 'dense' && central > 0.46) {
-    return central > 0.7 ? '◆' : '◈';
+  if (layout === 'dense' && central > 0.46) {
+    return central > 0.7 ? '◎' : '◉';
   }
-  if (profile.morphology === 'lattice' && radius > 0.24 && radius < 0.74) {
+  if (profile.geometry === 'lattice' && radius > 0.24 && radius < 0.74) {
     const diagonalA = Math.abs(Math.sin((nx + ny) * 7 + stableFrame * 0.08));
     const diagonalB = Math.abs(Math.sin((nx - ny) * 7 - stableFrame * 0.08));
     if (diagonalA < 0.12 || diagonalB < 0.12) return Math.sin(angle) * Math.cos(angle) > 0 ? '╲' : '╱';
   }
-  if (profile.morphology === 'lens' && central > 0.68) return central > 0.82 ? '◎' : '●';
-  if (profile.morphology === 'contained' && central > 0.72 && positiveModulo(x + y, 2) === 0) return '●';
+  if (profile.geometry === 'lens' && central > 0.68) return central > 0.82 ? '◎' : '●';
+  if (profile.geometry === 'default' && central > 0.72 && positiveModulo(x + y, 2) === 0) return '●';
   if (
-    profile.morphology === 'furnace' &&
+    profile.geometry === 'furnace' &&
     Math.abs(ny) < 0.18 &&
     radius < 0.68 &&
     positiveModulo(x + stableFrame, 2) === 0
   ) {
     return Math.abs(ny) < 0.08 ? '═' : '━';
   }
-  if (
-    profile.morphology === 'twin' &&
-    Math.abs(nx) < 0.05 &&
-    radius < 0.62 &&
-    positiveModulo(y + stableFrame, 3) === 0
-  ) {
+  if (profile.geometry === 'twin' && Math.abs(nx) < 0.05 && radius < 0.62 && positiveModulo(y + stableFrame, 3) === 0) {
     return '│';
   }
   return undefined;
@@ -478,10 +503,10 @@ function isToolScanCell(
   ny: number,
 ): boolean {
   if (state.mode !== 'tool_execution') return false;
-  if (state.visualProfile.toolScan === 'horizontal') {
+  if (state.visualProfile.motion.scanStyle === 'beam') {
     return Math.abs(ny) < 0.2 && positiveModulo(x + frame, 3) === 0;
   }
-  if (state.visualProfile.toolScan === 'split') {
+  if (state.visualProfile.motion.scanStyle === 'split') {
     return containment < 0.08 && positiveModulo(x - y + frame, 5) === 0;
   }
   return containment < 0.075 && positiveModulo(x + frame, 4) === 0;

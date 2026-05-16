@@ -1,6 +1,7 @@
 import type { RunStateSnapshot } from '../agent/tui-state';
 import type { CoreMode } from './ai-core';
 import { CORE_HEIGHT, CORE_WIDTH, modeColor, modePromptColor, renderAiCore } from './ai-core';
+import { resolveCoreVisualProfile } from './core-visual-profile';
 import { renderTranscript } from './transcript';
 import { charWidthAt, stripAnsi, visibleLength, terminalWriteWidth } from './text-utils';
 
@@ -112,7 +113,11 @@ function renderWelcome(lines: string[], width: number, bodyHeight: number, state
 
   // Animated AI core logo (centered) — only if we have room
   if (bodyHeight >= 16) {
-    const core = renderAiCore(state.coreMode, state.nowMs / 1000);
+    const core = renderAiCore(
+      state.coreMode,
+      state.nowMs / 1000,
+      resolveCoreVisualProfile(state.modelLabel || state.run.modelId),
+    );
     const coreX = Math.max(0, Math.floor((width - CORE_WIDTH) / 2));
     const coreY = Math.max(3, Math.floor((bodyHeight - CORE_HEIGHT) / 2) - 3);
     putBlock(lines, coreY, coreX, core, width);

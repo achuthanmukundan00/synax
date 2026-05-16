@@ -18,7 +18,12 @@ import {
   slashAutocompleteItems,
 } from '../tui/interactive-tui';
 import { setPromptValue } from '../tui/key-handlers';
-import { formatEventCrown, promptInputHeight, renderSplashLogo } from '../tui/opentui-artifact-renderer';
+import {
+  formatEventCrown,
+  promptInputHeight,
+  renderArtifactRoot,
+  renderSplashLogo,
+} from '../tui/opentui-artifact-renderer';
 import { detectColorFgBgTheme, getPalette } from '../tui/theme';
 import type { EffectiveSynaxConfig } from '../config/schema';
 import { PassThrough, Writable } from 'stream';
@@ -37,6 +42,27 @@ class CapturingWritable extends Writable {
   text(): string {
     return this.chunks.join('');
   }
+}
+
+type FakeOpenTuiNode = {
+  type: string;
+  props: Record<string, unknown>;
+  children: FakeOpenTuiNode[];
+};
+
+function createFakeOpenTuiCore(): any {
+  const node = (type: string, props: Record<string, unknown>, children: FakeOpenTuiNode[] = []): FakeOpenTuiNode => ({
+    type,
+    props,
+    children,
+  });
+  return {
+    Box: (props: Record<string, unknown>, ...children: FakeOpenTuiNode[]) => node('Box', props, children),
+    ScrollBox: (props: Record<string, unknown>, ...children: FakeOpenTuiNode[]) => node('ScrollBox', props, children),
+    Text: (props: Record<string, unknown>) => node('Text', props),
+    TextareaRenderable: class TextareaRenderable {},
+    h: (_renderable: unknown, props: Record<string, unknown>) => node('Textarea', props),
+  };
 }
 
 function createTtyInput(): PassThrough & {
@@ -67,6 +93,64 @@ describe('interactive tui wiring', () => {
 
   it('falls back when not tty', () => {
     expect(shouldUseInteractiveTui({ plain: false, stdinIsTTY: false, stdoutIsTTY: true })).toBe(false);
+  });
+});
+
+describe('OpenTUI startup layout', () => {
+  it('keeps the initial empty session compact instead of filling the terminal', () => {
+    const core = createFakeOpenTuiCore();
+    const root = renderArtifactRoot(
+      core,
+      [],
+      {
+        model: 'qwen3-local',
+        cwd: '~/workspace/git/synax',
+        branch: 'main',
+        filesTouched: [],
+        uptimeLabel: '0:00',
+      },
+      {
+        status: 'Ready.',
+        prompt: '',
+        placeholder: 'Ask Synax...',
+        hints: 'Enter send',
+        location: '~/workspace/git/synax',
+      },
+      100,
+    ) as unknown as FakeOpenTuiNode;
+
+    expect(root.props.height).toBe(27);
+    expect(root.children[0].props.height).toBe(22);
+  });
+
+  it('uses full-height feed layout once visible events exist', () => {
+    const core = createFakeOpenTuiCore();
+    const root = renderArtifactRoot(
+      core,
+      [
+        {
+          id: 'event-1',
+          class: 'note',
+          timestamp: '2026-05-16T00:00:00.000Z',
+          artifact: { type: 'text', title: 'Note', body: 'hello' },
+        } as any,
+      ],
+      {
+        model: 'qwen3-local',
+        filesTouched: [],
+        uptimeLabel: '0:00',
+      },
+      {
+        status: 'Ready.',
+        prompt: '',
+        placeholder: 'Ask Synax...',
+        hints: 'Enter send',
+      },
+      100,
+    ) as unknown as FakeOpenTuiNode;
+
+    expect(root.props.height).toBe('100%');
+    expect(root.children[0].props.flexGrow).toBe(1);
   });
 });
 
@@ -491,6 +575,9 @@ describe('ai core renderer', () => {
     expect(resolveCoreVisualProfile('deepseekv4-pro').id).toBe('deepseek');
     expect(resolveCoreVisualProfile('gemini-2.5-pro').id).toBe('gemini');
     expect(resolveCoreVisualProfile('local-unknown-model.gguf').id).toBe('default');
+    expect(resolveCoreVisualProfile('qwen3-local').geometry).toBe('lattice');
+    expect(resolveCoreVisualProfile('qwen3-local').motion.phaseStyle).toBe('snap');
+    expect(resolveCoreVisualProfile('deepseek-r1').motion.scanStyle).toBe('beam');
   });
 
   it('renders distinct inner morphology for qwen, claude, and default profiles in the same state', () => {
@@ -509,8 +596,8 @@ describe('ai core renderer', () => {
     expect(qwen).not.toEqual(fallback);
     expect(claude).not.toEqual(fallback);
     expect(qwen).toMatch(/[╱╲]/);
-    expect(claude).toMatch(/[○◉]/);
-    expect(fallback).toMatch(/[●◎•]/);
+    expect(claude).toMatch(/[◎◉]/);
+    expect(fallback).toMatch(/[●◎]/);
   });
 
   it('renders a stable inner containment chamber across model profiles', () => {
@@ -529,7 +616,7 @@ describe('ai core renderer', () => {
 
     expect(openai).not.toEqual(claude);
     expect(openai).not.toMatch(/[╱╲]/);
-    expect(claude).toMatch(/[○◉]/);
+    expect(claude).toMatch(/[◎◉]/);
   });
 
   it('renders prominent model-specific morphology signatures', () => {
@@ -556,8 +643,8 @@ describe('ai core renderer', () => {
     expect(profiles.qwen).toMatch(/[╱╲]/);
     expect(profiles.openai).toMatch(/[◎●]/);
     expect(profiles.openai).not.toMatch(/[╱╲]/);
-    expect(profiles.claude).toMatch(/[○◉]/);
-    expect(profiles.deepseek).toMatch(/[═━◆◈]/);
+    expect(profiles.claude).toMatch(/[◎◉]/);
+    expect(profiles.deepseek).toMatch(/[═━◎◉]/);
     expect(profiles.gemini).toMatch(/●[\s\S]*●/);
     expect(profiles.gemini).toMatch(/│/);
   });
@@ -583,13 +670,13 @@ describe('ai core renderer', () => {
 
     expect(stripAnsi(idle[0])).not.toMatch(/^┌─+┐$/);
     expect(stripAnsi(idle[idle.length - 1])).not.toMatch(/^└─+┘$/);
-    expect(stripAnsi(idle.join('\n'))).toMatch(/[.·•○◎╱╲─│]/);
+    expect(stripAnsi(idle.join('\n'))).toMatch(/[.·●◎╱╲─│]/);
     expect(idle.join('\n')).toContain('\u001b[38;2;');
 
     expect(thinking.join('\n')).not.toEqual(idle.join('\n'));
-    expect(stripAnsi(tool.join('\n'))).toMatch(/[◆◈]/);
-    expect(stripAnsi(verifying.join('\n'))).toMatch(/[━╋]/);
-    expect(stripAnsi(failure.join('\n'))).toMatch(/[×╳]/);
+    expect(stripAnsi(tool.join('\n'))).toMatch(/[═◎◉]/);
+    expect(stripAnsi(verifying.join('\n'))).toMatch(/[━]/);
+    expect(stripAnsi(failure.join('\n'))).toMatch(/[×]/);
   });
 
   it('keeps material state color selection stable', () => {
@@ -892,7 +979,7 @@ describe('interactive layout visual agreements', () => {
     const plain = lines.map((line) => stripAnsi(line)).join('\n');
     expect(plain).not.toContain('Field');
     expect(plain).not.toContain('contained local intelligence runtime');
-    expect(plain).toMatch(/[.·•○◎╱╲]/);
+    expect(plain).toMatch(/[.·●◎╱╲]/);
   });
 
   it('renders read, command, edit, verification, and final summary blocks as the main surface', () => {
@@ -1710,7 +1797,7 @@ describe('interactive layout visual agreements', () => {
       .map((line) => stripAnsi(line))
       .join('\n');
 
-    expect(mediumPlain).toMatch(/[·•◎╱╲]/);
+    expect(mediumPlain).toMatch(/[·●◎╱╲]/);
   });
 
   it('renders multi-line slash command output without 3-line cap', () => {
@@ -2039,6 +2126,167 @@ describe('artifact-first tui event model', () => {
   });
 });
 
+describe('orchestration semantic events', () => {
+  it('classifyAgentEvent with orchestration_plan_generated returns dispatch event', () => {
+    const state = createInitialRunStateSnapshot(0);
+    const event = {
+      type: 'orchestration_plan_generated' as const,
+      timestamp: new Date(0).toISOString(),
+      profile: 'default',
+      payload: {
+        sessionId: 'session-1',
+        task: 'Fix all lint errors',
+        plan: {
+          planId: 'plan-1',
+          strategy: 'orchestrate' as const,
+          subTasks: [
+            {
+              id: 'agent-1',
+              description: 'Fix src/a.ts',
+              estimatedBudget: 1000,
+              fileScope: ['src/a.ts'],
+              dependencies: [],
+              verification: { level: 'none' as const, label: 'none' },
+            },
+            {
+              id: 'agent-2',
+              description: 'Fix src/b.ts',
+              estimatedBudget: 1000,
+              fileScope: ['src/b.ts'],
+              dependencies: [],
+              verification: { level: 'none' as const, label: 'none' },
+            },
+          ],
+          estimatedTotalTokens: 2000,
+          repoMetadata: { fileCount: 10, totalKB: 100, sourceKB: 80 },
+          contextWindowTokens: 131072,
+        },
+      },
+    };
+    const result = classifyAgentEvent(event, state, 1);
+    expect(result).toHaveLength(1);
+    expect(result[0].class).toBe('dispatch');
+    expect(result[0].artifact).toEqual(
+      expect.objectContaining({
+        type: 'text',
+        title: expect.stringContaining('2 agents · parallel'),
+      }),
+    );
+    if (result[0].artifact.type === 'text') {
+      expect(result[0].artifact.body).toContain('Fix all lint errors');
+    }
+  });
+
+  it('classifyAgentEvent with inline plan returns empty', () => {
+    const state = createInitialRunStateSnapshot(0);
+    const event = {
+      type: 'orchestration_plan_generated' as const,
+      timestamp: new Date(0).toISOString(),
+      profile: 'default',
+      payload: {
+        sessionId: 'session-1',
+        task: 'Simple fix',
+        plan: { inline: true } as const,
+      },
+    } as const;
+    const result = classifyAgentEvent(event as Parameters<typeof classifyAgentEvent>[0], state, 1);
+    expect(result).toHaveLength(0);
+  });
+
+  it('classifyAgentEvent with child_session_spawned returns agent_status running', () => {
+    const state = createInitialRunStateSnapshot(0);
+    const event = {
+      type: 'child_session_spawned' as const,
+      timestamp: new Date(0).toISOString(),
+      parentSessionId: 'parent-1',
+      childSessionId: 'child-a1',
+      subtaskId: 'agent-1',
+    };
+    const result = classifyAgentEvent(event, state, 1);
+    expect(result).toHaveLength(1);
+    expect(result[0].class).toBe('agent_status');
+    if (result[0].artifact.type === 'text') {
+      expect(result[0].artifact.body).toBe('running');
+      expect(result[0].artifact.title).toBe('agent-1');
+    }
+  });
+
+  it('classifyAgentEvent with child_session_completed returns agent_status with output', () => {
+    const state = createInitialRunStateSnapshot(0);
+    const event = {
+      type: 'child_session_completed' as const,
+      timestamp: new Date(0).toISOString(),
+      parentSessionId: 'parent-1',
+      childSessionId: 'child-a1',
+      subtaskId: 'agent-1',
+      result: {
+        subTaskId: 'agent-1',
+        terminalState: 'completed' as const,
+        changedFiles: ['src/a.ts'],
+        toolCalls: 4,
+        finalAnswer: 'Fixed lint error #12 in src/a.ts',
+      },
+    };
+    const result = classifyAgentEvent(event, state, 1);
+    expect(result).toHaveLength(1);
+    expect(result[0].class).toBe('agent_status');
+    if (result[0].artifact.type === 'text') {
+      expect(result[0].artifact.body).toContain('Fixed lint error');
+      expect(result[0].artifact.title).toContain('returned');
+    }
+    expect(result[0].metadata.toolCalls).toBe(4);
+    expect(result[0].metadata.filesTouched).toContain('src/a.ts');
+  });
+
+  it('classifyAgentEvent with child_session_failed returns agent_status with error', () => {
+    const state = createInitialRunStateSnapshot(0);
+    const event = {
+      type: 'child_session_failed' as const,
+      timestamp: new Date(0).toISOString(),
+      parentSessionId: 'parent-1',
+      childSessionId: 'child-a1',
+      subtaskId: 'agent-1',
+      error: 'Agent crashed',
+      partialResult: {
+        subTaskId: 'agent-1',
+        terminalState: 'model_error' as const,
+        changedFiles: [],
+        toolCalls: 2,
+      },
+    };
+    const result = classifyAgentEvent(event, state, 1);
+    expect(result).toHaveLength(1);
+    expect(result[0].class).toBe('agent_status');
+    if (result[0].artifact.type === 'text') {
+      expect(result[0].artifact.body).toContain('Failed:');
+      expect(result[0].artifact.body).toContain('Agent crashed');
+    }
+  });
+
+  it('child_session_completed without finalAnswer produces agent_status with fallback', () => {
+    const state = createInitialRunStateSnapshot(0);
+    const event = {
+      type: 'child_session_completed' as const,
+      timestamp: new Date(0).toISOString(),
+      parentSessionId: 'parent-1',
+      childSessionId: 'child-a1',
+      subtaskId: 'agent-1',
+      result: {
+        subTaskId: 'agent-1',
+        terminalState: 'completed' as const,
+        changedFiles: [],
+        toolCalls: 0,
+      },
+    };
+    const result = classifyAgentEvent(event, state, 1);
+    expect(result).toHaveLength(1);
+    expect(result[0].class).toBe('agent_status');
+    if (result[0].artifact.type === 'text') {
+      expect(result[0].artifact.body).toBeTruthy();
+    }
+  });
+});
+
 function stripAnsi(input: string): string {
   // eslint-disable-next-line no-control-regex
   return input.replace(/\u001b\[[0-9;]*m/g, '');
@@ -2060,3 +2308,165 @@ function extractTrueColors(input: string): Array<{ r: number; g: number; b: numb
 function isWarningAmber(color: { r: number; g: number; b: number }): boolean {
   return color.r >= 150 && color.g >= 95 && color.g > color.b * 1.35 && color.r > color.b * 2;
 }
+
+describe('dispatch card conciseness', () => {
+  it('truncates long mission text', () => {
+    const state = createInitialRunStateSnapshot(0);
+    const longMission = 'A'.repeat(500);
+    const event: Parameters<typeof classifyAgentEvent>[0] = {
+      type: 'orchestration_plan_generated' as const,
+      timestamp: new Date(0).toISOString(),
+      payload: {
+        sessionId: 'session-1',
+        task: longMission,
+        plan: {
+          planId: 'plan-1',
+          strategy: 'orchestrate' as const,
+          subTasks: [
+            {
+              id: 'agent-1',
+              description: 'Fix src/a.ts',
+              estimatedBudget: 1000,
+              fileScope: ['src/a.ts'],
+              dependencies: [],
+              verification: { level: 'none' as const, label: 'none' },
+            },
+          ],
+          estimatedTotalTokens: 1000,
+          repoMetadata: { fileCount: 5, totalKB: 50, sourceKB: 40 },
+          contextWindowTokens: 131072,
+        },
+      },
+    };
+    const result = classifyAgentEvent(event, state, 1);
+    expect(result).toHaveLength(1);
+    if (result[0].artifact.type === 'text') {
+      expect(result[0].artifact.body).toContain('Mission:');
+      expect(result[0].artifact.body).toContain('…');
+      expect(result[0].artifact.body).not.toContain('A'.repeat(300));
+    }
+  });
+
+  it('truncates long sub-task descriptions', () => {
+    const state = createInitialRunStateSnapshot(0);
+    const longDesc = 'X'.repeat(500);
+    const event: Parameters<typeof classifyAgentEvent>[0] = {
+      type: 'orchestration_plan_generated' as const,
+      timestamp: new Date(0).toISOString(),
+      payload: {
+        sessionId: 'session-1',
+        task: 'Short mission',
+        plan: {
+          planId: 'plan-1',
+          strategy: 'orchestrate' as const,
+          subTasks: [
+            {
+              id: 'agent-1',
+              description: longDesc,
+              estimatedBudget: 1000,
+              fileScope: ['src/a.ts'],
+              dependencies: [],
+              verification: { level: 'none' as const, label: 'none' },
+            },
+          ],
+          estimatedTotalTokens: 1000,
+          repoMetadata: { fileCount: 5, totalKB: 50, sourceKB: 40 },
+          contextWindowTokens: 131072,
+        },
+      },
+    };
+    const result = classifyAgentEvent(event, state, 1);
+    expect(result).toHaveLength(1);
+    if (result[0].artifact.type === 'text') {
+      expect(result[0].artifact.body).toContain('agent-1:');
+      expect(result[0].artifact.body).toContain('…');
+      expect(result[0].artifact.body).not.toContain('X'.repeat(200));
+    }
+  });
+
+  it('limits sub-task lines and shows overflow indicator', () => {
+    const state = createInitialRunStateSnapshot(0);
+    const subTasks = Array.from({ length: 10 }, (_, i) => ({
+      id: `agent-${i + 1}`,
+      description: `Sub-task ${i + 1}`,
+      estimatedBudget: 1000,
+      fileScope: ['src/a.ts'],
+      dependencies: [],
+      verification: { level: 'none' as const, label: 'none' },
+    }));
+    const event: Parameters<typeof classifyAgentEvent>[0] = {
+      type: 'orchestration_plan_generated' as const,
+      timestamp: new Date(0).toISOString(),
+      payload: {
+        sessionId: 'session-1',
+        task: 'Many sub-tasks',
+        plan: {
+          planId: 'plan-1',
+          strategy: 'orchestrate' as const,
+          subTasks,
+          estimatedTotalTokens: 10000,
+          repoMetadata: { fileCount: 20, totalKB: 200, sourceKB: 150 },
+          contextWindowTokens: 131072,
+        },
+      },
+    };
+    const result = classifyAgentEvent(event, state, 1);
+    expect(result).toHaveLength(1);
+    if (result[0].artifact.type === 'text') {
+      expect(result[0].artifact.body).toContain('agent-1');
+      expect(result[0].artifact.body).toContain('agent-6');
+      expect(result[0].artifact.body).not.toContain('agent-7');
+      expect(result[0].artifact.body).toContain('4 more');
+    }
+  });
+
+  it('shows sub-task count and mode in title', () => {
+    const state = createInitialRunStateSnapshot(0);
+    const event: Parameters<typeof classifyAgentEvent>[0] = {
+      type: 'orchestration_plan_generated' as const,
+      timestamp: new Date(0).toISOString(),
+      payload: {
+        sessionId: 'session-1',
+        task: 'test',
+        plan: {
+          planId: 'plan-1',
+          strategy: 'orchestrate' as const,
+          subTasks: [
+            {
+              id: 'a1',
+              description: 'd1',
+              estimatedBudget: 500,
+              fileScope: [],
+              dependencies: [],
+              verification: { level: 'none' as const, label: 'none' },
+            },
+            {
+              id: 'a2',
+              description: 'd2',
+              estimatedBudget: 500,
+              fileScope: [],
+              dependencies: [],
+              verification: { level: 'none' as const, label: 'none' },
+            },
+            {
+              id: 'a3',
+              description: 'd3',
+              estimatedBudget: 500,
+              fileScope: [],
+              dependencies: [],
+              verification: { level: 'none' as const, label: 'none' },
+            },
+          ],
+          estimatedTotalTokens: 1500,
+          repoMetadata: { fileCount: 5, totalKB: 50, sourceKB: 40 },
+          contextWindowTokens: 131072,
+        },
+      },
+    };
+    const result = classifyAgentEvent(event, state, 1);
+    expect(result).toHaveLength(1);
+    if (result[0].artifact.type === 'text') {
+      expect(result[0].artifact.title).toBe('Dispatch · 3 agents · parallel');
+    }
+  });
+});

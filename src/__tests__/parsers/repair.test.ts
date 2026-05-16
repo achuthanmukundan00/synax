@@ -193,6 +193,73 @@ describe('repairXml', () => {
     const r = result as NonNullable<typeof result>;
     expect(r.fixes.length).toBeGreaterThan(0);
   });
+
+  it('wraps bare function names missing <function=...> wrapper', () => {
+    // Model emitted: <tool_call>read<parameter=path>foo</parameter></tool_call>
+    // instead of: <tool_call><function=read>...</function></tool_call>
+    const raw = '<tool_call>\nread\n<parameter=path>README.md</parameter>\n</tool_call>';
+    const result = repairXml(raw);
+    expect(result).not.toBeNull();
+    const r = result as NonNullable<typeof result>;
+    expect(r.repaired).toContain('<function=read>');
+    expect(r.repaired).toContain('</function>');
+    expect(r.fixes).toContain('wrapped bare function name in <function=...> tags');
+  });
+
+  it('wraps bare function name with parameters on same line', () => {
+    const raw =
+      '<tool_call>edit<parameter=path>src/cli.ts</parameter><parameter=oldStr>foo</parameter><parameter=newStr>bar</parameter></tool_call>';
+    const result = repairXml(raw);
+    expect(result).not.toBeNull();
+    const r = result as NonNullable<typeof result>;
+    expect(r.repaired).toContain('<function=edit>');
+    expect(r.repaired).toContain('</function>');
+  });
+
+  it('leaves blocks with existing <function=...> unchanged', () => {
+    const raw = '<tool_call><function=read><parameter=path>x</parameter></function></tool_call>';
+    const result = repairXml(raw);
+    expect(result).not.toBeNull();
+    const r = result as NonNullable<typeof result>;
+    // No wrapping fix recorded — block was already correct
+    expect(r.fixes.every((f) => !f.includes('bare function'))).toBe(true);
+  });
+
+  it('wraps bare function in one block while leaving correct sibling alone', () => {
+    const raw =
+      '<tool_call><function=read><parameter=path>a.ts</parameter></function></tool_call>\n<tool_call>read<parameter=path>b.ts</parameter></tool_call>';
+    const result = repairXml(raw);
+    expect(result).not.toBeNull();
+    const r = result as NonNullable<typeof result>;
+    expect(r.fixes).toContain('wrapped bare function name in <function=...> tags');
+    // Second block should be wrapped
+    expect(r.repaired).toContain('<function=read>');
+  });
+
+  it('wraps dotted function names like mcp.call', () => {
+    const raw = '<tool_call>\nmcp.read\n<parameter=uri>file://foo</parameter>\n</tool_call>';
+    const result = repairXml(raw);
+    expect(result).not.toBeNull();
+    const r = result as NonNullable<typeof result>;
+    expect(r.repaired).toContain('<function=mcp.read>');
+    expect(r.repaired).toContain('</function>');
+    expect(r.fixes).toContain('wrapped bare function name in <function=...> tags');
+  });
+
+  it('repair-then-parse: bare function name survives through qwen3_xml parser', () => {
+    // Simulate the repair → parse pipeline that tryRepairAndParse runs
+    const raw = '<tool_call>\nread\n<parameter=path>README.md</parameter>\n</tool_call>';
+    const repaired = repairXml(raw);
+    expect(repaired).not.toBeNull();
+    // After repair, parser should succeed
+    const parsed = parseQwenToolCallsFromContentResult((repaired as NonNullable<typeof repaired>).repaired);
+    expect(parsed.ok).toBe(true);
+    if (parsed.ok) {
+      expect(parsed.calls.length).toBe(1);
+      expect(parsed.calls[0].name).toBe('read');
+      expect(parsed.calls[0].arguments).toEqual({ path: 'README.md' });
+    }
+  });
 });
 
 // ─── Reasoning sanitizer ────────────────────────────────
@@ -264,6 +331,13 @@ describe('sanitizeReasoning', () => {
     const input = 'output start <think>truncated reasoning';
     const result = sanitizeReasoning(input);
     expect(result.content).toBe('output start');
+    expect(result.removedReasoning).toBe(true);
+  });
+
+  it('strips stray closing think tags from final answers', () => {
+    const input = 'visible result </think>';
+    const result = sanitizeReasoning(input);
+    expect(result.content).toBe('visible result');
     expect(result.removedReasoning).toBe(true);
   });
 });

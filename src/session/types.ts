@@ -203,6 +203,8 @@ export interface SubAgentResult {
   toolCalls: number;
   /** Error message if the sub-agent did not complete successfully. */
   error?: string;
+  /** Final model output from the sub-agent's last turn. */
+  finalAnswer?: string;
 }
 
 /**

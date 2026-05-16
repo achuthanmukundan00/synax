@@ -416,7 +416,14 @@ export class Session {
         tokenCounter: this.tokenCounter,
         costTracker: this.costTracker,
         onEvent: (event) => {
-          this.onEvent?.(event as import('../agent/events').AgentEvent);
+          // Do NOT forward child lifecycle events to the parent TUI.
+          // Child-internal tool_finished, assistant_message, task_finished, etc.
+          // produce noisy ◇ cards and duplicate Result cards. The child's outcome
+          // is conveyed via child_session_completed/failed emitted separately on
+          // the parent event bus. Only forward critical errors.
+          if ((event as import('../agent/events').AgentEvent).type === 'error') {
+            this.onEvent?.(event as import('../agent/events').AgentEvent);
+          }
         },
       });
 
@@ -427,6 +434,7 @@ export class Session {
         changedFiles: executionResult.turnResult.changedFiles,
         toolCalls: executionResult.turnResult.toolCalls.length,
         error: executionResult.error || executionResult.turnResult.error,
+        finalAnswer: executionResult.turnResult.finalAnswer,
       };
 
       if (executionResult.success) {

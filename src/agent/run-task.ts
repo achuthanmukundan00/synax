@@ -342,12 +342,6 @@ export async function runAgentTask(options: RunTaskOptions): Promise<RunTaskRepo
       const handoffManager = new HandoffManager();
       session.setHandoffManager(handoffManager);
 
-      wrappedOnEvent({
-        type: 'assistant_message',
-        timestamp: eventNow(),
-        content: `Orchestrating task across ${planResult.plan.subTasks.length} sub-tasks (strategy: ${strategy})...`,
-      });
-
       const orchestrationResult = await OrchestrationManager.execute(planResult.plan, session, handoffManager, {
         forcedMode: forceOrchestrate ? forcedMode : undefined,
       });

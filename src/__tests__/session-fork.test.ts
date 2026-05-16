@@ -21,7 +21,6 @@ describe('Session.fork()', () => {
   it('should spawn a child session and emit lifecycle events', async () => {
     let childSpawned: ChildSessionSpawnedEvent | undefined;
     let childCompleted: ChildSessionCompletedEvent | undefined;
-    let childModelStepStarted = false;
 
     const parentSession = new Session({
       repoRoot: '/tmp/test',
@@ -35,9 +34,6 @@ describe('Session.fork()', () => {
       }
       if (event.type === 'child_session_completed') {
         childCompleted = event;
-      }
-      if (event.type === 'model_step_started') {
-        childModelStepStarted = true;
       }
     };
 
@@ -79,6 +75,56 @@ describe('Session.fork()', () => {
     expect(childCompleted?.parentSessionId).toBe('parent-123');
     expect(childCompleted?.subtaskId).toBe('sub-1');
     expect(childCompleted?.result.terminalState).toBe('completed');
-    expect(childModelStepStarted).toBe(true);
+  });
+
+  it('should NOT forward child internal lifecycle events to parent onEvent', async () => {
+    let childEventCount = 0;
+
+    const parentSession = new Session({
+      repoRoot: '/tmp/test',
+      client: mockClient(true),
+      sessionId: 'parent-filter-test',
+    });
+
+    parentSession.onEvent = (event: any) => {
+      // Only orchestration-level events should reach the parent TUI.
+      // Internal child events (tool_finished, assistant_message, model_step_started, etc.)
+      // must be filtered by the fork() onEvent callback.
+      if (['child_session_spawned', 'child_session_completed', 'child_session_failed'].includes(event.type)) {
+        childEventCount++;
+      }
+    };
+
+    const subtask: SubTask = {
+      id: 'filter-test',
+      description: 'Verify child events are filtered',
+      estimatedBudget: 500,
+      fileScope: ['src/'],
+      dependencies: [],
+      verification: { level: 'none', label: 'no verification' },
+    };
+
+    const manifest: HandoffManifest = {
+      handoffId: 'filter-test',
+      parentSessionId: 'parent-filter-test',
+      reason: 'task_delegation',
+      task: 'Filter test',
+      status: 'starting',
+      keyFindings: [],
+      filesChanged: [],
+      filesRead: [],
+      pendingWork: [],
+      suggestedSearchTerms: [],
+      contextWindowUsed: 0,
+      depth: 0,
+      createdAt: new Date().toISOString(),
+    };
+
+    const result = await parentSession.fork(subtask, manifest);
+
+    expect(result.subTaskId).toBe('filter-test');
+    // Only orchestration-level events should have reached onEvent
+    // (child_session_spawned + child_session_completed = 2)
+    expect(childEventCount).toBe(2);
   });
 });

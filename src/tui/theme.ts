@@ -13,7 +13,9 @@ export type SemanticColorSlot =
   | 'error'
   | 'prompt'
   | 'note'
-  | 'assistant_text';
+  | 'assistant_text'
+  | 'dispatch'
+  | 'agent_status';
 
 export type RgbaHex = string;
 
@@ -49,6 +51,8 @@ const DEFAULT_SEMANTIC: Record<SemanticColorSlot, RgbaHex> = {
   prompt: '#8a8f98',
   note: '#6272a4',
   assistant_text: '#6272a4',
+  dispatch: '#8be9fd',
+  agent_status: '#ff79c6',
 };
 
 const PALETTES: Record<string, TuiPalette> = {
@@ -100,6 +104,8 @@ const PALETTES: Record<string, TuiPalette> = {
       prompt: '#6b7280',
       note: '#6b7280',
       assistant_text: '#6b7280',
+      dispatch: '#0891b2',
+      agent_status: '#d946ef',
     },
     background: '#f8f8f8',
     surface: '#ffffff',
@@ -131,6 +137,8 @@ const PALETTES: Record<string, TuiPalette> = {
       prompt: '#bbbbbb',
       note: '#bbbbbb',
       assistant_text: '#bbbbbb',
+      dispatch: '#66d9ef',
+      agent_status: '#f1fa8c',
     },
     background: '#000000',
     surface: '#000000',
