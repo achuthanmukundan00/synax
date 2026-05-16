@@ -212,6 +212,7 @@ export function renderArtifactRoot(
         paddingX: 1,
         paddingY: 0,
         visible: true,
+        backgroundColor: pal.background,
       },
       core.Text({ id: ACTIVITY_GLYPH_ID, content: '', width: 11 }),
       core.Text({ id: ACTIVITY_TEXT_ID, content: 'Ready.', fg: pal.textAccent }),
@@ -237,12 +238,13 @@ export function renderArtifactRoot(
           id: 'synax-input-frame',
           width: '100%',
           height: inputFrameHeight,
-          flexDirection: 'column',
+          flexDirection: 'row',
           backgroundColor: pal.surface,
           paddingX: 1,
           paddingY: 1,
         },
-        input,
+        core.Text({ content: '> ', fg: pal.textMuted, width: 2 }),
+        core.Box({ flexGrow: 1 }, input),
       ),
       core.Text({ id: 'synax-hints', content: footer.hints, fg: pal.textAccent }),
     ),
@@ -801,12 +803,20 @@ function renderEmptyState(
   const width = Math.min(64, Math.max(42, terminalWidth - 8));
   const activeModel = modelId ?? rail.model ?? '';
   const visualProfile = resolveCoreVisualProfile(activeModel);
-  const model = rail.model ? clip(rail.model, Math.max(12, width - 16)) : 'local';
-  const workspace = rail.cwd ? clip(rail.cwd, Math.max(12, width - 16)) : '~';
-  const branch = rail.branch ? clip(rail.branch, width - 16) : '-';
-  const context = rail.contextLabel ? clip(rail.contextLabel, width - 16) : `${rail.filesTouched.length} files loaded`;
-  const state = clip(footer.status.replace(/\.$/, '').toLowerCase() || 'ready', width - 16);
+  const inner = width - 2;
+  const railPrefix = ' │ ';
+  const railInner = inner - 3;
+  const model = rail.model ? clip(rail.model, Math.max(8, railInner - 12)) : 'local';
+  const workspace = rail.cwd ? clip(rail.cwd, Math.max(8, railInner - 12)) : '~';
+  const branch = rail.branch ? clip(rail.branch, railInner - 12) : '-';
+  const context = rail.contextLabel
+    ? clip(rail.contextLabel, railInner - 12)
+    : `${rail.filesTouched.length} files loaded`;
+  const stateLine = clip(footer.status.replace(/\.$/, '').toLowerCase() || 'ready', railInner - 12);
   const coreLines = renderAiCore('idle', (splash?.frame ?? 0) / 8, visualProfile).map(stripAnsi);
+  const hr = '─'.repeat(Math.max(20, inner - 6));
+  const tableLabelWidth = 10;
+
   return core.Box(
     {
       id: 'synax-empty-state',
@@ -815,20 +825,37 @@ function renderEmptyState(
       paddingX: 1,
       paddingY: 0,
     },
-    core.Text({ content: centerText('Synax', width - 2), fg: pal.brand }),
-    core.Text({ content: centerText('contained local intelligence runtime', width - 2), fg: pal.textMuted }),
+    // Title with horizontal rule
+    core.Text({ content: centerText(`── synax ──${hr}`, inner), fg: pal.brand }),
+    // Subdued subtitle
+    core.Text({ content: centerText('parallel thought interface', inner), fg: pal.textMuted }),
     core.Text({ content: '' }),
-    core.Text({ content: centerText('·     ·     ·', width - 2), fg: pal.textMuted }),
+    // Core morphology
     ...coreLines.map((line) =>
-      core.Text({ content: centerText(line, width - 2), fg: modelPal?.primary ?? pal.textAccent }),
+      core.Text({ content: centerText(line, inner), fg: modelPal?.primary ?? pal.textAccent }),
     ),
-    core.Text({ content: centerText('·     ·     ·', width - 2), fg: pal.textMuted }),
     core.Text({ content: '' }),
-    core.Text({ content: telemetryRow('model', model), fg: pal.textMuted }),
-    core.Text({ content: telemetryRow('workspace', workspace), fg: pal.textMuted }),
-    core.Text({ content: telemetryRow('branch', branch), fg: pal.textMuted }),
-    core.Text({ content: telemetryRow('context', context), fg: pal.textMuted }),
-    core.Text({ content: telemetryRow('state', state), fg: pal.textAccent }),
+    // Metadata table with left rail
+    core.Text({
+      content: `${railPrefix}${'model'.padEnd(tableLabelWidth)}${model}`,
+      fg: pal.textMuted,
+    }),
+    core.Text({
+      content: `${railPrefix}${'workspace'.padEnd(tableLabelWidth)}${workspace}`,
+      fg: pal.textMuted,
+    }),
+    core.Text({
+      content: `${railPrefix}${'branch'.padEnd(tableLabelWidth)}${branch}`,
+      fg: pal.textMuted,
+    }),
+    core.Text({
+      content: `${railPrefix}${'context'.padEnd(tableLabelWidth)}${context}`,
+      fg: pal.textMuted,
+    }),
+    core.Text({
+      content: `${railPrefix}${'state'.padEnd(tableLabelWidth)}${stateLine}`,
+      fg: pal.textAccent,
+    }),
   );
 }
 
@@ -841,10 +868,6 @@ function centerText(text: string, width: number): string {
   const visible = visibleLength(text);
   if (visible >= width) return text;
   return `${' '.repeat(Math.floor((width - visible) / 2))}${text}`;
-}
-
-function telemetryRow(label: string, value: string): string {
-  return `${label.padEnd(10, ' ')}${value}`;
 }
 
 function labelFor(eventClass: SemanticEventClass): string {
