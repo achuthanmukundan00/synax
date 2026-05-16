@@ -220,12 +220,15 @@ describe('TUI usability floor', () => {
     // The appended event should have the full body, not truncated.
     const appendOps = plan.operations.filter((op) => op.type === 'append');
     expect(appendOps.length).toBeGreaterThanOrEqual(1);
-    for (const op of appendOps) {
+    // At least one append operation must carry the full assistant_message body.
+    const hasFullBody = appendOps.some((op) => {
       if (op.event?.artifact.type === 'text') {
         const body = (op.event.artifact as { type: 'text'; title: string; body: string }).body;
-        expect(body.length).toBeGreaterThan(400);
+        return body.length > 400;
       }
-    }
+      return false;
+    });
+    expect(hasFullBody).toBe(true);
   });
 
   it('feed model handles event updates (streaming → stable card transition)', () => {
@@ -450,14 +453,14 @@ describe('TUI usability floor', () => {
     const assistantTexts = semanticEvents.filter((e) => e.class === 'tool_result' && e.artifact.type === 'text');
     expect(assistantTexts.length).toBeGreaterThanOrEqual(1);
 
-    // The text body should contain the complete final answer, not truncated.
-    for (const text of assistantTexts) {
+    // At least one text event must contain the full final answer, not truncated.
+    const fullAnswer = assistantTexts.some((text) => {
       if (text.artifact.type === 'text') {
-        // Should contain both beginning and end of the answer.
-        expect(text.artifact.body).toContain('operation completed successfully');
-        expect(text.artifact.body.length).toBeGreaterThan(2000);
+        return text.artifact.body.includes('operation completed successfully') && text.artifact.body.length > 2000;
       }
-    }
+      return false;
+    });
+    expect(fullAnswer).toBe(true);
   });
 
   it('compact edit tool cards preserve file path and summary', () => {

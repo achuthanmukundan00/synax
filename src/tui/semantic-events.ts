@@ -259,8 +259,10 @@ export function classifyAgentEvent(event: AgentEvent, state: RunStateSnapshot, n
         }),
       ];
     case 'task_finished': {
-      const summary = terminalSummary(event.error ?? event.verification);
-      if (!summary) return [];
+      const detail = terminalSummary(event.error ?? event.verification);
+      const summary =
+        detail ||
+        `Run completed · ${event.modelSteps} steps · ${event.toolCalls} tools · ${event.changedFiles.length} files`;
       return textEvent(event.status === 'completed' ? 'tool_result' : 'result_error', base, 'Result', summary);
     }
     case 'error':
