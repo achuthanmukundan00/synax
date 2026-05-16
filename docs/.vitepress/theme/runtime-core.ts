@@ -1,71 +1,56 @@
-export type CoreModelProfileId = 'default' | 'qwen' | 'deepseek' | 'openai' | 'claude' | 'gemini'
+export type CoreModelProfileId = 'default' | 'qwen' | 'deepseek' | 'openai' | 'claude' | 'gemini';
 
-export type RuntimeState =
-  | 'unloaded'
-  | 'idle'
-  | 'working'
-  | 'tool-running'
-  | 'succeeded'
-  | 'warning'
-  | 'error'
+export type RuntimeState = 'unloaded' | 'idle' | 'working' | 'tool-running' | 'succeeded' | 'warning' | 'error';
 
-export type MorphologyGeometry = 'contained' | 'lattice' | 'furnace' | 'lens' | 'aperture' | 'twin'
+export type MorphologyGeometry = 'contained' | 'lattice' | 'furnace' | 'lens' | 'aperture' | 'twin';
 
-export type TerminalTone =
-  | 'default'
-  | 'dim'
-  | 'model'
-  | 'working'
-  | 'succeeded'
-  | 'warning'
-  | 'error'
-  | 'action'
+export type TerminalTone = 'default' | 'dim' | 'model' | 'working' | 'succeeded' | 'warning' | 'error' | 'action';
 
 export interface CoreVisualProfile {
-  id: CoreModelProfileId
-  label: string
-  match: RegExp[]
-  geometry: MorphologyGeometry
-  accentRgb: string
+  id: CoreModelProfileId;
+  label: string;
+  match: RegExp[];
+  geometry: MorphologyGeometry;
+  accentRgb: string;
   motion: {
-    breathRate: number
-    phaseStyle: 'smooth' | 'snap' | 'compressed' | 'elastic' | 'mirrored'
-    scanStyle: 'soft' | 'precise' | 'beam' | 'split'
-  }
+    breathRate: number;
+    phaseStyle: 'smooth' | 'snap' | 'compressed' | 'elastic' | 'mirrored';
+    scanStyle: 'soft' | 'precise' | 'beam' | 'split';
+  };
 }
 
 export interface RuntimePalette {
-  label: string
-  stateRgb: string
-  hotRgb: string
-  shellRgb: string
-  lowRgb: string
+  label: string;
+  stateRgb: string;
+  hotRgb: string;
+  shellRgb: string;
+  lowRgb: string;
 }
 
 export interface TerminalLine {
-  kind: 'kv' | 'command'
-  key?: string
-  value: string
-  tone?: TerminalTone
+  kind: 'kv' | 'command';
+  key?: string;
+  value: string;
+  tone?: TerminalTone;
 }
 
 export interface RuntimeSceneDef {
-  id: string
-  modelId: string
-  coreName: string
-  provider: string
-  state: RuntimeState
-  headline: string
-  subheadline: string
-  context: string
-  terminal: TerminalLine[]
-  intensity: number
+  id: string;
+  modelId: string;
+  coreName: string;
+  provider: string;
+  state: RuntimeState;
+  headline: string;
+  subheadline: string;
+  context: string;
+  terminal: TerminalLine[];
+  intensity: number;
 }
 
 export interface RuntimeScene extends RuntimeSceneDef {
-  profile: CoreVisualProfile
-  palette: RuntimePalette
-  contextPressure: boolean
+  profile: CoreVisualProfile;
+  palette: RuntimePalette;
+  contextPressure: boolean;
 }
 
 const PROFILES: Record<CoreModelProfileId, CoreVisualProfile> = {
@@ -141,7 +126,7 @@ const PROFILES: Record<CoreModelProfileId, CoreVisualProfile> = {
       scanStyle: 'split',
     },
   },
-}
+};
 
 export const runtimeScenes: RuntimeSceneDef[] = [
   {
@@ -321,27 +306,27 @@ export const runtimeScenes: RuntimeSceneDef[] = [
       { kind: 'kv', key: 'ctx', value: '18420 / 65536' },
     ],
   },
-]
+];
 
 export function resolveCoreVisualProfile(modelId: string): CoreVisualProfile {
-  const normalized = modelId.trim().toLowerCase()
+  const normalized = modelId.trim().toLowerCase();
   for (const profile of Object.values(PROFILES)) {
     if (profile.id !== 'default' && profile.match.some((matcher) => matcher.test(normalized))) {
-      return profile
+      return profile;
     }
   }
-  return PROFILES.default
+  return PROFILES.default;
 }
 
 export function buildRuntimeScene(scene: RuntimeSceneDef): RuntimeScene {
-  const profile = scene.state === 'unloaded' ? PROFILES.default : resolveCoreVisualProfile(scene.modelId)
+  const profile = scene.state === 'unloaded' ? PROFILES.default : resolveCoreVisualProfile(scene.modelId);
 
   return {
     ...scene,
     profile,
     palette: resolveRuntimePalette(scene.state, profile),
     contextPressure: isContextPressure(scene.context),
-  }
+  };
 }
 
 function resolveRuntimePalette(state: RuntimeState, profile: CoreVisualProfile): RuntimePalette {
@@ -352,7 +337,7 @@ function resolveRuntimePalette(state: RuntimeState, profile: CoreVisualProfile):
       hotRgb: '145 150 160',
       shellRgb: '82 86 94',
       lowRgb: '38 41 48',
-    }
+    };
   }
 
   if (state === 'succeeded') {
@@ -362,7 +347,7 @@ function resolveRuntimePalette(state: RuntimeState, profile: CoreVisualProfile):
       hotRgb: '134 239 172',
       shellRgb: '34 197 94',
       lowRgb: '20 83 45',
-    }
+    };
   }
 
   if (state === 'warning') {
@@ -372,7 +357,7 @@ function resolveRuntimePalette(state: RuntimeState, profile: CoreVisualProfile):
       hotRgb: '253 224 71',
       shellRgb: '202 138 4',
       lowRgb: '113 63 18',
-    }
+    };
   }
 
   if (state === 'error') {
@@ -382,7 +367,7 @@ function resolveRuntimePalette(state: RuntimeState, profile: CoreVisualProfile):
       hotRgb: '251 146 60',
       shellRgb: '239 68 68',
       lowRgb: '127 29 29',
-    }
+    };
   }
 
   return {
@@ -391,30 +376,30 @@ function resolveRuntimePalette(state: RuntimeState, profile: CoreVisualProfile):
     hotRgb: lightenRgb(profile.accentRgb),
     shellRgb: profile.accentRgb,
     lowRgb: dimRgb(profile.accentRgb),
-  }
+  };
 }
 
 function lightenRgb(rgb: string): string {
   return rgb
     .split(' ')
     .map((channel) => Math.min(255, Number(channel) + 38))
-    .join(' ')
+    .join(' ');
 }
 
 function dimRgb(rgb: string): string {
   return rgb
     .split(' ')
     .map((channel) => Math.max(0, Math.round(Number(channel) * 0.44)))
-    .join(' ')
+    .join(' ');
 }
 
 function isContextPressure(context: string): boolean {
-  const match = context.match(/(\d+)\s*\/\s*(\d+)/)
-  if (!match) return false
+  const match = context.match(/(\d+)\s*\/\s*(\d+)/);
+  if (!match) return false;
 
-  const current = Number(match[1])
-  const max = Number(match[2])
-  if (!Number.isFinite(current) || !Number.isFinite(max) || max <= 0) return false
+  const current = Number(match[1]);
+  const max = Number(match[2]);
+  if (!Number.isFinite(current) || !Number.isFinite(max) || max <= 0) return false;
 
-  return current / max >= 0.9
+  return current / max >= 0.9;
 }

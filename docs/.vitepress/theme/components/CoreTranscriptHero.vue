@@ -9,7 +9,8 @@
           :key="i"
           class="reasoning-line"
           :style="{ width: line.width + 'px' }"
-        >{{ line.text }}</span>
+          >{{ line.text }}</span
+        >
       </div>
     </div>
 
@@ -49,54 +50,50 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, onMounted } from 'vue'
-import type { RuntimeScene, TerminalLine } from '../runtime-core'
-import {
-  prepareMeasuredTextWithSegments,
-  layoutMeasuredLines,
-  type LayoutLine,
-} from '../measured-text'
+import { ref, computed, watch, onMounted } from 'vue';
+import type { RuntimeScene, TerminalLine } from '../runtime-core';
+import { prepareMeasuredTextWithSegments, layoutMeasuredLines, type LayoutLine } from '../measured-text';
 
 const props = defineProps<{
-  core: RuntimeScene
-}>()
+  core: RuntimeScene;
+}>();
 
 // ---------------------------------------------------------------------------
 // Font setup — must match CSS declarations
 // ---------------------------------------------------------------------------
 
-const TERMINAL_FONT = '12px "JetBrains Mono", "Fira Code", ui-monospace, monospace'
-const REASONING_MAX_WIDTH = 420
-const COMMAND_MAX_WIDTH = 480
-const REASONING_LINE_HEIGHT = 18
-const COMMAND_LINE_HEIGHT = 19
+const TERMINAL_FONT = '12px "JetBrains Mono", "Fira Code", ui-monospace, monospace';
+const REASONING_MAX_WIDTH = 420;
+const COMMAND_MAX_WIDTH = 480;
+const REASONING_LINE_HEIGHT = 18;
+const COMMAND_LINE_HEIGHT = 19;
 
 // ---------------------------------------------------------------------------
 // Measured reasoning lines
 // ---------------------------------------------------------------------------
 
 interface MeasuredLine {
-  text: string
-  width: number
+  text: string;
+  width: number;
 }
 
-const measuredReasoning = ref<MeasuredLine[]>([])
+const measuredReasoning = ref<MeasuredLine[]>([]);
 
 function computeReasoning(): void {
   // Build a dim "reasoning preview" from the scene's subheadline
-  const text = `> ${props.core.subheadline}  ${props.core.headline}`
+  const text = `> ${props.core.subheadline}  ${props.core.headline}`;
   const prepared = prepareMeasuredTextWithSegments(text, TERMINAL_FONT, {
     whiteSpace: 'pre-wrap',
-  })
+  });
   if (!prepared) {
-    measuredReasoning.value = []
-    return
+    measuredReasoning.value = [];
+    return;
   }
-  const result = layoutMeasuredLines(prepared, REASONING_MAX_WIDTH, REASONING_LINE_HEIGHT)
+  const result = layoutMeasuredLines(prepared, REASONING_MAX_WIDTH, REASONING_LINE_HEIGHT);
   measuredReasoning.value = result.lines.map((l: LayoutLine) => ({
     text: l.text,
     width: Math.ceil(l.width),
-  }))
+  }));
 }
 
 // ---------------------------------------------------------------------------
@@ -104,31 +101,31 @@ function computeReasoning(): void {
 // ---------------------------------------------------------------------------
 
 interface MeasuredCommand extends TerminalLine {
-  measuredWidth: number
+  measuredWidth: number;
 }
 
-const measuredCommands = ref<MeasuredCommand[]>([])
+const measuredCommands = ref<MeasuredCommand[]>([]);
 
 function computeCommands(): void {
-  const result: MeasuredCommand[] = []
+  const result: MeasuredCommand[] = [];
   for (const row of props.core.terminal) {
-    const text = row.kind === 'command' ? `$ ${row.value}` : `${row.key ?? ''}: ${row.value}`
+    const text = row.kind === 'command' ? `$ ${row.value}` : `${row.key ?? ''}: ${row.value}`;
     const prepared = prepareMeasuredTextWithSegments(text, TERMINAL_FONT, {
       whiteSpace: 'pre-wrap',
-    })
+    });
     if (!prepared) {
-      result.push({ ...row, measuredWidth: 0 })
-      continue
+      result.push({ ...row, measuredWidth: 0 });
+      continue;
     }
-    const layoutResult = layoutMeasuredLines(prepared, COMMAND_MAX_WIDTH, COMMAND_LINE_HEIGHT)
+    const layoutResult = layoutMeasuredLines(prepared, COMMAND_MAX_WIDTH, COMMAND_LINE_HEIGHT);
     // Use the widest line as the row's measured width
-    let maxW = 0
+    let maxW = 0;
     for (const l of layoutResult.lines) {
-      if (l.width > maxW) maxW = l.width
+      if (l.width > maxW) maxW = l.width;
     }
-    result.push({ ...row, measuredWidth: Math.ceil(maxW) + 4 })
+    result.push({ ...row, measuredWidth: Math.ceil(maxW) + 4 });
   }
-  measuredCommands.value = result
+  measuredCommands.value = result;
 }
 
 // ---------------------------------------------------------------------------
@@ -137,43 +134,43 @@ function computeCommands(): void {
 
 const reasoningStyle = computed(() => ({
   '--state-dim-rgb': dimRgb(props.core.palette.stateRgb),
-}))
+}));
 
 const heroStyle = computed(() => ({
   '--state-rgb': props.core.palette.stateRgb,
   '--state-hot-rgb': props.core.palette.hotRgb,
-}))
+}));
 const identityStyle = computed(() => ({
   '--state-rgb': props.core.palette.stateRgb,
   '--state-hot-rgb': props.core.palette.hotRgb,
-}))
+}));
 
 function dimRgb(rgb: string): string {
   return rgb
     .split(' ')
     .map((c) => Math.max(0, Math.round(Number(c) * 0.45)))
-    .join(' ')
+    .join(' ');
 }
 
 // ---------------------------------------------------------------------------
 // Watchers
 // ---------------------------------------------------------------------------
 
-const reasoningRef = ref<HTMLElement | null>(null)
+const reasoningRef = ref<HTMLElement | null>(null);
 
 watch(
   () => props.core,
   () => {
-    computeReasoning()
-    computeCommands()
+    computeReasoning();
+    computeCommands();
   },
   { immediate: true },
-)
+);
 
 onMounted(() => {
-  computeReasoning()
-  computeCommands()
-})
+  computeReasoning();
+  computeCommands();
+});
 </script>
 
 <style scoped>

@@ -1,9 +1,5 @@
 <template>
-  <div
-    class="measured-terminal"
-    :style="terminalStyle"
-    :aria-label="ariaLabel || 'Terminal code block'"
-  >
+  <div class="measured-terminal" :style="terminalStyle" :aria-label="ariaLabel || 'Terminal code block'">
     <!-- Hidden accessible text for screen readers -->
     <span class="sr-only">{{ accessibleText }}</span>
 
@@ -23,33 +19,30 @@
           class="mt-text"
           :class="{ 'mt-dim': line.dim }"
           :style="line.width > 0 ? { width: line.measuredWidth + 'px' } : {}"
-        >{{ line.text }}</span>
+          >{{ line.text }}</span
+        >
       </div>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, onMounted } from 'vue'
-import {
-  prepareMeasuredTextWithSegments,
-  layoutMeasuredLines,
-  type LayoutLine,
-} from '../measured-text'
+import { ref, computed, watch, onMounted } from 'vue';
+import { prepareMeasuredTextWithSegments, layoutMeasuredLines, type LayoutLine } from '../measured-text';
 
 const props = withDefaults(
   defineProps<{
-    lines?: string[]
-    content?: string
-    title?: string
-    prompt?: string
-    showPrompt?: boolean
-    ariaLabel?: string
-    font?: string
-    maxWidth?: number
-    lineHeight?: number
-    stateRgb?: string
-    dimLines?: number[]
+    lines?: string[];
+    content?: string;
+    title?: string;
+    prompt?: string;
+    showPrompt?: boolean;
+    ariaLabel?: string;
+    font?: string;
+    maxWidth?: number;
+    lineHeight?: number;
+    stateRgb?: string;
+    dimLines?: number[];
   }>(),
   {
     lines: () => [],
@@ -64,41 +57,41 @@ const props = withDefaults(
     stateRgb: '86 141 208',
     dimLines: () => [],
   },
-)
+);
 
 interface MeasuredLine {
-  text: string
-  width: number
-  measuredWidth: number
-  isEmpty: boolean
-  dim: boolean
+  text: string;
+  width: number;
+  measuredWidth: number;
+  isEmpty: boolean;
+  dim: boolean;
 }
 
-const measuredLines = ref<MeasuredLine[]>([])
-const bodyRef = ref<HTMLElement | null>(null)
+const measuredLines = ref<MeasuredLine[]>([]);
+const bodyRef = ref<HTMLElement | null>(null);
 
 // Build the text lines from props
 const sourceLines = computed(() => {
-  if (props.lines.length > 0) return props.lines
-  if (props.content) return props.content.split('\n')
-  return []
-})
+  if (props.lines.length > 0) return props.lines;
+  if (props.content) return props.content.split('\n');
+  return [];
+});
 
-const accessibleText = computed(() => sourceLines.value.join('\n'))
+const accessibleText = computed(() => sourceLines.value.join('\n'));
 
 function computeLines(): void {
-  const result: MeasuredLine[] = []
-  const dimSet = new Set(props.dimLines ?? [])
+  const result: MeasuredLine[] = [];
+  const dimSet = new Set(props.dimLines ?? []);
 
   for (let i = 0; i < sourceLines.value.length; i++) {
-    const text = sourceLines.value[i]
+    const text = sourceLines.value[i];
     if (text === '' || text === undefined) {
-      result.push({ text: '', width: 0, measuredWidth: 0, isEmpty: true, dim: dimSet.has(i) })
-      continue
+      result.push({ text: '', width: 0, measuredWidth: 0, isEmpty: true, dim: dimSet.has(i) });
+      continue;
     }
     const prepared = prepareMeasuredTextWithSegments(text, props.font, {
       whiteSpace: 'pre-wrap',
-    })
+    });
     if (!prepared) {
       result.push({
         text,
@@ -106,14 +99,14 @@ function computeLines(): void {
         measuredWidth: 0,
         isEmpty: false,
         dim: dimSet.has(i),
-      })
-      continue
+      });
+      continue;
     }
-    const layoutResult = layoutMeasuredLines(prepared, props.maxWidth, props.lineHeight)
+    const layoutResult = layoutMeasuredLines(prepared, props.maxWidth, props.lineHeight);
     // For single-line input, find the measured width
-    let maxW = 0
+    let maxW = 0;
     for (const l of layoutResult.lines) {
-      if (l.width > maxW) maxW = l.width
+      if (l.width > maxW) maxW = l.width;
     }
     result.push({
       text,
@@ -121,22 +114,22 @@ function computeLines(): void {
       measuredWidth: Math.ceil(maxW) + 4,
       isEmpty: false,
       dim: dimSet.has(i),
-    })
+    });
   }
-  measuredLines.value = result
+  measuredLines.value = result;
 }
 
 const terminalStyle = computed(() => ({
   '--mt-rgb': props.stateRgb,
-}))
+}));
 
 watch(
   () => [props.lines, props.content, props.font, props.maxWidth],
   () => computeLines(),
   { immediate: true },
-)
+);
 
-onMounted(() => computeLines())
+onMounted(() => computeLines());
 </script>
 
 <style scoped>

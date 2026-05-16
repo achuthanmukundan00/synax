@@ -24,14 +24,14 @@ import {
   type LayoutCursor,
   type PrepareOptions,
   type LineStats,
-} from '@chenglou/pretext'
+} from '@chenglou/pretext';
 
 // ---------------------------------------------------------------------------
 // SSR detection
 // ---------------------------------------------------------------------------
 
 function isSSR(): boolean {
-  return typeof document === 'undefined' || typeof HTMLCanvasElement === 'undefined'
+  return typeof document === 'undefined' || typeof HTMLCanvasElement === 'undefined';
 }
 
 // ---------------------------------------------------------------------------
@@ -39,36 +39,32 @@ function isSSR(): boolean {
 // ---------------------------------------------------------------------------
 
 interface CacheEntry {
-  plain: PreparedText | null
-  segmented: PreparedTextWithSegments | null
+  plain: PreparedText | null;
+  segmented: PreparedTextWithSegments | null;
 }
 
-const prepareCache = new Map<string, CacheEntry>()
+const prepareCache = new Map<string, CacheEntry>();
 
 function cacheKey(text: string, font: string, options?: PrepareOptions): string {
-  return JSON.stringify({ t: text, f: font, o: options ?? {} })
+  return JSON.stringify({ t: text, f: font, o: options ?? {} });
 }
 
 /**
  * Prepare text for measurement. Results are cached by text+font+options.
  * Returns null if canvas is unavailable (SSR).
  */
-export function prepareMeasuredText(
-  text: string,
-  font: string,
-  options?: PrepareOptions,
-): PreparedText | null {
-  if (isSSR()) return null
-  const key = cacheKey(text, font, options)
-  let entry = prepareCache.get(key)
+export function prepareMeasuredText(text: string, font: string, options?: PrepareOptions): PreparedText | null {
+  if (isSSR()) return null;
+  const key = cacheKey(text, font, options);
+  let entry = prepareCache.get(key);
   if (!entry) {
-    entry = { plain: null, segmented: null }
-    prepareCache.set(key, entry)
+    entry = { plain: null, segmented: null };
+    prepareCache.set(key, entry);
   }
   if (!entry.plain) {
-    entry.plain = prepare(text, font, options)
+    entry.plain = prepare(text, font, options);
   }
-  return entry.plain
+  return entry.plain;
 }
 
 /**
@@ -80,30 +76,26 @@ export function prepareMeasuredTextWithSegments(
   font: string,
   options?: PrepareOptions,
 ): PreparedTextWithSegments | null {
-  if (isSSR()) return null
-  const key = cacheKey(text, font, options)
-  let entry = prepareCache.get(key)
+  if (isSSR()) return null;
+  const key = cacheKey(text, font, options);
+  let entry = prepareCache.get(key);
   if (!entry) {
-    entry = { plain: null, segmented: null }
-    prepareCache.set(key, entry)
+    entry = { plain: null, segmented: null };
+    prepareCache.set(key, entry);
   }
   if (!entry.segmented) {
-    entry.segmented = prepareWithSegments(text, font, options)
+    entry.segmented = prepareWithSegments(text, font, options);
   }
-  return entry.segmented
+  return entry.segmented;
 }
 
 /**
  * Measure a text block's height and line count at a given max width.
  * Returns zero results if prepared is null (SSR).
  */
-export function measureTextBlock(
-  prepared: PreparedText | null,
-  maxWidth: number,
-  lineHeight: number,
-): LayoutResult {
-  if (!prepared) return { height: 0, lineCount: 0 }
-  return layout(prepared, maxWidth, lineHeight)
+export function measureTextBlock(prepared: PreparedText | null, maxWidth: number, lineHeight: number): LayoutResult {
+  if (!prepared) return { height: 0, lineCount: 0 };
+  return layout(prepared, maxWidth, lineHeight);
 }
 
 /**
@@ -115,19 +107,16 @@ export function layoutMeasuredLines(
   maxWidth: number,
   lineHeight: number,
 ): LayoutLinesResult {
-  if (!prepared) return { height: 0, lineCount: 0, lines: [] }
-  return layoutWithLines(prepared, maxWidth, lineHeight)
+  if (!prepared) return { height: 0, lineCount: 0, lines: [] };
+  return layoutWithLines(prepared, maxWidth, lineHeight);
 }
 
 /**
  * Get line statistics (count + max width) without allocating line strings.
  */
-export function getLineStats(
-  prepared: PreparedTextWithSegments | null,
-  maxWidth: number,
-): LineStats {
-  if (!prepared) return { lineCount: 0, maxLineWidth: 0 }
-  return measureLineStats(prepared, maxWidth)
+export function getLineStats(prepared: PreparedTextWithSegments | null, maxWidth: number): LineStats {
+  if (!prepared) return { lineCount: 0, maxLineWidth: 0 };
+  return measureLineStats(prepared, maxWidth);
 }
 
 /**
@@ -138,8 +127,8 @@ export function walkMeasuredLineRanges(
   maxWidth: number,
   onLine: (line: LayoutLineRange) => void,
 ): number {
-  if (!prepared) return 0
-  return walkLineRanges(prepared, maxWidth, onLine)
+  if (!prepared) return 0;
+  return walkLineRanges(prepared, maxWidth, onLine);
 }
 
 /**
@@ -150,8 +139,8 @@ export function nextMeasuredLine(
   start: LayoutCursor,
   maxWidth: number,
 ): LayoutLine | null {
-  if (!prepared) return null
-  return layoutNextLine(prepared, start, maxWidth)
+  if (!prepared) return null;
+  return layoutNextLine(prepared, start, maxWidth);
 }
 
 /**
@@ -161,8 +150,8 @@ export function materializeMeasuredLine(
   prepared: PreparedTextWithSegments | null,
   line: LayoutLineRange,
 ): LayoutLine | null {
-  if (!prepared) return null
-  return materializeLineRange(prepared, line)
+  if (!prepared) return null;
+  return materializeLineRange(prepared, line);
 }
 
 /**
@@ -170,5 +159,5 @@ export function materializeMeasuredLine(
  * different texts/fonts.
  */
 export function clearMeasuredTextCache(): void {
-  prepareCache.clear()
+  prepareCache.clear();
 }

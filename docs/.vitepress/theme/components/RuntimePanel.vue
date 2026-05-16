@@ -25,16 +25,16 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
-import type { RuntimeScene } from '../runtime-core'
+import { computed } from 'vue';
+import type { RuntimeScene } from '../runtime-core';
 
-const props = defineProps<{ core: RuntimeScene }>()
+const props = defineProps<{ core: RuntimeScene }>();
 
 const panelStyle = computed(() => ({
   '--state-rgb': props.core.palette.stateRgb,
   '--state-hot-rgb': props.core.palette.hotRgb,
   '--profile-rgb': props.core.profile.accentRgb,
-}))
+}));
 </script>
 
 <style scoped>

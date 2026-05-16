@@ -173,8 +173,14 @@
         </g>
 
         <g class="morph morph-claude">
-          <path d="M107,146 C107,119 128,104 150,107 C172,104 193,119 193,146 C193,171 171,185 150,182 C129,185 107,171 107,146 Z" class="aperture-line" />
-          <path d="M95,145 C112,116 135,100 150,106 C165,100 188,116 205,145 C188,174 165,190 150,184 C135,190 112,174 95,145 Z" class="aperture-line soft" />
+          <path
+            d="M107,146 C107,119 128,104 150,107 C172,104 193,119 193,146 C193,171 171,185 150,182 C129,185 107,171 107,146 Z"
+            class="aperture-line"
+          />
+          <path
+            d="M95,145 C112,116 135,100 150,106 C165,100 188,116 205,145 C188,174 165,190 150,184 C135,190 112,174 95,145 Z"
+            class="aperture-line soft"
+          />
           <circle cx="116" cy="129" r="1.25" class="bloom-dot b1" />
           <circle cx="184" cy="129" r="1.25" class="bloom-dot b2" />
           <circle cx="116" cy="162" r="1.25" class="bloom-dot b3" />
@@ -242,18 +248,18 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
-import type { RuntimeScene } from '../runtime-core'
+import { computed } from 'vue';
+import type { RuntimeScene } from '../runtime-core';
 
 const props = withDefaults(
   defineProps<{
-    core: RuntimeScene
-    showLabel?: boolean
+    core: RuntimeScene;
+    showLabel?: boolean;
   }>(),
   {
     showLabel: true,
   },
-)
+);
 
 const coreClasses = computed(() => [
   `profile-${props.core.profile.id}`,
@@ -261,7 +267,7 @@ const coreClasses = computed(() => [
   `geometry-${props.core.profile.geometry}`,
   `phase-${props.core.profile.motion.phaseStyle}`,
   `scan-${props.core.profile.motion.scanStyle}`,
-])
+]);
 
 const coreStyle = computed(() => ({
   '--state-rgb': props.core.palette.stateRgb,
@@ -273,7 +279,7 @@ const coreStyle = computed(() => ({
   '--breath-rate-shell': `${props.core.profile.motion.breathRate * 1.2}s`,
   '--breath-rate-field': `${props.core.profile.motion.breathRate * 1.5}s`,
   '--scene-intensity': String(props.core.intensity),
-}))
+}));
 </script>
 
 <style scoped>
