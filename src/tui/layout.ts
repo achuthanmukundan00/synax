@@ -40,15 +40,16 @@ export function renderLayout(state: InteractiveViewState, cols: number, rows: nu
   const renderWidth = terminalWriteWidth(width);
   const height = Math.max(14, rows);
   const steeringBarHeight = state.steeringMessage ? 1 : 0;
+  const activityBarHeight = activityStripVisible(state) ? 1 : 0;
   const panel = renderInputDock(
     state.objectiveInput,
     renderWidth,
     state.coreMode,
     state.nowMs,
     locationLabel(state.cwdLabel, state.gitBranch),
-    maxInputDockBodyLines(height - steeringBarHeight),
+    maxInputDockBodyLines(height - steeringBarHeight - activityBarHeight),
   );
-  const bodyHeight = Math.max(1, height - panel.length - steeringBarHeight);
+  const bodyHeight = Math.max(1, height - panel.length - steeringBarHeight - activityBarHeight);
   const lines = Array.from({ length: bodyHeight }, () => '');
   const hasTranscript =
     state.run.timeline.length > 0 ||
@@ -85,6 +86,9 @@ export function renderLayout(state: InteractiveViewState, cols: number, rows: nu
     const steelBlue = '[38;2;67;76;88m[3m';
     clipped.push(pad(`${steelBlue}${steeringLabel}${truncated}[0m`, width));
   }
+  if (activityBarHeight > 0) {
+    clipped.push(pad(renderActivityStrip(state, width), width));
+  }
   clipped.push(...panel);
   return clipped.map((line) => pad(clip(line, width), width));
 }
@@ -94,12 +98,13 @@ export function maxHistoryScrollOffset(state: InteractiveViewState, _cols: numbe
   const renderWidth = terminalWriteWidth(width);
   const height = Math.max(14, rows);
   const steeringBarHeight = state.steeringMessage ? 1 : 0;
+  const activityBarHeight = activityStripVisible(state) ? 1 : 0;
   const panelHeight = inputDockHeight(
     state.objectiveInput,
     renderWidth,
-    maxInputDockBodyLines(height - steeringBarHeight),
+    maxInputDockBodyLines(height - steeringBarHeight - activityBarHeight),
   );
-  const bodyHeight = Math.max(1, height - panelHeight - steeringBarHeight);
+  const bodyHeight = Math.max(1, height - panelHeight - steeringBarHeight - activityBarHeight);
   const visibleRows = Math.max(1, bodyHeight - 3);
   const transcriptWidth = Math.max(24, renderWidth - 4);
   const transcriptLines = renderTranscript({ ...state, nowMs: state.nowMs }, transcriptWidth);
@@ -457,6 +462,21 @@ function phaseLabel(phase: string): string {
   if (phase === 'completed') return 'Ready';
   if (phase === 'budget_exhausted') return 'Budget exhausted';
   return `${phase.slice(0, 1).toUpperCase()}${phase.slice(1)}`;
+}
+
+function activityStripVisible(state: InteractiveViewState): boolean {
+  return state.run.terminal === 'running' && state.run.phase !== 'idle' && state.run.phase !== 'completed';
+}
+
+function renderActivityStrip(state: InteractiveViewState, width: number): string {
+  const glyphs = ['◜', '◠', '◝', '◞', '◡', '◟'];
+  const frame = Math.floor((state.nowMs / 1000) * 8);
+  const glyph = glyphs[frame % glyphs.length] ?? '◌';
+  const label = state.run.phase === 'thinking' ? 'thinking' : 'working';
+  const latestSummary = (state.run.timeline[state.run.timeline.length - 1]?.summary ?? '').slice(0, 58);
+  const detail = state.run.phase === 'tool_execution' && latestSummary ? ` · ${latestSummary}` : '';
+  const text = `${glyph} ${label}${detail}`;
+  return ` ${modeColor(state.coreMode)}${clip(text, Math.max(1, width - 2))}[0m`;
 }
 
 function locationLabel(cwdLabel?: string, gitBranch?: string): string | undefined {
