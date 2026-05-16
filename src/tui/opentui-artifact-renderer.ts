@@ -576,18 +576,33 @@ function renderResultMarkdown(core: OpenTuiCore, body: string, palette: TuiPalet
   const nodes: OpenTuiNode[] = [];
   const lines = body.split('\n');
   let inCodeBlock = false;
+  const codeBlockLines: string[] = [];
 
   for (let idx = 0; idx < lines.length; idx += 1) {
     const rawLine = lines[idx] ?? '';
     const line = rawLine.trimEnd();
 
     if (/^```/.test(line)) {
-      inCodeBlock = !inCodeBlock;
+      if (inCodeBlock) {
+        // Flush accumulated code block as a single box with padding
+        if (codeBlockLines.length > 0) {
+          nodes.push(
+            core.Box(
+              { paddingLeft: 2, flexDirection: 'column' },
+              ...codeBlockLines.map((cl) => core.Text({ content: cl, fg: palette.info })),
+            ),
+          );
+          codeBlockLines.length = 0;
+        }
+        inCodeBlock = false;
+        continue;
+      }
+      inCodeBlock = true;
       continue;
     }
 
     if (inCodeBlock) {
-      nodes.push(core.Text({ content: line, fg: palette.info }));
+      codeBlockLines.push(line);
       continue;
     }
 
@@ -1114,13 +1129,13 @@ function renderAgentStatusCard(core: OpenTuiCore, event: SemanticEvent, palette?
     );
   }
 
-  // Completed: full bordered result card
-  const color = pal.success;
+  // Completed: full bordered result card — use info/cyan for intermediate child results
+  const color = pal.info;
   const toolCalls = event.metadata.toolCalls ?? 0;
   const filesCount = event.metadata.filesTouched?.length ?? 0;
   const statsParts: string[] = [];
   if (toolCalls > 0) statsParts.push(`Calls ${toolCalls}`);
-  if (filesCount > 0) statsParts.push(`Files ${filesCount}`);
+  if (filesCount > 0) statsParts.push(`Files touched: ${filesCount}`);
 
   return core.Box(
     {

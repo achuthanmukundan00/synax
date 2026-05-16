@@ -14,6 +14,7 @@ import { classifyAgentEvent, semanticEventsFromDebugHistory } from '../tui/seman
 import {
   latestExpandableEventId,
   activityLineActive,
+  computeOrchestrationStepText,
   movePromptCursorVertically,
   resolveCtrlCBehavior,
   scrollArtifactHistory,
@@ -245,6 +246,40 @@ describe('OpenTUI startup layout', () => {
     expect(text).not.toContain('`abc123`');
   });
 
+  it('renders fenced code blocks as distinct content regions', () => {
+    const core = createFakeOpenTuiCore();
+    const card = renderArtifactCard(core, {
+      id: 'result-cb',
+      class: 'tool_result',
+      timestamp: '2026-05-16T00:00:00.000Z',
+      artifact: {
+        type: 'text',
+        title: 'Result',
+        body: [
+          'Latest commits (top 5):',
+          '',
+          '```',
+          '94336c3 Extract activityLineActive helper, keep spinner alive when busy',
+          'b277ebf feat: add token-stream animation module',
+          '```',
+          '',
+          'Done.',
+        ].join('\n'),
+      },
+      metadata: {},
+    } as any) as unknown as FakeOpenTuiNode;
+
+    const text = collectTextContent(card).join('\n');
+    // Code block content is rendered (not stripped)
+    expect(text).toContain('94336c3 Extract activityLineActive helper');
+    expect(text).toContain('b277ebf feat: add token-stream animation module');
+    // Backtick fences are not shown
+    expect(text).not.toContain('```');
+    // Non-code content surrounding the block is preserved
+    expect(text).toContain('Latest commits (top 5):');
+    expect(text).toContain('Done.');
+  });
+
   it('keeps long OpenTUI result cards intact for artifact scrolling', () => {
     const core = createFakeOpenTuiCore();
     const body = Array.from({ length: 80 }, (_, index) => `line ${index + 1}`).join('\n');
@@ -284,6 +319,22 @@ describe('token stream activity indicator', () => {
 
     expect(activityLineActive(completed, true, '')).toBe(true);
     expect(activityLineActive(completed, false, '')).toBe(false);
+  });
+
+  it('computeOrchestrationStepText: sequential step 1/2 for 2-step plan, first step active', () => {
+    expect(computeOrchestrationStepText('sequential', 1, 0, 2)).toBe('step 1/2 running');
+  });
+
+  it('computeOrchestrationStepText: sequential step 2/2 for 2-step plan, second step active', () => {
+    expect(computeOrchestrationStepText('sequential', 1, 1, 2)).toBe('step 2/2 running');
+  });
+
+  it('computeOrchestrationStepText: parallel mode counts from active and returned', () => {
+    expect(computeOrchestrationStepText('parallel', 2, 1, 0)).toBe('1/3 agents returned');
+  });
+
+  it('computeOrchestrationStepText: falls back to active+returned count when totalSteps is 0', () => {
+    expect(computeOrchestrationStepText('sequential', 1, 0, 0)).toBe('step 1/1 running');
   });
 });
 
@@ -2695,6 +2746,59 @@ describe('result card renderer display', () => {
     const card = renderArtifactCard(core, event) as unknown as FakeOpenTuiNode;
     const text = collectTextContent(card).join(' ');
     expect(text).not.toContain('Touched files');
+  });
+});
+
+describe('subagent result card visual semantics', () => {
+  it('completed subagent card uses info/cyan color, not success/green', () => {
+    const core = createFakeOpenTuiCore();
+    const event = {
+      id: 'sub-agent-returned',
+      class: 'agent_status' as const,
+      timestamp: 1715731200000,
+      artifact: { type: 'text', title: 'step-1 returned', body: 'done' },
+      metadata: { toolCalls: 2, filesTouched: ['a.ts'] },
+    } as Parameters<typeof renderArtifactCard>[1];
+    const card = renderArtifactCard(core, event) as unknown as FakeOpenTuiNode;
+
+    // The completed agent_status card uses pal.info (#8be9fd cyan) not pal.success (#00ff87 green)
+    const colorBar = card.children[0] as FakeOpenTuiNode;
+    expect(colorBar.props.backgroundColor).toBe('#8be9fd');
+    // Card title shows the subagent name, not generic "Result"
+    const borderedCard = card.children[1] as FakeOpenTuiNode;
+    expect(borderedCard.props.title).toContain('step-1 returned');
+  });
+
+  it('final all-success result card remains success/green', () => {
+    const core = createFakeOpenTuiCore();
+    const event = {
+      id: 'final-result',
+      class: 'tool_result' as const,
+      timestamp: 1715731200000,
+      artifact: { type: 'text', title: 'Result', body: 'Status: completed\nAll sub-tasks done.' },
+      metadata: {},
+    } as Parameters<typeof renderArtifactCard>[1];
+    const card = renderArtifactCard(core, event) as unknown as FakeOpenTuiNode;
+
+    // The final result card uses pal.success (#00ff87 green)
+    const colorBar = card.children[0] as FakeOpenTuiNode;
+    expect(colorBar.props.backgroundColor).toBe('#00ff87');
+  });
+
+  it('failed agent_status card uses error/red color', () => {
+    const core = createFakeOpenTuiCore();
+    const event = {
+      id: 'sub-agent-failed',
+      class: 'agent_status' as const,
+      timestamp: 1715731200000,
+      artifact: { type: 'text', title: 'step-1', body: 'Failed: timed out' },
+      metadata: {},
+    } as Parameters<typeof renderArtifactCard>[1];
+    const card = renderArtifactCard(core, event) as unknown as FakeOpenTuiNode;
+
+    // Failed agent_status uses pal.error (#ff5555 red)
+    const colorBar = card.children[0] as FakeOpenTuiNode;
+    expect(colorBar.props.backgroundColor).toBe('#ff5555');
   });
 });
 
