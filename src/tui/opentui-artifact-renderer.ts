@@ -825,9 +825,6 @@ function renderEmptyState(
     },
     // Title with horizontal rule
     core.Text({ content: centerText(`── synax ──${hr}`, inner), fg: pal.brand }),
-    // Subdued subtitle
-    core.Text({ content: centerText('parallel thought interface', inner), fg: pal.textMuted }),
-    core.Text({ content: '' }),
     // Core morphology
     ...coreLines.map((line) =>
       core.Text({ content: centerText(line, inner), fg: modelPal?.primary ?? pal.textAccent }),
