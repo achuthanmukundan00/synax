@@ -11,7 +11,6 @@ import {
   HUNK_PREVIEW_LINES,
   TEXT_PREVIEW_LINES,
   PERSISTENT_STATUS_CARD_ID,
-  SCROLL_INDICATOR_ID,
   ACTIVITY_LINE_ID,
   ACTIVITY_GLYPH_ID,
   ACTIVITY_TEXT_ID,
@@ -64,6 +63,12 @@ export type ExpandedState = Record<string, boolean>;
 export interface SplashOptions {
   frame: number;
   color?: boolean;
+}
+
+export function footerLayoutHeight(footer: FooterState): number {
+  const inputHeight = footer.inputHeight ?? promptInputHeight(footer.prompt);
+  const inputFrameHeight = inputHeight + 2;
+  return inputFrameHeight + 2;
 }
 
 const COLORS: Record<SemanticEventClass, string> = {
@@ -122,17 +127,25 @@ export function renderArtifactRoot(
   onPromptChange?: (value: string, input: unknown) => void,
   splash?: SplashOptions,
   modelId?: string,
+  terminalHeight?: number,
 ): OpenTuiNode {
   const pal = palette ?? getPalette();
   const modelPal = modelId ? getModelPalette(modelId) : getModelPalette('');
-  const compactStartup = events.length === 0 && (!settingsLines || settingsLines.length === 0);
+  const compactStartup =
+    events.length === 0 &&
+    (!settingsLines || settingsLines.length === 0) &&
+    footer.status === 'Ready.' &&
+    footer.prompt.length === 0;
   const mainChildren =
     events.length > 0
       ? events.map((event) => renderArtifactCard(core, event, expanded?.[event.id] ?? false, onToggleExpand, pal))
       : [renderEmptyState(core, rail, terminalWidth, footer, pal, splash, modelPal, modelId)];
   const inputHeight = footer.inputHeight ?? promptInputHeight(footer.prompt);
-  const footerHeight = 3 + (footer.location ? 1 : 0) + inputHeight;
+  const inputFrameHeight = inputHeight + 2;
+  const footerHeight = footerLayoutHeight(footer);
+  const activityHeight = 1;
   const emptyStateHeight = compactEmptyStateHeight(rail);
+  const rootHeight = compactStartup ? emptyStateHeight + activityHeight + footerHeight : (terminalHeight ?? '100%');
   const input = core.h(core.TextareaRenderable, {
     id: 'synax-input',
     initialValue: footer.prompt,
@@ -142,7 +155,7 @@ export function renderArtifactRoot(
     minHeight: 1,
     maxHeight: 12,
     wrapMode: 'word',
-    backgroundColor: pal.background,
+    backgroundColor: pal.surface,
     textColor: pal.text,
     focusedBackgroundColor: pal.surface,
     focusedTextColor: pal.text,
@@ -166,18 +179,20 @@ export function renderArtifactRoot(
     {
       id: 'synax-root',
       width: '100%',
-      height: compactStartup ? emptyStateHeight + footerHeight : '100%',
+      height: rootHeight,
       flexDirection: 'column',
+      overflow: 'hidden',
       backgroundColor: pal.background,
     },
     core.Box(
       compactStartup
-        ? { height: emptyStateHeight, flexDirection: 'row', minHeight: 1 }
-        : { flexGrow: 1, flexDirection: 'row', minHeight: 1 },
+        ? { height: emptyStateHeight, flexDirection: 'row', minHeight: 1, overflow: 'hidden' }
+        : { flexGrow: 1, flexDirection: 'row', minHeight: 1, overflow: 'hidden' },
       core.ScrollBox(
         {
           id: 'synax-artifacts',
           ...(compactStartup ? { height: emptyStateHeight } : { flexGrow: 1 }),
+          overflow: 'hidden',
           viewportCulling: true,
           stickyScroll: true,
           stickyStart: 'bottom',
@@ -186,26 +201,19 @@ export function renderArtifactRoot(
         },
         ...mainChildren,
       ),
-      core.Text({
-        id: SCROLL_INDICATOR_ID,
-        content: '↓ scroll down for more',
-        visible: false,
-        position: 'absolute',
-        bottom: 0,
-        left: 1,
-      }),
     ),
     // Live activity line — single row between feed and footer
     core.Box(
       {
         id: ACTIVITY_LINE_ID,
         width: '100%',
+        height: 1,
         flexDirection: 'row',
         paddingX: 1,
         paddingY: 0,
-        visible: false,
+        visible: true,
       },
-      core.Text({ id: ACTIVITY_GLYPH_ID, content: '', width: 2 }),
+      core.Text({ id: ACTIVITY_GLYPH_ID, content: '', width: 11 }),
       core.Text({ id: ACTIVITY_TEXT_ID, content: 'Ready.', fg: pal.textAccent }),
     ),
     ...(settingsLines && settingsLines.length > 0
@@ -220,11 +228,22 @@ export function renderArtifactRoot(
         flexDirection: 'column',
         border: ['top'],
         borderColor: pal.border,
+        backgroundColor: pal.background,
+        zIndex: 20,
         paddingX: 1,
       },
-      core.Text({ id: 'synax-status', content: footer.status, fg: footerColor(footer.status) }),
-      input,
-      ...(footer.location ? [core.Text({ id: 'synax-location', content: footer.location, fg: pal.textMuted })] : []),
+      core.Box(
+        {
+          id: 'synax-input-frame',
+          width: '100%',
+          height: inputFrameHeight,
+          flexDirection: 'column',
+          backgroundColor: pal.surface,
+          paddingX: 1,
+          paddingY: 1,
+        },
+        input,
+      ),
       core.Text({ id: 'synax-hints', content: footer.hints, fg: pal.textAccent }),
     ),
   );
@@ -276,6 +295,69 @@ function styledActiveSettingsLine(
     core.bg(palette.text)(core.fg(palette.background)(active)),
     { __isChunk: true, text: after },
   ] as any);
+}
+
+function styledInlineMarkdown(
+  core: OpenTuiCore,
+  text: string,
+  palette: TuiPalette,
+  baseColor = palette.text,
+): string | InstanceType<(typeof import('@opentui/core'))['StyledText']> {
+  const coreWithStyles = core as unknown as {
+    StyledText?: new (chunks: unknown[]) => unknown;
+    fg?: (color: string) => (text: string) => unknown;
+    bold?: (chunk: unknown) => unknown;
+    italic?: (chunk: unknown) => unknown;
+    underline?: (chunk: unknown) => unknown;
+  };
+  if (typeof coreWithStyles.StyledText !== 'function' || typeof coreWithStyles.fg !== 'function') {
+    return plainInlineMarkdown(text);
+  }
+
+  const chunks: unknown[] = [];
+  const tokenPattern = /(`[^`]+`|\*\*[^*\n]+\*\*|__[^_\n]+__|\*[^*\n]+\*|_[^_\n]+_|\[[^\]\n]+\]\([^)]+\))/g;
+  let cursor = 0;
+
+  const pushPlain = (value: string): void => {
+    if (!value) return;
+    chunks.push(coreWithStyles.fg!(baseColor)(value));
+  };
+
+  for (const match of text.matchAll(tokenPattern)) {
+    const raw = match[0];
+    const index = match.index ?? 0;
+    pushPlain(text.slice(cursor, index));
+    cursor = index + raw.length;
+
+    if (raw.startsWith('`') && raw.endsWith('`')) {
+      chunks.push(coreWithStyles.fg!(palette.info)(raw.slice(1, -1)));
+    } else if ((raw.startsWith('**') && raw.endsWith('**')) || (raw.startsWith('__') && raw.endsWith('__'))) {
+      const inner = raw.slice(2, -2);
+      const colored = coreWithStyles.fg!(baseColor)(inner);
+      chunks.push(typeof coreWithStyles.bold === 'function' ? coreWithStyles.bold(colored) : colored);
+    } else if (raw.startsWith('[')) {
+      const linkText = raw.match(/^\[([^\]\n]+)\]\([^)]+\)$/)?.[1] ?? plainInlineMarkdown(raw);
+      const colored = coreWithStyles.fg!(palette.info)(linkText);
+      chunks.push(typeof coreWithStyles.underline === 'function' ? coreWithStyles.underline(colored) : colored);
+    } else {
+      const inner = raw.slice(1, -1);
+      const colored = coreWithStyles.fg!(baseColor)(inner);
+      chunks.push(typeof coreWithStyles.italic === 'function' ? coreWithStyles.italic(colored) : colored);
+    }
+  }
+
+  pushPlain(text.slice(cursor));
+  return new coreWithStyles.StyledText(chunks) as InstanceType<(typeof import('@opentui/core'))['StyledText']>;
+}
+
+function plainInlineMarkdown(text: string): string {
+  return text
+    .replace(/\[([^\]\n]+)\]\([^)]+\)/g, '$1')
+    .replace(/`([^`]+)`/g, '$1')
+    .replace(/\*\*([^*\n]+)\*\*/g, '$1')
+    .replace(/__([^_\n]+)__/g, '$1')
+    .replace(/\*([^*\n]+)\*/g, '$1')
+    .replace(/_([^_\n]+)_/g, '$1');
 }
 
 export function renderArtifactCard(
@@ -490,13 +572,19 @@ function renderPayloadRows(
 function renderResultMarkdown(core: OpenTuiCore, body: string, palette: TuiPalette): OpenTuiNode[] {
   const nodes: OpenTuiNode[] = [];
   const lines = body.split('\n');
+  let inCodeBlock = false;
 
   for (let idx = 0; idx < lines.length; idx += 1) {
     const rawLine = lines[idx] ?? '';
     const line = rawLine.trimEnd();
 
-    // Fenced code blocks: skip fence markers, inline code as-is
     if (/^```/.test(line)) {
+      inCodeBlock = !inCodeBlock;
+      continue;
+    }
+
+    if (inCodeBlock) {
+      nodes.push(core.Text({ content: line, fg: palette.info }));
       continue;
     }
 
@@ -516,7 +604,7 @@ function renderResultMarkdown(core: OpenTuiCore, body: string, palette: TuiPalet
     const hMatch = line.match(/^(#{1,4})\s+(.+)/);
     if (hMatch && hMatch[1] && hMatch[2]) {
       const level = hMatch[1].length;
-      const text = hMatch[2];
+      const text = plainInlineMarkdown(hMatch[2]);
       const hColor = level <= 2 ? palette.brand : palette.warning;
       nodes.push(core.Text({ content: text, fg: hColor }));
       continue;
@@ -525,21 +613,31 @@ function renderResultMarkdown(core: OpenTuiCore, body: string, palette: TuiPalet
     // Bullet lists
     const bMatch = line.match(/^\s*[-*+]\s+(.+)/);
     if (bMatch) {
-      nodes.push(core.Text({ content: `• ${bMatch[1]}`, fg: palette.text }));
+      nodes.push(core.Text({ content: styledInlineMarkdown(core, `• ${bMatch[1]}`, palette), fg: palette.text }));
       continue;
     }
 
     // Numbered lists
-    const nMatch = line.match(/^(\s*)\d+\.\s+(.+)/);
+    const nMatch = line.match(/^(\s*)(\d+\.)\s+(.+)/);
     if (nMatch) {
-      nodes.push(core.Text({ content: line, fg: palette.text }));
+      nodes.push(
+        core.Text({
+          content: styledInlineMarkdown(core, `${nMatch[1]}${nMatch[2]} ${nMatch[3]}`, palette),
+          fg: palette.text,
+        }),
+      );
       continue;
     }
 
     // Blockquotes
     const qMatch = line.match(/^>\s?(.+)/);
     if (qMatch && qMatch[1]) {
-      nodes.push(core.Text({ content: qMatch[1], fg: palette.textMuted }));
+      nodes.push(
+        core.Text({
+          content: styledInlineMarkdown(core, qMatch[1], palette, palette.textMuted),
+          fg: palette.textMuted,
+        }),
+      );
       continue;
     }
 
@@ -549,25 +647,7 @@ function renderResultMarkdown(core: OpenTuiCore, body: string, palette: TuiPalet
       continue;
     }
 
-    // Regular text with inline code support — split on backtick pairs.
-    // Each odd-indexed segment after splitting by backticks is inline code.
-    const segments = line.split(/(`[^`]+`)/);
-    const lineNodes: OpenTuiNode[] = [];
-    let accumulator = '';
-    for (const seg of segments) {
-      if (seg.startsWith('`') && seg.endsWith('`') && seg.length >= 2) {
-        if (accumulator) {
-          lineNodes.push(core.Text({ content: accumulator, fg: palette.text }));
-          accumulator = '';
-        }
-        lineNodes.push(core.Text({ content: seg.slice(1, -1), fg: palette.info }));
-      } else {
-        accumulator += seg;
-      }
-    }
-    if (accumulator) lineNodes.push(core.Text({ content: accumulator, fg: palette.text }));
-
-    nodes.push(...lineNodes);
+    nodes.push(core.Text({ content: styledInlineMarkdown(core, line, palette), fg: palette.text }));
   }
 
   return nodes;
@@ -596,7 +676,7 @@ function tableCells(line: string): string[] {
 }
 
 function renderResultTable(core: OpenTuiCore, rows: string[], palette: TuiPalette): OpenTuiNode[] {
-  const parsed = rows.map(tableCells);
+  const parsed = rows.map((row) => tableCells(row).map(plainInlineMarkdown));
   const columnCount = Math.max(0, ...parsed.map((row) => row.length));
   if (columnCount === 0) return [];
   const widths = Array.from({ length: columnCount }, (_, column) =>
@@ -807,18 +887,6 @@ function riskColor(risk: RiskLevel): string {
   if (risk === 'high') return '#ff5555';
   if (risk === 'medium') return '#ffb86c';
   return '#00ff87';
-}
-
-function footerColor(status: string): string {
-  if (status.startsWith('!')) return '#ffb86c';
-  if (status.startsWith('x') || status.startsWith('✗')) return '#ff5555';
-  if (status.startsWith('✓')) return '#00ff87';
-  // Animated spinner glyphs (◐ ◓ ◑ ◒) or pulse glyphs (○ ◌ ●) for active states
-  if (status.startsWith('◐') || status.startsWith('◓') || status.startsWith('◑') || status.startsWith('◒'))
-    return '#8be9fd';
-  if (status.startsWith('○') || status.startsWith('◌') || status.startsWith('●')) return '#8be9fd';
-  if (status.startsWith('$')) return '#8be9fd';
-  return '#cccccc';
 }
 
 function clip(text: string, width: number): string {

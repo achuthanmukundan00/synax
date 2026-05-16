@@ -1013,8 +1013,9 @@ export class Session {
           });
 
           // ── Mixed output guard ──────────────────────────────────────
-          if (response.toolCalls.length > 0 && response.content.trim().length > 0) {
-            if (!isSafeToolPreamble(response.content)) {
+          const visibleContentBeforeToolCalls = assistantVisibleContent(response.content);
+          if (response.toolCalls.length > 0 && visibleContentBeforeToolCalls.length > 0) {
+            if (!isSafeToolPreamble(visibleContentBeforeToolCalls)) {
               return {
                 terminalState: 'model_error',
                 finalAnswer: finalAnswerFromResponse(response),

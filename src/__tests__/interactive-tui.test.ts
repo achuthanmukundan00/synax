@@ -5,6 +5,7 @@ import { CORE_HEIGHT, CORE_WIDTH, modeColor, renderAiCore, renderDottedCore } fr
 import { DiffRenderer } from '../tui/diff-renderer';
 import { LayerStack } from '../tui/layer-manager';
 import { maxHistoryScrollOffset, renderLayout } from '../tui/layout';
+import { renderAnsiTokenStreamFrame, tokenStreamFrameText } from '../tui/token-stream';
 import { createInputParser, parseInputChunk } from '../tui/input';
 import { createTerminalSession } from '../tui/terminal';
 import { renderSettings } from '../settings/settings-renderer';
@@ -21,6 +22,7 @@ import { setPromptValue } from '../tui/key-handlers';
 import {
   formatEventCrown,
   promptInputHeight,
+  renderArtifactCard,
   renderArtifactRoot,
   renderSplashLogo,
 } from '../tui/opentui-artifact-renderer';
@@ -63,6 +65,20 @@ function createFakeOpenTuiCore(): any {
     TextareaRenderable: class TextareaRenderable {},
     h: (_renderable: unknown, props: Record<string, unknown>) => node('Textarea', props),
   };
+}
+
+function collectTextContent(node: FakeOpenTuiNode): string[] {
+  const here = node.type === 'Text' && typeof node.props.content === 'string' ? [node.props.content] : [];
+  return [...here, ...node.children.flatMap(collectTextContent)];
+}
+
+function findNodeById(node: FakeOpenTuiNode, id: string): FakeOpenTuiNode | undefined {
+  if (node.props.id === id) return node;
+  for (const child of node.children) {
+    const found = findNodeById(child, id);
+    if (found) return found;
+  }
+  return undefined;
 }
 
 function createTtyInput(): PassThrough & {
@@ -119,8 +135,10 @@ describe('OpenTUI startup layout', () => {
       100,
     ) as unknown as FakeOpenTuiNode;
 
-    expect(root.props.height).toBe(27);
+    expect(root.props.height).toBe(28);
     expect(root.children[0].props.height).toBe(22);
+    expect(findNodeById(root, 'synax-input-frame')?.props.height).toBe(3);
+    expect(findNodeById(root, 'synax-location')).toBeUndefined();
   });
 
   it('uses full-height feed layout once visible events exist', () => {
@@ -147,10 +165,113 @@ describe('OpenTUI startup layout', () => {
         hints: 'Enter send',
       },
       100,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      'qwen3-local',
+      40,
     ) as unknown as FakeOpenTuiNode;
 
-    expect(root.props.height).toBe('100%');
+    expect(root.props.height).toBe(40);
     expect(root.children[0].props.flexGrow).toBe(1);
+  });
+
+  it('moves the prompt dock to the bottom as soon as the first run starts', () => {
+    const core = createFakeOpenTuiCore();
+    const root = renderArtifactRoot(
+      core,
+      [],
+      {
+        model: 'deepseek-v4-pro',
+        filesTouched: [],
+        uptimeLabel: '0:00',
+      },
+      {
+        status: 'Thinking',
+        prompt: '',
+        placeholder: 'Ask Synax...',
+        hints: 'Ctrl+D quit',
+      },
+      100,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      'deepseek-v4-pro',
+      42,
+    ) as unknown as FakeOpenTuiNode;
+
+    expect(root.props.height).toBe(42);
+    expect(root.children[0].props.flexGrow).toBe(1);
+  });
+
+  it('renders result markdown without leaking inline markers in fallback tests', () => {
+    const core = createFakeOpenTuiCore();
+    const card = renderArtifactCard(core, {
+      id: 'result-1',
+      class: 'tool_result',
+      timestamp: '2026-05-16T00:00:00.000Z',
+      artifact: {
+        type: 'text',
+        title: 'Result',
+        body: [
+          'Changed **bold**, *italic*, and `code`.',
+          '',
+          '| Commit | Message |',
+          '| --- | --- |',
+          '| `abc123` | **fix:** markdown |',
+        ].join('\n'),
+      },
+      metadata: {},
+    } as any) as unknown as FakeOpenTuiNode;
+
+    const text = collectTextContent(card).join('\n');
+    expect(text).toContain('Changed bold, italic, and code.');
+    expect(text).toContain('abc123');
+    expect(text).toContain('fix: markdown');
+    expect(text).not.toContain('**bold**');
+    expect(text).not.toContain('`abc123`');
+  });
+
+  it('keeps long OpenTUI result cards intact for artifact scrolling', () => {
+    const core = createFakeOpenTuiCore();
+    const body = Array.from({ length: 80 }, (_, index) => `line ${index + 1}`).join('\n');
+    const card = renderArtifactCard(
+      core,
+      {
+        id: 'result-long',
+        class: 'tool_result',
+        timestamp: '2026-05-16T00:00:00.000Z',
+        artifact: { type: 'text', title: 'Result', body },
+        metadata: {},
+      } as any,
+      false,
+      jest.fn(),
+    ) as unknown as FakeOpenTuiNode;
+
+    const text = collectTextContent(card).join('\n');
+    expect(text).toContain('line 1');
+    expect(text).toContain('line 80');
+    expect(text).not.toContain('[Show full text]');
+  });
+});
+
+describe('token stream activity indicator', () => {
+  it('renders semantic token stream frames with plain and ANSI output', () => {
+    expect(tokenStreamFrameText('default', 0)).toBe('˙·.:●:.·˙');
+    expect(tokenStreamFrameText('qwen', 0)).toBe('╱·:●:·╲');
+    expect(renderAnsiTokenStreamFrame('default', 0)).toContain('\x1b[38;5;230m●');
   });
 });
 

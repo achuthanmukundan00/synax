@@ -47,6 +47,13 @@ describe('renderMarkdownBlock', () => {
     expect(out.join('\n')).toContain('read');
   });
 
+  it('renders italic text in inline markdown', () => {
+    const md = '*italic text* and _more italic_';
+    const out = ansiFree(renderMarkdownBlock(md, W));
+    expect(out.join('\n')).toContain('italic text');
+    expect(out.join('\n')).toContain('more italic');
+  });
+
   it('renders fenced code blocks', () => {
     const md = ['```', 'const x = 1;', 'const y = 2;', '```'].join('\n');
     const out = ansiFree(renderMarkdownBlock(md, W));
@@ -99,6 +106,17 @@ describe('renderReviewOutput', () => {
     const out = ansiFree(renderReviewOutput(text, W));
     expect(out.some((l) => l.includes('result'))).toBe(true);
     expect(out.some((l) => l.includes('Just some plain text'))).toBe(true);
+  });
+
+  it('formats inline markdown in final result prose', () => {
+    const text = 'Changed **bold**, *italic*, and `code` text.';
+    const out = ansiFree(renderReviewOutput(text, W));
+    const joined = out.join('\n');
+    expect(joined).toContain('bold');
+    expect(joined).toContain('italic');
+    expect(joined).toContain('code');
+    expect(joined).not.toContain('**bold**');
+    expect(joined).not.toContain('`code`');
   });
 
   it('filters process-chatter lines from result', () => {
