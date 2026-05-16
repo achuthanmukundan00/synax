@@ -21,6 +21,7 @@ import {
   RAIL_MAX_CHECKPOINTS,
   CLIP_SINGLE_LINE_WIDTH,
   PERSISTENT_STATUS_CARD_ID,
+  SCROLL_INDICATOR_ID,
   AUTOCOMPLETE_MAX_ROWS,
 } from './tui-constants';
 
@@ -184,6 +185,14 @@ export function renderArtifactRoot(
         ...mainChildren,
       ),
       ...(rightRailWidth > 0 ? [renderRightRail(core, rail, rightRailWidth, pal)] : []),
+      core.Text({
+        id: SCROLL_INDICATOR_ID,
+        content: '↓ scroll down for more',
+        visible: false,
+        position: 'absolute',
+        bottom: 0,
+        left: 1,
+      }),
     ),
     ...(settingsLines && settingsLines.length > 0
       ? [renderSettingsOverlay(core, settingsLines, pal, settingsActiveLabel)]
@@ -343,7 +352,19 @@ function statusCardColor(label: string, palette: TuiPalette): string {
   if (label.startsWith('✗') || label.startsWith('x')) return palette.error;
   if (label.startsWith('✓')) return palette.success;
   if (label.startsWith('!')) return palette.warning;
-  if (label.startsWith('$') || label.startsWith('○') || label.startsWith('...')) return palette.info;
+  // Animated spinner (◐ ◓ ◑ ◒) / pulse (○ ◌ ●) glyphs for active states
+  if (
+    label.startsWith('$') ||
+    label.startsWith('○') ||
+    label.startsWith('◌') ||
+    label.startsWith('●') ||
+    label.startsWith('◐') ||
+    label.startsWith('◓') ||
+    label.startsWith('◑') ||
+    label.startsWith('◒')
+  ) {
+    return palette.info;
+  }
   if (label.startsWith('◉')) return palette.brand;
   return palette.info;
 }
@@ -839,8 +860,12 @@ function riskColor(risk: RiskLevel): string {
 
 function footerColor(status: string): string {
   if (status.startsWith('!')) return '#ffb86c';
-  if (status.startsWith('x')) return '#ff5555';
+  if (status.startsWith('x') || status.startsWith('✗')) return '#ff5555';
   if (status.startsWith('✓')) return '#00ff87';
+  // Animated spinner glyphs (◐ ◓ ◑ ◒) or pulse glyphs (○ ◌ ●) for active states
+  if (status.startsWith('◐') || status.startsWith('◓') || status.startsWith('◑') || status.startsWith('◒'))
+    return '#8be9fd';
+  if (status.startsWith('○') || status.startsWith('◌') || status.startsWith('●')) return '#8be9fd';
   if (status.startsWith('$')) return '#8be9fd';
   return '#cccccc';
 }

@@ -19,6 +19,7 @@ export const RAIL_UPTIME_ID = 'synax-rail-uptime';
 export const RAIL_MODEL_ID = 'synax-rail-model';
 export const RAIL_BRANCH_ID = 'synax-rail-branch';
 export const PERSISTENT_STATUS_CARD_ID = 'persistent-status-card';
+export const SCROLL_INDICATOR_ID = 'synax-scroll-indicator';
 
 /** Max autocomplete rows shown in the dropdown overlay. */
 export const AUTOCOMPLETE_MAX_ROWS = 10;

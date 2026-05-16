@@ -55,6 +55,7 @@ import {
   TRANSIENT_EVENT_TYPES,
   SCROLL_STEP_ROWS,
   SCROLL_PAGE_FACTOR,
+  SCROLL_INDICATOR_ID,
 } from './tui-constants';
 import { padAnsi, visibleLength } from './text-utils';
 
@@ -161,6 +162,8 @@ export async function runInteractiveTui(
   let promptDirty = false;
   let layoutDirty = false;
   let settingsState = options?.settingsConfig ? createSettingsState(options.settingsConfig) : undefined;
+  let busyAnimationFrame = 0;
+  let userScrolledUp = false;
 
   // --- Expanded state for cards ---
   const expandedState: ExpandedState = {};
@@ -228,6 +231,7 @@ export async function runInteractiveTui(
   const doRender = (): void => {
     if (exiting || renderer.isDestroyed) return;
     state = advanceClock(state, Date.now());
+    busyAnimationFrame++;
 
     // Sync persistent status card at the bottom of the transcript
     syncStatusCard();
@@ -269,6 +273,7 @@ export async function runInteractiveTui(
       steeringBuffer,
       terminalWidth: renderer.width,
       options,
+      busyAnimationFrame,
     });
     const footerSignature = stableFooterSignature(footer);
     if (treeBuilt && footerSignature !== lastRenderedFooterSignature) {
@@ -381,10 +386,21 @@ export async function runInteractiveTui(
       updateAutocompleteNode();
       rebuildEvents();
       lastRenderedFooterSignature = footerSignature;
+      // Update scroll continuation indicator
+      const scrollIndicator = findNode(SCROLL_INDICATOR_ID);
+      if (scrollIndicator) {
+        (scrollIndicator as any).visible = userScrolledUp && events.length > 0;
+      }
     }
     tuiStats.recordRepaint();
     tuiStats.recordFrame(renderScheduler.getStats());
     renderer.requestRender();
+
+    // Keep the spinner/pulse animation alive during active execution.
+    // Re-render at ~4 fps when the run is active but no new events arrive.
+    if (state.terminal === 'running' && state.phase !== 'idle' && state.phase !== 'completed') {
+      setTimeout(() => render('animation', { immediate: true }), 250);
+    }
 
     function findNode(id: string): any {
       return renderer.root.findDescendantById(id);
@@ -504,6 +520,12 @@ export async function runInteractiveTui(
       return;
     }
 
+    // Animated spinner glyphs for active states.
+    const SPINNER_GLYPHS = ['◐', '◓', '◑', '◒'];
+    const spin = SPINNER_GLYPHS[busyAnimationFrame % SPINNER_GLYPHS.length];
+    const PULSE_GLYPHS = ['○', '◌', '●', '◌'];
+    const pulse = PULSE_GLYPHS[busyAnimationFrame % PULSE_GLYPHS.length];
+
     let label: string;
     let detail: string;
 
@@ -511,13 +533,13 @@ export async function runInteractiveTui(
       label = statusOverride;
       detail = '';
     } else if (activeSubAgents.length > 0) {
-      label = `◉ Orchestrating sub-agents: ${activeSubAgents.join(', ')}`;
+      label = `${spin} Orchestrating sub-agents: ${activeSubAgents.join(', ')}`;
       detail = '';
     } else if (state.phase === 'thinking') {
-      label = `○ Thinking${state.modelId ? ` (${state.modelId})` : ''}`;
+      label = `${pulse} Thinking${state.modelId ? ` (${state.modelId})` : ''}`;
       detail = '';
     } else if (state.phase === 'tool_execution') {
-      label = `$ Running tool (${elapsed(state.startedAtMs, state.nowMs)})`;
+      label = `${spin} Running tool (${elapsed(state.startedAtMs, state.nowMs)})`;
       const lastTimelineItem = state.timeline[state.timeline.length - 1];
       detail = lastTimelineItem?.summary
         ? lastTimelineItem.summary.length > 50
@@ -525,7 +547,7 @@ export async function runInteractiveTui(
           : lastTimelineItem.summary
         : '';
     } else if (state.phase === 'verifying') {
-      label = '✓ Verifying';
+      label = `${pulse} Verifying`;
       detail = state.verification.currentCheckLabel || '';
     } else if (state.phase === 'error') {
       label = '✗ Error';
@@ -537,7 +559,7 @@ export async function runInteractiveTui(
       label = '! Budget exhausted';
       detail = state.objective.nextCheckpoint;
     } else {
-      label = '... Working';
+      label = `${spin} Working`;
       detail = '';
     }
 
@@ -882,6 +904,8 @@ export async function runInteractiveTui(
       if (event.type === 'task_finished') {
         removeStatusCard();
       }
+      // New user-visible events reset scroll position to follow the feed.
+      userScrolledUp = false;
       eventsVersion++;
       events.push(...newEvents);
       events = events.slice(Math.max(0, events.length - MAX_TRANSCRIPT_EVENTS));
@@ -1148,6 +1172,7 @@ export async function runInteractiveTui(
         return;
       }
       scrollArtifactHistory(renderer, -SCROLL_STEP_ROWS);
+      userScrolledUp = true;
       key.preventDefault?.();
       render();
       return;
@@ -1169,6 +1194,7 @@ export async function runInteractiveTui(
   function handlePageNav(key: { name: string; preventDefault?: () => void }): void {
     if (key.name === 'pageup') {
       scrollArtifactHistory(renderer, -Math.max(10, Math.floor(renderer.height * SCROLL_PAGE_FACTOR)));
+      userScrolledUp = true;
     } else {
       scrollArtifactHistory(renderer, Math.max(10, Math.floor(renderer.height * SCROLL_PAGE_FACTOR)));
     }
@@ -1491,6 +1517,7 @@ function footerState({
   steeringBuffer,
   terminalWidth,
   options,
+  busyAnimationFrame,
 }: {
   state: RunStateSnapshot;
   prompt: string;
@@ -1502,7 +1529,12 @@ function footerState({
     cwdLabel?: string;
     gitBranch?: string;
   };
+  busyAnimationFrame: number;
 }): FooterState {
+  const SPINNER_GLYPHS = ['◐', '◓', '◑', '◒'];
+  const spin = SPINNER_GLYPHS[busyAnimationFrame % SPINNER_GLYPHS.length];
+  const PULSE_GLYPHS = ['○', '◌', '●', '◌'];
+  const pulse = PULSE_GLYPHS[busyAnimationFrame % PULSE_GLYPHS.length];
   const inputHeight = promptInputHeight(prompt, terminalWidth);
   const hints = '[Enter] submit   [/help] commands   [Ctrl+D] quit';
   const location = [options?.cwdLabel, options?.gitBranch].filter(Boolean).join('  │  ');
@@ -1529,7 +1561,7 @@ function footerState({
   if (state.phase === 'tool_execution') {
     const steerHint = steeringBuffer ? ` [Steering: ${clip(steeringBuffer, 40)}]` : '';
     return {
-      status: `$ Running tool (${elapsed(state.startedAtMs, state.nowMs)})${steerHint}`,
+      status: `${spin} Running tool (${elapsed(state.startedAtMs, state.nowMs)})${steerHint}`,
       prompt,
       placeholder: 'Steer Synax after the next tool result...',
       hints,
@@ -1540,7 +1572,7 @@ function footerState({
   if (busy || state.phase === 'thinking') {
     const steerHint = steeringBuffer ? ` [Steering: ${clip(steeringBuffer, 40)}]` : '';
     return {
-      status: `... Thinking${state.modelId ? ` (${state.modelId})` : ''}${steerHint}`,
+      status: `${pulse} Thinking${state.modelId ? ` (${state.modelId})` : ''}${steerHint}`,
       prompt,
       placeholder: 'Working...',
       hints: '[Ctrl+D] quit',

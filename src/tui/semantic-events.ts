@@ -368,6 +368,16 @@ function semantic(
   };
 }
 
+/** Maximum characters for a non-result text event body (error, prompt, note).
+ *  Final assistant/model results (tool_result, result_error) are NOT truncated
+ *  here — the TUI card renderer handles viewport culling separately. */
+const NON_RESULT_TEXT_MAX = 2000;
+
+/** Result text events (tool_result, result_error) are the final model answer.
+ *  They must never be silently truncated. Pass the raw body through without
+ *  line slicing or char caps; the TUI card renderer soft-wraps naturally. */
+const RESULT_EVENT_CLASSES: ReadonlySet<SemanticEventClass> = new Set(['tool_result', 'result_error']);
+
 function textEvent(
   eventClass: SemanticEventClass,
   base: Pick<SemanticEvent, 'timestamp' | 'metadata'>,
@@ -377,7 +387,11 @@ function textEvent(
 ): SemanticEvent[] {
   const trimmed = body.trim();
   if (!trimmed) return [];
-  return [semantic(eventClass, base, { type: 'text', title, body: summarizePlain(trimmed, 400) }, explicitId)];
+  const isResult = RESULT_EVENT_CLASSES.has(eventClass);
+  // Final results: pass raw body through — no summarization at all.
+  // Non-results (error, prompt, note): safe summarization with generous cap.
+  const artifactBody = isResult ? trimmed : summarizePlain(trimmed, NON_RESULT_TEXT_MAX);
+  return [semantic(eventClass, base, { type: 'text', title, body: artifactBody }, explicitId)];
 }
 
 function editEventFromToolResult(
