@@ -8,11 +8,7 @@ module.exports = {
     project: './tsconfig.json',
   },
   plugins: ['@typescript-eslint'],
-  extends: [
-    'eslint:recommended',
-    'plugin:@typescript-eslint/recommended',
-    'prettier',
-  ],
+  extends: ['eslint:recommended', 'plugin:@typescript-eslint/recommended', 'prettier'],
   ignorePatterns: ['dist/', 'node_modules/', 'fixtures/', 'examples/', 'docs/', 'scripts/'],
   env: {
     node: true,
