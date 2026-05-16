@@ -491,11 +491,24 @@ function renderResultMarkdown(core: OpenTuiCore, body: string, palette: TuiPalet
   const nodes: OpenTuiNode[] = [];
   const lines = body.split('\n');
 
-  for (const rawLine of lines) {
+  for (let idx = 0; idx < lines.length; idx += 1) {
+    const rawLine = lines[idx] ?? '';
     const line = rawLine.trimEnd();
 
     // Fenced code blocks: skip fence markers, inline code as-is
     if (/^```/.test(line)) {
+      continue;
+    }
+
+    if (isMarkdownTableRow(line) && isMarkdownTableSeparator(lines[idx + 1] ?? '')) {
+      const tableRows: string[] = [line];
+      idx += 2;
+      while (idx < lines.length && isMarkdownTableRow(lines[idx] ?? '')) {
+        tableRows.push((lines[idx] ?? '').trimEnd());
+        idx += 1;
+      }
+      idx -= 1;
+      nodes.push(...renderResultTable(core, tableRows, palette));
       continue;
     }
 
@@ -558,6 +571,47 @@ function renderResultMarkdown(core: OpenTuiCore, body: string, palette: TuiPalet
   }
 
   return nodes;
+}
+
+function isMarkdownTableRow(line: string): boolean {
+  const trimmed = line.trim();
+  return trimmed.startsWith('|') && trimmed.endsWith('|') && trimmed.split('|').length >= 4;
+}
+
+function isMarkdownTableSeparator(line: string): boolean {
+  const trimmed = line.trim();
+  if (!isMarkdownTableRow(trimmed)) return false;
+  return trimmed
+    .slice(1, -1)
+    .split('|')
+    .every((cell) => /^:?-{3,}:?$/.test(cell.trim()));
+}
+
+function tableCells(line: string): string[] {
+  return line
+    .trim()
+    .slice(1, -1)
+    .split('|')
+    .map((cell) => cell.trim());
+}
+
+function renderResultTable(core: OpenTuiCore, rows: string[], palette: TuiPalette): OpenTuiNode[] {
+  const parsed = rows.map(tableCells);
+  const columnCount = Math.max(0, ...parsed.map((row) => row.length));
+  if (columnCount === 0) return [];
+  const widths = Array.from({ length: columnCount }, (_, column) =>
+    Math.min(28, Math.max(6, ...parsed.map((row) => visibleLength(row[column] ?? '')))),
+  );
+  return parsed.map((row, rowIndex) => {
+    const content = widths
+      .map((width, column) => {
+        const value = row[column] ?? '';
+        return visibleLength(value) > width ? `${value.slice(0, Math.max(0, width - 1))}…` : value.padEnd(width, ' ');
+      })
+      .join('  ')
+      .trimEnd();
+    return core.Text({ content, fg: rowIndex === 0 ? palette.brand : palette.text });
+  });
 }
 
 function textPayloadRows(
