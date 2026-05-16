@@ -162,8 +162,6 @@ export function renderArtifactRoot(
     placeholderColor: pal.textAccent,
     cursorStyle: { style: 'line', blinking: true },
     keyBindings: [
-      { name: 'return', action: 'submit' },
-      { name: 'linefeed', action: 'submit' },
       { name: 'return', shift: true, action: 'newline' },
       { name: 'linefeed', shift: true, action: 'newline' },
     ],

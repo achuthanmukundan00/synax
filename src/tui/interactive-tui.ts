@@ -1482,34 +1482,40 @@ export async function runInteractiveTui(
       }
       if (key.name === 'backspace') {
         steeringBuffer = steeringBuffer.slice(0, -1);
+        key.preventDefault();
         render();
         return;
       }
       if (key.name === 'enter' || key.name === 'return') {
         if (key.shift) {
           steeringBuffer += '\n';
+          key.preventDefault();
           render();
           return;
         }
         if (steeringBuffer.trim()) {
           const text = steeringBuffer;
           steeringBuffer = '';
+          key.preventDefault();
           session.abortCurrentTurn?.();
           statusOverride = '! Aborted, submitting steering...';
           render();
           submitSteering(text).catch(() => {});
           return;
         }
+        key.preventDefault();
         return;
       }
       if (key.name === 'space') {
         steeringBuffer += ' ';
+        key.preventDefault();
         if (dispatchBusySlashCommand()) return;
         render();
         return;
       }
       if (key.name && key.name.length === 1 && !key.ctrl && !key.shift) {
         steeringBuffer += key.name;
+        key.preventDefault();
         if (dispatchBusySlashCommand()) return;
         render();
         return;
