@@ -560,6 +560,11 @@ export async function runInteractiveTui(
 
   /** Pick the animation glyph for the current frame. */
   const frameGlyph = (glyphs: string[], frame: number): string => glyphs[frame % glyphs.length] ?? glyphs[0] ?? '·';
+  const circularGlyph = (frame: number): string => {
+    const glyphs = ['◜', '◠', '◝', '◞', '◡', '◟'];
+    return glyphs[frame % glyphs.length] ?? '◌';
+  };
+  const shimmerColor = (frame: number): string => (frame % 4 < 2 ? currentPalette.textAccent : currentPalette.brand);
 
   const syncActivityLine = (): void => {
     const active =
@@ -575,56 +580,62 @@ export async function runInteractiveTui(
       return;
     }
 
-    const g = modelPalette.animationGlyphs;
-
     let glyph: string;
     let text: string;
 
     if (statusOverride) {
-      glyph = frameGlyph(g.error, busyAnimationFrame);
+      glyph = frameGlyph(modelPalette.animationGlyphs.error, busyAnimationFrame);
       text = statusOverride;
     } else if (activeSubAgents.length > 0) {
-      glyph = frameGlyph(g.orchestrating, busyAnimationFrame);
+      glyph = circularGlyph(busyAnimationFrame);
       const total = activeSubAgents.length + orchestrationReturnedCount;
-      text = `thinking · ${total - orchestrationReturnedCount}/${total} agents returned`;
+      text = `working · ${total - orchestrationReturnedCount}/${total} agents returned`;
     } else if (state.phase === 'thinking') {
-      glyph = frameGlyph(g.thinking, busyAnimationFrame);
-      const summary = state.timeline[state.timeline.length - 1]?.summary ?? '';
-      text = summary ? `Reading · ${summary.slice(0, 58)}` : 'Thinking';
+      glyph = circularGlyph(busyAnimationFrame);
+      text = 'thinking';
     } else if (state.phase === 'tool_execution') {
-      glyph = frameGlyph(g.working, busyAnimationFrame);
+      glyph = circularGlyph(busyAnimationFrame);
       const toolSummary = state.timeline[state.timeline.length - 1]?.summary ?? '';
-      text = toolSummary
-        ? `Working · ${toolSummary.slice(0, 58)}`
-        : `Working (${elapsed(state.startedAtMs, state.nowMs)})`;
+      text = toolSummary ? `working · ${toolSummary.slice(0, 58)}` : 'working';
     } else if (state.phase === 'verifying') {
-      glyph = frameGlyph(g.verifying, busyAnimationFrame);
+      glyph = circularGlyph(busyAnimationFrame);
       text = state.verification.currentCheckLabel
-        ? `Verifying · ${state.verification.currentCheckLabel.slice(0, 58)}`
-        : 'Verifying';
+        ? `working · ${state.verification.currentCheckLabel.slice(0, 58)}`
+        : 'working';
     } else if (state.phase === 'error') {
-      glyph = frameGlyph(g.error, busyAnimationFrame);
+      glyph = frameGlyph(modelPalette.animationGlyphs.error, busyAnimationFrame);
       text = state.terminalIssue ? `Error · ${state.terminalIssue.slice(0, 78)}` : 'Error';
     } else if (state.phase === 'blocked') {
-      glyph = frameGlyph(g.error, busyAnimationFrame);
+      glyph = frameGlyph(modelPalette.animationGlyphs.error, busyAnimationFrame);
       text = state.objective.nextCheckpoint.slice(0, 78) || 'Blocked';
     } else if (state.phase === 'budget_exhausted') {
-      glyph = frameGlyph(g.error, busyAnimationFrame);
+      glyph = frameGlyph(modelPalette.animationGlyphs.error, busyAnimationFrame);
       text = state.objective.nextCheckpoint.slice(0, 78) || 'Budget exhausted';
     } else {
-      glyph = frameGlyph(g.thinking, busyAnimationFrame);
-      text = 'Working';
+      glyph = circularGlyph(busyAnimationFrame);
+      text = 'working';
     }
 
-    if (glyph === lastActivityGlyph && text === lastActivityText) return;
+    const textColor = shimmerColor(busyAnimationFrame);
+    if (glyph === lastActivityGlyph && text === lastActivityText) {
+      const textNode = findNode(ACTIVITY_TEXT_ID);
+      if (textNode) setNodeProp(ACTIVITY_TEXT_ID, 'fg', textColor);
+      return;
+    }
     lastActivityGlyph = glyph;
     lastActivityText = text;
 
     setNodeProp(ACTIVITY_LINE_ID, 'visible', true);
     const glyphNode = findNode(ACTIVITY_GLYPH_ID);
-    if (glyphNode) setNodeProp(ACTIVITY_GLYPH_ID, 'content', glyph);
+    if (glyphNode) {
+      setNodeProp(ACTIVITY_GLYPH_ID, 'content', glyph);
+      setNodeProp(ACTIVITY_GLYPH_ID, 'fg', currentPalette.brand);
+    }
     const textNode = findNode(ACTIVITY_TEXT_ID);
-    if (textNode) setNodeProp(ACTIVITY_TEXT_ID, 'content', text);
+    if (textNode) {
+      setNodeProp(ACTIVITY_TEXT_ID, 'content', text);
+      setNodeProp(ACTIVITY_TEXT_ID, 'fg', textColor);
+    }
   };
 
   const renderScheduler = new AdaptiveRenderScheduler(
@@ -935,7 +946,12 @@ export async function runInteractiveTui(
     // Filter transient events from the transcript — they create too many
     // individual result cards during execution. Status is reflected via
     // the persistent status card and footer line instead.
-    if ((TRANSIENT_EVENT_TYPES as Set<string>).has(event.type)) {
+    const shouldHideCard =
+      (TRANSIENT_EVENT_TYPES as Set<string>).has(event.type) ||
+      (event.type === 'tool_finished' && event.status === 'ok') ||
+      event.type === 'verification_passed' ||
+      event.type === 'verification_skipped';
+    if (shouldHideCard) {
       // Still mark dirty so the status card gets updated
       eventsVersion++;
     } else {
@@ -1637,10 +1653,7 @@ function footerState({
   };
   busyAnimationFrame: number;
 }): FooterState {
-  const SPINNER_GLYPHS = ['◐', '◓', '◑', '◒'];
-  const spin = SPINNER_GLYPHS[busyAnimationFrame % SPINNER_GLYPHS.length];
-  const PULSE_GLYPHS = ['○', '◌', '●', '◌'];
-  const pulse = PULSE_GLYPHS[busyAnimationFrame % PULSE_GLYPHS.length];
+  void busyAnimationFrame;
   const inputHeight = promptInputHeight(prompt, terminalWidth);
   const hints = '[Enter] submit   [/help] commands   [Ctrl+D] quit';
   const contextLabel =
@@ -1683,7 +1696,7 @@ function footerState({
   if (state.phase === 'tool_execution') {
     const steerHint = steeringBuffer ? ` [Steering: ${clip(steeringBuffer, 40)}]` : '';
     return {
-      status: `${spin} Running tool (${elapsed(state.startedAtMs, state.nowMs)})${steerHint}`,
+      status: `Working${steerHint}`,
       prompt,
       placeholder: 'Steer Synax after the next tool result...',
       hints,
@@ -1694,7 +1707,7 @@ function footerState({
   if (busy || state.phase === 'thinking') {
     const steerHint = steeringBuffer ? ` [Steering: ${clip(steeringBuffer, 40)}]` : '';
     return {
-      status: `${pulse} Thinking${state.modelId ? ` (${state.modelId})` : ''}${steerHint}`,
+      status: `Thinking${steerHint}`,
       prompt,
       placeholder: 'Working...',
       hints: '[Ctrl+D] quit',
@@ -1837,7 +1850,7 @@ function printableKeyValue(key: { name?: string; sequence?: string; shift?: bool
 }
 
 function stableFooterSignature(footer: FooterState): string {
-  return [footer.location ? 'location' : 'no-location'].join('\0');
+  return [footer.location ? 'location' : 'no-location', String(footer.inputHeight ?? 1)].join('\0');
 }
 
 function elapsed(startedAtMs: number, nowMs: number): string {
