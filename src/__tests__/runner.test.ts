@@ -692,6 +692,35 @@ describe('shared bounded agent runner', () => {
     expect(result).toMatchObject({ terminalState: 'completed', finalAnswer: 'final answer', steps: 1 });
   });
 
+  it('does not expose stray closing think tags as the final answer', async () => {
+    const client = fakeClient([{ content: '</think>' }]);
+
+    const result = await runTurn({ repoRoot: TMP, task: 'answer', client });
+
+    expect(result).toMatchObject({ terminalState: 'completed', finalAnswer: '', steps: 1 });
+  });
+
+  it('strips stray closing think tags around visible final answers', async () => {
+    const client = fakeClient([{ content: 'Result\n</think>' }]);
+
+    const result = await runTurn({ repoRoot: TMP, task: 'answer', client });
+
+    expect(result).toMatchObject({ terminalState: 'completed', finalAnswer: 'Result', steps: 1 });
+  });
+
+  it('does not expose raw content-XML tool-call markup as a final answer', async () => {
+    const client = fakeClient([
+      {
+        content:
+          '</think>\n\n<tool_call>\n<function=read>\n<parameter=path>\npackage.json\n</parameter>\n</function>\n</tool_call>',
+      },
+    ]);
+
+    const result = await runTurn({ repoRoot: TMP, task: 'answer', client });
+
+    expect(result).toMatchObject({ terminalState: 'completed', finalAnswer: '', steps: 1 });
+  });
+
   it('fails closed on ambiguous mixed output with tool calls and final text', async () => {
     const client = fakeClient([
       { content: 'The answer is that everything looks good.', toolCalls: [{ id: '1', name: 'read', arguments: {} }] },
@@ -768,6 +797,33 @@ describe('shared bounded agent runner', () => {
     const result = await runTurn({ repoRoot: TMP, task: 'Inspect the repo. Do not modify files.', client });
     expect(result.terminalState).toBe('completed');
     expect(result.toolCalls).toEqual([{ name: 'read', success: true, error: undefined }]);
+  });
+
+  it('accepts technical planning preambles that mention final-answer handling before tool calls', async () => {
+    const client = fakeClient([
+      {
+        content:
+          'I can see 8 modified files across 3 logical groups. Let me commit them modularly:\n\n' +
+          '1. Core fix: strip stray closing tags from model output in all sanitizers\n' +
+          '2. Session: use reasoning sanitizer for final answer extraction\n' +
+          '3. Tests: cover stray closing think tag handling',
+        toolCalls: [{ id: 'call_1', name: 'bash', arguments: { command: 'git status --short' } }],
+      },
+      {
+        content: 'Status checked.',
+        toolCalls: [],
+      },
+    ]);
+
+    const result = await runTurn({
+      repoRoot: TMP,
+      task: 'Commit the modified files.',
+      client,
+      tools: { bashEnabled: true },
+    });
+
+    expect(result.terminalState).toBe('completed');
+    expect(result.toolCalls).toEqual([{ name: 'bash', success: true, error: undefined }]);
   });
 
   it('still fails closed on substantive mixed output before tool calls', async () => {

@@ -106,6 +106,22 @@ describe('tui-state', () => {
     ]);
   });
 
+  it('does not summarize stray closing think tags as model output', () => {
+    let state = createInitialRunStateSnapshot(0);
+
+    state = applyEventToRunState(
+      state,
+      {
+        type: 'assistant_message',
+        timestamp: new Date(1).toISOString(),
+        content: '</think>',
+      },
+      1,
+    );
+
+    expect(state.lastModelOutput).toBe('');
+  });
+
   it('does not treat terminal tool errors as running verification', () => {
     let state = createInitialRunStateSnapshot(0);
 
