@@ -264,8 +264,7 @@ export function classifyAgentEvent(event: AgentEvent, state: RunStateSnapshot, n
     case 'task_finished': {
       // Build a summary that includes file change information so the final
       // card shows subagent work even when the LLM's inline summary says "none".
-      const fileInfo =
-        event.changedFiles.length > 0 ? `\nFiles changed by subagents: ${event.changedFiles.length}` : '';
+      const fileInfo = event.changedFiles.length > 0 ? `\nFiles changed: ${event.changedFiles.length}` : '';
       const treeInfo =
         event.workingTreeClean !== undefined ? `\nWorking tree: ${event.workingTreeClean ? 'clean' : 'dirty'}` : '';
       const detail = terminalSummary(event.error ?? event.verification);
