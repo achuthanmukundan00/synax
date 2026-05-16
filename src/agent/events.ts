@@ -43,6 +43,47 @@ export interface VerificationLifecycleEvent extends AgentEventBase {
 import type { OrchestrationPlanGeneratedEvent } from '../session/types';
 import type { ChildSessionCompletedEvent, ChildSessionFailedEvent, ChildSessionSpawnedEvent } from '../events/types';
 
+// ─── Planner / Dispatch lifecycle events ──────────────────────────────────────
+
+export interface PlannerStartedEvent extends AgentEventBase {
+  type: 'planner_started';
+  promptLength: number;
+}
+
+export interface PlannerIntentDetectedEvent extends AgentEventBase {
+  type: 'planner_intent_detected';
+  intent: 'explicit_delegation' | 'repo_reconnaissance' | 'requires_llm_planning';
+  mode?: 'parallel' | 'sequential' | 'auto';
+  elapsedMs: number;
+}
+
+export interface PlannerStrategySelectedEvent extends AgentEventBase {
+  type: 'planner_strategy_selected';
+  strategy: string;
+  agentCount: number;
+  usedLlmPlanning: boolean;
+  usedFastPath: boolean;
+  elapsedMs: number;
+}
+
+export interface DispatchStartedEvent extends AgentEventBase {
+  type: 'dispatch_started';
+  strategy: string;
+  agentCount: number;
+  mode: 'parallel' | 'sequential' | 'delegated' | 'inline';
+}
+
+export interface DispatchWorkerSpawnedEvent extends AgentEventBase {
+  type: 'dispatch_worker_spawned';
+  workerIndex: number;
+  workerId: string;
+}
+
+export interface DispatchWorkersCompletedEvent extends AgentEventBase {
+  type: 'dispatch_workers_completed';
+  workerCount: number;
+}
+
 export type AgentEvent =
   | (AgentEventBase & {
       type: 'task_started';
@@ -112,7 +153,13 @@ export type AgentEvent =
       inputTokens: number;
       outputTokens: number;
       estimatedCost: number;
-    });
+    })
+  | PlannerStartedEvent
+  | PlannerIntentDetectedEvent
+  | PlannerStrategySelectedEvent
+  | DispatchStartedEvent
+  | DispatchWorkerSpawnedEvent
+  | DispatchWorkersCompletedEvent;
 
 export function eventNow(): string {
   return new Date().toISOString();

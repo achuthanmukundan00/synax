@@ -16,7 +16,17 @@ import { OrchestrationManager } from '../orchestration/OrchestrationManager';
 import { HandoffManager } from '../handoff/HandoffManager';
 import { createTokenLedger } from '../agent/context-budget';
 import { createInspectionLedger as createInspLedger } from '../tools';
-import type { AgentTurnResult } from '../session/types';
+import type { AgentTurnResult, OrchestrationPlan, SubTask } from '../session/types';
+import {
+  classifyDispatchIntent,
+  buildRepoReconTasks,
+  startPlannerTimer,
+  markIntentClassified,
+  markWorkersSpawned,
+  type RepoHints,
+  type RepoReconTask,
+  type DispatchIntent,
+} from './dispatch-intent';
 
 export interface RunTaskOptions {
   repoRoot: string;
@@ -83,37 +93,9 @@ export interface RunTaskReport {
 const execFileAsync = promisify(execFile);
 
 /** Detected subagent trigger from user task text. */
-interface SubagentTrigger {
-  active: boolean;
-  mode: 'parallel' | 'sequential' | 'auto';
-  cleanTask: string;
-}
+type SubagentMode = 'parallel' | 'sequential' | 'auto';
 
-const SUBAGENT_TRIGGERS: Array<{ pattern: RegExp; mode: SubagentTrigger['mode'] }> = [
-  { pattern: /parallel\s+sub-?agents?\b/i, mode: 'parallel' },
-  { pattern: /sequential\s+sub-?agents?\b/i, mode: 'sequential' },
-  { pattern: /\bsub-?agents?\b/i, mode: 'auto' },
-];
-
-/**
- * Detect explicit subagent trigger phrases in the user's task.
- * Returns the trigger mode and the cleaned task text (trigger phrase removed).
- * If no trigger is found, returns active=false.
- */
-function detectSubagentTrigger(task: string): SubagentTrigger {
-  for (const trigger of SUBAGENT_TRIGGERS) {
-    if (trigger.pattern.test(task)) {
-      const cleanTask = task
-        .replace(trigger.pattern, '')
-        .replace(/\s{2,}/g, ' ')
-        .trim();
-      return { active: true, mode: trigger.mode, cleanTask: cleanTask || task };
-    }
-  }
-  return { active: false, mode: 'auto', cleanTask: task };
-}
-
-function buildExplicitOrchestrationTask(task: string, mode: SubagentTrigger['mode']): string {
+function buildExplicitOrchestrationTask(task: string, mode: SubagentMode): string {
   const modeInstruction =
     mode === 'parallel'
       ? 'Use parallel sub-agents. Return independent sub-tasks with no dependencies when possible.'
@@ -302,99 +284,190 @@ export async function runAgentTask(options: RunTaskOptions): Promise<RunTaskRepo
     }
   }
 
-  // ── Orchestration: detect explicit triggers, or auto-estimate budget ──
+  // ── Orchestration: dispatch intent classification + fast-path dispatch ──
   let turn: AgentTurnResult;
   let orchestrationUsed = false;
 
-  const subagentTrigger = detectSubagentTrigger(options.task);
-  const effectiveTask = subagentTrigger.cleanTask;
-  const planningTask = subagentTrigger.active
-    ? buildExplicitOrchestrationTask(options.task, subagentTrigger.mode)
-    : effectiveTask;
+  // Start planner timer for telemetry
+  const plannerTimer = startPlannerTimer();
 
-  // Determine strategy: explicit trigger phrase overrides auto-estimation
-  let strategy: string;
+  // Emit planner_started event
+  wrappedOnEvent({
+    type: 'planner_started',
+    timestamp: eventNow(),
+    promptLength: options.task.length,
+  });
+
+  // Classify dispatch intent
+  const dispatchIntent = classifyDispatchIntent(options.task);
+  const classifiedTimer = markIntentClassified(plannerTimer);
+  const intentElapsed = Math.round((classifiedTimer.intentClassifiedMs! - classifiedTimer.startedMs));
+
+  wrappedOnEvent({
+    type: 'planner_intent_detected',
+    timestamp: eventNow(),
+    intent: dispatchIntent.kind,
+    mode: dispatchIntent.kind === 'explicit_delegation' ? (dispatchIntent as any).mode : undefined,
+    elapsedMs: intentElapsed,
+  });
+
+  // Determine strategy and build plan
   let forceOrchestrate = false;
   let forcedMode: 'parallel' | 'sequential' | undefined;
+  let planResult: import('../session/types').PlanParseResult | null = null;
+  let strategyLabel = 'inline';
+  let plan: OrchestrationPlan | null = null;
 
-  if (subagentTrigger.active) {
-    // User explicitly requested subagents via trigger phrase — force orchestration
-    strategy =
-      subagentTrigger.mode === 'parallel'
+  // ═══ Fast-path: repo reconnaissance ═══════════════════════════════════
+  if (dispatchIntent.kind === 'repo_reconnaissance') {
+    // Cheap repo hints collection (single find + dir checks)
+    const repoHints = await collectRepoHints(options.repoRoot);
+    const reconTasks = buildRepoReconTasks(repoHints);
+
+    // Build orchestration plan directly (no LLM call)
+    plan = buildReconOrchestrationPlan(reconTasks, options.repoRoot, options.task);
+    strategyLabel = 'repo_reconnaissance';
+    forcedMode = 'parallel';
+
+    wrappedOnEvent({
+      type: 'planner_strategy_selected',
+      timestamp: eventNow(),
+      strategy: 'repo_reconnaissance',
+      agentCount: reconTasks.length,
+      usedLlmPlanning: false,
+      usedFastPath: true,
+      elapsedMs: Math.round(performance.now() - classifiedTimer.startedMs),
+    });
+
+  // ═══ Fast-path: explicit delegation ═══════════════════════════════════
+  } else if (dispatchIntent.kind === 'explicit_delegation') {
+    const delegation = dispatchIntent as Extract<DispatchIntent, { kind: 'explicit_delegation' }>;
+    const planningTask = buildExplicitOrchestrationTask(options.task, delegation.mode);
+
+    strategyLabel =
+      delegation.mode === 'parallel'
         ? 'orchestrate (parallel)'
-        : subagentTrigger.mode === 'sequential'
+        : delegation.mode === 'sequential'
           ? 'orchestrate (sequential)'
           : 'orchestrate';
     forceOrchestrate = true;
-    if (subagentTrigger.mode === 'parallel' || subagentTrigger.mode === 'sequential') {
-      forcedMode = subagentTrigger.mode;
+    if (delegation.mode === 'parallel' || delegation.mode === 'sequential') {
+      forcedMode = delegation.mode;
     }
+
+    wrappedOnEvent({
+      type: 'planner_strategy_selected',
+      timestamp: eventNow(),
+      strategy: strategyLabel,
+      agentCount: 0,
+      usedLlmPlanning: true,
+      usedFastPath: false,
+      elapsedMs: Math.round(performance.now() - classifiedTimer.startedMs),
+    });
+
+    // Call LLM planner for decomposition
+    planResult = await session.planOrchestratedTurn(planningTask, forcedMode);
+
+  // ═══ LLM planning fallback ════════════════════════════════════════════
   } else {
     // Auto-detect strategy via budget estimation
     const estimate = await session.estimateTaskBudget(options.task);
-    strategy = estimate.strategy as string;
+    strategyLabel = estimate.strategy;
+
+    wrappedOnEvent({
+      type: 'planner_strategy_selected',
+      timestamp: eventNow(),
+      strategy: strategyLabel,
+      agentCount: 0,
+      usedLlmPlanning: true,
+      usedFastPath: false,
+      elapsedMs: Math.round(performance.now() - classifiedTimer.startedMs),
+    });
+
+    if (strategyLabel === 'orchestrate' || strategyLabel === 'decompose') {
+      planResult = await session.planOrchestratedTurn(options.task, undefined);
+    }
   }
 
-  if (forceOrchestrate || strategy === 'orchestrate' || strategy === 'decompose') {
-    const planResult = await session.planOrchestratedTurn(planningTask, forcedMode);
+  // ═══ Execute orchestration plan ═══════════════════════════════════════
+  const planFromResult = planResult?.success ? planResult.plan : undefined;
+  const effectivePlan = plan ?? planFromResult ?? null;
 
-    if (planResult.success && planResult.plan.subTasks && planResult.plan.subTasks.length > 0) {
-      const handoffManager = new HandoffManager();
-      session.setHandoffManager(handoffManager);
+  if (effectivePlan && effectivePlan.subTasks && effectivePlan.subTasks.length > 0) {
+    const agentCount = effectivePlan.subTasks.length;
+    const mode = forcedMode ?? 'parallel';
 
-      const orchestrationResult = await OrchestrationManager.execute(planResult.plan, session, handoffManager, {
-        forcedMode: forceOrchestrate ? forcedMode : undefined,
-      });
+    // Guard: 1 agent in parallel mode — normalize to delegated single
+    const normalizedMode = agentCount === 1 && mode === 'parallel' ? 'delegated' : mode;
 
-      orchestrationUsed = true;
+    // Emit dispatch_started
+    wrappedOnEvent({
+      type: 'dispatch_started',
+      timestamp: eventNow(),
+      strategy: strategyLabel,
+      agentCount,
+      mode: normalizedMode as 'parallel' | 'sequential' | 'delegated' | 'inline',
+    });
 
-      // Convert orchestration result to AgentTurnResult for downstream compatibility
-      turn = {
-        terminalState: orchestrationResult.terminalState as AgentTerminalState,
-        finalAnswer: orchestrationResult.conclusion,
-        steps: orchestrationResult.results.length,
-        toolCalls: orchestrationResult.results.flatMap((r) =>
-          Array.from({ length: r.toolCalls }, () => ({
-            name: `subagent:${r.subTaskId}`,
-            success: r.terminalState === 'completed',
-            error: r.error,
-          })),
-        ),
-        changedFiles: orchestrationResult.changedFiles,
-        conversation: {
-          messages: [],
-          inspectionLedger: createInspLedger(),
-          latestCompaction: null,
-          tokenLedger: createTokenLedger(),
-          assemblyStats: null,
-        },
-        error: orchestrationResult.error,
-      };
-    } else if (forceOrchestrate) {
-      const reason = planResult.success
-        ? 'planner returned no sub-tasks'
-        : (planResult.error ?? 'planner returned inline');
-      const message = `Explicit ${strategy} was requested, but Synax could not generate a valid sub-agent plan (${reason}). Refusing to continue inline because that would ignore the requested execution mode.`;
-      wrappedOnEvent({
-        type: 'assistant_message',
-        timestamp: eventNow(),
-        content: message,
-      });
-      turn = {
-        terminalState: 'blocked',
-        finalAnswer: message,
-        steps: 0,
-        toolCalls: [],
-        changedFiles: [],
-        conversation: session.conversation,
-        error: message,
-      };
-    } else {
-      // Auto-detection: plan failed or returned inline — fall through to inline execution
-      turn = await session.startTurnWithRecovery(options.task);
-    }
+    const handoffManager = new HandoffManager();
+    session.setHandoffManager(handoffManager);
+
+    const orchestrationResult = await OrchestrationManager.execute(effectivePlan, session, handoffManager, {
+      forcedMode: normalizedMode === 'delegated' ? undefined : forcedMode,
+    });
+
+    orchestrationUsed = true;
+    markWorkersSpawned(plannerTimer);
+
+    wrappedOnEvent({
+      type: 'dispatch_workers_completed',
+      timestamp: eventNow(),
+      workerCount: agentCount,
+    });
+
+    // Convert orchestration result to AgentTurnResult
+    turn = {
+      terminalState: orchestrationResult.terminalState as AgentTerminalState,
+      finalAnswer: orchestrationResult.conclusion,
+      steps: orchestrationResult.results.length,
+      toolCalls: orchestrationResult.results.flatMap((r) =>
+        Array.from({ length: r.toolCalls }, () => ({
+          name: `subagent:${r.subTaskId}`,
+          success: r.terminalState === 'completed',
+          error: r.error,
+        })),
+      ),
+      changedFiles: orchestrationResult.changedFiles,
+      conversation: {
+        messages: [],
+        inspectionLedger: createInspLedger(),
+        latestCompaction: null,
+        tokenLedger: createTokenLedger(),
+        assemblyStats: null,
+      },
+      error: orchestrationResult.error,
+    };
+  } else if (forceOrchestrate) {
+    const reason = planResult && !planResult.success
+      ? (planResult.error ?? 'planner returned inline')
+      : 'planner returned no sub-tasks';
+    const message = `Explicit ${strategyLabel} was requested, but Synax could not generate a valid sub-agent plan (${reason}). Refusing to continue inline because that would ignore the requested execution mode.`;
+    wrappedOnEvent({
+      type: 'assistant_message',
+      timestamp: eventNow(),
+      content: message,
+    });
+    turn = {
+      terminalState: 'blocked',
+      finalAnswer: message,
+      steps: 0,
+      toolCalls: [],
+      changedFiles: [],
+      conversation: session.conversation,
+      error: message,
+    };
   } else {
-    // Strategy is 'inline' — normal execution
+    // Auto-detection: plan failed, returned inline, or inline strategy — normal execution
     turn = await session.startTurnWithRecovery(options.task);
   }
   const checkpointRecord = checkpoint as { id: string; statusPath: string; diffPath: string } | null;
@@ -651,6 +724,94 @@ export async function runAgentTask(options: RunTaskOptions): Promise<RunTaskRepo
         }
       : null,
     error: turn.error,
+  };
+}
+
+// ─── Repo hints for dispatch intent classifier ────────────────────────────────
+
+/**
+ * Lightweight repo hints collector. Single find + stat calls — does NOT scan
+ * file contents. Used by the dispatch intent classifier to determine:
+ * - file count (tiny/normal/large)
+ * - presence of test, TUI, and docs directories
+ *
+ * This is deliberately cheaper than collectRepoMetadata() which runs
+ * 3 separate find+du commands for budget estimation.
+ */
+async function collectRepoHints(repoRoot: string): Promise<RepoHints> {
+  // Quick file count
+  let fileCount = 0;
+  try {
+    const { stdout } = await execFileAsync(
+      'bash',
+      [
+        '-c',
+        `find . -type f -not -path '*/node_modules/*' -not -path '*/.git/*' -not -path '*/dist/*' -not -path '*/build/*' -not -path '*/coverage/*' 2>/dev/null | wc -l`,
+      ],
+      { cwd: repoRoot, maxBuffer: 64 * 1024, timeout: 3000 },
+    );
+    fileCount = parseInt(stdout.trim(), 10) || 0;
+  } catch {
+    // Best-effort
+  }
+
+  // Quick directory checks (in parallel, cheap)
+  const dirPaths = ['src/tui', 'src/__tests__', 'docs', 'README.md'];
+  let hasTui = false;
+  let hasTests = false;
+  let hasDocs = false;
+
+  try {
+    const results = await Promise.all(
+      dirPaths.map(async (d) => {
+        try {
+          await execFileAsync('bash', ['-c', `test -d '${d}' || test -f '${d}'`], { cwd: repoRoot, timeout: 1000 });
+          return d;
+        } catch {
+          return null;
+        }
+      }),
+    );
+    hasTui = results.includes('src/tui');
+    hasTests = results.includes('src/__tests__');
+    hasDocs = results.includes('docs') || results.includes('README.md');
+  } catch {
+    // Best-effort
+  }
+
+  return { fileCount, hasTui, hasTests, hasDocs, domains: [] };
+}
+
+// ─── Direct orchestration plan builder (no LLM call) ──────────────────────────
+
+/**
+ * Build an OrchestrationPlan directly from repo-recon tasks, skipping the LLM
+ * planning call entirely. Each task becomes a SubTask for OrchestrationManager.
+ */
+function buildReconOrchestrationPlan(tasks: RepoReconTask[], _repoRoot: string, _task: string): OrchestrationPlan {
+  const subTasks: SubTask[] = tasks.map((t, i) => ({
+    id: `recon-${i + 1}`,
+    description: t.description,
+    fileScope: [t.scope],
+    dependencies: [],
+    estimatedBudget: 8000,
+    verification: { level: 'files_changed', label: 'Verify files changed' },
+  }));
+
+  return {
+    planId: `repo-recon-${Date.now()}`,
+    subtasks: tasks.map((t, i) => ({
+      id: `recon-${i + 1}`,
+      description: t.description,
+      fileScope: [t.scope],
+      dependencies: [],
+      estimatedTokens: 8000,
+    })),
+    subTasks,
+    strategy: 'orchestrate',
+    estimatedTotalTokens: subTasks.length * 8000,
+    repoMetadata: { fileCount: 0, totalKB: 0, sourceKB: 0 },
+    contextWindowTokens: 0,
   };
 }
 
