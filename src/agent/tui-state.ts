@@ -214,6 +214,39 @@ export function applyEventToRunState(state: RunStateSnapshot, event: AgentEvent,
       });
       return withTimeline(next, 'thinking', 'objective registered', 'S0');
     }
+    case 'user_message': {
+      const prompt = event.content.trim() || 'No objective';
+      next = {
+        ...next,
+        runId: event.timestamp.replace(/[-:.TZ]/g, '').slice(0, 14) || next.runId,
+        startedAtMs: Date.parse(event.timestamp) || nowMs,
+        objective: {
+          label: prompt,
+          currentPhase: 'thinking',
+          nextCheckpoint: 'awaiting model output',
+        },
+        changes: { items: [], overflowCount: 0 },
+        filesChangedThisRun: [],
+        workingTreeClean: undefined,
+        toolInvocationCount: 0,
+        verification: createEmptyVerificationState(),
+        statusNote: '',
+        riskLine: 'risk: nominal',
+        terminalIssue: undefined,
+        severity: 'S0',
+        terminal: 'running',
+        lastModelOutput: '',
+        patchPreview: undefined,
+      };
+      next = withPhase(next, 'thinking', 'user prompt');
+      next = withDebugHistory(next, {
+        atMs: nowMs,
+        kind: 'user',
+        summary: 'user prompt',
+        detail: event.content,
+      });
+      return withTimeline(next, 'thinking', 'objective registered', 'S0');
+    }
     case 'model_step_started': {
       next = withPhase(next, 'thinking', 'model step');
       return withTimeline(next, 'thinking', `Working · step ${event.stepIndex ?? next.timeline.length + 1}`, 'S0');

@@ -67,6 +67,69 @@ describe('tui-state', () => {
     expect(state.phase).toBe('thinking');
   });
 
+  it('starts a fresh interactive turn from user_message events', () => {
+    let state = createInitialRunStateSnapshot(0);
+    state = applyEventToRunState(
+      state,
+      {
+        type: 'task_started',
+        timestamp: new Date(0).toISOString(),
+        mode: 'patch',
+        profile: 'default',
+        endpoint: 'http://127.0.0.1:1234/v1',
+        model: 'qwen',
+        contextBudgetTokens: 1000,
+        maxModelSteps: 10,
+        maxToolCalls: 10,
+        tools: [],
+        task: 'first prompt',
+      },
+      1,
+    );
+    state = applyEventToRunState(
+      state,
+      {
+        type: 'assistant_message',
+        timestamp: new Date(1).toISOString(),
+        content: 'first answer',
+      },
+      2,
+    );
+    state = applyEventToRunState(
+      state,
+      {
+        type: 'task_finished',
+        timestamp: new Date(2).toISOString(),
+        status: 'completed',
+        toolCalls: 0,
+        maxToolCalls: 10,
+        modelSteps: 1,
+        maxModelSteps: 10,
+        changedFiles: [],
+        workingTreeClean: true,
+        verification: 'not run',
+      },
+      3,
+    );
+
+    state = applyEventToRunState(
+      state,
+      {
+        type: 'user_message',
+        timestamp: new Date(3).toISOString(),
+        content: 'second prompt',
+      },
+      4,
+    );
+
+    expect(state.terminal).toBe('running');
+    expect(state.phase).toBe('thinking');
+    expect(state.objective.label).toBe('second prompt');
+    expect(state.lastModelOutput).toBe('');
+    expect(state.debugHistory.map((item) => item.kind)).toEqual(['user', 'model', 'final_summary', 'user']);
+    expect(state.debugHistory.at(-1)?.detail).toBe('second prompt');
+  });
+
   it('records compact model step progress and assistant notes', () => {
     let state = createInitialRunStateSnapshot(0);
 

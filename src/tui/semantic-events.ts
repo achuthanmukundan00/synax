@@ -292,10 +292,24 @@ export function classifyAgentEvent(event: AgentEvent, state: RunStateSnapshot, n
       const bodyParts: string[] = [];
       if (shortMission) bodyParts.push(`Mission: ${shortMission}${planPayload.task.length > 80 ? '…' : ''}`);
       bodyParts.push(...agentLines);
-      const title =
-        mode === 'sequential'
-          ? `Sequential plan · ${subTasks.length} steps`
-          : `Dispatch · ${subTasks.length} agents · parallel`;
+      // Guard: normalize "1 agents · parallel" and improve wording
+      const title = formatDispatchTitle(mode, subTasks.length, plan.strategy);
+      return [
+        semantic('dispatch', base, {
+          type: 'text',
+          title,
+          body: bodyParts.join('\n'),
+        }),
+      ];
+    }
+    case 'dispatch_started': {
+      const payload = event as import('../agent/events').DispatchStartedEvent;
+      const bodyParts: string[] = [];
+      const title = formatDispatchTitle(
+        payload.mode as string,
+        payload.agentCount,
+        payload.strategy,
+      );
       return [
         semantic('dispatch', base, {
           type: 'text',
@@ -600,4 +614,50 @@ export function createCheckpointEvent(title: string, files: string[], hash: stri
 export function shouldEmitCheckpoint(currentFiles: number, lastFiles: number): boolean {
   const delta = currentFiles - lastFiles;
   return delta > 0 && delta % 5 === 0;
+}
+
+/**
+ * Format the dispatch header title, with guard against "1 agents · parallel".
+ *
+ * Renders:
+ * - "Strategy · repo reconnaissance (4 domains)"
+ * - "Dispatch · 4 agents · parallel"
+ * - "Delegated · 1 agent"
+ * - "Inline · no delegation"
+ */
+export function formatDispatchTitle(
+  mode: string,
+  agentCount: number,
+  strategy: string,
+): string {
+  // Guard: inline or 0 agents
+  if (agentCount === 0 || mode === 'inline') {
+    return 'Inline · no delegation';
+  }
+
+  // Guard: 1 agent in parallel mode → delegated single
+  if (agentCount === 1 && mode === 'parallel') {
+    return 'Delegated · 1 agent';
+  }
+
+  // Guard: 1 agent in any mode
+  if (agentCount === 1) {
+    return 'Delegated · 1 agent';
+  }
+
+  // Repo reconnaissance
+  if (strategy === 'repo_reconnaissance' || strategy.startsWith('repo_recon')) {
+    return `Strategy · repo reconnaissance (${agentCount} domains)`;
+  }
+
+  // Parallel / sequential
+  if (mode === 'parallel') {
+    return `Dispatch · ${agentCount} agents · parallel`;
+  }
+  if (mode === 'sequential') {
+    return `Sequential plan · ${agentCount} steps`;
+  }
+
+  // Fallback
+  return `Dispatch · ${agentCount} agents`;
 }

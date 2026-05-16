@@ -121,6 +121,7 @@ const AGENT_EVENT_TYPES: Set<string> = new Set([
   'command_output',
   'local_shell_command',
   'assistant_message',
+  'user_message',
   'assistant_delta',
   'task_finished',
   'error',
@@ -129,6 +130,12 @@ const AGENT_EVENT_TYPES: Set<string> = new Set([
   'child_session_spawned',
   'child_session_completed',
   'child_session_failed',
+  'planner_started',
+  'planner_intent_detected',
+  'planner_strategy_selected',
+  'dispatch_started',
+  'dispatch_worker_spawned',
+  'dispatch_workers_completed',
 ]);
 
 // ─── Session Class ───────────────────────────────────────────────────────────
