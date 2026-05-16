@@ -514,7 +514,7 @@ function isToolScanCell(
 
 function profileForMode(mode: NormalizedCoreMode): CoreProfile {
   if (mode === 'idle') {
-    return { density: 0.12, flow: 0.02, pressure: 0.18, compression: 0.06, sync: 0.08, strain: false, stable: true };
+    return { density: 0.12, flow: 0.06, pressure: 0.18, compression: 0.06, sync: 0.12, strain: false, stable: false };
   }
   if (mode === 'unloaded') {
     return { density: 0.14, flow: 0, pressure: 0, compression: 0, sync: 0, strain: false, stable: true };
