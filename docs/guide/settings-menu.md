@@ -14,15 +14,15 @@ The settings menu opens as a full-screen modal overlay.
 
 ## Navigation
 
-| Key | Action |
-|-----|--------|
-| ← / → | Switch tabs |
-| ↑ / ↓ | Move selected row |
-| Enter | Select / toggle / edit |
-| Space | Toggle checkbox |
-| Escape | Close settings |
-| q | Close settings (when not editing text) |
-| / | Close settings, open command autocomplete |
+| Key    | Action                                    |
+| ------ | ----------------------------------------- |
+| ← / →  | Switch tabs                               |
+| ↑ / ↓  | Move selected row                         |
+| Enter  | Select / toggle / edit                    |
+| Space  | Toggle checkbox                           |
+| Escape | Close settings                            |
+| q      | Close settings (when not editing text)    |
+| /      | Close settings, open command autocomplete |
 
 ## Tabs
 
@@ -38,6 +38,7 @@ When **No model** is selected, model submissions are blocked until a model is se
 ### Providers
 
 Lists all configured providers with:
+
 - Enabled/disabled status (✓/○)
 - Compatibility type
 - Base URL (sanitized)
@@ -47,6 +48,7 @@ Lists all configured providers with:
 
 Lists discovered skills from `~/.agents/skills/`. Skill entries in config
 use filesystem paths (e.g. `~/.agents/skills/coderabbit-review`):
+
 - ✓ — Enabled
 - ○ — Disabled
 - ! — Broken (missing manifest)
@@ -56,6 +58,7 @@ Toggle with Space or Enter.
 ### MCP
 
 Lists configured MCP servers:
+
 - ✓ — Enabled
 - ○ — Disabled
 - ! — Configuration error (e.g., missing env var)
@@ -65,6 +68,7 @@ Toggle with Space or Enter.
 ### Config
 
 Shows config status:
+
 - Config source paths (global/local)
 - Effective model
 - Which config source is active
@@ -78,6 +82,7 @@ Quick reference for keyboard controls, config file locations, and provider setup
 ## Persistence
 
 Changes made in the settings menu persist automatically:
+
 - If a local `.synax.toml` exists, changes go there
 - Otherwise, changes go to `~/.config/synax/config.toml`
 - If neither exists, a new `.synax.toml` is created in the current repo
@@ -85,6 +90,7 @@ Changes made in the settings menu persist automatically:
 ## Visual Style
 
 The settings menu follows Synax's industrial design:
+
 - Dark background
 - Aligned labels
 - Subtle separators

@@ -52,7 +52,7 @@ Synax currently normalizes these provider presets:
 
 | Preset                     | Use                                              |
 | -------------------------- | ------------------------------------------------ |
-| `relay`              | Default local Relay endpoint at `127.0.0.1:1234` |
+| `relay`                    | Default local Relay endpoint at `127.0.0.1:1234` |
 | `openai`                   | OpenAI-compatible cloud endpoint                 |
 | `anthropic`                | Experimental OpenAI-compatible config shape only |
 | `openrouter`               | OpenRouter-compatible endpoint                   |

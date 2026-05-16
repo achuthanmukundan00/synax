@@ -23,6 +23,7 @@ applying project-specific domain conventions.
 ## Auto-Discovery
 
 Synax scans two directories for `SKILL.md` files:
+
 - `~/.synax/skills/<skill-name>/SKILL.md` — global skills (user-installed)
 - `.synax/skills/<skill-name>/SKILL.md` — project-specific skills
 
@@ -31,11 +32,13 @@ frontmatter:
 
 ```markdown
 ---
-name: "TypeScript Conventions"
-description: "Project TypeScript style guide"
+name: 'TypeScript Conventions'
+description: 'Project TypeScript style guide'
 enabled: true
 ---
+
 # Instructions
+
 - Use strict mode
 - Prefer interfaces over type aliases
 ```
@@ -72,6 +75,7 @@ For explicit config-based skill entries, Synax resolves paths to files. Synax re
 a `SKILL.md` file and loads its content.
 
 Supported path forms:
+
 - **Home-relative**: `~/.agents/skills/coderabbit-review` — expands `~` to your home directory
 - **Absolute**: `/opt/skills/my-skill/SKILL.md` — used directly
 - **Project-relative**: `./project-skills/lint-checker` — resolved from the project root

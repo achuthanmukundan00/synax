@@ -1,6 +1,6 @@
 # Consuming Synax
 
-Synax is designed primarily as a CLI tool, but its core behavior relies on a clean, decoupled programmatic API that can be consumed directly by other applications. 
+Synax is designed primarily as a CLI tool, but its core behavior relies on a clean, decoupled programmatic API that can be consumed directly by other applications.
 
 By installing Synax, you can instantiate an agent session, integrate it with custom tool registries, or query holographic memory files directly from your own software.
 
@@ -13,11 +13,13 @@ As of version 0.1.0-alpha, Synax is not yet published to a public registry. You 
 Use `bun link` to symbiotically manage your project and Synax while testing local changes.
 
 In the Synax project root:
+
 ```bash
 bun link
 ```
 
 In your project root:
+
 ```bash
 bun link synax
 ```
@@ -35,12 +37,15 @@ bun add ../path/to/synax
 Create a compressed tarball mimicking a remote registry release, and lock that version. Recommended option for pseudo-production testing.
 
 In the Synax project root:
+
 ```bash
 bun pm pack
 ```
+
 This produces a file like `synax-0.1.0-alpha.1.tgz`.
 
 In your project root:
+
 ```bash
 bun add ../path/to/synax/synax-0.1.0-alpha.1.tgz
 ```
@@ -59,13 +64,13 @@ const client = {
       message: {
         role: 'assistant',
         content: 'I am a Synax programming session initialized programmatically.',
-        tool_calls: null
+        tool_calls: null,
       },
       logprobs: null,
       created: Date.now(),
-      model: 'mistral-nemo'
+      model: 'mistral-nemo',
     };
-  }
+  },
 };
 
 async function check() {

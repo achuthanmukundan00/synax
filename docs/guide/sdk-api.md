@@ -74,7 +74,7 @@ import { ToolRegistry } from 'synax/tools';
 import { ActionExecutor } from 'synax';
 
 // Assume you created a custom registry and a list of tool schema definitions
-const registry = new ToolRegistry(); 
+const registry = new ToolRegistry();
 registry.registerTool({
   name: 'say_hello',
   description: 'Say hello to someone.',
@@ -108,4 +108,4 @@ session.eventBus.on('tool_execution_start', (event) => {
 });
 ```
 
-*(Note: In earlier versions of `Session`, `onActivity`, `onEvent`, and `onBudget` handlers could be passed to the constructor. EventBus offers deeper observability.)*
+_(Note: In earlier versions of `Session`, `onActivity`, `onEvent`, and `onBudget` handlers could be passed to the constructor. EventBus offers deeper observability.)_

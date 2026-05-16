@@ -51,16 +51,16 @@ examples/         Example extensions and configurations
 
 ### Key Modules
 
-| Module | Responsibility |
-|--------|---------------|
-| `Session` | Agent lifecycle: boot → trustGate → ready → running → shutdown |
-| `EventBus` | Typed pub/sub for lifecycle events and control hooks |
-| `ActionExecutor` | Executes tool calls (bash, read, write, edit, search_memory) |
-| `DeterministicCompactor` | Zero-token regex/structural compression (tier 1) |
-| `HolographicMemory` | SQLite FTS5 semantic memory with 0-token overhead |
-| `HandoffManager` | Context exhaustion → spawn child session with FTS5 inheritance |
-| `RecoveryManager` | Pre-programmed recipes for empty_response, bash_failure, context_exhaustion, infinite_loop |
-| `SkillLoader` | Auto-discovers SKILL.md files from ~/.synax/skills/ and .synax/skills/ |
+| Module                   | Responsibility                                                                             |
+| ------------------------ | ------------------------------------------------------------------------------------------ |
+| `Session`                | Agent lifecycle: boot → trustGate → ready → running → shutdown                             |
+| `EventBus`               | Typed pub/sub for lifecycle events and control hooks                                       |
+| `ActionExecutor`         | Executes tool calls (bash, read, write, edit, search_memory)                               |
+| `DeterministicCompactor` | Zero-token regex/structural compression (tier 1)                                           |
+| `HolographicMemory`      | SQLite FTS5 semantic memory with 0-token overhead                                          |
+| `HandoffManager`         | Context exhaustion → spawn child session with FTS5 inheritance                             |
+| `RecoveryManager`        | Pre-programmed recipes for empty_response, bash_failure, context_exhaustion, infinite_loop |
+| `SkillLoader`            | Auto-discovers SKILL.md files from ~/.synax/skills/ and .synax/skills/                     |
 
 ## How to Add a New Action Handler
 
@@ -138,23 +138,23 @@ Before opening a pull request:
 
 ## Issue Labels
 
-| Label | Meaning |
-|-------|---------|
-| `type:feature` | New product capability |
-| `type:bug` | Defect or incorrect behavior |
-| `type:docs` | Documentation-only |
-| `type:chore` | Maintenance, tooling, CI |
-| `priority:p0` | Blocks release or core workflow |
-| `priority:p1` | Important after p0 foundation |
-| `priority:p2` | Nice to have |
-| `area:docs` | Documentation site or guides |
-| `area:cli` | CLI commands and UX |
-| `area:llm` | LLM client, parsers, providers |
-| `area:tools` | Tool execution and registry |
-| `area:memory` | HolographicMemory, handoff |
+| Label             | Meaning                         |
+| ----------------- | ------------------------------- |
+| `type:feature`    | New product capability          |
+| `type:bug`        | Defect or incorrect behavior    |
+| `type:docs`       | Documentation-only              |
+| `type:chore`      | Maintenance, tooling, CI        |
+| `priority:p0`     | Blocks release or core workflow |
+| `priority:p1`     | Important after p0 foundation   |
+| `priority:p2`     | Nice to have                    |
+| `area:docs`       | Documentation site or guides    |
+| `area:cli`        | CLI commands and UX             |
+| `area:llm`        | LLM client, parsers, providers  |
+| `area:tools`      | Tool execution and registry     |
+| `area:memory`     | HolographicMemory, handoff      |
 | `area:extensions` | Extension system and interfaces |
-| `milestone:M6` | Community Readiness |
-| `milestone:M7` | SDK Surface & Package |
+| `milestone:M6`    | Community Readiness             |
+| `milestone:M7`    | SDK Surface & Package           |
 
 ## Extension Points
 

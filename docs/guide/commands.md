@@ -34,7 +34,7 @@ bun run synax -- chat --message "Explain the test layout."
 Slash commands:
 
 | Command                        | Behavior                                              |
-| ------------------------------ | ----------------------------------------------------- |
+| ------------------------------ | ----------------------------------------------------- | ----------------------------------- |
 | `/help`                        | Show available chat commands                          |
 | `/settings`                    | Show provider, agent, tool, and verification settings |
 | `/settings set <path> <value>` | Change a supported setting for the current session    |
@@ -42,8 +42,8 @@ Slash commands:
 | `/budget`                      | Show context and loop limits                          |
 | `/test-provider`               | Probe provider models and chat endpoints              |
 | `/inspect`                     | Show project profile                                  |
-| `/verify [quick|full]`         | Run configured verification command                   |
-| `/diff`                        | Show bounded git status and diff                     |
+| `/verify [quick                | full]`                                                | Run configured verification command |
+| `/diff`                        | Show bounded git status and diff                      |
 | `/status`                      | Show git, budget, checkpoint, and read-state summary  |
 | `/clear`                       | Reset the chat conversation and inspection ledger     |
 | `/exit`, `/quit`               | Exit chat                                             |

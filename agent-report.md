@@ -16,7 +16,7 @@ After executing the tool handler, if the call was a **successful** `edit` or `wr
 
 Key design choices:
 
-1. **Only successful mutations reset.** A failed edit (e.g., `oldStr` mismatch) does *not* reset the counter. If the model tries to edit, fails, and keeps repeating the same bash command, the loop detector still fires — no safety weakening.
+1. **Only successful mutations reset.** A failed edit (e.g., `oldStr` mismatch) does _not_ reset the counter. If the model tries to edit, fails, and keeps repeating the same bash command, the loop detector still fires — no safety weakening.
 
 2. **Only `edit` and `write` reset.** Reads and other non-mutating tools do not count as progress. A read-loop followed by more identical bash commands will still be caught.
 

@@ -22,15 +22,15 @@ Full event logs are stored as JSONL and read only during resume.
 
 Each session records:
 
-| Metadata | Event Log |
-|----------|-----------|
-| Session ID | User messages |
-| Created/updated timestamps | Assistant messages |
-| Workspace path | Tool calls and results |
-| Git branch | State snapshots |
-| Active provider/model | Summaries |
-| Message/event counts | |
-| Session status | |
+| Metadata                   | Event Log              |
+| -------------------------- | ---------------------- |
+| Session ID                 | User messages          |
+| Created/updated timestamps | Assistant messages     |
+| Workspace path             | Tool calls and results |
+| Git branch                 | State snapshots        |
+| Active provider/model      | Summaries              |
+| Message/event counts       |                        |
+| Session status             |                        |
 
 ## /resume Command
 
@@ -56,14 +56,14 @@ enter to resume    esc to start new    ctrl+d to quit    tab to toggle sort    �
 
 ## Picker Controls
 
-| Key | Action |
-|-----|--------|
-| ↑ / ↓ | Browse sessions |
-| Enter | Resume selected session |
-| Escape | Close picker, start new |
-| Ctrl+D | Quit Synax |
-| Tab | Toggle sort (updated/created) |
-| Type | Filter sessions by text |
+| Key    | Action                        |
+| ------ | ----------------------------- |
+| ↑ / ↓  | Browse sessions               |
+| Enter  | Resume selected session       |
+| Escape | Close picker, start new       |
+| Ctrl+D | Quit Synax                    |
+| Tab    | Toggle sort (updated/created) |
+| Type   | Filter sessions by text       |
 
 ## Resume Behavior
 

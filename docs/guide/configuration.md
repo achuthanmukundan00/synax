@@ -4,11 +4,11 @@ Synax uses a layered config system with clear precedence.
 
 ## Config Files
 
-| Level | Path | Purpose |
-|-------|------|---------|
-| Defaults | Built-in | Safe fallback values |
-| Global | `~/.config/synax/config.toml` | Machine-wide defaults |
-| Local | `<repo>/.synax.toml` | Per-project overrides |
+| Level    | Path                          | Purpose               |
+| -------- | ----------------------------- | --------------------- |
+| Defaults | Built-in                      | Safe fallback values  |
+| Global   | `~/.config/synax/config.toml` | Machine-wide defaults |
+| Local    | `<repo>/.synax.toml`          | Per-project overrides |
 
 ## Precedence
 
@@ -137,13 +137,13 @@ When both formats exist, the multi-provider format takes precedence for provider
 
 ## Environment Variables
 
-| Variable | Purpose |
-|----------|---------|
+| Variable                      | Purpose                 |
+| ----------------------------- | ----------------------- |
 | `SYNAX_CONTEXT_BUDGET_TOKENS` | Override context budget |
-| `SYNAX_MAX_TOOL_CALLS` | Override max tool calls |
-| `DEEPSEEK_API_KEY` | DeepSeek API key |
-| `OPENAI_API_KEY` | OpenAI API key |
-| `ANTHROPIC_API_KEY` | Anthropic API key |
+| `SYNAX_MAX_TOOL_CALLS`        | Override max tool calls |
+| `DEEPSEEK_API_KEY`            | DeepSeek API key        |
+| `OPENAI_API_KEY`              | OpenAI API key          |
+| `ANTHROPIC_API_KEY`           | Anthropic API key       |
 
 ## Validation
 

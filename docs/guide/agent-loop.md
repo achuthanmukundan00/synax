@@ -13,14 +13,14 @@ Synax uses a bounded model-tool loop:
 
 The model-facing tool names are intentionally small:
 
-| Tool          | Purpose                                               |
-| ------------- | ----------------------------------------------------- |
-| `read`        | List files, read a bounded file range, or search text |
-| `edit`        | Exact `replace_in_file` edit                          |
-| `write`       | Create a new repo-local text file                     |
-| `bash`        | Run terminal commands, including git and verification |
-| `view_image`  | Read image file, return base64 for vision-model analysis |
-| `search_memory`| Search conversation history with FTS5 stemming       |
+| Tool            | Purpose                                                  |
+| --------------- | -------------------------------------------------------- |
+| `read`          | List files, read a bounded file range, or search text    |
+| `edit`          | Exact `replace_in_file` edit                             |
+| `write`         | Create a new repo-local text file                        |
+| `bash`          | Run terminal commands, including git and verification    |
+| `view_image`    | Read image file, return base64 for vision-model analysis |
+| `search_memory` | Search conversation history with FTS5 stemming           |
 
 Internally, read calls map to more specific tools such as `list_files`, `read_file_range`, and `search_text`.
 

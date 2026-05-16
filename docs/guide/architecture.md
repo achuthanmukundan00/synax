@@ -60,14 +60,14 @@ Each control hook handler returns a `ControlDecision` — `{ allow: true }` to p
 
 Dispatches tool calls to handlers. Current handlers:
 
-| Handler | Source | Purpose |
-|---------|--------|---------|
-| `read` | `handlers/read-handler.ts` | Read files, list directories, search text |
-| `edit` | `handlers/edit-handler.ts` | Exact `replace_in_file` edits with safety gates |
-| `write` | `handlers/write-handler.ts` | Create new text files |
-| `bash` | `handlers/bash-handler.ts` | Execute shell commands (disabled by default) |
-| `search_memory` | `handlers/search-memory-handler.ts` | Query HolographicMemory via FTS5 |
-| `view_image` | `handlers/view-image-handler.ts` | View image files |
+| Handler         | Source                              | Purpose                                         |
+| --------------- | ----------------------------------- | ----------------------------------------------- |
+| `read`          | `handlers/read-handler.ts`          | Read files, list directories, search text       |
+| `edit`          | `handlers/edit-handler.ts`          | Exact `replace_in_file` edits with safety gates |
+| `write`         | `handlers/write-handler.ts`         | Create new text files                           |
+| `bash`          | `handlers/bash-handler.ts`          | Execute shell commands (disabled by default)    |
+| `search_memory` | `handlers/search-memory-handler.ts` | Query HolographicMemory via FTS5                |
+| `view_image`    | `handlers/view-image-handler.ts`    | View image files                                |
 
 Each handler validates input against policy, enforces path safety, and applies output caps.
 
@@ -106,12 +106,12 @@ Spawns child Sessions with fresh context when the parent's context window is exh
 
 Pre-programmed recipes for failure scenarios. Each recipe injects a nudge message into the conversation and retries. Recipes are registered and can be customized:
 
-| Scenario | Behavior |
-|----------|----------|
-| `empty_response` | Inject "please continue" nudge, retry once |
-| `bash_failure` | Feed stderr back to model, retry once |
+| Scenario             | Behavior                                             |
+| -------------------- | ---------------------------------------------------- |
+| `empty_response`     | Inject "please continue" nudge, retry once           |
+| `bash_failure`       | Feed stderr back to model, retry once                |
 | `context_exhaustion` | Inject "stop reading, take action" nudge, retry once |
-| `infinite_loop` | Inject "try a different approach" steering message |
+| `infinite_loop`      | Inject "try a different approach" steering message   |
 
 ### CostTracker & TokenCounter (`src/metrics/`)
 
@@ -120,6 +120,7 @@ Track token usage and cost in real time. Token counting uses approximate charact
 ### SkillLoader (`src/skills/SkillLoader.ts`)
 
 Auto-discovers SKILL.md files from:
+
 - `~/.synax/skills/` — global skills (user-installed)
 - `.synax/skills/` — project-specific skills
 

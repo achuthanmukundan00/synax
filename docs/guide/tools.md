@@ -26,14 +26,14 @@ session.registry.register({
   inputSchema: {
     type: 'object',
     properties: {
-      action: { type: 'string' }
+      action: { type: 'string' },
     },
-    required: ['action']
+    required: ['action'],
   },
   safetyPolicy: {
     readOnly: true,
     rejectsUnsafePaths: false,
-    boundedOutput: true
+    boundedOutput: true,
   },
   ledgerBehavior: 'none',
   execute: async (input: unknown, context): Promise<ToolResult> => {
@@ -41,9 +41,9 @@ session.registry.register({
     return {
       success: true,
       toolName: 'my_custom_tool',
-      output: `Executed ${action} in ${context.repoRoot}`
+      output: `Executed ${action} in ${context.repoRoot}`,
     };
-  }
+  },
 });
 ```
 

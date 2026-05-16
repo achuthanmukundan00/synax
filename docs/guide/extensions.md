@@ -48,19 +48,19 @@ bus.onAny((event) => {
 
 **Available lifecycle events:**
 
-| Event | Payload | When |
-|-------|---------|------|
-| `session_start` | `mode`, `model` | Agent boots up |
-| `session_shutdown` | `terminalState` | Agent shuts down |
-| `turn_start` | `stepIndex`, `task` | New turn begins |
-| `turn_end` | `stepIndex`, `terminalState`, `toolCalls`, `steps` | Turn completes |
-| `tool_execution_start` | `toolCallId`, `toolName`, `arguments` | Before tool runs |
-| `tool_execution_end` | `toolCallId`, `toolName`, `success`, `error` | After tool runs |
-| `before_compact` | `estimatedInputTokens`, `inputLimit` | Compaction about to run |
-| `session_compact` | `stage`, `tokensBefore`, `tokensAfter` | Compaction completed |
-| `child_session_spawned` | `parentSessionId`, `childSessionId` | Handoff spawned child |
-| `child_session_completed` | `parentSessionId`, `childSessionId`, `result` | Child session completed |
-| `child_session_failed` | `parentSessionId`, `childSessionId`, `error` | Child session failed |
+| Event                     | Payload                                            | When                    |
+| ------------------------- | -------------------------------------------------- | ----------------------- |
+| `session_start`           | `mode`, `model`                                    | Agent boots up          |
+| `session_shutdown`        | `terminalState`                                    | Agent shuts down        |
+| `turn_start`              | `stepIndex`, `task`                                | New turn begins         |
+| `turn_end`                | `stepIndex`, `terminalState`, `toolCalls`, `steps` | Turn completes          |
+| `tool_execution_start`    | `toolCallId`, `toolName`, `arguments`              | Before tool runs        |
+| `tool_execution_end`      | `toolCallId`, `toolName`, `success`, `error`       | After tool runs         |
+| `before_compact`          | `estimatedInputTokens`, `inputLimit`               | Compaction about to run |
+| `session_compact`         | `stage`, `tokensBefore`, `tokensAfter`             | Compaction completed    |
+| `child_session_spawned`   | `parentSessionId`, `childSessionId`                | Handoff spawned child   |
+| `child_session_completed` | `parentSessionId`, `childSessionId`, `result`      | Child session completed |
+| `child_session_failed`    | `parentSessionId`, `childSessionId`, `error`       | Child session failed    |
 
 All lifecycle handlers run in parallel. Individual handler errors are caught and swallowed — they never crash the agent.
 
@@ -101,10 +101,10 @@ bus.onControl('pre_tool_use', (event) => {
 
 **Available control hooks:**
 
-| Hook | When | Return type |
-|------|------|-------------|
-| `pre_tool_use` | Before any tool executes | `{ allow: true }` or `{ allow: false, reason }` |
-| `post_tool_use_failure` | After a tool fails | `{ allow: true }` or `{ allow: false, reason }` |
+| Hook                    | When                     | Return type                                     |
+| ----------------------- | ------------------------ | ----------------------------------------------- |
+| `pre_tool_use`          | Before any tool executes | `{ allow: true }` or `{ allow: false, reason }` |
+| `post_tool_use_failure` | After a tool fails       | `{ allow: true }` or `{ allow: false, reason }` |
 
 Control hooks run sequentially. The first handler returning `allow: false` short-circuits the chain. This lets you layer safety gates — a restrictive gate first, followed by logging.
 
@@ -386,6 +386,7 @@ synax chat --skill examples/hello-world-extension
 ```
 
 The example demonstrates:
+
 - Writing a SKILL.md with YAML frontmatter
 - Subscribing to lifecycle events
 - Logging tool calls with a custom subscriber

@@ -5,25 +5,25 @@ You can configure multiple providers and switch between them at runtime.
 
 ## Provider Protocols
 
-| Protocol | Description |
-|----------|-------------|
-| `openai-compatible` | Any service with an OpenAI-compatible `/chat/completions` endpoint |
-| `anthropic-messages` | Real Anthropic Messages API adapter via `/v1/messages` |
+| Protocol             | Description                                                        |
+| -------------------- | ------------------------------------------------------------------ |
+| `openai-compatible`  | Any service with an OpenAI-compatible `/chat/completions` endpoint |
+| `anthropic-messages` | Real Anthropic Messages API adapter via `/v1/messages`             |
 
 ## Built-in Provider Presets
 
 Synax ships with presets for these providers:
 
-| Provider ID | Protocol | Base URL | Auth |
-|-------------|----------|----------|------|
-| `relay` | openai-compatible | `http://127.0.0.1:1234/v1` | none |
-| `custom` | openai-compatible | user-configured | optional |
-| `deepseek` | openai-compatible | `https://api.deepseek.com/v1` | `DEEPSEEK_API_KEY` |
-| `openrouter` | openai-compatible | `https://openrouter.ai/api/v1` | `OPENROUTER_API_KEY` |
-| `groq` | openai-compatible | `https://api.groq.com/openai/v1` | `GROQ_API_KEY` |
-| `anthropic` | anthropic-messages | `https://api.anthropic.com` | `ANTHROPIC_API_KEY` |
-| `mistral` | openai-compatible | `https://api.mistral.ai/v1` | `MISTRAL_API_KEY` |
-| `together` | openai-compatible | `https://api.together.xyz/v1` | `TOGETHER_API_KEY` |
+| Provider ID  | Protocol           | Base URL                         | Auth                 |
+| ------------ | ------------------ | -------------------------------- | -------------------- |
+| `relay`      | openai-compatible  | `http://127.0.0.1:1234/v1`       | none                 |
+| `custom`     | openai-compatible  | user-configured                  | optional             |
+| `deepseek`   | openai-compatible  | `https://api.deepseek.com/v1`    | `DEEPSEEK_API_KEY`   |
+| `openrouter` | openai-compatible  | `https://openrouter.ai/api/v1`   | `OPENROUTER_API_KEY` |
+| `groq`       | openai-compatible  | `https://api.groq.com/openai/v1` | `GROQ_API_KEY`       |
+| `anthropic`  | anthropic-messages | `https://api.anthropic.com`      | `ANTHROPIC_API_KEY`  |
+| `mistral`    | openai-compatible  | `https://api.mistral.ai/v1`      | `MISTRAL_API_KEY`    |
+| `together`   | openai-compatible  | `https://api.together.xyz/v1`    | `TOGETHER_API_KEY`   |
 
 OpenAI-compatible providers (relay, custom, deepseek, openrouter, groq, mistral, together) share
 one client implementation. Anthropic uses a real Messages API adapter.
@@ -143,12 +143,12 @@ output_price_per_1m_tokens = 1.10  # USD per 1M output tokens
 
 Default pricing per provider:
 
-| Provider | Input ($/1M) | Output ($/1M) |
-|----------|-------------|---------------|
-| DeepSeek | $0.27 | $1.10 |
-| Groq | $0.59 | $0.79 |
-| Anthropic | $3.00 | $15.00 |
-| OpenRouter | varies | varies |
+| Provider   | Input ($/1M) | Output ($/1M) |
+| ---------- | ------------ | ------------- |
+| DeepSeek   | $0.27        | $1.10         |
+| Groq       | $0.59        | $0.79         |
+| Anthropic  | $3.00        | $15.00        |
+| OpenRouter | varies       | varies        |
 
 When pricing is configured, the TUI shows a session spend indicator
 at the bottom of the screen: `Spend: $0.004`. Local providers show
@@ -206,6 +206,7 @@ when required API keys are missing.
 ## Switching Providers
 
 From the TUI:
+
 1. Press `/` and type `settings`
 2. Navigate to the **Model** tab
 3. Select **Active Provider** and choose from enabled providers

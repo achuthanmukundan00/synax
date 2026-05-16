@@ -30,33 +30,33 @@ tool_call_parser = "qwen3_xml"
 
 If you don't set `tool_call_parser`, Synax auto-detects the parser from your model name:
 
-| Model Family | Auto-Detected Parser |
-|---|---|
-| Qwen3, Qwen3-Coder, Qwen3.5, Qwen3.6 | `qwen3_xml` |
-| Qwen2.5 | `hermes` |
-| Hermes, NousResearch, OpenHermes | `hermes` |
-| Llama 3 / 3.1 / 3.2 / 3.3 | `llama3_json` |
-| Llama 4 | `llama4_pythonic` |
-| DeepSeek V3 / Chat / R1 | `deepseek_v3` |
-| DeepSeek V3.1 | `deepseek_v31` |
-| Mistral, Mixtral | `mistral` |
-| xLAM | `xlam` |
-| Granite / Granite 3 | `granite` |
-| Granite 4 | `granite4` |
-| Granite 20B FC | `granite-20b-fc` |
-| InternLM | `internlm` |
-| FunctionGemma | `functiongemma` |
-| OLMo3 / OLMoE | `olmo3` |
-| GLM-4 / GLM-4.5 | `glm45` |
-| GLM-4.7 | `glm47` |
-| Step 3 | `step3` |
-| Step 3.5 | `step3p5` |
-| Kimi K2 | `kimi_k2` |
-| Hunyuan A13B | `hunyuan_a13b` |
-| LongCat | `longcat` |
-| Jamba | `jamba` |
-| MiniMax | `minimax` |
-| GigaChat 3 | `gigachat3` |
+| Model Family                         | Auto-Detected Parser |
+| ------------------------------------ | -------------------- |
+| Qwen3, Qwen3-Coder, Qwen3.5, Qwen3.6 | `qwen3_xml`          |
+| Qwen2.5                              | `hermes`             |
+| Hermes, NousResearch, OpenHermes     | `hermes`             |
+| Llama 3 / 3.1 / 3.2 / 3.3            | `llama3_json`        |
+| Llama 4                              | `llama4_pythonic`    |
+| DeepSeek V3 / Chat / R1              | `deepseek_v3`        |
+| DeepSeek V3.1                        | `deepseek_v31`       |
+| Mistral, Mixtral                     | `mistral`            |
+| xLAM                                 | `xlam`               |
+| Granite / Granite 3                  | `granite`            |
+| Granite 4                            | `granite4`           |
+| Granite 20B FC                       | `granite-20b-fc`     |
+| InternLM                             | `internlm`           |
+| FunctionGemma                        | `functiongemma`      |
+| OLMo3 / OLMoE                        | `olmo3`              |
+| GLM-4 / GLM-4.5                      | `glm45`              |
+| GLM-4.7                              | `glm47`              |
+| Step 3                               | `step3`              |
+| Step 3.5                             | `step3p5`            |
+| Kimi K2                              | `kimi_k2`            |
+| Hunyuan A13B                         | `hunyuan_a13b`       |
+| LongCat                              | `longcat`            |
+| Jamba                                | `jamba`              |
+| MiniMax                              | `minimax`            |
+| GigaChat 3                           | `gigachat3`          |
 
 ### Explicit Override
 
@@ -80,54 +80,54 @@ tool_call_parser = "openai"
 
 ### XML/Tag-Based
 
-| Parser ID | Format | Example Models |
-|---|---|---|
-| `qwen3_xml` | `<tool_call><function=name><parameter=key>val</parameter></function></tool_call>` | Qwen3, Qwen3-Coder |
-| `hermes` | `<tool_call>{"name":"...","arguments":{...}}</tool_call>` | Hermes, Qwen2.5 |
-| `olmo3` | `<function_calls><function_call>{...}</function_call></function_calls>` | OLMo3 |
-| `functiongemma` | `<tool_call>{"name":"...","arguments":{...}}</tool_call>` | FunctionGemma |
-| `gigachat3` | `<function=name>{"key":"value"}</function>` | GigaChat 3 |
-| `step3` | `<tool_call>` or `<function_call>` blocks | Step 3 |
-| `step3p5` | `<tool_call>` or `<function_call>` blocks | Step 3.5 |
+| Parser ID       | Format                                                                            | Example Models     |
+| --------------- | --------------------------------------------------------------------------------- | ------------------ |
+| `qwen3_xml`     | `<tool_call><function=name><parameter=key>val</parameter></function></tool_call>` | Qwen3, Qwen3-Coder |
+| `hermes`        | `<tool_call>{"name":"...","arguments":{...}}</tool_call>`                         | Hermes, Qwen2.5    |
+| `olmo3`         | `<function_calls><function_call>{...}</function_call></function_calls>`           | OLMo3              |
+| `functiongemma` | `<tool_call>{"name":"...","arguments":{...}}</tool_call>`                         | FunctionGemma      |
+| `gigachat3`     | `<function=name>{"key":"value"}</function>`                                       | GigaChat 3         |
+| `step3`         | `<tool_call>` or `<function_call>` blocks                                         | Step 3             |
+| `step3p5`       | `<tool_call>` or `<function_call>` blocks                                         | Step 3.5           |
 
 ### JSON-Based
 
-| Parser ID | Format | Example Models |
-|---|---|---|
-| `llama3_json` | `<\|python_tag\|>{"name":"...","parameters":{...}}` | Llama 3.x |
-| `mistral` | `[TOOL_CALLS][{"name":"...","arguments":{...}}]` | Mistral, Mixtral |
-| `xlam` | `<tool_call>{"name":"...","arguments":{...}}</tool_call>` or bare fn+JSON | xLAM |
-| `granite` | `<tool_call>{"name":"...","arguments":{...}}</tool_call>` | Granite 3 |
-| `granite4` | `<tool_call>{"name":"...","arguments":{...}}</tool_call>` | Granite 4 |
-| `granite-20b-fc` | `<tool_call>{"name":"...","arguments":{...}}</tool_call>` | Granite 20B FC |
-| `internlm` | `<tool_call>{"name":"...","arguments":{...}}</tool_call>` | InternLM |
-| `jamba` | `<tool_call>{"name":"...","arguments":{...}}</tool_call>` | Jamba |
-| `minimax` | `<tool_call>{"name":"...","arguments":{...}}</tool_call>` | MiniMax |
-| `kimi_k2` | `<tool_call>{"name":"...","arguments":{...}}</tool_call>` | Kimi K2 |
-| `hunyuan_a13b` | `<tool_call>{"name":"...","arguments":{...}}</tool_call>` | Hunyuan A13B |
-| `longcat` | `<tool_call>{"name":"...","arguments":{...}}</tool_call>` | LongCat |
-| `deepseek_v3` | `<tool_call>{"name":"...","arguments":{...}}</tool_call>` | DeepSeek V3, R1 |
-| `deepseek_v31` | Same as V3 with special token variant | DeepSeek V3.1 |
-| `glm45` | `<\|tool_call\|>{"name":"...","arguments":{...}}` or Hermes fallback | GLM-4.5 |
-| `glm47` | Same as glm45 | GLM-4.7 |
+| Parser ID        | Format                                                                    | Example Models   |
+| ---------------- | ------------------------------------------------------------------------- | ---------------- |
+| `llama3_json`    | `<\|python_tag\|>{"name":"...","parameters":{...}}`                       | Llama 3.x        |
+| `mistral`        | `[TOOL_CALLS][{"name":"...","arguments":{...}}]`                          | Mistral, Mixtral |
+| `xlam`           | `<tool_call>{"name":"...","arguments":{...}}</tool_call>` or bare fn+JSON | xLAM             |
+| `granite`        | `<tool_call>{"name":"...","arguments":{...}}</tool_call>`                 | Granite 3        |
+| `granite4`       | `<tool_call>{"name":"...","arguments":{...}}</tool_call>`                 | Granite 4        |
+| `granite-20b-fc` | `<tool_call>{"name":"...","arguments":{...}}</tool_call>`                 | Granite 20B FC   |
+| `internlm`       | `<tool_call>{"name":"...","arguments":{...}}</tool_call>`                 | InternLM         |
+| `jamba`          | `<tool_call>{"name":"...","arguments":{...}}</tool_call>`                 | Jamba            |
+| `minimax`        | `<tool_call>{"name":"...","arguments":{...}}</tool_call>`                 | MiniMax          |
+| `kimi_k2`        | `<tool_call>{"name":"...","arguments":{...}}</tool_call>`                 | Kimi K2          |
+| `hunyuan_a13b`   | `<tool_call>{"name":"...","arguments":{...}}</tool_call>`                 | Hunyuan A13B     |
+| `longcat`        | `<tool_call>{"name":"...","arguments":{...}}</tool_call>`                 | LongCat          |
+| `deepseek_v3`    | `<tool_call>{"name":"...","arguments":{...}}</tool_call>`                 | DeepSeek V3, R1  |
+| `deepseek_v31`   | Same as V3 with special token variant                                     | DeepSeek V3.1    |
+| `glm45`          | `<\|tool_call\|>{"name":"...","arguments":{...}}` or Hermes fallback      | GLM-4.5          |
+| `glm47`          | Same as glm45                                                             | GLM-4.7          |
 
 ### Pythonic
 
-| Parser ID | Format | Example Models |
-|---|---|---|
-| `pythonic` | `func(key="val", ...)` or `[func(...), func(...)]` | Pythonic-capable models |
-| `llama4_pythonic` | `<\|python_tag\|>func(key="val")` | Llama 4 |
+| Parser ID         | Format                                             | Example Models          |
+| ----------------- | -------------------------------------------------- | ----------------------- |
+| `pythonic`        | `func(key="val", ...)` or `[func(...), func(...)]` | Pythonic-capable models |
+| `llama4_pythonic` | `<\|python_tag\|>func(key="val")`                  | Llama 4                 |
 
 ### Passthrough
 
-| Parser ID | Behavior |
-|---|---|
-| `openai` | No text parsing; uses API-returned `tool_calls` only |
+| Parser ID | Behavior                                             |
+| --------- | ---------------------------------------------------- |
+| `openai`  | No text parsing; uses API-returned `tool_calls` only |
 
 ### Generic Fallback
 
-| Parser ID | Behavior |
-|---|---|
+| Parser ID | Behavior                                                       |
+| --------- | -------------------------------------------------------------- |
 | `generic` | Multi-strategy: tries Hermes-style, fenced JSON, and bare JSON |
 
 ## Format Details

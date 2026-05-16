@@ -42,25 +42,25 @@ graph TD
 
 ## Component Map
 
-| Component | Source Path | Status |
-|---|---|---|
-| Session | [`src/session/Session.ts`](https://github.com/achuthanmukundan00/synax/blob/main/src/session/Session.ts) | **active** |
-| ActionExecutor | [`src/actions/ActionExecutor.ts`](https://github.com/achuthanmukundan00/synax/blob/main/src/actions/ActionExecutor.ts) | **active** |
-| ExecutionEnv | [`src/env/ExecutionEnv.ts`](https://github.com/achuthanmukundan00/synax/blob/main/src/env/ExecutionEnv.ts) | **active** |
-| Provider Factory | [`src/llm/provider-factory.ts`](https://github.com/achuthanmukundan00/synax/blob/main/src/llm/provider-factory.ts) | **active** |
-| Parser Pipeline | [`src/llm/parsers/`](https://github.com/achuthanmukundan00/synax/tree/main/src/llm/parsers) | **active** |
-| Parser Repair | [`src/llm/repair/`](https://github.com/achuthanmukundan00/synax/tree/main/src/llm/repair) | **active** |
-| RecoveryManager | [`src/recovery/RecoveryManager.ts`](https://github.com/achuthanmukundan00/synax/blob/main/src/recovery/RecoveryManager.ts) | **active** |
-| Context Budget | [`src/agent/context-budget.ts`](https://github.com/achuthanmukundan00/synax/blob/main/src/agent/context-budget.ts) | **active** |
-| Message Assembly | [`src/session/message-assembly.ts`](https://github.com/achuthanmukundan00/synax/blob/main/src/session/message-assembly.ts) | **active** |
+| Component              | Source Path                                                                                                                                  | Status     |
+| ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- | ---------- |
+| Session                | [`src/session/Session.ts`](https://github.com/achuthanmukundan00/synax/blob/main/src/session/Session.ts)                                     | **active** |
+| ActionExecutor         | [`src/actions/ActionExecutor.ts`](https://github.com/achuthanmukundan00/synax/blob/main/src/actions/ActionExecutor.ts)                       | **active** |
+| ExecutionEnv           | [`src/env/ExecutionEnv.ts`](https://github.com/achuthanmukundan00/synax/blob/main/src/env/ExecutionEnv.ts)                                   | **active** |
+| Provider Factory       | [`src/llm/provider-factory.ts`](https://github.com/achuthanmukundan00/synax/blob/main/src/llm/provider-factory.ts)                           | **active** |
+| Parser Pipeline        | [`src/llm/parsers/`](https://github.com/achuthanmukundan00/synax/tree/main/src/llm/parsers)                                                  | **active** |
+| Parser Repair          | [`src/llm/repair/`](https://github.com/achuthanmukundan00/synax/tree/main/src/llm/repair)                                                    | **active** |
+| RecoveryManager        | [`src/recovery/RecoveryManager.ts`](https://github.com/achuthanmukundan00/synax/blob/main/src/recovery/RecoveryManager.ts)                   | **active** |
+| Context Budget         | [`src/agent/context-budget.ts`](https://github.com/achuthanmukundan00/synax/blob/main/src/agent/context-budget.ts)                           | **active** |
+| Message Assembly       | [`src/session/message-assembly.ts`](https://github.com/achuthanmukundan00/synax/blob/main/src/session/message-assembly.ts)                   | **active** |
 | DeterministicCompactor | [`src/compaction/DeterministicCompactor.ts`](https://github.com/achuthanmukundan00/synax/blob/main/src/compaction/DeterministicCompactor.ts) | **active** |
-| EventStore | [`src/store/EventStore.ts`](https://github.com/achuthanmukundan00/synax/blob/main/src/store/EventStore.ts) | **active** |
-| SpanTracer | [`src/telemetry/SpanTracer.ts`](https://github.com/achuthanmukundan00/synax/blob/main/src/telemetry/SpanTracer.ts) | **active** |
-| TokenCounter | [`src/metrics/TokenCounter.ts`](https://github.com/achuthanmukundan00/synax/blob/main/src/metrics/TokenCounter.ts) | **active** |
-| CostTracker | [`src/metrics/CostTracker.ts`](https://github.com/achuthanmukundan00/synax/blob/main/src/metrics/CostTracker.ts) | **active** |
-| Structured Logging | [`src/logging/`](https://github.com/achuthanmukundan00/synax/tree/main/src/logging) | **active** |
-| EventBus | [`src/events/EventBus.ts`](https://github.com/achuthanmukundan00/synax/blob/main/src/events/EventBus.ts) | **active** |
-| inspect metrics | [`src/commands/inspect-metrics.ts`](https://github.com/achuthanmukundan00/synax/blob/main/src/commands/inspect-metrics.ts) | **active** |
+| EventStore             | [`src/store/EventStore.ts`](https://github.com/achuthanmukundan00/synax/blob/main/src/store/EventStore.ts)                                   | **active** |
+| SpanTracer             | [`src/telemetry/SpanTracer.ts`](https://github.com/achuthanmukundan00/synax/blob/main/src/telemetry/SpanTracer.ts)                           | **active** |
+| TokenCounter           | [`src/metrics/TokenCounter.ts`](https://github.com/achuthanmukundan00/synax/blob/main/src/metrics/TokenCounter.ts)                           | **active** |
+| CostTracker            | [`src/metrics/CostTracker.ts`](https://github.com/achuthanmukundan00/synax/blob/main/src/metrics/CostTracker.ts)                             | **active** |
+| Structured Logging     | [`src/logging/`](https://github.com/achuthanmukundan00/synax/tree/main/src/logging)                                                          | **active** |
+| EventBus               | [`src/events/EventBus.ts`](https://github.com/achuthanmukundan00/synax/blob/main/src/events/EventBus.ts)                                     | **active** |
+| inspect metrics        | [`src/commands/inspect-metrics.ts`](https://github.com/achuthanmukundan00/synax/blob/main/src/commands/inspect-metrics.ts)                   | **active** |
 
 ---
 
@@ -157,12 +157,12 @@ graph LR
 
 **Default handler map** (created by `createDefaultHandlerMap()`):
 
-| Kind | Handler | File |
-|---|---|---|
-| `read` | `handleRead` | `src/actions/handlers/read-handler.ts` |
-| `edit` | `handleEdit` | `src/actions/handlers/edit-handler.ts` |
-| `write` | `handleWrite` | `src/actions/handlers/write-handler.ts` |
-| `bash` | `handleBash` | `src/actions/handlers/bash-handler.ts` |
+| Kind            | Handler              | File                                            |
+| --------------- | -------------------- | ----------------------------------------------- |
+| `read`          | `handleRead`         | `src/actions/handlers/read-handler.ts`          |
+| `edit`          | `handleEdit`         | `src/actions/handlers/edit-handler.ts`          |
+| `write`         | `handleWrite`        | `src/actions/handlers/write-handler.ts`         |
+| `bash`          | `handleBash`         | `src/actions/handlers/bash-handler.ts`          |
 | `search_memory` | `handleSearchMemory` | `src/actions/handlers/search-memory-handler.ts` |
 
 **Relationship to `ToolRegistry`:** The executor tries its handler map first. Unknown tool names fall through to `ToolRegistry.execute()` for custom/extended tools.
@@ -180,13 +180,13 @@ The filesystem and process abstraction boundary. The agent never calls `fs` or `
 
 **Interface:**
 
-| Method | Purpose |
-|---|---|
-| `fileExists(path)` | Synchronous existence check |
-| `readFile(path)` | Read a text file |
+| Method                     | Purpose                                  |
+| -------------------------- | ---------------------------------------- |
+| `fileExists(path)`         | Synchronous existence check              |
+| `readFile(path)`           | Read a text file                         |
 | `writeFile(path, content)` | Write text content (creates parent dirs) |
-| `makeDir(path)` | Create directory (recursive) |
-| `execCommand(cmd, cwd)` | Execute via `bash -lc` |
+| `makeDir(path)`            | Create directory (recursive)             |
+| `execCommand(cmd, cwd)`    | Execute via `bash -lc`                   |
 
 **Default implementation:** `NodeExecutionEnv` wraps `fs.promises` and `child_process.execFile`. Tests swap in a mock `ExecutionEnv` for deterministic behavior without real I/O.
 
@@ -215,9 +215,9 @@ Multi-protocol routing for LLM clients. Creates the correct client based on prov
 
 ```ts
 interface ProviderFactoryResult {
-  client: AgentClient;            // The chat client
-  metadata: ProviderMetadata;     // Display name, model, pricing, capabilities
-  normalizedConfig: NormalizedProviderConfig;  // Cleaned config for TUI
+  client: AgentClient; // The chat client
+  metadata: ProviderMetadata; // Display name, model, pricing, capabilities
+  normalizedConfig: NormalizedProviderConfig; // Cleaned config for TUI
 }
 ```
 
@@ -253,13 +253,13 @@ The `toolCallParserRegistry` is a singleton map of parser IDs → factory functi
 
 **Registered parsers** (grouped by format):
 
-| Format | Parsers |
-|---|---|
-| **XML/tag-based** | `qwen3_xml`, `hermes`, `step3`, `step3p5`, `functiongemma`, `olmo3`, `glm45`, `glm47`, `gigachat3` |
-| **JSON-based** | `llama3_json`, `mistral`, `xlam`, `granite`, `granite4`, `jamba`, `internlm`, `minimax`, `kimi_k2`, `hunyuan_a13b`, `longcat`, `openai` |
-| **Pythonic** | `pythonic`, `llama4_pythonic` |
-| **DeepSeek** | `deepseek_v3`, `deepseek_v31` |
-| **Generic fallback** | `generic` |
+| Format               | Parsers                                                                                                                                 |
+| -------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| **XML/tag-based**    | `qwen3_xml`, `hermes`, `step3`, `step3p5`, `functiongemma`, `olmo3`, `glm45`, `glm47`, `gigachat3`                                      |
+| **JSON-based**       | `llama3_json`, `mistral`, `xlam`, `granite`, `granite4`, `jamba`, `internlm`, `minimax`, `kimi_k2`, `hunyuan_a13b`, `longcat`, `openai` |
+| **Pythonic**         | `pythonic`, `llama4_pythonic`                                                                                                           |
+| **DeepSeek**         | `deepseek_v3`, `deepseek_v31`                                                                                                           |
+| **Generic fallback** | `generic`                                                                                                                               |
 
 **Aliases:** `qwen3_coder` → `qwen3_xml`, `granite-20b-fc` is its own entry.
 
@@ -284,12 +284,12 @@ Wraps the Session turn loop with recovery logic for known failure scenarios. Rec
 
 **Registered recipes:**
 
-| Scenario | Max Attempts | Action |
-|---|---|---|
-| `empty_response` | 2 | Inject nudge: "Your last response was empty. Please continue…" |
-| `bash_failure` | 2 | Feed stderr back: "The last bash command failed with error:…" |
-| `context_exhaustion` | 1 | Inject urgency: "⚠️ Context budget is running low…" |
-| `infinite_loop` | 1 | Inject steering: "You appear stuck repeating…" |
+| Scenario             | Max Attempts | Action                                                         |
+| -------------------- | ------------ | -------------------------------------------------------------- |
+| `empty_response`     | 2            | Inject nudge: "Your last response was empty. Please continue…" |
+| `bash_failure`       | 2            | Feed stderr back: "The last bash command failed with error:…"  |
+| `context_exhaustion` | 1            | Inject urgency: "⚠️ Context budget is running low…"            |
+| `infinite_loop`      | 1            | Inject steering: "You appear stuck repeating…"                 |
 
 **Integration with `startTurnWithRecovery()`:**
 
@@ -321,13 +321,13 @@ The context budget manages model-facing token limits and applies multi-stage com
 
 ```ts
 interface ContextBudgetSettings {
-  contextWindowTokens: number;    // Default 131072
-  reservedOutputTokens: number;   // Default 8192
-  keepRecentTokens: number;       // Default 20000
-  maxSingleReadResultTokens: number;      // Default 12000
+  contextWindowTokens: number; // Default 131072
+  reservedOutputTokens: number; // Default 8192
+  keepRecentTokens: number; // Default 20000
+  maxSingleReadResultTokens: number; // Default 12000
   maxTotalReadResultTokensPerTurn: number; // Default 96000
-  keepRecentToolTurns?: number;   // Default 3
-  assemblyCompactionThreshold?: number;  // Default 0.8
+  keepRecentToolTurns?: number; // Default 3
+  assemblyCompactionThreshold?: number; // Default 0.8
 }
 ```
 
@@ -382,6 +382,7 @@ Skipped only when context management is disabled (`none`/`off`). Light+ mode sti
 Uses an approximate character heuristic throughout: chars/4 by default, with more conservative counting for dense long-token text and CJK-heavy content. The `TokenLedger` provides incremental accounting to avoid full rescans on every budget check.
 
 > ⚠️ **DO NOT touch casually:**
+>
 > - **Compaction tool-call/tool-result pairing rules** — `adjustKeepFromForToolIntegrity()` enforces that tool-call and tool-result messages stay together. Breaking this means the model sees orphaned tool calls/results, causing protocol errors.
 > - **Tool result integrity** — `isProtocolSafeCompactionBoundary()` validates that every kept tool result has a matching kept tool call (and vice versa). Changing compaction logic without preserving this invariant will corrupt model-facing messages.
 
@@ -396,12 +397,12 @@ SQLite-backed append-only event log stored at `~/.local/share/synax/history.db`.
 
 **Schema tables:**
 
-| Table | Purpose |
-|---|---|
-| `sessions` | Session lifecycle records (start, terminal state, stats) |
-| `events` | Append-only event log with typed payloads |
-| `spans` | Span tracing records for nested timing data |
-| `log_events` | Structured log entries at info+ level |
+| Table        | Purpose                                                  |
+| ------------ | -------------------------------------------------------- |
+| `sessions`   | Session lifecycle records (start, terminal state, stats) |
+| `events`     | Append-only event log with typed payloads                |
+| `spans`      | Span tracing records for nested timing data              |
+| `log_events` | Structured log entries at info+ level                    |
 
 **Key methods for inspect metrics:**
 
@@ -425,11 +426,11 @@ Lightweight nested span tracing for agent operations. Creates spans with timing 
 
 **Span kinds used by Session:**
 
-| Kind | When |
-|---|---|
-| `turn` | Start of `startTurn()` |
-| `model_call` | Each model API call (child of `turn`) |
-| `tool_parse` | Tool-call parsing step (child of `turn`) |
+| Kind             | When                                       |
+| ---------------- | ------------------------------------------ |
+| `turn`           | Start of `startTurn()`                     |
+| `model_call`     | Each model API call (child of `turn`)      |
+| `tool_parse`     | Tool-call parsing step (child of `turn`)   |
 | `tool_execution` | Each tool call execution (child of `turn`) |
 
 **API:**
@@ -519,7 +520,7 @@ Typed pub/sub bus replacing raw `EventEmitter`. Supports two handler categories:
 
 ```ts
 bus.on('turn_start', (e) => console.log('turn', e.stepIndex));
-bus.onAny((event) => logAll(event));  // wildcard
+bus.onAny((event) => logAll(event)); // wildcard
 ```
 
 **Control hooks** — sequential chain. First blocking decision short-circuits.
@@ -541,17 +542,17 @@ bus.onControl('pre_tool_use', (e) => {
 
 **Events used internally by Session:**
 
-| Event | When |
-|---|---|
-| `turn_start` / `turn_end` | Turn lifecycle boundaries |
-| `session_start` / `session_shutdown` | Session lifecycle |
-| `model_step_started` | Each model call |
-| `tool_started` / `tool_finished` | Tool execution lifecycle |
-| `pre_tool_use` (control) | Before each tool execution — can block |
-| `tool_execution_start` / `tool_execution_end` | Internal fine-grained lifecycle |
-| `patch_preview` | Edit/write diff previews |
-| `token_usage` | Per-model-step token counts |
-| `session_compact` | After compaction applied |
+| Event                                         | When                                   |
+| --------------------------------------------- | -------------------------------------- |
+| `turn_start` / `turn_end`                     | Turn lifecycle boundaries              |
+| `session_start` / `session_shutdown`          | Session lifecycle                      |
+| `model_step_started`                          | Each model call                        |
+| `tool_started` / `tool_finished`              | Tool execution lifecycle               |
+| `pre_tool_use` (control)                      | Before each tool execution — can block |
+| `tool_execution_start` / `tool_execution_end` | Internal fine-grained lifecycle        |
+| `patch_preview`                               | Edit/write diff previews               |
+| `token_usage`                                 | Per-model-step token counts            |
+| `session_compact`                             | After compaction applied               |
 
 ---
 
@@ -561,12 +562,12 @@ bus.onControl('pre_tool_use', (e) => {
 
 CLI command accessible via `synax inspect --metrics`. Three modes:
 
-| Command | Output |
-|---|---|
-| `synax inspect --metrics` | Recent sessions table (last 20) |
-| `synax inspect --metrics --session <id>` | Event timeline for a session |
-| `synax inspect --metrics --stats` | Aggregate statistics (30 days) |
-| Any + `--json` | Machine-readable JSON output |
+| Command                                  | Output                          |
+| ---------------------------------------- | ------------------------------- |
+| `synax inspect --metrics`                | Recent sessions table (last 20) |
+| `synax inspect --metrics --session <id>` | Event timeline for a session    |
+| `synax inspect --metrics --stats`        | Aggregate statistics (30 days)  |
+| Any + `--json`                           | Machine-readable JSON output    |
 
 **Table columns:** Date, Mode, Model, Steps, Tool Calls, Status, Files
 
@@ -619,13 +620,13 @@ Session supports runtime steering without aborting:
 
 ## "Do Not Touch Casually" Summary
 
-| Surface | Why |
-|---|---|
-| **Session turn loop** (`startTurn`) | Critical path for budget enforcement, tool-call/tool-result integrity, verification, steering, recovery, and handoff |
-| **Compaction integrity** (`adjustKeepFromForToolIntegrity`, `isProtocolSafeCompactionBoundary`) | Breaking tool-call/tool-result pairing corrupts model-facing messages |
-| **Parser pipeline ordering** | Reasoning sanitization MUST precede parsing; registry order matters |
-| **Message assembly** (`assembleModelMessages`) | Runs on every model call — changes affect context sent to the model every step |
-| **Multi-stage compaction** (`compactMessagesMultiStage`) | Fail-closed at stage 4; stage 0 deterministic techniques are composable and order-dependent |
+| Surface                                                                                         | Why                                                                                                                  |
+| ----------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| **Session turn loop** (`startTurn`)                                                             | Critical path for budget enforcement, tool-call/tool-result integrity, verification, steering, recovery, and handoff |
+| **Compaction integrity** (`adjustKeepFromForToolIntegrity`, `isProtocolSafeCompactionBoundary`) | Breaking tool-call/tool-result pairing corrupts model-facing messages                                                |
+| **Parser pipeline ordering**                                                                    | Reasoning sanitization MUST precede parsing; registry order matters                                                  |
+| **Message assembly** (`assembleModelMessages`)                                                  | Runs on every model call — changes affect context sent to the model every step                                       |
+| **Multi-stage compaction** (`compactMessagesMultiStage`)                                        | Fail-closed at stage 4; stage 0 deterministic techniques are composable and order-dependent                          |
 
 ---
 
@@ -663,18 +664,18 @@ src/
 
 ## Related Specs
 
-| Spec | Topic |
-|---|---|
-| [`specs/001-session-extraction.md`](https://github.com/achuthanmukundan00/synax/blob/main/specs/001-session-extraction.md) | Session extraction from Session |
-| [`specs/002-action-executor.md`](https://github.com/achuthanmukundan00/synax/blob/main/specs/002-action-executor.md) | ActionExecutor |
-| [`specs/003-execution-env.md`](https://github.com/achuthanmukundan00/synax/blob/main/specs/003-execution-env.md) | ExecutionEnv |
-| [`specs/004-event-bus.md`](https://github.com/achuthanmukundan00/synax/blob/main/specs/004-event-bus.md) | EventBus |
-| [`specs/005-event-store.md`](https://github.com/achuthanmukundan00/synax/blob/main/specs/005-event-store.md) | EventStore |
-| [`specs/006-span-tracing.md`](https://github.com/achuthanmukundan00/synax/blob/main/specs/006-span-tracing.md) | SpanTracer |
-| [`specs/008-context-strategy.md`](https://github.com/achuthanmukundan00/synax/blob/main/specs/008-context-strategy.md) | Context strategy |
-| [`specs/009-deterministic-compaction.md`](https://github.com/achuthanmukundan00/synax/blob/main/specs/009-deterministic-compaction.md) | Deterministic compaction |
-| [`specs/010-recovery-recipes.md`](https://github.com/achuthanmukundan00/synax/blob/main/specs/010-recovery-recipes.md) | Recovery recipes |
-| [`specs/011-parser-repair.md`](https://github.com/achuthanmukundan00/synax/blob/main/specs/011-parser-repair.md) | Parser repair |
-| [`specs/014-handoff-sub-agents.md`](https://github.com/achuthanmukundan00/synax/blob/main/specs/014-handoff-sub-agents.md) | Handoff / sub-agents |
-| [`specs/016-structured-logging.md`](https://github.com/achuthanmukundan00/synax/blob/main/specs/016-structured-logging.md) | Structured logging |
-| [`specs/017-token-metrics.md`](https://github.com/achuthanmukundan00/synax/blob/main/specs/017-token-metrics.md) | Token / cost metrics |
+| Spec                                                                                                                                   | Topic                           |
+| -------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------- |
+| [`specs/001-session-extraction.md`](https://github.com/achuthanmukundan00/synax/blob/main/specs/001-session-extraction.md)             | Session extraction from Session |
+| [`specs/002-action-executor.md`](https://github.com/achuthanmukundan00/synax/blob/main/specs/002-action-executor.md)                   | ActionExecutor                  |
+| [`specs/003-execution-env.md`](https://github.com/achuthanmukundan00/synax/blob/main/specs/003-execution-env.md)                       | ExecutionEnv                    |
+| [`specs/004-event-bus.md`](https://github.com/achuthanmukundan00/synax/blob/main/specs/004-event-bus.md)                               | EventBus                        |
+| [`specs/005-event-store.md`](https://github.com/achuthanmukundan00/synax/blob/main/specs/005-event-store.md)                           | EventStore                      |
+| [`specs/006-span-tracing.md`](https://github.com/achuthanmukundan00/synax/blob/main/specs/006-span-tracing.md)                         | SpanTracer                      |
+| [`specs/008-context-strategy.md`](https://github.com/achuthanmukundan00/synax/blob/main/specs/008-context-strategy.md)                 | Context strategy                |
+| [`specs/009-deterministic-compaction.md`](https://github.com/achuthanmukundan00/synax/blob/main/specs/009-deterministic-compaction.md) | Deterministic compaction        |
+| [`specs/010-recovery-recipes.md`](https://github.com/achuthanmukundan00/synax/blob/main/specs/010-recovery-recipes.md)                 | Recovery recipes                |
+| [`specs/011-parser-repair.md`](https://github.com/achuthanmukundan00/synax/blob/main/specs/011-parser-repair.md)                       | Parser repair                   |
+| [`specs/014-handoff-sub-agents.md`](https://github.com/achuthanmukundan00/synax/blob/main/specs/014-handoff-sub-agents.md)             | Handoff / sub-agents            |
+| [`specs/016-structured-logging.md`](https://github.com/achuthanmukundan00/synax/blob/main/specs/016-structured-logging.md)             | Structured logging              |
+| [`specs/017-token-metrics.md`](https://github.com/achuthanmukundan00/synax/blob/main/specs/017-token-metrics.md)                       | Token / cost metrics            |

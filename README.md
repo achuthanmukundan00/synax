@@ -23,17 +23,17 @@ Synax is not a cloud agent platform, SaaS product, IDE, web dashboard, daemon, d
 
 ## Features
 
-| Feature | Description |
-|---------|-------------|
-| Adaptive Context | Token estimation, deterministic compaction at ~60% budget, progressive loop resistance |
-| Holographic Memory | SQLite FTS5 — zero tokens burned, agent queries what it needs |
-| Recovery Recipes | Empty response, bash failure, context exhaustion, infinite loop survival |
-| Handoff Manager | Context exhaustion → clean child session with FTS5 inheritance (depth-capped at 3) |
-| Skills | Auto-discovered `SKILL.md` files from global and project directories |
-| Typed EventBus | Lifecycle events + `pre_tool_use` control hooks with allow/block decisions |
-| Native Parsers | 26 model families — Qwen XML, Hermes, Llama 3, Mistral, Pythonic, JSON-in-tags |
-| Edit Safety | Exact-text edits require prior complete read; verification profiles |
-| MCP Bridge | Guarded Model Context Protocol export/import scaffold |
+| Feature            | Description                                                                            |
+| ------------------ | -------------------------------------------------------------------------------------- |
+| Adaptive Context   | Token estimation, deterministic compaction at ~60% budget, progressive loop resistance |
+| Holographic Memory | SQLite FTS5 — zero tokens burned, agent queries what it needs                          |
+| Recovery Recipes   | Empty response, bash failure, context exhaustion, infinite loop survival               |
+| Handoff Manager    | Context exhaustion → clean child session with FTS5 inheritance (depth-capped at 3)     |
+| Skills             | Auto-discovered `SKILL.md` files from global and project directories                   |
+| Typed EventBus     | Lifecycle events + `pre_tool_use` control hooks with allow/block decisions             |
+| Native Parsers     | 26 model families — Qwen XML, Hermes, Llama 3, Mistral, Pythonic, JSON-in-tags         |
+| Edit Safety        | Exact-text edits require prior complete read; verification profiles                    |
+| MCP Bridge         | Guarded Model Context Protocol export/import scaffold                                  |
 
 See the [Architecture Guide](/docs/guide/architecture) for module diagrams and data flow.
 
@@ -277,8 +277,8 @@ The model loop stops when the model returns a final answer, hits the configured 
 
 ## Examples
 
-| Example | Description |
-|---------|-------------|
+| Example                                                  | Description                                                       |
+| -------------------------------------------------------- | ----------------------------------------------------------------- |
 | [hello-world-extension](examples/hello-world-extension/) | SKILL.md + EventBus subscriber demonstrating the extension system |
 
 ## Docs

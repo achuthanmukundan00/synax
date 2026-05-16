@@ -20,12 +20,12 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "."]
 
 ## Server Fields
 
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `enabled` | boolean | No (default: true) | Whether the server starts with Synax |
-| `command` | string | Yes | The command to launch the server |
-| `args` | string[] | No | Command arguments |
-| `env` | object | No | Environment variables for the server process |
+| Field     | Type     | Required           | Description                                  |
+| --------- | -------- | ------------------ | -------------------------------------------- |
+| `enabled` | boolean  | No (default: true) | Whether the server starts with Synax         |
+| `command` | string   | Yes                | The command to launch the server             |
+| `args`    | string[] | No                 | Command arguments                            |
+| `env`     | object   | No                 | Environment variables for the server process |
 
 ## Environment Variables
 
@@ -65,6 +65,7 @@ This gives Synax access to up-to-date library documentation during coding tasks.
 ## Validation
 
 Synax validates MCP configurations:
+
 - Missing `command` → error shown in settings
 - Missing environment variables that contain `TOKEN` → warning shown
 - Invalid JSON schema → server marked as broken
