@@ -79,7 +79,7 @@ function renderTabBar(active: SettingsTab, width: number): string {
     const tab = SETTINGS_TABS[i];
     const label = tabLabel(tab);
     if (tab === active) {
-      result += ` ${invert(label)} `;
+      result += invert(` ${label} `);
     } else {
       result += ` ${dim(label)} `;
     }
