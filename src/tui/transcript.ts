@@ -1043,15 +1043,19 @@ export function renderMarkdownBlock(md: string, width: number): string[] {
   return lines;
 }
 
-/** Render inline Markdown: bold, inline code, and links. */
+/** Render inline Markdown: bold, italics, inline code, and links. */
 function renderInlineMd(text: string, _maxWidth: number): string {
   let result = text;
   // Bold
   result = result.replace(/[*]{2}(.+?)[*]{2}/g, `\u001b[1;37m$1\u001b[0m`);
+  result = result.replace(/__([^_\n]+)__/g, `\u001b[1;37m$1\u001b[0m`);
   // Inline code
   result = result.replace(/`([^`]+)`/g, `\u001b[33m$1\u001b[0m`);
   // Links (keep text, drop URL)
   result = result.replace(new RegExp(String.raw`\[([^\]]+)\]\([^)]+\)`, 'g'), `\u001b[4;36m$1\u001b[0m`);
+  // Italics after bold so **strong** is not treated as two italic runs.
+  result = result.replace(/(^|[^*])\*([^*\n]+)\*(?!\*)/g, `$1\u001b[3;37m$2\u001b[0m`);
+  result = result.replace(/(^|[^_])_([^_\n]+)_(?!_)/g, `$1\u001b[3;37m$2\u001b[0m`);
   return result;
 }
 
@@ -1073,7 +1077,10 @@ export function renderReviewOutput(body: string, width: number): string[] {
     .trim();
   if (!clean) return [`${green('•')} ${boldDim('result')}`];
 
-  const hasMd = /^#{1,3}\s|^[*\-+]\s|^```|^\d+\.\s|^>\s|^---+$|^\s*\|.+\|\s*$/m.test(clean);
+  const hasMd =
+    /^#{1,3}\s|^[*\-+]\s|^```|^\d+\.\s|^>\s|^---+$|^\s*\|.+\|\s*$|[*]{2}.+?[*]{2}|`[^`]+`|\[[^\]]+\]\([^)]+\)|(^|[^*])\*[^*\n]+\*(?!\*)/m.test(
+      clean,
+    );
   // Accent header: dashed rule with bold result label in green
   const accentWidth = Math.max(0, width - 6 - ' result '.length);
   const lines: string[] = [`  ${dim('╌')} ${boldDim('result')} ${green('╌'.repeat(Math.max(0, accentWidth)))}`];

@@ -22,6 +22,7 @@ import {
   renderArtifactRoot,
   renderArtifactCard,
   promptInputHeight,
+  footerLayoutHeight,
   type ArtifactRailState,
   type FooterState,
   type ExpandedState,
@@ -37,6 +38,7 @@ import {
 } from './semantic-events';
 import { getPalette, detectThemeMode, type TuiPalette } from './theme';
 import { tuiStats } from './telemetry';
+import { tokenStreamFrame, tokenStreamFrameText, tokenStreamRoleColor } from './token-stream';
 import {
   AdaptiveRenderScheduler,
   CMUX_ACTIVE_FPS,
@@ -55,7 +57,6 @@ import {
   TRANSIENT_EVENT_TYPES,
   SCROLL_STEP_ROWS,
   SCROLL_PAGE_FACTOR,
-  SCROLL_INDICATOR_ID,
   ACTIVITY_LINE_ID,
   ACTIVITY_GLYPH_ID,
   ACTIVITY_TEXT_ID,
@@ -174,37 +175,12 @@ export async function runInteractiveTui(
   let layoutDirty = false;
   let settingsState = options?.settingsConfig ? createSettingsState(options.settingsConfig) : undefined;
   let busyAnimationFrame = 0;
-  let userScrolledUp = false;
   let modelPalette: ModelPalette = getModelPalette(options?.modelLabel ?? '');
 
   /** Working directory for path completion. */
   const cwd = options?.cwd ?? process.cwd();
   /** Repository root for @-mention completion. */
   const repoRoot = options?.repoRoot ?? process.cwd();
-
-  /** Query the ScrollBox to determine if user has scrolled away from bottom. */
-  const isScrolledAwayFromBottom = (): boolean => {
-    const scrollBox = renderer.root.findDescendantById('synax-artifacts') as unknown as {
-      stickyScroll?: boolean;
-      scrollTop?: number;
-      contentHeight?: number;
-      viewportHeight?: number;
-    } | null;
-    if (!scrollBox) return false;
-    // When sticky scroll is active, user hasn't manually scrolled up.
-    if (scrollBox.stickyScroll === true) return false;
-    // Use content/viewport geometry to determine if there's content below.
-    const top = typeof scrollBox.scrollTop === 'number' ? scrollBox.scrollTop : 0;
-    const content = typeof scrollBox.contentHeight === 'number' ? scrollBox.contentHeight : 0;
-    const viewport = typeof scrollBox.viewportHeight === 'number' ? scrollBox.viewportHeight : 0;
-    if (content > 0 && viewport > 0) {
-      // User is at the bottom when scrollTop + viewportHeight >= contentHeight.
-      // Show indicator only when there is content below the visible viewport.
-      return top + viewport < content - 1;
-    }
-    // Fallback: if we can't read geometry, use the tracked flag.
-    return userScrolledUp;
-  };
 
   // --- Expanded state for cards ---
   const expandedState: ExpandedState = {};
@@ -248,6 +224,7 @@ export async function runInteractiveTui(
   let lastRenderedEventsVersion = -1;
   let lastRenderedSplashFrame = -1;
   let lastRenderedFooterSignature = '';
+  let lastRenderedRootLayoutSignature = '';
   const feedModel = new IncrementalFeedModel(liveCardLimit);
 
   const removeRenderedRoot = (): void => {
@@ -329,8 +306,19 @@ export async function runInteractiveTui(
       options,
       busyAnimationFrame,
     });
+    const renderedEvents = visibleEvents(events, state);
     const footerSignature = stableFooterSignature(footer);
+    const rootLayoutSignature = rootLayoutModeSignature({
+      visibleEventCount: renderedEvents.length,
+      footer,
+      settingsActive: settingsState?.active === true,
+      terminalWidth: renderer.width,
+      terminalHeight: renderer.height,
+    });
     if (treeBuilt && footerSignature !== lastRenderedFooterSignature) {
+      treeBuilt = false;
+    }
+    if (treeBuilt && rootLayoutSignature !== lastRenderedRootLayoutSignature) {
       treeBuilt = false;
     }
     const acState: AutocompleteState | undefined = autocompleteVisible
@@ -350,7 +338,7 @@ export async function runInteractiveTui(
       renderer.root.add(
         renderArtifactRoot(
           core,
-          visibleEvents(events, state),
+          renderedEvents,
           rail,
           footer,
           renderer.width,
@@ -387,15 +375,18 @@ export async function runInteractiveTui(
           },
           { frame: splashFrame(state.nowMs) },
           state.modelId,
+          renderer.height,
         ),
       );
       treeBuilt = true;
       lastRenderedEventsVersion = eventsVersion;
       lastRenderedSplashFrame = splashFrame(state.nowMs);
       lastRenderedFooterSignature = footerSignature;
+      lastRenderedRootLayoutSignature = rootLayoutSignature;
       expandCollapseVersion = 0;
       feedModel.reset();
-      feedModel.plan(visibleEvents(events, state), expandedState);
+      feedModel.plan(renderedEvents, expandedState);
+      syncActivityLine(true);
       // Focus and position the input after rebuilds. OpenTUI applies initialValue
       // without guaranteeing the cursor is at the end of that value.
       queueMicrotask(() => {
@@ -404,7 +395,6 @@ export async function runInteractiveTui(
         placePromptCursorAtEnd(input, prompt);
       });
     } else {
-      setNodeContent('synax-status', footer.status);
       setNodeContent('synax-hints', footer.hints);
       if (footer.location) setNodeContent('synax-location', footer.location);
       const input = findNode('synax-input');
@@ -419,11 +409,16 @@ export async function runInteractiveTui(
           (input as any).height = textareaHeight;
           layoutDirty = true;
         }
+        const inputFrame = findNode('synax-input-frame');
+        const inputFrameHeight = textareaHeight + 2;
+        if (inputFrame && (inputFrame as any).height !== inputFrameHeight) {
+          (inputFrame as any).height = inputFrameHeight;
+          layoutDirty = true;
+        }
       }
       const footerNode = findNode('synax-footer');
       if (footerNode && 'height' in (footerNode as any)) {
-        const newFooterHeight =
-          3 + (footer.location ? 1 : 0) + (footer.inputHeight ?? promptInputHeight(prompt, renderer.width));
+        const newFooterHeight = footerLayoutHeight(footer);
         const autocompleteNode = findNode('synax-autocomplete');
         if (autocompleteNode && 'bottom' in (autocompleteNode as any)) {
           (autocompleteNode as any).bottom = newFooterHeight;
@@ -443,20 +438,16 @@ export async function runInteractiveTui(
       updateAutocompleteNode();
       rebuildEvents();
       lastRenderedFooterSignature = footerSignature;
-      // Update scroll continuation indicator from actual viewport geometry
-      const scrollIndicator = findNode(SCROLL_INDICATOR_ID);
-      if (scrollIndicator) {
-        (scrollIndicator as any).visible = isScrolledAwayFromBottom() && events.length > 0;
-      }
+      lastRenderedRootLayoutSignature = rootLayoutSignature;
     }
     tuiStats.recordRepaint();
     tuiStats.recordFrame(renderScheduler.getStats());
     renderer.requestRender();
 
-    // Keep the spinner/pulse animation alive during active execution.
-    // Re-render at ~4 fps when the run is active but no new events arrive.
+    // Keep the spinner animation alive during active execution.
+    // Re-render at ~3 fps when the run is active but no new events arrive.
     if (state.terminal === 'running' && state.phase !== 'idle' && state.phase !== 'completed') {
-      setTimeout(() => render('animation', { immediate: true }), 250);
+      setTimeout(() => render('animation', { immediate: true }), 333);
     }
 
     function removeNode(parent: unknown, id: string): void {
@@ -560,13 +551,24 @@ export async function runInteractiveTui(
 
   /** Pick the animation glyph for the current frame. */
   const frameGlyph = (glyphs: string[], frame: number): string => glyphs[frame % glyphs.length] ?? glyphs[0] ?? '·';
-  const circularGlyph = (frame: number): string => {
-    const glyphs = ['◜', '◠', '◝', '◞', '◡', '◟'];
-    return glyphs[frame % glyphs.length] ?? '◌';
+  const activityGlyph = (frame: number): string => tokenStreamFrameText(modelPalette.family, frame);
+  const styledActivityGlyph = (
+    frame: number,
+  ): string | InstanceType<(typeof import('@opentui/core'))['StyledText']> => {
+    const coreWithStyles = core as unknown as {
+      StyledText?: new (chunks: unknown[]) => unknown;
+      fg?: (color: string) => (text: string) => unknown;
+    };
+    if (typeof coreWithStyles.StyledText !== 'function' || typeof coreWithStyles.fg !== 'function') {
+      return activityGlyph(frame);
+    }
+    return new coreWithStyles.StyledText(
+      tokenStreamFrame(modelPalette.family, frame).map((glyph) =>
+        coreWithStyles.fg!(tokenStreamRoleColor(modelPalette.family, glyph.role))(glyph.char),
+      ),
+    ) as InstanceType<(typeof import('@opentui/core'))['StyledText']>;
   };
-  const shimmerColor = (frame: number): string => (frame % 4 < 2 ? currentPalette.textAccent : currentPalette.brand);
-
-  const syncActivityLine = (): void => {
+  const syncActivityLine = (force = false): void => {
     const active =
       statusOverride !== '' || (state.terminal === 'running' && state.phase !== 'idle' && state.phase !== 'completed');
 
@@ -574,7 +576,9 @@ export async function runInteractiveTui(
     if (!line) return;
 
     if (!active) {
-      setNodeProp(ACTIVITY_LINE_ID, 'visible', false);
+      setNodeProp(ACTIVITY_LINE_ID, 'visible', true);
+      setNodeProp(ACTIVITY_GLYPH_ID, 'content', '');
+      setNodeProp(ACTIVITY_TEXT_ID, 'content', '');
       lastActivityGlyph = '';
       lastActivityText = '';
       return;
@@ -587,18 +591,17 @@ export async function runInteractiveTui(
       glyph = frameGlyph(modelPalette.animationGlyphs.error, busyAnimationFrame);
       text = statusOverride;
     } else if (activeSubAgents.length > 0) {
-      glyph = circularGlyph(busyAnimationFrame);
+      glyph = activityGlyph(busyAnimationFrame);
       const total = activeSubAgents.length + orchestrationReturnedCount;
       text = `working · ${total - orchestrationReturnedCount}/${total} agents returned`;
     } else if (state.phase === 'thinking') {
-      glyph = circularGlyph(busyAnimationFrame);
-      text = 'thinking';
+      glyph = activityGlyph(busyAnimationFrame);
+      text = `thinking · ${activitySummary(state)}`;
     } else if (state.phase === 'tool_execution') {
-      glyph = circularGlyph(busyAnimationFrame);
-      const toolSummary = state.timeline[state.timeline.length - 1]?.summary ?? '';
-      text = toolSummary ? `working · ${toolSummary.slice(0, 58)}` : 'working';
+      glyph = activityGlyph(busyAnimationFrame);
+      text = `working · ${activitySummary(state)}`;
     } else if (state.phase === 'verifying') {
-      glyph = circularGlyph(busyAnimationFrame);
+      glyph = activityGlyph(busyAnimationFrame);
       text = state.verification.currentCheckLabel
         ? `working · ${state.verification.currentCheckLabel.slice(0, 58)}`
         : 'working';
@@ -612,14 +615,11 @@ export async function runInteractiveTui(
       glyph = frameGlyph(modelPalette.animationGlyphs.error, busyAnimationFrame);
       text = state.objective.nextCheckpoint.slice(0, 78) || 'Budget exhausted';
     } else {
-      glyph = circularGlyph(busyAnimationFrame);
+      glyph = activityGlyph(busyAnimationFrame);
       text = 'working';
     }
 
-    const textColor = shimmerColor(busyAnimationFrame);
-    if (glyph === lastActivityGlyph && text === lastActivityText) {
-      const textNode = findNode(ACTIVITY_TEXT_ID);
-      if (textNode) setNodeProp(ACTIVITY_TEXT_ID, 'fg', textColor);
+    if (!force && glyph === lastActivityGlyph && text === lastActivityText) {
       return;
     }
     lastActivityGlyph = glyph;
@@ -628,13 +628,13 @@ export async function runInteractiveTui(
     setNodeProp(ACTIVITY_LINE_ID, 'visible', true);
     const glyphNode = findNode(ACTIVITY_GLYPH_ID);
     if (glyphNode) {
-      setNodeProp(ACTIVITY_GLYPH_ID, 'content', glyph);
+      setNodeProp(ACTIVITY_GLYPH_ID, 'content', styledActivityGlyph(busyAnimationFrame));
       setNodeProp(ACTIVITY_GLYPH_ID, 'fg', currentPalette.brand);
     }
     const textNode = findNode(ACTIVITY_TEXT_ID);
     if (textNode) {
       setNodeProp(ACTIVITY_TEXT_ID, 'content', text);
-      setNodeProp(ACTIVITY_TEXT_ID, 'fg', textColor);
+      setNodeProp(ACTIVITY_TEXT_ID, 'fg', currentPalette.textAccent);
     }
   };
 
@@ -956,7 +956,6 @@ export async function runInteractiveTui(
       eventsVersion++;
     } else {
       // New user-visible events reset scroll position to follow the feed.
-      userScrolledUp = false;
       eventsVersion++;
       events.push(...newEvents);
       events = events.slice(Math.max(0, events.length - MAX_TRANSCRIPT_EVENTS));
@@ -1276,7 +1275,6 @@ export async function runInteractiveTui(
         return;
       }
       scrollArtifactHistory(renderer, -SCROLL_STEP_ROWS);
-      userScrolledUp = true;
       key.preventDefault?.();
       render();
       return;
@@ -1298,7 +1296,6 @@ export async function runInteractiveTui(
   function handlePageNav(key: { name: string; preventDefault?: () => void }): void {
     if (key.name === 'pageup') {
       scrollArtifactHistory(renderer, -Math.max(10, Math.floor(renderer.height * SCROLL_PAGE_FACTOR)));
-      userScrolledUp = true;
     } else {
       scrollArtifactHistory(renderer, Math.max(10, Math.floor(renderer.height * SCROLL_PAGE_FACTOR)));
     }
@@ -1630,6 +1627,47 @@ function railState(
   };
 }
 
+function activitySummary(state: RunStateSnapshot): string {
+  if (state.phase === 'verifying') {
+    return state.verification.currentCheckLabel ? clip(state.verification.currentCheckLabel, 58) : 'running checks';
+  }
+
+  const latest = state.timeline[state.timeline.length - 1]?.summary ?? '';
+  const cleaned = cleanActivitySummary(latest);
+
+  if (state.phase === 'tool_execution') {
+    return clip(cleaned || toolNameFromStatus(state.statusNote) || 'running tool', 58);
+  }
+
+  if (state.phase === 'thinking') {
+    if (/^Tool\s*·/i.test(latest)) {
+      return clip(`reviewing ${cleaned || 'tool'} result`, 58);
+    }
+    if (/verification/i.test(latest)) {
+      return clip(cleaned || 'reviewing checks', 58);
+    }
+    if (cleaned && !/objective registered/i.test(cleaned) && !/^step\s+\d+/i.test(cleaned)) {
+      return clip(cleaned, 58);
+    }
+    return clip(state.objective.nextCheckpoint || 'awaiting model response', 58);
+  }
+
+  return clip(cleaned || state.objective.nextCheckpoint || 'working', 58);
+}
+
+function cleanActivitySummary(summary: string): string {
+  return summary
+    .replace(/^Working\s*·\s*/i, '')
+    .replace(/^Tool\s*·\s*/i, '')
+    .replace(/\s+ok$/i, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function toolNameFromStatus(statusNote?: string): string {
+  return (statusNote ?? '').replace(/^tool:\s*/i, '').trim();
+}
+
 function footerState({
   state,
   prompt,
@@ -1656,30 +1694,13 @@ function footerState({
   void busyAnimationFrame;
   const inputHeight = promptInputHeight(prompt, terminalWidth);
   const hints = '[Enter] submit   [/help] commands   [Ctrl+D] quit';
-  const contextLabel =
-    state.contextUsedTokens !== undefined && state.contextWindowTokens
-      ? `ctx ${Math.round((state.contextUsedTokens / state.contextWindowTokens) * 100)}%`
-      : undefined;
-  const filesLabel =
-    state.filesChangedThisRun.length > 0
-      ? `${state.filesChangedThisRun.length} ${state.filesChangedThisRun.length === 1 ? 'file' : 'files'}`
-      : undefined;
-  const location = [
-    options?.modelLabel ?? state.modelId,
-    options?.cwdLabel,
-    options?.gitBranch,
-    contextLabel,
-    filesLabel,
-  ]
-    .filter(Boolean)
-    .join(' · ');
+  void options;
   if (statusOverride) {
     return {
       status: statusOverride,
       prompt,
       placeholder: 'Ask Synax...',
       hints,
-      location,
       inputHeight,
     };
   }
@@ -1689,29 +1710,26 @@ function footerState({
       prompt,
       placeholder: 'Type a message to continue...',
       hints,
-      location,
       inputHeight,
     };
   }
   if (state.phase === 'tool_execution') {
     const steerHint = steeringBuffer ? ` [Steering: ${clip(steeringBuffer, 40)}]` : '';
     return {
-      status: `Working${steerHint}`,
+      status: `Working · ${activitySummary(state)}${steerHint}`,
       prompt,
       placeholder: 'Steer Synax after the next tool result...',
       hints,
-      location,
       inputHeight,
     };
   }
   if (busy || state.phase === 'thinking') {
     const steerHint = steeringBuffer ? ` [Steering: ${clip(steeringBuffer, 40)}]` : '';
     return {
-      status: `Thinking${steerHint}`,
+      status: `Thinking · ${activitySummary(state)}${steerHint}`,
       prompt,
       placeholder: 'Working...',
       hints: '[Ctrl+D] quit',
-      location,
       inputHeight,
     };
   }
@@ -1721,7 +1739,6 @@ function footerState({
       prompt,
       placeholder: 'Ask Synax how to recover...',
       hints,
-      location,
       inputHeight,
     };
   }
@@ -1731,7 +1748,6 @@ function footerState({
       prompt,
       placeholder: 'Continue...',
       hints,
-      location,
       inputHeight,
     };
   }
@@ -1741,7 +1757,6 @@ function footerState({
       prompt,
       placeholder: 'Respond or adjust settings...',
       hints,
-      location,
       inputHeight,
     };
   }
@@ -1750,7 +1765,6 @@ function footerState({
     prompt,
     placeholder: 'Ask Synax to inspect, edit, test, or commit...',
     hints,
-    location,
     inputHeight,
   };
 }
@@ -1850,7 +1864,23 @@ function printableKeyValue(key: { name?: string; sequence?: string; shift?: bool
 }
 
 function stableFooterSignature(footer: FooterState): string {
-  return [footer.location ? 'location' : 'no-location', String(footer.inputHeight ?? 1)].join('\0');
+  return footer.location ? 'location' : 'no-location';
+}
+
+function rootLayoutModeSignature(args: {
+  visibleEventCount: number;
+  footer: FooterState;
+  settingsActive: boolean;
+  terminalWidth: number;
+  terminalHeight: number;
+}): string {
+  const compactStartup =
+    args.visibleEventCount === 0 &&
+    !args.settingsActive &&
+    args.footer.status === 'Ready.' &&
+    args.footer.prompt.length === 0;
+  const mode = compactStartup ? 'compact' : 'full';
+  return [mode, String(args.terminalWidth), String(args.terminalHeight)].join('\0');
 }
 
 function elapsed(startedAtMs: number, nowMs: number): string {

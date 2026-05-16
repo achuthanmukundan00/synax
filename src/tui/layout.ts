@@ -2,7 +2,9 @@ import type { RunStateSnapshot } from '../agent/tui-state';
 import type { CoreMode } from './ai-core';
 import { CORE_HEIGHT, CORE_WIDTH, modeColor, modePromptColor, renderAiCore } from './ai-core';
 import { resolveCoreVisualProfile } from './core-visual-profile';
+import { resolveModelFamily } from './model-palette';
 import { renderTranscript } from './transcript';
+import { renderAnsiTokenStreamFrame } from './token-stream';
 import { charWidthAt, stripAnsi, visibleLength, terminalWriteWidth } from './text-utils';
 
 const INPUT_DOCK_MAX_BODY_LINES = 12;
@@ -469,14 +471,42 @@ function activityStripVisible(state: InteractiveViewState): boolean {
 }
 
 function renderActivityStrip(state: InteractiveViewState, width: number): string {
-  const glyphs = ['◜', '◠', '◝', '◞', '◡', '◟'];
-  const frame = Math.floor((state.nowMs / 1000) * 8);
-  const glyph = glyphs[frame % glyphs.length] ?? '◌';
+  const intervalMs = state.run.phase === 'thinking' ? 333 : 120;
+  const frame = Math.floor(state.nowMs / intervalMs);
+  const glyph = renderAnsiTokenStreamFrame(resolveModelFamily(state.modelLabel || state.run.modelId), frame);
   const label = state.run.phase === 'thinking' ? 'thinking' : 'working';
-  const latestSummary = (state.run.timeline[state.run.timeline.length - 1]?.summary ?? '').slice(0, 58);
-  const detail = state.run.phase === 'tool_execution' && latestSummary ? ` · ${latestSummary}` : '';
-  const text = `${glyph} ${label}${detail}`;
+  const text = `${glyph} ${label} · ${fallbackActivitySummary(state.run)}`;
   return ` ${modeColor(state.coreMode)}${clip(text, Math.max(1, width - 2))}[0m`;
+}
+
+function fallbackActivitySummary(run: RunStateSnapshot): string {
+  if (run.phase === 'verifying') {
+    return run.verification.currentCheckLabel || 'running checks';
+  }
+  const latest = run.timeline[run.timeline.length - 1]?.summary ?? '';
+  const cleaned = cleanActivitySummary(latest);
+  if (run.phase === 'tool_execution') {
+    return cleaned || toolNameFromStatus(run.statusNote) || 'running tool';
+  }
+  if (run.phase === 'thinking') {
+    if (/^Tool\s*·/i.test(latest)) return `reviewing ${cleaned || 'tool'} result`;
+    if (cleaned && !/objective registered/i.test(cleaned) && !/^step\s+\d+/i.test(cleaned)) return cleaned;
+    return run.objective.nextCheckpoint || 'awaiting model response';
+  }
+  return cleaned || run.objective.nextCheckpoint || 'working';
+}
+
+function cleanActivitySummary(summary: string): string {
+  return summary
+    .replace(/^Working\s*·\s*/i, '')
+    .replace(/^Tool\s*·\s*/i, '')
+    .replace(/\s+ok$/i, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function toolNameFromStatus(statusNote?: string): string {
+  return (statusNote ?? '').replace(/^tool:\s*/i, '').trim();
 }
 
 function locationLabel(cwdLabel?: string, gitBranch?: string): string | undefined {
