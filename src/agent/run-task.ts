@@ -336,7 +336,7 @@ export async function runAgentTask(options: RunTaskOptions): Promise<RunTaskRepo
   }
 
   if (forceOrchestrate || strategy === 'orchestrate' || strategy === 'decompose') {
-    const planResult = await session.planOrchestratedTurn(planningTask);
+    const planResult = await session.planOrchestratedTurn(planningTask, forcedMode);
 
     if (planResult.success && planResult.plan.subTasks && planResult.plan.subTasks.length > 0) {
       const handoffManager = new HandoffManager();

@@ -192,6 +192,8 @@ export async function runInteractiveTui(
   // --- Persistent status card state (removed — using activity line instead)
   const activeSubAgents: string[] = [];
   let orchestrationReturnedCount = 0;
+  let orchestrationMode: 'parallel' | 'sequential' | null = null;
+  let orchestrationPhase: 'dispatching' | 'synthesizing' | 'committing' | null = null;
 
   /** Find a descendant OpenTUI node by ID. */
   const findNode = (id: string): unknown => renderer.root.findDescendantById(id);
@@ -589,10 +591,25 @@ export async function runInteractiveTui(
     if (statusOverride) {
       glyph = frameGlyph(modelPalette.animationGlyphs.error, busyAnimationFrame);
       text = statusOverride;
+    } else if (orchestrationPhase === 'synthesizing') {
+      glyph = activityGlyph(busyAnimationFrame);
+      text = 'working · synthesizing result';
+    } else if (orchestrationPhase === 'committing') {
+      glyph = activityGlyph(busyAnimationFrame);
+      text = 'working · committing changes';
+    } else if (activeSubAgents.length > 0 && orchestrationMode) {
+      glyph = activityGlyph(busyAnimationFrame);
+      const total = activeSubAgents.length + orchestrationReturnedCount;
+      if (orchestrationMode === 'sequential') {
+        const step = orchestrationReturnedCount + 1;
+        text = `working · step ${step}/${total} running`;
+      } else {
+        text = `working · ${orchestrationReturnedCount}/${total} agents returned`;
+      }
     } else if (activeSubAgents.length > 0) {
       glyph = activityGlyph(busyAnimationFrame);
       const total = activeSubAgents.length + orchestrationReturnedCount;
-      text = `working · ${total - orchestrationReturnedCount}/${total} agents returned`;
+      text = `working · ${orchestrationReturnedCount}/${total} agents returned`;
     } else if (state.phase === 'thinking') {
       glyph = activityGlyph(busyAnimationFrame);
       text = `thinking · ${activitySummary(state)}`;
@@ -925,11 +942,15 @@ export async function runInteractiveTui(
 
     // Track subagent orchestration for the status card
     if (event.type === 'orchestration_plan_generated') {
-      const planEv = event as unknown as { payload?: { plan?: unknown } };
+      const planEv = event as unknown as {
+        payload?: { plan?: unknown; orchestrationMode?: 'parallel' | 'sequential' };
+      };
       const plan = planEv?.payload?.plan as { inline?: boolean } | undefined;
       if (!plan?.inline) {
         orchestrationReturnedCount = 0;
         activeSubAgents.length = 0; // reset for new orchestration
+        orchestrationMode = planEv?.payload?.orchestrationMode ?? null;
+        orchestrationPhase = 'dispatching';
       }
     }
     if (event.type === 'child_session_spawned') {
@@ -943,6 +964,31 @@ export async function runInteractiveTui(
       const idx = activeSubAgents.indexOf(label);
       if (idx >= 0) activeSubAgents.splice(idx, 1);
       orchestrationReturnedCount++;
+      // When all subagents returned, transition to synthesizing phase
+      if (activeSubAgents.length === 0 && orchestrationPhase === 'dispatching') {
+        orchestrationPhase = 'synthesizing';
+      }
+      // Remove the stale "running" card so we don't show both running and returned
+      events = events.filter(
+        (ev) =>
+          !(
+            ev.class === 'agent_status' &&
+            ev.artifact.type === 'text' &&
+            ev.artifact.title === label &&
+            ev.artifact.body === 'running'
+          ),
+      );
+    }
+
+    // Reset orchestration tracking on task finished
+    if (event.type === 'task_finished') {
+      orchestrationPhase = null;
+      orchestrationMode = null;
+    }
+
+    // Detect committing phase during orchestration
+    if (event.type === 'local_shell_command' && orchestrationPhase && event.command.trim().startsWith('git commit')) {
+      orchestrationPhase = 'committing';
     }
 
     // Filter transient events from the transcript — they create too many
@@ -1742,7 +1788,7 @@ function footerState({
     return {
       status: `Thinking · ${activitySummary(state)}${steerHint}`,
       prompt,
-      placeholder: 'Working...',
+      placeholder: 'Synax is working… input paused',
       hints: '[Ctrl+D] quit',
       inputHeight,
     };

@@ -539,8 +539,11 @@ function renderPayloadRows(
     if (isDiagnosticTitle(payload.title)) {
       return renderDiagnosticCard(core, payload, eventClass, pal);
     }
+    // Skip inner title when it duplicates the card crown (crown already shows "Result")
+    const titleRows: OpenTuiNode[] =
+      payload.title !== 'Result' ? [core.Text({ content: payload.title, fg: color })] : [];
     return [
-      core.Text({ content: payload.title, fg: color }),
+      ...titleRows,
       ...renderResultMarkdown(core, payload.body, pal),
       ...(event ? [renderResultStats(core, event, pal)] : []),
     ];
@@ -991,7 +994,7 @@ function renderResultStats(core: OpenTuiCore, event: SemanticEvent, palette: Tui
     parts.push(`Duration ${s}`);
   }
   const fileCount = event.metadata.filesTouched?.length;
-  if (fileCount && fileCount > 0) parts.push(`Files ${fileCount}`);
+  if (fileCount && fileCount > 0) parts.push(`Touched files: ${fileCount}`);
   // Commands count is not tracked directly — approximate from file count.
   if (parts.length > 0) {
     return core.Text({ content: parts.join('   '), fg: palette.textAccent });
