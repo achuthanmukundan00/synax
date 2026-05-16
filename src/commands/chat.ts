@@ -94,6 +94,22 @@ export interface ChatTurnReport {
   error?: string;
 }
 
+export function inferChatRunMode(message: string): 'read-only' | 'patch' {
+  const normalized = message.toLowerCase();
+  const readOnlyIntent =
+    /\b(?:summarize|explain|inspect|identify|locate|find|where|report back|look at|show me)\b/.test(normalized) ||
+    /\b(?:don't|do not|dont|without)\s+(?:edit|change|modify|write|touch)\b/.test(normalized) ||
+    /\bgo-?ahead\b/.test(normalized);
+  const mutationIntent =
+    /\b(?:fix|edit|change|modify|update|add|remove|delete|implement|create|write|adjust|make)\b/.test(normalized);
+
+  if (readOnlyIntent && !/\b(?:go ahead and|please do it|make the change|apply (?:it|the change))\b/.test(normalized)) {
+    return 'read-only';
+  }
+
+  return mutationIntent ? 'patch' : 'read-only';
+}
+
 export interface SlashCommandReport {
   handled: boolean;
   exit?: boolean;
@@ -366,6 +382,7 @@ export function createChatSession(options: {
       if (thinkingLevelRef) factoryInput.thinkingLevel = thinkingLevelRef;
       const factoryResult = createLLMClient(factoryInput);
       const client = factoryResult.client;
+      const runMode = inferChatRunMode(message);
       // Create a fresh AbortController per turn.
       currentAbortController = new AbortController();
 
@@ -374,7 +391,7 @@ export function createChatSession(options: {
         client,
         config,
         components,
-        mode: 'patch',
+        mode: runMode,
         conversation,
         skipStoreRegistration: true,
         onSessionEvent: (event) => appendSessionEventFn(event),
@@ -422,6 +439,7 @@ export function createChatSession(options: {
         runReport = await runAgentTask({
           repoRoot: options.repoRoot,
           task: message,
+          mode: runMode,
           session: turnSession,
           components,
           client,

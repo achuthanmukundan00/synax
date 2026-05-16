@@ -60,7 +60,8 @@ export function buildRepoReconTasks(hints: RepoHints): RepoReconTask[] {
 
   tasks.push({
     id: 'repo-map',
-    description: 'Inspect top-level structure: entrypoints, scripts, module layout. Report the architecture overview without reading every file.',
+    description:
+      'Inspect top-level structure: entrypoints, scripts, module layout. Report the architecture overview without reading every file.',
     scope: 'package.json, tsconfig, Cargo.toml, Makefile, src/index, src/main, bin/, lib/',
     exclusions: ['node_modules', '.git', 'dist', 'build', 'coverage'],
     expectedOutput: 'Summary of project purpose, language, build system, dependency graph, and directory layout.',
@@ -71,12 +72,14 @@ export function buildRepoReconTasks(hints: RepoHints): RepoReconTask[] {
     description: 'Trace the startup/runtime flow: CLI entry, lifecycle, main orchestration, async behavior.',
     scope: 'CLI entrypoint, main loop, session lifecycle, config loading',
     exclusions: ['test files', 'node_modules', '.git'],
-    expectedOutput: 'Description of how the application starts, runs, and handles its main loop, including async concurrency model.',
+    expectedOutput:
+      'Description of how the application starts, runs, and handles its main loop, including async concurrency model.',
   });
 
   tasks.push({
     id: 'tests-quality',
-    description: 'Inspect tests, fixtures, smoke scripts, and CI configuration. Report coverage patterns, missing areas, and fragile tests.',
+    description:
+      'Inspect tests, fixtures, smoke scripts, and CI configuration. Report coverage patterns, missing areas, and fragile tests.',
     scope: 'src/__tests__/, test/, tests/, .github/workflows/, .circleci/',
     exclusions: ['node_modules', '.git', 'dist', 'build'],
     expectedOutput: 'Summary of test framework, number of tests, coverage gaps, CI setup, and any flaky or slow tests.',
@@ -87,10 +90,12 @@ export function buildRepoReconTasks(hints: RepoHints): RepoReconTask[] {
   if (hints.hasTui && !isTiny) {
     tasks.push({
       id: 'tui-rendering',
-      description: 'Inspect TUI render loop, input handling, layout/status indicators, terminal edge cases, and render scheduling.',
+      description:
+        'Inspect TUI render loop, input handling, layout/status indicators, terminal edge cases, and render scheduling.',
       scope: 'src/tui/, src/presentation/',
       exclusions: ['node_modules', '.git', 'dist', 'build', 'tests'],
-      expectedOutput: 'Summary of TUI architecture, render loop design, input model, layout system, and terminal compatibility.',
+      expectedOutput:
+        'Summary of TUI architecture, render loop design, input model, layout system, and terminal compatibility.',
     });
   }
 
@@ -99,10 +104,12 @@ export function buildRepoReconTasks(hints: RepoHints): RepoReconTask[] {
   if (!isTiny) {
     tasks.push({
       id: 'agent-system',
-      description: 'Inspect agent planning, subagent dispatch, tool execution, context handoff, memory/history behavior.',
+      description:
+        'Inspect agent planning, subagent dispatch, tool execution, context handoff, memory/history behavior.',
       scope: 'src/agent/, src/orchestration/, src/handoff/, src/session/',
       exclusions: ['node_modules', '.git', 'dist', 'build', 'test fixtures'],
-      expectedOutput: 'Description of how the agent processes tasks, manages context, dispatches sub-tasks, and handles tool execution.',
+      expectedOutput:
+        'Description of how the agent processes tasks, manages context, dispatches sub-tasks, and handles tool execution.',
     });
   }
 
@@ -111,10 +118,12 @@ export function buildRepoReconTasks(hints: RepoHints): RepoReconTask[] {
   if (hints.hasDocs && !isTiny) {
     tasks.push({
       id: 'docs-config',
-      description: 'Inspect README, docs, config files, env/schema, and versioning. Compare docs to actual code for accuracy.',
+      description:
+        'Inspect README, docs, config files, env/schema, and versioning. Compare docs to actual code for accuracy.',
       scope: 'README*, docs/, *.md, .env.example, tsconfig.json, Cargo.toml, package.json',
       exclusions: ['node_modules', '.git', 'dist', 'build'],
-      expectedOutput: 'Summary of documentation quality, config structure, env requirements, and any discrepancies between docs and code.',
+      expectedOutput:
+        'Summary of documentation quality, config structure, env requirements, and any discrepancies between docs and code.',
     });
   }
 
@@ -129,10 +138,12 @@ export function buildRepoReconTasks(hints: RepoHints): RepoReconTask[] {
     // Large repos: add a general-inspection catch-all
     tasks.push({
       id: 'code-quality',
-      description: 'Survey code quality patterns: error handling, logging, async safety, type safety, and common anti-patterns.',
+      description:
+        'Survey code quality patterns: error handling, logging, async safety, type safety, and common anti-patterns.',
       scope: 'src/',
       exclusions: ['node_modules', '.git', 'dist', 'build', 'coverage', 'test fixtures', 'generated files'],
-      expectedOutput: 'Summary of code quality strengths and concerns, with specific file/line references for notable patterns.',
+      expectedOutput:
+        'Summary of code quality strengths and concerns, with specific file/line references for notable patterns.',
     });
   }
 
@@ -181,13 +192,16 @@ const REPO_RECON_PATTERNS: RegExp[] = [
  * Returns the detected intent on first match. Only falls through to
  * LLM planning if no pattern matches AND the prompt is ambiguous.
  */
-export function detectExplicitDelegationIntent(prompt: string): Extract<DispatchIntent, { kind: 'explicit_delegation' }> | null {
+export function detectExplicitDelegationIntent(
+  prompt: string,
+): Extract<DispatchIntent, { kind: 'explicit_delegation' }> | null {
   for (const pattern of EXPLICIT_DELEGATION_PATTERNS) {
     if (pattern.regex.test(prompt)) {
-      const cleanTask = prompt
-        .replace(pattern.regex, '')
-        .replace(/\s{2,}/g, ' ')
-        .trim() || prompt;
+      const cleanTask =
+        prompt
+          .replace(pattern.regex, '')
+          .replace(/\s{2,}/g, ' ')
+          .trim() || prompt;
       return { kind: 'explicit_delegation', mode: pattern.mode, cleanTask };
     }
   }
@@ -280,9 +294,10 @@ export function normalizeDispatchPlan(
       return {
         strategy: 'repo_reconnaissance',
         agentCount: reconTasks.length,
-        uiLabel: reconTasks.length > 0
-          ? `Strategy · repo reconnaissance (${reconTasks.length} domains)`
-          : 'Inline · no delegation',
+        uiLabel:
+          reconTasks.length > 0
+            ? `Strategy · repo reconnaissance (${reconTasks.length} domains)`
+            : 'Inline · no delegation',
         usedLlmPlanning: false,
         usedFastPath: true,
       };
@@ -335,9 +350,10 @@ export function normalizeDispatchPlan(
   }
 
   const modeLabel = mode === 'parallel' ? 'parallel' : mode === 'sequential' ? 'sequential' : '';
-  const strategyLabel = strategyName === 'orchestrate' || strategyName === 'subagent_parallel'
-    ? `Dispatch · ${agentCount} agents · ${modeLabel}`
-    : `Strategy · ${strategyName}`;
+  const strategyLabel =
+    strategyName === 'orchestrate' || strategyName === 'subagent_parallel'
+      ? `Dispatch · ${agentCount} agents · ${modeLabel}`
+      : `Strategy · ${strategyName}`;
 
   return {
     strategy: strategyName as NormalizedDispatchPlan['strategy'],
@@ -419,7 +435,19 @@ function getDefaultHints(): RepoHints {
   return { fileCount: 100, hasTui: true, hasTests: true, hasDocs: true, domains: [] };
 }
 
-const COMMON_EXCLUDED_DIRS = ['node_modules', '.git', 'dist', 'build', 'coverage', '.next', '.turbo', 'vendor', 'target', '.venv', '__pycache__'];
+const COMMON_EXCLUDED_DIRS = [
+  'node_modules',
+  '.git',
+  'dist',
+  'build',
+  'coverage',
+  '.next',
+  '.turbo',
+  'vendor',
+  'target',
+  '.venv',
+  '__pycache__',
+];
 
 export function commonExcludedDirs(): string[] {
   return [...COMMON_EXCLUDED_DIRS];

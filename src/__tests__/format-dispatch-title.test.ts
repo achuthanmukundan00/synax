@@ -39,7 +39,9 @@ describe('formatDispatchTitle', () => {
   });
 
   it('returns repo reconnaissance label', () => {
-    expect(formatDispatchTitle('parallel', 4, 'repo_reconnaissance')).toBe('Strategy · repo reconnaissance (4 domains)');
+    expect(formatDispatchTitle('parallel', 4, 'repo_reconnaissance')).toBe(
+      'Strategy · repo reconnaissance (4 domains)',
+    );
   });
 
   it('returns repo reconnaissance label for repo_recon strategy prefix', () => {

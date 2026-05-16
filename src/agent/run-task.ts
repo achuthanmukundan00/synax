@@ -301,7 +301,7 @@ export async function runAgentTask(options: RunTaskOptions): Promise<RunTaskRepo
   // Classify dispatch intent
   const dispatchIntent = classifyDispatchIntent(options.task);
   const classifiedTimer = markIntentClassified(plannerTimer);
-  const intentElapsed = Math.round((classifiedTimer.intentClassifiedMs! - classifiedTimer.startedMs));
+  const intentElapsed = Math.round(classifiedTimer.intentClassifiedMs! - classifiedTimer.startedMs);
 
   wrappedOnEvent({
     type: 'planner_intent_detected',
@@ -339,7 +339,7 @@ export async function runAgentTask(options: RunTaskOptions): Promise<RunTaskRepo
       elapsedMs: Math.round(performance.now() - classifiedTimer.startedMs),
     });
 
-  // ═══ Fast-path: explicit delegation ═══════════════════════════════════
+    // ═══ Fast-path: explicit delegation ═══════════════════════════════════
   } else if (dispatchIntent.kind === 'explicit_delegation') {
     const delegation = dispatchIntent as Extract<DispatchIntent, { kind: 'explicit_delegation' }>;
     const planningTask = buildExplicitOrchestrationTask(options.task, delegation.mode);
@@ -368,7 +368,7 @@ export async function runAgentTask(options: RunTaskOptions): Promise<RunTaskRepo
     // Call LLM planner for decomposition
     planResult = await session.planOrchestratedTurn(planningTask, forcedMode);
 
-  // ═══ LLM planning fallback ════════════════════════════════════════════
+    // ═══ LLM planning fallback ════════════════════════════════════════════
   } else {
     // Auto-detect strategy via budget estimation
     const estimate = await session.estimateTaskBudget(options.task);
@@ -448,9 +448,10 @@ export async function runAgentTask(options: RunTaskOptions): Promise<RunTaskRepo
       error: orchestrationResult.error,
     };
   } else if (forceOrchestrate) {
-    const reason = planResult && !planResult.success
-      ? (planResult.error ?? 'planner returned inline')
-      : 'planner returned no sub-tasks';
+    const reason =
+      planResult && !planResult.success
+        ? (planResult.error ?? 'planner returned inline')
+        : 'planner returned no sub-tasks';
     const message = `Explicit ${strategyLabel} was requested, but Synax could not generate a valid sub-agent plan (${reason}). Refusing to continue inline because that would ignore the requested execution mode.`;
     wrappedOnEvent({
       type: 'assistant_message',
