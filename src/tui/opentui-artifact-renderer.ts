@@ -3,13 +3,13 @@ import { getPalette } from './theme';
 import type { ArtifactPayload, RiskLevel, SemanticEvent, SemanticEventClass } from './semantic-events';
 import { tuiStats } from './telemetry';
 import { renderAiCore } from './ai-core';
+import { resolveCoreVisualProfile } from './core-visual-profile';
+import { visibleLength } from './text-utils';
 import type { ModelPalette } from './model-palette';
 import { getModelPalette } from './model-palette';
 import {
   HUNK_PREVIEW_LINES,
   TEXT_PREVIEW_LINES,
-  RIGHT_RAIL_MIN_WIDTH,
-  RIGHT_RAIL_WIDTH,
   PERSISTENT_STATUS_CARD_ID,
   SCROLL_INDICATOR_ID,
   ACTIVITY_LINE_ID,
@@ -82,6 +82,8 @@ const COLORS: Record<SemanticEventClass, string> = {
   prompt: '#8a8f98',
   note: '#6272a4',
   assistant_text: '#6272a4',
+  dispatch: '#8be9fd',
+  agent_status: '#ff79c6',
 };
 
 const GLYPHS: Record<SemanticEventClass, string> = {
@@ -100,6 +102,8 @@ const GLYPHS: Record<SemanticEventClass, string> = {
   prompt: '◆',
   note: '→',
   assistant_text: '→',
+  dispatch: '◇',
+  agent_status: '◈',
 };
 
 export function renderArtifactRoot(
@@ -121,13 +125,14 @@ export function renderArtifactRoot(
 ): OpenTuiNode {
   const pal = palette ?? getPalette();
   const modelPal = modelId ? getModelPalette(modelId) : getModelPalette('');
-  const rightRailWidth = railWidthFor(terminalWidth);
+  const compactStartup = events.length === 0 && (!settingsLines || settingsLines.length === 0);
   const mainChildren =
     events.length > 0
       ? events.map((event) => renderArtifactCard(core, event, expanded?.[event.id] ?? false, onToggleExpand, pal))
-      : [renderEmptyState(core, pal, splash, modelPal)];
+      : [renderEmptyState(core, rail, terminalWidth, footer, pal, splash, modelPal, modelId)];
   const inputHeight = footer.inputHeight ?? promptInputHeight(footer.prompt);
   const footerHeight = 3 + (footer.location ? 1 : 0) + inputHeight;
+  const emptyStateHeight = compactEmptyStateHeight(rail);
   const input = core.h(core.TextareaRenderable, {
     id: 'synax-input',
     initialValue: footer.prompt,
@@ -161,16 +166,18 @@ export function renderArtifactRoot(
     {
       id: 'synax-root',
       width: '100%',
-      height: '100%',
+      height: compactStartup ? emptyStateHeight + footerHeight : '100%',
       flexDirection: 'column',
       backgroundColor: pal.background,
     },
     core.Box(
-      { flexGrow: 1, flexDirection: 'row', minHeight: 1 },
+      compactStartup
+        ? { height: emptyStateHeight, flexDirection: 'row', minHeight: 1 }
+        : { flexGrow: 1, flexDirection: 'row', minHeight: 1 },
       core.ScrollBox(
         {
           id: 'synax-artifacts',
-          flexGrow: 1,
+          ...(compactStartup ? { height: emptyStateHeight } : { flexGrow: 1 }),
           viewportCulling: true,
           stickyScroll: true,
           stickyStart: 'bottom',
@@ -179,7 +186,6 @@ export function renderArtifactRoot(
         },
         ...mainChildren,
       ),
-      ...(rightRailWidth > 0 ? [renderRightRail(core, rail, rightRailWidth, pal, modelPal)] : []),
       core.Text({
         id: SCROLL_INDICATOR_ID,
         content: '↓ scroll down for more',
@@ -283,6 +289,17 @@ export function renderArtifactCard(
   if (event.id === PERSISTENT_STATUS_CARD_ID) {
     return renderPersistentStatusCard(core, event, palette);
   }
+
+  // Dispatch — compact orchestration header
+  if (event.class === 'dispatch') {
+    return renderDispatchCard(core, event, palette);
+  }
+
+  // Agent status — compact when running, full card when returned/failed
+  if (event.class === 'agent_status') {
+    return renderAgentStatusCard(core, event, palette);
+  }
+
   const pal = palette ?? getPalette();
   const color = eventColor(event.class, pal);
   const children = renderPayloadRows(
@@ -564,38 +581,6 @@ function isCollapsibleText(body: string, eventClass: SemanticEventClass): boolea
   return eventClass !== 'tool_result' && body.split('\n').length > TEXT_PREVIEW_LINES;
 }
 
-function renderRightRail(
-  core: OpenTuiCore,
-  rail: ArtifactRailState,
-  width: number,
-  palette?: TuiPalette,
-  modelPal?: ModelPalette,
-): OpenTuiNode {
-  const pal = palette ?? getPalette();
-  const color = modelPal?.primary ?? pal.brand;
-  return core.Box(
-    {
-      id: 'synax-right-rail',
-      width,
-      flexDirection: 'column',
-      border: ['left'],
-      borderColor: pal.border,
-      paddingX: 1,
-    },
-    core.Text({ content: `${rail.filesTouched.length} files`, fg: pal.textAccent }),
-    ...(rail.contextLabel ? [core.Text({ content: `ctx ${rail.contextLabel}`, fg: pal.textAccent })] : []),
-    core.Text({ content: rail.uptimeLabel, fg: pal.textAccent }),
-    core.Text({ id: 'synax-rail-model', content: clip(rail.model ?? '—', width - 2), fg: color }),
-    ...(rail.branch ? [core.Text({ content: rail.branch, fg: pal.textMuted })] : []),
-    ...(rail.costLabel && rail.costLabel !== 'local'
-      ? [core.Text({ content: rail.costLabel, fg: pal.textAccent })]
-      : []),
-    ...(rail.pendingApprovals && rail.pendingApprovals > 0
-      ? [core.Text({ content: `${rail.pendingApprovals} pending`, fg: pal.warning })]
-      : []),
-  );
-}
-
 function renderAutocompleteOverlay(
   core: OpenTuiCore,
   autocomplete: AutocompleteState | undefined,
@@ -652,36 +637,62 @@ function autocompleteWindowStart(selectedIndex: number, itemCount: number, windo
 
 function renderEmptyState(
   core: OpenTuiCore,
+  rail: ArtifactRailState,
+  terminalWidth: number,
+  footer: FooterState,
   palette?: TuiPalette,
   splash?: SplashOptions,
   modelPal?: ModelPalette,
+  modelId?: string,
 ): OpenTuiNode {
   const pal = palette ?? getPalette();
-  const logo = renderSplashLogo(splash?.frame ?? 0, { color: splash?.color ?? shouldUseSplashColor() });
+  const width = Math.min(64, Math.max(42, terminalWidth - 8));
+  const activeModel = modelId ?? rail.model ?? '';
+  const visualProfile = resolveCoreVisualProfile(activeModel);
+  const model = rail.model ? clip(rail.model, Math.max(12, width - 16)) : 'local';
+  const workspace = rail.cwd ? clip(rail.cwd, Math.max(12, width - 16)) : '~';
+  const branch = rail.branch ? clip(rail.branch, width - 16) : '-';
+  const context = rail.contextLabel ? clip(rail.contextLabel, width - 16) : `${rail.filesTouched.length} files loaded`;
+  const state = clip(footer.status.replace(/\.$/, '').toLowerCase() || 'ready', width - 16);
+  const coreLines = renderAiCore('idle', (splash?.frame ?? 0) / 8, visualProfile).map(stripAnsi);
   return core.Box(
     {
       id: 'synax-empty-state',
-      width: '100%',
+      width,
       flexDirection: 'column',
-      border: true,
-      borderStyle: 'single',
-      borderColor: modelPal?.primary ?? pal.border,
-      padding: 1,
+      paddingX: 1,
+      paddingY: 0,
     },
-    ...logo.map((line, index) =>
-      core.Text({
-        content: line,
-        fg: splashLineColor(index, splash?.frame ?? 0, pal, modelPal),
-      }),
-    ),
+    core.Text({ content: centerText('Synax', width - 2), fg: pal.brand }),
+    core.Text({ content: centerText('contained local intelligence runtime', width - 2), fg: pal.textMuted }),
     core.Text({ content: '' }),
-    core.Text({ content: 'synax', fg: modelPal?.primary ?? pal.brand }),
-    core.Text({ content: 'local-first coding agent runtime', fg: pal.textMuted }),
+    core.Text({ content: centerText('·     ·     ·', width - 2), fg: pal.textMuted }),
+    ...coreLines.map((line) =>
+      core.Text({ content: centerText(line, width - 2), fg: modelPal?.primary ?? pal.textAccent }),
+    ),
+    core.Text({ content: centerText('·     ·     ·', width - 2), fg: pal.textMuted }),
+    core.Text({ content: '' }),
+    core.Text({ content: telemetryRow('model', model), fg: pal.textMuted }),
+    core.Text({ content: telemetryRow('workspace', workspace), fg: pal.textMuted }),
+    core.Text({ content: telemetryRow('branch', branch), fg: pal.textMuted }),
+    core.Text({ content: telemetryRow('context', context), fg: pal.textMuted }),
+    core.Text({ content: telemetryRow('state', state), fg: pal.textAccent }),
   );
 }
 
-function railWidthFor(width: number): number {
-  return width < RIGHT_RAIL_MIN_WIDTH ? 0 : RIGHT_RAIL_WIDTH;
+function compactEmptyStateHeight(rail: ArtifactRailState): number {
+  void rail;
+  return 22;
+}
+
+function centerText(text: string, width: number): string {
+  const visible = visibleLength(text);
+  if (visible >= width) return text;
+  return `${' '.repeat(Math.floor((width - visible) / 2))}${text}`;
+}
+
+function telemetryRow(label: string, value: string): string {
+  return `${label.padEnd(10, ' ')}${value}`;
 }
 
 function labelFor(eventClass: SemanticEventClass): string {
@@ -715,16 +726,6 @@ const ANSI_PATTERN = new RegExp(String.fromCharCode(27) + '\\[[0-9;]*m', 'g');
 
 function stripAnsi(text: string): string {
   return text.replace(ANSI_PATTERN, '');
-}
-
-function shouldUseSplashColor(): boolean {
-  return !process.env.NO_COLOR && process.env.TERM !== 'dumb';
-}
-
-function splashLineColor(index: number, frame: number, palette: TuiPalette, modelPal?: ModelPalette): string {
-  if (!shouldUseSplashColor()) return palette.textMuted;
-  const colors = modelPal?.splashAccents ?? ['#4f8cff', '#47d7ff', '#7c6cff', '#82f7ff'];
-  return colors[(index + frame) % colors.length] ?? modelPal?.primary ?? palette.brand;
 }
 
 function actionText(core: OpenTuiCore, content: string, fg: string, onToggle?: () => void): OpenTuiNode {
@@ -909,4 +910,116 @@ function renderDiagnosticCard(
       ? [core.Text({ content: `[${lines.length - 1} lines of detail]`, fg: palette.textAccent })]
       : []),
   ];
+}
+
+// ─── Orchestration dispatch card ────────────────────────────────────────────
+
+/** Compact dispatch header for orchestration start. */
+function renderDispatchCard(core: OpenTuiCore, event: SemanticEvent, palette?: TuiPalette): OpenTuiNode {
+  const pal = palette ?? getPalette();
+  const color = eventColor('dispatch', pal);
+  const payload = event.artifact;
+  const title = payload.type === 'text' ? payload.title : '';
+  const bodyLines = payload.type === 'text' ? payload.body.split('\n').filter(Boolean) : [];
+
+  return core.Box(
+    {
+      id: event.id,
+      width: '100%',
+      flexDirection: 'row',
+      marginBottom: 0,
+    },
+    core.Box({ width: 2, minWidth: 2, marginRight: 1 }, core.Text({ content: ' ', fg: color })),
+    core.Box(
+      { flexGrow: 1, flexDirection: 'column', paddingY: 0 },
+      core.Text({ content: `◇ ${title}`, fg: color }),
+      ...bodyLines.map((line) => core.Text({ content: `  ${line}`, fg: pal.textAccent })),
+    ),
+  );
+}
+
+// ─── Agent status card ──────────────────────────────────────────────────────
+
+/** Agent status: compact band while running, full bordered card on return/failure. */
+function renderAgentStatusCard(core: OpenTuiCore, event: SemanticEvent, palette?: TuiPalette): OpenTuiNode {
+  const pal = palette ?? getPalette();
+  const payload = event.artifact;
+  const name = payload.type === 'text' ? payload.title : 'agent';
+  const body = payload.type === 'text' ? payload.body : '';
+
+  // Running: compact band
+  if (body === 'running') {
+    const color = pal.info;
+    return core.Box(
+      {
+        id: event.id,
+        width: '100%',
+        flexDirection: 'row',
+        marginBottom: 0,
+      },
+      core.Box({ width: 2, minWidth: 2, marginRight: 1 }, core.Text({ content: ' ', fg: color })),
+      core.Box({ flexGrow: 1, paddingY: 0 }, core.Text({ content: `◈ ${name} · running`, fg: color })),
+    );
+  }
+
+  // Failed: full error card
+  if (body.startsWith('Failed:')) {
+    const color = pal.error;
+    return core.Box(
+      {
+        id: event.id,
+        width: '100%',
+        flexDirection: 'row',
+        marginBottom: 1,
+      },
+      core.Box({ width: 2, backgroundColor: color, marginRight: 1 }),
+      core.Box(
+        {
+          flexGrow: 1,
+          flexDirection: 'column',
+          border: true,
+          borderStyle: 'single',
+          borderColor: color,
+          title: `  ×  ${name}  `,
+          paddingX: 1,
+          paddingY: 0,
+        },
+        core.Text({ content: body, fg: color }),
+      ),
+    );
+  }
+
+  // Completed: full bordered result card
+  const color = pal.success;
+  const toolCalls = event.metadata.toolCalls ?? 0;
+  const filesCount = event.metadata.filesTouched?.length ?? 0;
+  const statsParts: string[] = [];
+  if (toolCalls > 0) statsParts.push(`Calls ${toolCalls}`);
+  if (filesCount > 0) statsParts.push(`Files ${filesCount}`);
+
+  return core.Box(
+    {
+      id: event.id,
+      width: '100%',
+      flexDirection: 'row',
+      marginBottom: 1,
+    },
+    core.Box({ width: 2, backgroundColor: color, marginRight: 1 }),
+    core.Box(
+      {
+        flexGrow: 1,
+        flexDirection: 'column',
+        border: true,
+        borderStyle: 'single',
+        borderColor: color,
+        title: `  ✓  ${name}  `,
+        paddingX: 1,
+        paddingY: 0,
+      },
+      core.Text({ content: statsParts.length > 0 ? statsParts.join(' · ') : '', fg: pal.textAccent }),
+      ...(body.trim()
+        ? renderResultMarkdown(core, body, pal)
+        : [core.Text({ content: '(no output)', fg: pal.textMuted })]),
+    ),
+  );
 }

@@ -18,6 +18,7 @@ const MAX_EMPTY_RESPONSE_ATTEMPTS = 2;
 const MAX_BASH_FAILURE_ATTEMPTS = 2;
 const MAX_CONTEXT_EXHAUSTION_ATTEMPTS = 1;
 const MAX_INFINITE_LOOP_ATTEMPTS = 1;
+const MAX_MALFORMED_TOOL_CALL_ATTEMPTS = 2;
 
 // ─── RecoveryManager ─────────────────────────────────────
 
@@ -58,6 +59,12 @@ export class RecoveryManager {
       scenario: 'infinite_loop',
       maxAttempts: MAX_INFINITE_LOOP_ATTEMPTS,
       execute: infiniteLoopRecipe,
+    });
+
+    this.register({
+      scenario: 'malformed_tool_call',
+      maxAttempts: MAX_MALFORMED_TOOL_CALL_ATTEMPTS,
+      execute: malformedToolCallRecipe,
     });
   }
 
@@ -157,6 +164,25 @@ async function infiniteLoopRecipe(context: RecoveryContext): Promise<RecoveryRes
     `You appear stuck repeating ${action}. ` +
     'Try a fundamentally different approach. ' +
     'If you are unsure how to proceed, explain what information you need.';
+
+  context.conversation.messages.push({ role: 'user', content: nudge });
+
+  return {
+    recovered: true,
+    injectedMessage: nudge,
+    conversation: context.conversation,
+  };
+}
+
+async function malformedToolCallRecipe(context: RecoveryContext): Promise<RecoveryResult> {
+  const details = context.details || 'unknown parse error';
+  const nudge =
+    `Your last tool call had a formatting error and could not be parsed.\n` +
+    `Error: ${details}\n\n` +
+    `Please retry using the EXACT required format:\n` +
+    `<tool_call>\n<function=NAME>\n<parameter=key>value</parameter>\n</function>\n</tool_call>\n\n` +
+    `The <function=...> wrapper is REQUIRED inside each <tool_call> block. ` +
+    `Do NOT skip it. Emit your tool call now in the correct format.`;
 
   context.conversation.messages.push({ role: 'user', content: nudge });
 

@@ -71,6 +71,15 @@ export function repairXml(raw: string): RepairResult | null {
     working = extracted;
   }
 
+  // Step 6: Wrap bare function names inside <tool_call> blocks that lack <function=...>
+  // Local models sometimes emit: <tool_call>read<parameter=...>...</parameter></tool_call>
+  // instead of: <tool_call><function=read>...</function></tool_call>
+  const wrapped = wrapBareFunctionNames(working);
+  if (wrapped !== working) {
+    fixes.push('wrapped bare function name in <function=...> tags');
+    working = wrapped;
+  }
+
   if (!working) return null;
 
   return { repaired: working, fixes };
@@ -230,6 +239,80 @@ function balanceParameterTags(text: string): string {
     const after = result.slice(lastClose + '</parameter>'.length).trim();
     result = result.slice(0, lastClose) + (after ? after : '');
   }
+  return result;
+}
+
+/**
+ * Wrap bare function names that appear at the start of <tool_call> blocks
+ * without the required <function=NAME> wrapper.
+ *
+ * Example input:
+ *   <tool_call>\nread\n<parameter=path>foo</parameter></tool_call>
+ *
+ * Example output:
+ *   <tool_call>\n<function=read>\n<parameter=path>foo</parameter>\n</function>\n</tool_call>
+ */
+function wrapBareFunctionNames(text: string): string {
+  // Only process if there are blocks that might need fixing
+  if (!/<tool_call>/i.test(text)) return text;
+
+  // Check if there are any blocks WITHOUT <function= already
+  const hasFunctionRegex = /<function=[^>]+>/i;
+  let hasBlockNeedingFix = false;
+
+  // Quick scan: any tool_call block that lacks <function=...>
+  const blockRegex = /<tool_call>([\s\S]*?)<\/tool_call>/gi;
+  for (const match of text.matchAll(blockRegex)) {
+    const inner = match[1];
+    if (inner && !hasFunctionRegex.test(inner)) {
+      hasBlockNeedingFix = true;
+      break;
+    }
+  }
+  if (!hasBlockNeedingFix) return text;
+
+  // Rebuild: wrap bare function names in blocks lacking <function=...>
+  let result = '';
+  let lastIndex = 0;
+  blockRegex.lastIndex = 0;
+
+  for (const match of text.matchAll(blockRegex)) {
+    const before = text.slice(lastIndex, match.index);
+    result += before;
+    lastIndex = match.index + match[0].length;
+
+    const inner = match[1];
+    if (!inner) {
+      result += match[0];
+      continue;
+    }
+
+    // Already has <function= — leave unchanged
+    if (hasFunctionRegex.test(inner)) {
+      result += match[0];
+      continue;
+    }
+
+    // Try to find a bare function name at the start of the inner content
+    const trimmed = inner.trimStart();
+    const fnMatch = trimmed.match(/^([a-zA-Z_][\w.]*)\s*(?=[\n<]|$)/);
+    if (!fnMatch || !fnMatch[1]) {
+      // Can't find a function name — leave unchanged (parser will fail, but
+      // the recovery recipe can still try a retry-nudge)
+      result += match[0];
+      continue;
+    }
+
+    const fnName = fnMatch[1];
+    const afterName = trimmed.slice(fnName.length);
+
+    // Reconstruct: <tool_call>\n<function=NAME>REST\n</function>\n</tool_call>
+    result += `<tool_call>\n<function=${fnName}>${afterName}\n</function>\n</tool_call>`;
+  }
+
+  // Append any trailing text after the last block
+  result += text.slice(lastIndex);
+
   return result;
 }
 

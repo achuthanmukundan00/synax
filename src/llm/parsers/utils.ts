@@ -15,7 +15,10 @@ import type { ParsedToolCall } from './types';
  * These tags are model-internal and should not affect tool-call parsing.
  */
 export function sanitizeReasoningTags(content: string): string {
-  return content.replace(/<(think|thinking)\b[^>]*>[\s\S]*?<\/\1>/gi, '').trim();
+  return content
+    .replace(/<(think|thinking)\b[^>]*>[\s\S]*?<\/\1>/gi, '')
+    .replace(/<\/think(?:ing)?>/gi, '')
+    .trim();
 }
 
 // ─── JSON parsing with repair ───────────────────────────

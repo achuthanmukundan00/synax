@@ -81,7 +81,15 @@ export function sanitizeReasoning(content: string): SanitizeResult {
     }
   }
 
-  // Pattern 6: Remove leading/trailing whitespace introduced by removals
+  // Pattern 6: Stray closing tags from truncated/streamed reasoning blocks.
+  // Some local models emit only the visible answer plus a dangling </think>.
+  const strayClosingRegex = /<\/think(?:ing)?>/gi;
+  if (strayClosingRegex.test(sanitized)) {
+    sanitized = sanitized.replace(strayClosingRegex, '');
+    removedReasoning = true;
+  }
+
+  // Pattern 7: Remove leading/trailing whitespace introduced by removals
   // Also collapse consecutive blank lines
   sanitized = sanitized.replace(/\n{3,}/g, '\n\n').trim();
 

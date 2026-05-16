@@ -16,7 +16,9 @@ export type SemanticEventClass =
   | 'error'
   | 'prompt'
   | 'note'
-  | 'assistant_text';
+  | 'assistant_text'
+  | 'dispatch'
+  | 'agent_status';
 
 export type RiskLevel = 'low' | 'medium' | 'high';
 
@@ -122,6 +124,7 @@ export interface SemanticEvent {
     filesTouched?: string[];
     toolName?: string;
     riskLevel?: RiskLevel;
+    toolCalls?: number;
   };
 }
 
@@ -267,6 +270,77 @@ export function classifyAgentEvent(event: AgentEvent, state: RunStateSnapshot, n
     }
     case 'error':
       return textEvent('error', base, 'Error', event.message);
+    case 'orchestration_plan_generated': {
+      const planPayload = event.payload;
+      if ('inline' in planPayload.plan && planPayload.plan.inline) return [];
+      const plan = planPayload.plan;
+      const subTasks = plan.subTasks ?? [];
+      const mode = plan.strategy === 'orchestrate' ? 'parallel' : 'sequential';
+      const maxDisplay = 6;
+      const shown = subTasks.slice(0, maxDisplay);
+      const overflow = subTasks.length - shown.length;
+      const agentLines = shown.map(
+        (st: { id: string; description: string }) =>
+          `  ${st.id}: ${st.description.slice(0, 100)}${st.description.length > 100 ? '…' : ''}`,
+      );
+      if (overflow > 0) agentLines.push(`  … and ${overflow} more`);
+      const mission = (planPayload.task || '').slice(0, 200);
+      const bodyParts: string[] = [];
+      if (mission) bodyParts.push(`Mission: ${mission}${planPayload.task.length > 200 ? '…' : ''}`);
+      bodyParts.push(...agentLines);
+      return [
+        semantic('dispatch', base, {
+          type: 'text',
+          title: `Dispatch · ${subTasks.length} agents · ${mode}`,
+          body: bodyParts.join('\n'),
+        }),
+      ];
+    }
+    case 'child_session_spawned': {
+      const spawnName = event.subtaskId ?? event.childSessionId ?? 'sub-agent';
+      return [
+        semantic('agent_status', base, {
+          type: 'text',
+          title: spawnName,
+          body: 'running',
+        }),
+      ];
+    }
+    case 'child_session_completed': {
+      const completedName = event.subtaskId ?? event.childSessionId ?? 'sub-agent';
+      const result = event.result;
+      const output = result.finalAnswer ?? '(no output)';
+      const toolCalls = result.toolCalls ?? 0;
+      const files = result.changedFiles ?? [];
+      return [
+        semantic(
+          'agent_status',
+          {
+            ...base,
+            metadata: {
+              ...base.metadata,
+              toolCalls,
+              filesTouched: files.length > 0 ? files : base.metadata.filesTouched,
+            },
+          },
+          {
+            type: 'text',
+            title: `${completedName} returned`,
+            body: output,
+          },
+        ),
+      ];
+    }
+    case 'child_session_failed': {
+      const failedName = event.subtaskId ?? event.childSessionId ?? 'sub-agent';
+      return [
+        semantic('agent_status', base, {
+          type: 'text',
+          title: failedName,
+          body: `Failed: ${event.error}`,
+        }),
+      ];
+    }
     default:
       return [];
   }

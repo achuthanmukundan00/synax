@@ -91,6 +91,41 @@ describe('RecoveryManager', () => {
     expect(conv.messages.length).toBe(3);
   });
 
+  test('malformed_tool_call recipe injects format correction nudge', async () => {
+    const conv = makeConversation();
+    const result = await manager.attemptRecovery({
+      scenario: 'malformed_tool_call',
+      conversation: conv,
+      task: 'read docs',
+      attempt: 0,
+      details: 'Qwen tool_call block missing <function=...> wrapper',
+    });
+
+    expect(result).not.toBeNull();
+    const r = result as NonNullable<typeof result>;
+    expect(r.recovered).toBe(true);
+    expect(r.injectedMessage).toContain('formatting error');
+    expect(r.injectedMessage).toContain('<function=');
+    expect(r.injectedMessage).toContain('REQUIRED');
+    expect(r.injectedMessage).toContain('missing <function=');
+    expect(conv.messages.length).toBe(3);
+  });
+
+  test('malformed_tool_call recipe uses fallback details when none provided', async () => {
+    const conv = makeConversation();
+    const result = await manager.attemptRecovery({
+      scenario: 'malformed_tool_call',
+      conversation: conv,
+      task: 'read docs',
+      attempt: 0,
+    });
+
+    expect(result).not.toBeNull();
+    const r = result as NonNullable<typeof result>;
+    expect(r.recovered).toBe(true);
+    expect(r.injectedMessage).toContain('unknown parse error');
+  });
+
   test('recovery is exhausted after max attempts', async () => {
     const conv = makeConversation();
     // empty_response has max 2 attempts
@@ -181,6 +216,76 @@ describe('recovery classification', () => {
         error: 'too many consecutive recoverable tool errors: 3',
       }),
     ).toBe('infinite_loop');
+  });
+
+  test('classifies malformed tool call — missing function wrapper', () => {
+    expect(
+      classifyResultForRecovery({
+        terminalState: 'model_error',
+        finalAnswer: '',
+        steps: 1,
+        changedFiles: [],
+        toolCalls: [],
+        conversation: {} as never,
+        error: 'Qwen tool_call block missing <function=...> wrapper',
+      }),
+    ).toBe('malformed_tool_call');
+  });
+
+  test('classifies malformed tool call — generic malformed error', () => {
+    expect(
+      classifyResultForRecovery({
+        terminalState: 'model_error',
+        finalAnswer: '',
+        steps: 1,
+        changedFiles: [],
+        toolCalls: [],
+        conversation: {} as never,
+        error: 'model emitted malformed tool call output: bad JSON',
+      }),
+    ).toBe('malformed_tool_call');
+  });
+
+  test('classifies malformed tool call — contained malformed', () => {
+    expect(
+      classifyResultForRecovery({
+        terminalState: 'model_error',
+        finalAnswer: '',
+        steps: 1,
+        changedFiles: [],
+        toolCalls: [],
+        conversation: {} as never,
+        error: 'tool_call block contained malformed <parameter=...>',
+      }),
+    ).toBe('malformed_tool_call');
+  });
+
+  test('does not classify non-malformed model_error as malformed_tool_call', () => {
+    expect(
+      classifyResultForRecovery({
+        terminalState: 'model_error',
+        finalAnswer: '',
+        steps: 1,
+        changedFiles: [],
+        toolCalls: [],
+        conversation: {} as never,
+        error: 'context budget exceeded',
+      }),
+    ).toBeNull();
+  });
+
+  test('does not classify tool_error without malformed markers', () => {
+    expect(
+      classifyResultForRecovery({
+        terminalState: 'tool_error',
+        finalAnswer: '',
+        steps: 1,
+        changedFiles: [],
+        toolCalls: [{ name: 'read', success: false, error: 'ENOENT: no such file' }],
+        conversation: {} as never,
+        error: 'ENOENT: no such file',
+      }),
+    ).toBeNull();
   });
 });
 

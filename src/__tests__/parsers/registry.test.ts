@@ -293,5 +293,6 @@ describe('backward-compatible API', () => {
   it('sanitizeReasoningTags is exported and works', () => {
     expect(sanitizeReasoningTags('<think>hidden</think>visible')).toBe('visible');
     expect(sanitizeReasoningTags('<thinking>nested</thinking>')).toBe('');
+    expect(sanitizeReasoningTags('visible result </think>')).toBe('visible result');
   });
 });

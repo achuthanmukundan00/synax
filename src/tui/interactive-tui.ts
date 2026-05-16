@@ -215,6 +215,7 @@ export async function runInteractiveTui(
 
   // --- Persistent status card state (removed — using activity line instead)
   const activeSubAgents: string[] = [];
+  let orchestrationReturnedCount = 0;
 
   /** Find a descendant OpenTUI node by ID. */
   const findNode = (id: string): unknown => renderer.root.findDescendantById(id);
@@ -406,11 +407,6 @@ export async function runInteractiveTui(
       setNodeContent('synax-status', footer.status);
       setNodeContent('synax-hints', footer.hints);
       if (footer.location) setNodeContent('synax-location', footer.location);
-      setNodeContent('synax-rail-files', `Files (${rail.filesTouched.length})`);
-      setNodeContent('synax-rail-context', `Context: ${rail.contextLabel ?? 'n/a'}`);
-      setNodeContent('synax-rail-cost', `Cost: ${rail.costLabel ?? 'local'}`);
-      setNodeContent('synax-rail-uptime', `Uptime: ${rail.uptimeLabel}`);
-      setNodeContent('synax-rail-model', rail.model ? clip(rail.model, 22) : '');
       const input = findNode('synax-input');
       if (input) {
         if (promptDirty) {
@@ -589,7 +585,8 @@ export async function runInteractiveTui(
       text = statusOverride;
     } else if (activeSubAgents.length > 0) {
       glyph = frameGlyph(g.orchestrating, busyAnimationFrame);
-      text = `Orchestrating: ${activeSubAgents.join(', ')}`;
+      const total = activeSubAgents.length + orchestrationReturnedCount;
+      text = `thinking · ${total - orchestrationReturnedCount}/${total} agents returned`;
     } else if (state.phase === 'thinking') {
       glyph = frameGlyph(g.thinking, busyAnimationFrame);
       const summary = state.timeline[state.timeline.length - 1]?.summary ?? '';
@@ -914,6 +911,14 @@ export async function runInteractiveTui(
     const newEvents = classifyAgentEvent(event, state, Date.now());
 
     // Track subagent orchestration for the status card
+    if (event.type === 'orchestration_plan_generated') {
+      const planEv = event as unknown as { payload?: { plan?: unknown } };
+      const plan = planEv?.payload?.plan as { inline?: boolean } | undefined;
+      if (!plan?.inline) {
+        orchestrationReturnedCount = 0;
+        activeSubAgents.length = 0; // reset for new orchestration
+      }
+    }
     if (event.type === 'child_session_spawned') {
       const child = event as unknown as { childSessionId?: string; subtaskId?: string };
       const label = child.subtaskId ?? child.childSessionId ?? 'sub-agent';
@@ -924,6 +929,7 @@ export async function runInteractiveTui(
       const label = child.subtaskId ?? child.childSessionId ?? 'sub-agent';
       const idx = activeSubAgents.indexOf(label);
       if (idx >= 0) activeSubAgents.splice(idx, 1);
+      orchestrationReturnedCount++;
     }
 
     // Filter transient events from the transcript — they create too many
@@ -1625,6 +1631,7 @@ function footerState({
   steeringBuffer?: string;
   terminalWidth?: number;
   options?: {
+    modelLabel?: string;
     cwdLabel?: string;
     gitBranch?: string;
   };
@@ -1636,7 +1643,23 @@ function footerState({
   const pulse = PULSE_GLYPHS[busyAnimationFrame % PULSE_GLYPHS.length];
   const inputHeight = promptInputHeight(prompt, terminalWidth);
   const hints = '[Enter] submit   [/help] commands   [Ctrl+D] quit';
-  const location = [options?.cwdLabel, options?.gitBranch].filter(Boolean).join('  │  ');
+  const contextLabel =
+    state.contextUsedTokens !== undefined && state.contextWindowTokens
+      ? `ctx ${Math.round((state.contextUsedTokens / state.contextWindowTokens) * 100)}%`
+      : undefined;
+  const filesLabel =
+    state.filesChangedThisRun.length > 0
+      ? `${state.filesChangedThisRun.length} ${state.filesChangedThisRun.length === 1 ? 'file' : 'files'}`
+      : undefined;
+  const location = [
+    options?.modelLabel ?? state.modelId,
+    options?.cwdLabel,
+    options?.gitBranch,
+    contextLabel,
+    filesLabel,
+  ]
+    .filter(Boolean)
+    .join(' · ');
   if (statusOverride) {
     return {
       status: statusOverride,

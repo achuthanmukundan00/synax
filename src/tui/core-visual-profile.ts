@@ -2,18 +2,32 @@ export type CoreVisualProfileId = 'default' | 'qwen' | 'openai' | 'claude' | 'de
 
 export type CoreVisualMode = 'model' | 'default' | 'off';
 
+export type CoreGeometry = 'lens' | 'lattice' | 'organic' | 'furnace' | 'twin' | 'default';
+export type CorePhaseStyle = 'smooth' | 'snap' | 'elastic' | 'compressed' | 'mirrored';
+export type CoreHoverBias = 'focus' | 'magnetic' | 'elastic' | 'minimal' | 'split';
+export type CoreScanStyle = 'soft' | 'beam' | 'inward' | 'split' | 'precise';
+export type CoreColorRole = 'neutral' | 'green' | 'blue' | 'violet' | 'red' | 'gold';
+
 export interface CoreVisualProfile {
   id: CoreVisualProfileId;
-  morphology: 'contained' | 'lattice' | 'lens' | 'aperture' | 'furnace' | 'twin';
-  densityBias: number;
-  flowBias: number;
-  compressionBias: number;
-  syncBias: number;
-  breathingRate: number;
-  accent: { r: number; g: number; b: number };
-  nucleusLayout: 'single' | 'soft' | 'dense' | 'twin';
-  toolScan: 'ring' | 'horizontal' | 'split';
-  hoverResponse: 'balanced' | 'optical' | 'elastic' | 'compressed' | 'mirrored';
+  label: string;
+  match: RegExp[];
+  glyphs: {
+    nucleus: string;
+    secondary?: string;
+    farParticle: string;
+    rearParticle: string;
+    glow: string;
+    hotGlow: string;
+  };
+  geometry: CoreGeometry;
+  motion: {
+    breathRate: number;
+    phaseStyle: CorePhaseStyle;
+    hoverBias: CoreHoverBias;
+    scanStyle: CoreScanStyle;
+  };
+  colorRole?: CoreColorRole;
 }
 
 export interface CoreVisualResolverOptions {
@@ -25,81 +39,128 @@ export interface CoreVisualResolverOptions {
 const PROFILES: Record<CoreVisualProfileId, CoreVisualProfile> = {
   default: {
     id: 'default',
-    morphology: 'contained',
-    densityBias: 0,
-    flowBias: 0,
-    compressionBias: 0,
-    syncBias: 0,
-    breathingRate: 1,
-    accent: { r: 58, g: 109, b: 176 },
-    nucleusLayout: 'single',
-    toolScan: 'ring',
-    hoverResponse: 'balanced',
+    label: 'Synax',
+    match: [],
+    glyphs: {
+      nucleus: '●',
+      farParticle: '˙',
+      rearParticle: '.',
+      glow: '·',
+      hotGlow: '◎',
+    },
+    geometry: 'default',
+    motion: {
+      breathRate: 0.82,
+      phaseStyle: 'smooth',
+      hoverBias: 'minimal',
+      scanStyle: 'soft',
+    },
+    colorRole: 'neutral',
   },
   qwen: {
     id: 'qwen',
-    morphology: 'lattice',
-    densityBias: 0.07,
-    flowBias: 0.12,
-    compressionBias: 0.02,
-    syncBias: 0.22,
-    breathingRate: 1.05,
-    accent: { r: 96, g: 136, b: 188 },
-    nucleusLayout: 'single',
-    toolScan: 'ring',
-    hoverResponse: 'balanced',
+    label: 'Qwen',
+    match: [/qwen/i],
+    glyphs: {
+      nucleus: '●',
+      secondary: '◎',
+      farParticle: '˙',
+      rearParticle: '.',
+      glow: '·',
+      hotGlow: '━',
+    },
+    geometry: 'lattice',
+    motion: {
+      breathRate: 1.05,
+      phaseStyle: 'snap',
+      hoverBias: 'magnetic',
+      scanStyle: 'precise',
+    },
+    colorRole: 'blue',
   },
   openai: {
     id: 'openai',
-    morphology: 'lens',
-    densityBias: -0.02,
-    flowBias: -0.08,
-    compressionBias: -0.03,
-    syncBias: 0.05,
-    breathingRate: 0.9,
-    accent: { r: 112, g: 151, b: 178 },
-    nucleusLayout: 'single',
-    toolScan: 'ring',
-    hoverResponse: 'optical',
+    label: 'OpenAI',
+    match: [/gpt|openai/i],
+    glyphs: {
+      nucleus: '●',
+      secondary: '◎',
+      farParticle: '.',
+      rearParticle: '˙',
+      glow: ':',
+      hotGlow: '●',
+    },
+    geometry: 'lens',
+    motion: {
+      breathRate: 0.9,
+      phaseStyle: 'smooth',
+      hoverBias: 'focus',
+      scanStyle: 'soft',
+    },
+    colorRole: 'green',
   },
   claude: {
     id: 'claude',
-    morphology: 'aperture',
-    densityBias: 0.02,
-    flowBias: -0.03,
-    compressionBias: -0.04,
-    syncBias: -0.08,
-    breathingRate: 1.16,
-    accent: { r: 172, g: 126, b: 88 },
-    nucleusLayout: 'soft',
-    toolScan: 'ring',
-    hoverResponse: 'elastic',
+    label: 'Claude',
+    match: [/claude/i],
+    glyphs: {
+      nucleus: '◉',
+      secondary: '◎',
+      farParticle: '.',
+      rearParticle: '˙',
+      glow: '·',
+      hotGlow: '◉',
+    },
+    geometry: 'organic',
+    motion: {
+      breathRate: 1.16,
+      phaseStyle: 'elastic',
+      hoverBias: 'elastic',
+      scanStyle: 'soft',
+    },
+    colorRole: 'gold',
   },
   deepseek: {
     id: 'deepseek',
-    morphology: 'furnace',
-    densityBias: 0.11,
-    flowBias: -0.12,
-    compressionBias: 0.16,
-    syncBias: -0.03,
-    breathingRate: 0.72,
-    accent: { r: 75, g: 111, b: 166 },
-    nucleusLayout: 'dense',
-    toolScan: 'horizontal',
-    hoverResponse: 'compressed',
+    label: 'DeepSeek',
+    match: [/deepseek/i],
+    glyphs: {
+      nucleus: '◉',
+      secondary: '◎',
+      farParticle: '˙',
+      rearParticle: '.',
+      glow: ':',
+      hotGlow: '━',
+    },
+    geometry: 'furnace',
+    motion: {
+      breathRate: 0.72,
+      phaseStyle: 'compressed',
+      hoverBias: 'focus',
+      scanStyle: 'beam',
+    },
+    colorRole: 'green',
   },
   gemini: {
     id: 'gemini',
-    morphology: 'twin',
-    densityBias: 0.04,
-    flowBias: 0.08,
-    compressionBias: 0,
-    syncBias: 0.14,
-    breathingRate: 1,
-    accent: { r: 86, g: 129, b: 184 },
-    nucleusLayout: 'twin',
-    toolScan: 'split',
-    hoverResponse: 'mirrored',
+    label: 'Gemini',
+    match: [/gemini/i],
+    glyphs: {
+      nucleus: '●',
+      secondary: '◉',
+      farParticle: '.',
+      rearParticle: '˙',
+      glow: '·',
+      hotGlow: '│',
+    },
+    geometry: 'twin',
+    motion: {
+      breathRate: 1,
+      phaseStyle: 'mirrored',
+      hoverBias: 'split',
+      scanStyle: 'split',
+    },
+    colorRole: 'violet',
   },
 };
 
@@ -111,11 +172,10 @@ export function resolveCoreVisualProfile(modelId: string, options: CoreVisualRes
   const override = resolveOverride(normalized, options.overrides);
   if (override) return PROFILES[override];
 
-  if (normalized.includes('qwen')) return PROFILES.qwen;
-  if (normalized.includes('gpt') || normalized.includes('openai')) return PROFILES.openai;
-  if (normalized.includes('claude')) return PROFILES.claude;
-  if (normalized.includes('deepseek')) return PROFILES.deepseek;
-  if (normalized.includes('gemini')) return PROFILES.gemini;
+  for (const profile of [PROFILES.qwen, PROFILES.openai, PROFILES.claude, PROFILES.deepseek, PROFILES.gemini]) {
+    if (profile.match.some((pattern) => pattern.test(modelId))) return profile;
+  }
+
   return PROFILES.default;
 }
 
