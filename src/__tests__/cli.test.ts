@@ -238,7 +238,7 @@ describe('CLI', () => {
           ].join('\n'),
           'utf-8',
         );
-        const result = await runSynaxDetailed(['ask', '--question', 'Inspect the project and summarize its files'], {
+        const result = await runSynaxDetailed(['ask', '--question', 'Describe the contents of this directory'], {
           cwd,
         });
         expect(result.status).toBe(0);

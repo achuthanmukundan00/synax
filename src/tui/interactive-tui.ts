@@ -63,6 +63,7 @@ import {
 } from './tui-constants';
 import { padAnsi, visibleLength } from './text-utils';
 import { getModelPalette, type ModelPalette } from './model-palette';
+import { parseInputChunk } from './input';
 
 type OpenTuiCore = typeof import('@opentui/core');
 
@@ -197,6 +198,7 @@ export async function runInteractiveTui(
   let orchestrationTotalSteps = 0;
   let orchestrationMode: 'parallel' | 'sequential' | null = null;
   let orchestrationPhase: 'dispatching' | 'synthesizing' | 'committing' | null = null;
+  let hasAssistantResultThisTurn = false;
 
   /** Find a descendant OpenTUI node by ID. */
   const findNode = (id: string): unknown => renderer.root.findDescendantById(id);
@@ -367,7 +369,7 @@ export async function runInteractiveTui(
           settingsLines,
           settingsState?.active ? tabLabel(settingsState.tab) : undefined,
           handleInputSubmit,
-          (value, input) => {
+          (value) => {
             if (autocompleteDraft !== null) return;
             // Clear file/path autocomplete when the user types
             if (autocompleteIsFile) {
@@ -378,7 +380,6 @@ export async function runInteractiveTui(
             }
             const previousPrompt = prompt;
             prompt = value;
-            placePromptCursorAtEnd(input, value);
             const autocompleteChanged = previousPrompt.startsWith('/') || value.startsWith('/');
             const heightChanged =
               promptInputHeight(previousPrompt, renderer.width) !== promptInputHeight(value, renderer.width);
@@ -948,8 +949,14 @@ export async function runInteractiveTui(
 
   session.setEventSink?.((event) => {
     if (exiting) return;
+    if (event.type === 'task_started' || event.type === 'user_message') {
+      hasAssistantResultThisTurn = false;
+    }
     state = applyEventToRunState(state, event, Date.now());
     const newEvents = classifyAgentEvent(event, state, Date.now());
+    if (event.type === 'assistant_message' && newEvents.length > 0) {
+      hasAssistantResultThisTurn = true;
+    }
 
     // Track subagent orchestration for the status card
     if (event.type === 'orchestration_plan_generated') {
@@ -1009,6 +1016,7 @@ export async function runInteractiveTui(
     const shouldHideCard =
       (TRANSIENT_EVENT_TYPES as Set<string>).has(event.type) ||
       (event.type === 'tool_finished' && event.status === 'ok') ||
+      shouldHideCompletionResultCard(event, hasAssistantResultThisTurn) ||
       event.type === 'verification_passed' ||
       event.type === 'verification_skipped';
     if (shouldHideCard) {
@@ -1315,6 +1323,15 @@ export async function runInteractiveTui(
     return false;
   }
 
+  function handleRawHistoryScrollInput(sequence: string): boolean {
+    const parsed = parseInputChunk(sequence);
+    const scroll = parsed.find((event) => event.type === 'scroll_history_up' || event.type === 'scroll_history_down');
+    if (!scroll) return false;
+    scrollArtifactHistory(renderer, scroll.type === 'scroll_history_up' ? -SCROLL_STEP_ROWS : SCROLL_STEP_ROWS);
+    render('scroll', { immediate: true });
+    return true;
+  }
+
   /** Autocomplete up/down navigation */
   function handleAutocompleteNav(key: { name: string; preventDefault?: () => void }): void {
     if (isUpKey(key.name)) {
@@ -1364,6 +1381,7 @@ export async function runInteractiveTui(
   }
 
   renderer.prependInputHandler(handleRawSlashAutocompleteInput);
+  renderer.prependInputHandler(handleRawHistoryScrollInput);
 
   renderer.keyInput.on('keypress', (key) => {
     // --- Ctrl+C: double-press ---
@@ -1649,6 +1667,13 @@ function shouldFlushEventPromptly(event: import('../agent/events').AgentEvent): 
     event.type === 'verification_passed' ||
     event.type === 'verification_skipped'
   );
+}
+
+export function shouldHideCompletionResultCard(
+  event: import('../agent/events').AgentEvent,
+  hasAssistantResultThisTurn: boolean,
+): boolean {
+  return event.type === 'task_finished' && event.status === 'completed' && hasAssistantResultThisTurn;
 }
 
 async function loadOpenTuiCore(): Promise<OpenTuiCore> {

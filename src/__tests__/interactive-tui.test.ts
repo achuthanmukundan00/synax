@@ -18,6 +18,7 @@ import {
   movePromptCursorVertically,
   resolveCtrlCBehavior,
   scrollArtifactHistory,
+  shouldHideCompletionResultCard,
   slashAutocompleteItems,
 } from '../tui/interactive-tui';
 import { setPromptValue } from '../tui/key-handlers';
@@ -573,6 +574,48 @@ describe('OpenTUI artifact scrolling', () => {
     };
 
     expect(scrollArtifactHistory(renderer, 9)).toBe(false);
+  });
+});
+
+describe('OpenTUI result card consolidation', () => {
+  it('hides the completed status card when the turn already has an assistant result', () => {
+    expect(
+      shouldHideCompletionResultCard(
+        {
+          type: 'task_finished',
+          timestamp: new Date(0).toISOString(),
+          status: 'completed',
+          toolCalls: 0,
+          maxToolCalls: 10,
+          modelSteps: 1,
+          maxModelSteps: 10,
+          changedFiles: [],
+          workingTreeClean: false,
+          verification: 'not run',
+        },
+        true,
+      ),
+    ).toBe(true);
+  });
+
+  it('keeps the completed status card as a fallback when no assistant result exists', () => {
+    expect(
+      shouldHideCompletionResultCard(
+        {
+          type: 'task_finished',
+          timestamp: new Date(0).toISOString(),
+          status: 'completed',
+          toolCalls: 0,
+          maxToolCalls: 10,
+          modelSteps: 1,
+          maxModelSteps: 10,
+          changedFiles: [],
+          workingTreeClean: false,
+          verification: 'not run',
+        },
+        false,
+      ),
+    ).toBe(false);
   });
 });
 

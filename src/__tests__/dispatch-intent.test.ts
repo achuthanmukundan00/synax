@@ -341,7 +341,13 @@ describe('normalizeDispatchPlan', () => {
   });
 
   it('expands single read-all task to repo reconnaissance', () => {
-    const result = normalizeDispatchPlan('orchestrate', 'parallel', 1, ['read all the files and summarize'], defaultHints);
+    const result = normalizeDispatchPlan(
+      'orchestrate',
+      'parallel',
+      1,
+      ['read all the files and summarize'],
+      defaultHints,
+    );
     expect(result.strategy).toBe('repo_reconnaissance');
     expect(result.agentCount).toBeGreaterThan(1);
   });

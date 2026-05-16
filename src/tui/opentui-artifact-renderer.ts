@@ -241,7 +241,7 @@ export function renderArtifactRoot(
           paddingX: 1,
           paddingY: 1,
         },
-        core.Text({ content: '> ', fg: pal.textMuted, width: 2 }),
+        core.Text({ content: '> ', fg: pal.textMuted, width: '10%' }),
         core.Box({ flexGrow: 1 }, input),
       ),
       core.Text({ id: 'synax-hints', content: footer.hints, fg: pal.textAccent }),
@@ -412,7 +412,7 @@ export function renderArtifactCard(
         flexDirection: 'row',
         marginBottom: 0,
       },
-      core.Box({ width: 2, minWidth: 2, marginRight: 1 }, core.Text({ content: ' ', fg: color })),
+      core.Box({ width: '10%', minWidth: '10%', marginRight: 1 }, core.Text({ content: ' ', fg: color })),
       core.Box({ flexGrow: 1, paddingY: 0 }, ...children),
     );
   }
@@ -424,7 +424,7 @@ export function renderArtifactCard(
       flexDirection: 'row',
       marginBottom: 1,
     },
-    core.Box({ width: 2, backgroundColor: color, marginRight: 1 }),
+    core.Box({ width: '10%', backgroundColor: color, marginRight: 1 }),
     core.Box(
       {
         flexGrow: 1,
@@ -461,7 +461,7 @@ function renderPersistentStatusCard(core: OpenTuiCore, event: SemanticEvent, pal
       flexDirection: 'row',
       marginBottom: 1,
     },
-    core.Box({ width: 2, backgroundColor: color, marginRight: 1 }),
+    core.Box({ width: '10%', backgroundColor: color, marginRight: 1 }),
     core.Box(
       {
         flexGrow: 1,
@@ -1087,7 +1087,7 @@ function renderDispatchCard(core: OpenTuiCore, event: SemanticEvent, palette?: T
       flexDirection: 'row',
       marginBottom: 0,
     },
-    core.Box({ width: 2, minWidth: 2, marginRight: 1 }, core.Text({ content: ' ', fg: color })),
+    core.Box({ width: '10%', minWidth: '10%', marginRight: 1 }, core.Text({ content: ' ', fg: color })),
     core.Box(
       { flexGrow: 1, flexDirection: 'column', paddingY: 0 },
       core.Text({ content: `◇ ${title}`, fg: color }),
@@ -1115,7 +1115,7 @@ function renderAgentStatusCard(core: OpenTuiCore, event: SemanticEvent, palette?
         flexDirection: 'row',
         marginBottom: 0,
       },
-      core.Box({ width: 2, minWidth: 2, marginRight: 1 }, core.Text({ content: ' ', fg: color })),
+      core.Box({ width: '10%', minWidth: '10%', marginRight: 1 }, core.Text({ content: ' ', fg: color })),
       core.Box({ flexGrow: 1, paddingY: 0 }, core.Text({ content: `◈ ${name} · running`, fg: color })),
     );
   }
@@ -1130,7 +1130,7 @@ function renderAgentStatusCard(core: OpenTuiCore, event: SemanticEvent, palette?
         flexDirection: 'row',
         marginBottom: 1,
       },
-      core.Box({ width: 2, backgroundColor: color, marginRight: 1 }),
+      core.Box({ width: '10%', backgroundColor: color, marginRight: 1 }),
       core.Box(
         {
           flexGrow: 1,
@@ -1162,7 +1162,7 @@ function renderAgentStatusCard(core: OpenTuiCore, event: SemanticEvent, palette?
       flexDirection: 'row',
       marginBottom: 1,
     },
-    core.Box({ width: 2, backgroundColor: color, marginRight: 1 }),
+    core.Box({ width: '10%', backgroundColor: color, marginRight: 1 }),
     core.Box(
       {
         flexGrow: 1,

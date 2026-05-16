@@ -305,11 +305,7 @@ export function classifyAgentEvent(event: AgentEvent, state: RunStateSnapshot, n
     case 'dispatch_started': {
       const payload = event as import('../agent/events').DispatchStartedEvent;
       const bodyParts: string[] = [];
-      const title = formatDispatchTitle(
-        payload.mode as string,
-        payload.agentCount,
-        payload.strategy,
-      );
+      const title = formatDispatchTitle(payload.mode as string, payload.agentCount, payload.strategy);
       return [
         semantic('dispatch', base, {
           type: 'text',
@@ -625,11 +621,7 @@ export function shouldEmitCheckpoint(currentFiles: number, lastFiles: number): b
  * - "Delegated · 1 agent"
  * - "Inline · no delegation"
  */
-export function formatDispatchTitle(
-  mode: string,
-  agentCount: number,
-  strategy: string,
-): string {
+export function formatDispatchTitle(mode: string, agentCount: number, strategy: string): string {
   // Guard: inline or 0 agents
   if (agentCount === 0 || mode === 'inline') {
     return 'Inline · no delegation';

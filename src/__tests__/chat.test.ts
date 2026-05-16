@@ -35,6 +35,7 @@ import {
   draftContainsPaste,
   draftPlainText,
   flattenInlinePasteDraft,
+  inferChatRunMode,
   promptInteractiveLine,
   runInlinePasteChat,
   type ChatSession,
@@ -94,6 +95,29 @@ describe('chat session', () => {
       session.conversation.messages.filter((message) => message.role === 'user').map((message) => message.content),
     ).toEqual(['one', 'two']);
     expect(requests).toHaveLength(2);
+  });
+
+  it('routes report-back inspection prompts as read-only so text answers are not swallowed', async () => {
+    const answer =
+      'The card accent strip is rendered in src/tui/opentui-artifact-renderer.ts inside renderArtifactCard. '.repeat(3);
+    responses = [{ content: answer }];
+    const session = createChatSession({
+      repoRoot: TMP,
+      config: { provider: { kind: 'openai-compatible', base_url: 'http://localhost/v1', model: 'fake' } },
+    });
+
+    const report = await session.handleUserMessage(
+      'could you identify where in the repo we should edit the code to make the colored rectangles skinnier? report back first',
+    );
+
+    expect(report.finalAnswer).toBe(answer.trim());
+    expect(requests).toHaveLength(1);
+  });
+
+  it('infers read-only versus patch intent for chat turns', () => {
+    expect(inferChatRunMode('summarize the state of the repo')).toBe('read-only');
+    expect(inferChatRunMode('identify where to make the TUI card stripe skinnier and report back')).toBe('read-only');
+    expect(inferChatRunMode('make the TUI card stripe skinnier')).toBe('patch');
   });
 
   it('does not emit the empty-response display fallback as TUI assistant content', async () => {
