@@ -262,11 +262,16 @@ export function classifyAgentEvent(event: AgentEvent, state: RunStateSnapshot, n
         }),
       ];
     case 'task_finished': {
-      // Only emit when there is meaningful detail (error, verification result).
-      // The model's assistant_message already provides the visible answer.
+      // Build a summary that includes file change information so the final
+      // card shows subagent work even when the LLM's inline summary says "none".
+      const fileInfo =
+        event.changedFiles.length > 0 ? `\nFiles changed by subagents: ${event.changedFiles.length}` : '';
+      const treeInfo =
+        event.workingTreeClean !== undefined ? `\nWorking tree: ${event.workingTreeClean ? 'clean' : 'dirty'}` : '';
       const detail = terminalSummary(event.error ?? event.verification);
-      if (!detail) return [];
-      return textEvent(event.status === 'completed' ? 'tool_result' : 'result_error', base, 'Result', detail);
+      const body = detail ? `${detail}${fileInfo}${treeInfo}` : `Status: ${event.status}${fileInfo}${treeInfo}`;
+      if (!body.trim()) return [];
+      return textEvent(event.status === 'completed' ? 'tool_result' : 'result_error', base, 'Result', body);
     }
     case 'error':
       return textEvent('error', base, 'Error', event.message);
@@ -275,7 +280,7 @@ export function classifyAgentEvent(event: AgentEvent, state: RunStateSnapshot, n
       if ('inline' in planPayload.plan && planPayload.plan.inline) return [];
       const plan = planPayload.plan;
       const subTasks = plan.subTasks ?? [];
-      const mode = plan.strategy === 'orchestrate' ? 'parallel' : 'sequential';
+      const mode = planPayload.orchestrationMode ?? (plan.strategy === 'decompose' ? 'sequential' : 'parallel');
       const maxDisplay = 6;
       const shown = subTasks.slice(0, maxDisplay);
       const overflow = subTasks.length - shown.length;
@@ -284,14 +289,18 @@ export function classifyAgentEvent(event: AgentEvent, state: RunStateSnapshot, n
           `  ${st.id}: ${st.description.slice(0, 100)}${st.description.length > 100 ? '…' : ''}`,
       );
       if (overflow > 0) agentLines.push(`  … and ${overflow} more`);
-      const mission = (planPayload.task || '').slice(0, 200);
+      const shortMission = (planPayload.task || '').slice(0, 80);
       const bodyParts: string[] = [];
-      if (mission) bodyParts.push(`Mission: ${mission}${planPayload.task.length > 200 ? '…' : ''}`);
+      if (shortMission) bodyParts.push(`Mission: ${shortMission}${planPayload.task.length > 80 ? '…' : ''}`);
       bodyParts.push(...agentLines);
+      const title =
+        mode === 'sequential'
+          ? `Sequential plan · ${subTasks.length} steps`
+          : `Dispatch · ${subTasks.length} agents · parallel`;
       return [
         semantic('dispatch', base, {
           type: 'text',
-          title: `Dispatch · ${subTasks.length} agents · ${mode}`,
+          title,
           body: bodyParts.join('\n'),
         }),
       ];

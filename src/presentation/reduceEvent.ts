@@ -295,7 +295,7 @@ export function reduceEvent(
       s = { ...s, agentPanes: [] };
       ({ state: s, ctx: c } = appendBlock(s, c, {
         kind: 'orchestration',
-        mode: plan.strategy === 'orchestrate' ? 'parallel' : 'sequential',
+        mode: event.payload.orchestrationMode ?? (plan.strategy === 'decompose' ? 'sequential' : 'parallel'),
         phase: 'planning',
         summary: `${subTasks.length} sub-tasks planned, mode: ${plan.strategy}`,
         subAgents: agents,

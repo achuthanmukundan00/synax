@@ -2602,4 +2602,249 @@ describe('dispatch card conciseness', () => {
       expect(result[0].artifact.title).toBe('Dispatch · 3 agents · parallel');
     }
   });
+
+  it('shows "Sequential plan" title when orchestrationMode is sequential', () => {
+    const state = createInitialRunStateSnapshot(0);
+    const event: Parameters<typeof classifyAgentEvent>[0] = {
+      type: 'orchestration_plan_generated' as const,
+      timestamp: new Date(0).toISOString(),
+      payload: {
+        sessionId: 'session-1',
+        task: 'do steps in order',
+        plan: {
+          planId: 'plan-1',
+          strategy: 'orchestrate' as const,
+          subTasks: [
+            {
+              id: 'step1',
+              description: 'first step',
+              estimatedBudget: 500,
+              fileScope: [],
+              dependencies: [],
+              verification: { level: 'none' as const, label: 'none' },
+            },
+            {
+              id: 'step2',
+              description: 'second step',
+              estimatedBudget: 500,
+              fileScope: [],
+              dependencies: [],
+              verification: { level: 'none' as const, label: 'none' },
+            },
+          ],
+          estimatedTotalTokens: 1000,
+          repoMetadata: { fileCount: 5, totalKB: 50, sourceKB: 40 },
+          contextWindowTokens: 131072,
+        },
+        orchestrationMode: 'sequential',
+      },
+    };
+    const result = classifyAgentEvent(event, state, 1);
+    expect(result).toHaveLength(1);
+    if (result[0].artifact.type === 'text') {
+      expect(result[0].artifact.title).toBe('Sequential plan · 2 steps');
+      expect(result[0].artifact.body).toContain('step1:');
+      expect(result[0].artifact.body).toContain('step2:');
+      expect(result[0].artifact.body).not.toContain('agents');
+    }
+  });
+});
+
+describe('result card renderer display', () => {
+  it('does not render a duplicate "Result" text when the card title is already "Result"', () => {
+    const core = createFakeOpenTuiCore();
+    const event = {
+      id: 'result-1',
+      class: 'tool_result',
+      timestamp: 1715731200000,
+      artifact: { type: 'text', title: 'Result', body: 'some output' },
+      metadata: {},
+    } as Parameters<typeof renderArtifactCard>[1];
+    const card = renderArtifactCard(core, event) as unknown as FakeOpenTuiNode;
+    const text = collectTextContent(card);
+    // The card crown already shows "Result" — an inner text node duplicating
+    // it would mean the string "Result" appears more than once.
+    const resultCount = text.filter((t) => t.trim() === 'Result').length;
+    expect(resultCount).toBe(0);
+  });
+
+  it('renders "Touched files: N" stat when filesTouched is set in metadata', () => {
+    const core = createFakeOpenTuiCore();
+    const event = {
+      id: 'result-2',
+      class: 'tool_result',
+      timestamp: 1715731200000,
+      artifact: { type: 'text', title: 'some result', body: 'finished work' },
+      metadata: { filesTouched: ['src/a.ts', 'src/b.ts'] },
+    } as Parameters<typeof renderArtifactCard>[1];
+    const card = renderArtifactCard(core, event) as unknown as FakeOpenTuiNode;
+    const text = collectTextContent(card).join(' ');
+    expect(text).toContain('Touched files: 2');
+    expect(text).not.toMatch(/\bFiles\s+2\b/);
+  });
+
+  it('omits the "Touched files" stat when filesTouched is empty', () => {
+    const core = createFakeOpenTuiCore();
+    const event = {
+      id: 'result-3',
+      class: 'tool_result',
+      timestamp: 1715731200000,
+      artifact: { type: 'text', title: 'some result', body: 'finished work' },
+      metadata: {},
+    } as Parameters<typeof renderArtifactCard>[1];
+    const card = renderArtifactCard(core, event) as unknown as FakeOpenTuiNode;
+    const text = collectTextContent(card).join(' ');
+    expect(text).not.toContain('Touched files');
+  });
+});
+
+describe('event sink stale card filter', () => {
+  it('filters out a running agent_status card when a matching child_session_completed arrives', () => {
+    const state = createInitialRunStateSnapshot(0);
+    // Simulate what the event sink does: classify spawned → gets "running" card
+    const spawned: Parameters<typeof classifyAgentEvent>[0] = {
+      type: 'child_session_spawned' as const,
+      timestamp: new Date(0).toISOString(),
+      parentSessionId: 'p1',
+      childSessionId: 'c1',
+      subtaskId: 'agent-x',
+    };
+    const completed: Parameters<typeof classifyAgentEvent>[0] = {
+      type: 'child_session_completed' as const,
+      timestamp: new Date(100).toISOString(),
+      parentSessionId: 'p1',
+      childSessionId: 'c1',
+      subtaskId: 'agent-x',
+      result: {
+        subTaskId: 'agent-x',
+        terminalState: 'completed' as const,
+        changedFiles: [],
+        toolCalls: 2,
+        finalAnswer: 'done',
+      },
+    };
+
+    const runningEvents = classifyAgentEvent(spawned, state, 1);
+    const completedEvents = classifyAgentEvent(completed, state, 101);
+    const allEvents = [...runningEvents, ...completedEvents];
+
+    // Apply the same filter the event sink uses
+    const label = 'agent-x';
+    const filtered = allEvents.filter(
+      (ev) =>
+        !(
+          ev.class === 'agent_status' &&
+          ev.artifact.type === 'text' &&
+          ev.artifact.title === label &&
+          ev.artifact.body === 'running'
+        ),
+    );
+
+    // Should still have the "returned" card but not the "running" card
+    expect(filtered).toHaveLength(1);
+    expect(filtered[0].artifact).toEqual(
+      expect.objectContaining({ type: 'text', title: expect.stringContaining('returned') }),
+    );
+  });
+
+  it('filters out running card when child_session_failed arrives', () => {
+    const state = createInitialRunStateSnapshot(0);
+    const spawned: Parameters<typeof classifyAgentEvent>[0] = {
+      type: 'child_session_spawned' as const,
+      timestamp: new Date(0).toISOString(),
+      parentSessionId: 'p1',
+      childSessionId: 'c2',
+      subtaskId: 'agent-y',
+    };
+    const failed: Parameters<typeof classifyAgentEvent>[0] = {
+      type: 'child_session_failed' as const,
+      timestamp: new Date(100).toISOString(),
+      parentSessionId: 'p1',
+      childSessionId: 'c2',
+      subtaskId: 'agent-y',
+      error: 'timed out',
+      partialResult: {
+        subTaskId: 'agent-y',
+        terminalState: 'model_error' as const,
+        changedFiles: [],
+        toolCalls: 1,
+      },
+    };
+
+    const runningEvents = classifyAgentEvent(spawned, state, 1);
+    const failedEvents = classifyAgentEvent(failed, state, 101);
+    const allEvents = [...runningEvents, ...failedEvents];
+
+    const label = 'agent-y';
+    const filtered = allEvents.filter(
+      (ev) =>
+        !(
+          ev.class === 'agent_status' &&
+          ev.artifact.type === 'text' &&
+          ev.artifact.title === label &&
+          ev.artifact.body === 'running'
+        ),
+    );
+
+    expect(filtered).toHaveLength(1);
+    if (filtered[0].artifact.type === 'text') {
+      expect(filtered[0].artifact.body).toContain('Failed:');
+    }
+  });
+
+  it('does not filter out running cards for a different sub-agent', () => {
+    const state = createInitialRunStateSnapshot(0);
+    const spawnedA: Parameters<typeof classifyAgentEvent>[0] = {
+      type: 'child_session_spawned' as const,
+      timestamp: new Date(0).toISOString(),
+      parentSessionId: 'p1',
+      childSessionId: 'c-a',
+      subtaskId: 'agent-a',
+    };
+    const spawnedB: Parameters<typeof classifyAgentEvent>[0] = {
+      type: 'child_session_spawned' as const,
+      timestamp: new Date(0).toISOString(),
+      parentSessionId: 'p1',
+      childSessionId: 'c-b',
+      subtaskId: 'agent-b',
+    };
+    const completedA: Parameters<typeof classifyAgentEvent>[0] = {
+      type: 'child_session_completed' as const,
+      timestamp: new Date(100).toISOString(),
+      parentSessionId: 'p1',
+      childSessionId: 'c-a',
+      subtaskId: 'agent-a',
+      result: {
+        subTaskId: 'agent-a',
+        terminalState: 'completed' as const,
+        changedFiles: [],
+        toolCalls: 1,
+        finalAnswer: 'done a',
+      },
+    };
+
+    const eventsA = classifyAgentEvent(spawnedA, state, 1);
+    const eventsB = classifyAgentEvent(spawnedB, state, 2);
+    const eventsCompleted = classifyAgentEvent(completedA, state, 101);
+    const allEvents = [...eventsA, ...eventsB, ...eventsCompleted];
+
+    // Filter out agent-a's running card (label = 'agent-a')
+    const label = 'agent-a';
+    const filtered = allEvents.filter(
+      (ev) =>
+        !(
+          ev.class === 'agent_status' &&
+          ev.artifact.type === 'text' &&
+          ev.artifact.title === label &&
+          ev.artifact.body === 'running'
+        ),
+    );
+
+    // agent-b's running card should survive
+    const runningB = filtered.filter(
+      (ev) => ev.class === 'agent_status' && ev.artifact.type === 'text' && ev.artifact.body === 'running',
+    );
+    expect(runningB).toHaveLength(1);
+    expect(runningB[0].artifact.type === 'text' ? runningB[0].artifact.title : '').toBe('agent-b');
+  });
 });

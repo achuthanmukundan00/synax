@@ -520,7 +520,7 @@ export class Session {
    * Prompts the model to decompose the task, validating and repairing the JSON response.
    * Emits the orchestration_plan_generated event.
    */
-  async planOrchestratedTurn(task: string): Promise<PlanParseResult> {
+  async planOrchestratedTurn(task: string, mode?: 'parallel' | 'sequential'): Promise<PlanParseResult> {
     const repoMetadata = await collectRepoMetadata(this.env, this.repoRoot);
 
     // Create prompt for decomposition
@@ -558,7 +558,7 @@ export class Session {
       this.eventBus.emit({
         type: 'orchestration_plan_generated',
         timestamp: eventNow(),
-        payload: { sessionId: this.sessionId, task, plan: { inline: true } },
+        payload: { sessionId: this.sessionId, task, plan: { inline: true }, orchestrationMode: mode },
       });
       return fallback;
     }
@@ -576,6 +576,7 @@ export class Session {
         sessionId: this.sessionId,
         task,
         plan: parsed.success ? parsed.plan : { inline: true },
+        orchestrationMode: mode,
       },
     } as any);
 

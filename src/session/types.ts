@@ -265,5 +265,6 @@ export interface OrchestrationPlanGeneratedEvent extends AgentEventBase {
     sessionId: string;
     task: string;
     plan: OrchestrationPlan | { inline: true };
+    orchestrationMode?: 'parallel' | 'sequential';
   };
 }
