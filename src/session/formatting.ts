@@ -11,9 +11,17 @@ import type { ToolResult } from '../tools/types';
 import type { ContextBudgetSettings } from '../agent/context-budget';
 import { estimateTokens, truncateForTokenBudget } from '../agent/context-budget';
 import { eventNow, type AgentEvent } from '../agent/events';
+import { sanitizeReasoning } from '../llm/repair/reasoning-sanitizer';
 import type { AgentMessage, AgentConversation, AgentActivity } from './types';
 
 // ─── Response formatting ─────────────────────────────────────────────────────
+
+export function assistantVisibleContent(content: string): string {
+  return sanitizeReasoning(content)
+    .content.replace(/<tool_call>[\s\S]*?<\/tool_call>/gi, '')
+    .replace(/<\|tool_call\|>[\s\S]*/gi, '')
+    .trim();
+}
 
 export function assistantMessage(response: ChatResponse, settings?: ContextBudgetSettings): AgentMessage {
   const maxOutputTokens = settings?.reservedOutputTokens ?? 8192;
@@ -134,14 +142,14 @@ export function formatToolResultDetail(toolResult: ToolResult): string {
 export function formatModelResponseActivity(response: ChatResponse, _step: number): AgentActivity {
   const lines: string[] = [];
   const reasoningContent = response.reasoningContent?.trim();
-  const trimmedContent = response.content.trim();
+  const visibleContent = assistantVisibleContent(response.content);
 
-  if (reasoningContent && !trimmedContent.includes(reasoningContent)) {
+  if (reasoningContent && !visibleContent.includes(reasoningContent)) {
     lines.push(`<thinking>\n${reasoningContent}\n</thinking>`);
   }
 
-  if (trimmedContent.length > 0) {
-    lines.push(trimmedContent);
+  if (visibleContent.length > 0) {
+    lines.push(visibleContent);
   }
 
   if (response.toolCalls.length > 0) {
@@ -171,11 +179,7 @@ export function isPrematureCompletionClaim(text: string, changedFiles: string[] 
   // files_changed verification level: if files were modified, completion is genuine
   if (changedFiles.length > 0) return false;
 
-  const normalized = text
-    .replace(/<think>[\s\S]*?<\/think>/gi, '')
-    .replace(/<thinking>[\s\S]*?<\/thinking>/gi, '')
-    .trim()
-    .toLowerCase();
+  const normalized = assistantVisibleContent(text).toLowerCase();
 
   if (normalized.length < 10) return false;
 
@@ -200,24 +204,22 @@ export function isPrematureCompletionClaim(text: string, changedFiles: string[] 
 // ─── Tool-call safety preamble check ─────────────────────────────────────────
 
 export function isSafeToolPreamble(text: string): boolean {
-  const normalized = text
-    .replace(/<think>[\s\S]*?<\/think>/gi, '')
-    .replace(/<thinking>[\s\S]*?<\/thinking>/gi, '')
-    .trim();
+  const normalized = assistantVisibleContent(text);
 
   if (!normalized) return true;
   const joined = normalized.toLowerCase();
 
-  const forbiddenPhrases = [
-    'answer is',
-    'final answer',
-    'in summary',
-    'in conclusion',
-    'to summarize',
-    'here is the answer',
+  const forbiddenPatterns = [
+    /\b(?:the\s+)?answer\s+is\b/,
+    /\bfinal\s+answer\s*[:：-]/,
+    /^\s*final\s+answer\b/m,
+    /\bin\s+summary\s*[,.:：-]/,
+    /\bin\s+conclusion\s*[,.:：-]/,
+    /\bto\s+summarize\s*[,.:：-]/,
+    /\bhere\s+is\s+the\s+answer\b/,
   ];
 
-  return !forbiddenPhrases.some((phrase) => joined.includes(phrase));
+  return !forbiddenPatterns.some((pattern) => pattern.test(joined));
 }
 
 // ─── Tool error classification ───────────────────────────────────────────────
