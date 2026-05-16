@@ -242,6 +242,7 @@ export function createAgentSession(options: CreateAgentSessionOptions): AgentSes
     sessionId: components.sessionId,
     memory: components.memory,
     maxToolCalls: options.config.maxToolCalls,
+    maxOutputTokens: options.config.provider?.maxOutputTokens,
     bashEnabled: options.config.tools?.bash?.enabled,
     skillMessages: components.skillMessages,
     conversation: options.conversation,

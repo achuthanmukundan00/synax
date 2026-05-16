@@ -118,26 +118,33 @@ export class EventStore {
     // Future migrations go here.
   }
 
-  /** Start a new session record. */
+  /** Start a new session record. Throws on session ID collision. */
   startSession(session: SessionRecord): void {
     if (!this.db) return;
     const changedFilesJson = JSON.stringify(session.changedFiles ?? []);
-    this.db
-      .prepare(
-        `INSERT OR REPLACE INTO sessions (id, repo_root, mode, model, created_at, terminal_state, steps, tool_calls, changed_files)
-       VALUES (@id, @repoRoot, @mode, @model, @createdAt, @terminalState, @steps, @toolCalls, @changedFiles)`,
-      )
-      .run({
-        id: session.id,
-        repoRoot: session.repoRoot,
-        mode: session.mode,
-        model: session.model,
-        createdAt: session.createdAt,
-        terminalState: session.terminalState ?? null,
-        steps: session.steps ?? 0,
-        toolCalls: session.toolCalls ?? 0,
-        changedFiles: changedFilesJson,
-      });
+    try {
+      this.db
+        .prepare(
+          `INSERT INTO sessions (id, repo_root, mode, model, created_at, terminal_state, steps, tool_calls, changed_files)
+         VALUES (@id, @repoRoot, @mode, @model, @createdAt, @terminalState, @steps, @toolCalls, @changedFiles)`,
+        )
+        .run({
+          id: session.id,
+          repoRoot: session.repoRoot,
+          mode: session.mode,
+          model: session.model,
+          createdAt: session.createdAt,
+          terminalState: session.terminalState ?? null,
+          steps: session.steps ?? 0,
+          toolCalls: session.toolCalls ?? 0,
+          changedFiles: changedFilesJson,
+        });
+    } catch (err: unknown) {
+      if (err && typeof err === 'object' && 'code' in err && (err as { code: string }).code === 'SQLITE_CONSTRAINT') {
+        throw new Error(`Session ID collision: ${session.id}`);
+      }
+      throw err;
+    }
   }
 
   /** Append an agent event to the store. */

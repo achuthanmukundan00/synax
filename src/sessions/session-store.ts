@@ -13,6 +13,7 @@
  *         <MM>/
  *           <session-id>.jsonl   — append-only event log
  */
+import { randomBytes } from 'crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync, appendFileSync, unlinkSync } from 'fs';
 import { join, dirname } from 'path';
 
@@ -272,8 +273,9 @@ export function generateSessionId(): string {
   const min = now.getMinutes().toString().padStart(2, '0');
   const ss = now.getSeconds().toString().padStart(2, '0');
   const ms = now.getMilliseconds().toString().padStart(3, '0');
-  const rand = Math.random().toString(36).slice(2, 6);
-  return `${yyyy}${mm}${dd}${hh}${min}${ss}${ms}-${rand}`;
+  const pid = process.pid.toString(36);
+  const rand = randomBytes(4).toString('hex');
+  return `${yyyy}${mm}${dd}${hh}${min}${ss}${ms}-${pid}-${rand}`;
 }
 
 // ─── Cleanup ────────────────────────────────────────────────

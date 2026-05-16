@@ -110,6 +110,7 @@ export type PatchApprovalDecision = 'accept' | 'reject';
 export interface AgentTurnResult {
   terminalState: AgentTerminalState;
   finalAnswer: string;
+  reasoningContent?: string;
   steps: number;
   toolCalls: Array<{ name: string; success: boolean; error?: string }>;
   changedFiles: string[];

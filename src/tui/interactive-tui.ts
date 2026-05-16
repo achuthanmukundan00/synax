@@ -82,6 +82,7 @@ import {
   tuiNote,
   slashOutputClass,
 } from './key-handlers';
+import { getCompletions } from './autocomplete';
 
 export async function runInteractiveTui(
   session: ChatSession,
@@ -95,7 +96,12 @@ export async function runInteractiveTui(
     thinkingEnabled?: boolean;
     endpointLabel?: string;
     providerName?: string;
+    /** Display label for the working directory in the rail/footer. */
     cwdLabel?: string;
+    /** Actual working directory path for path-completion; defaults to process.cwd(). */
+    cwd?: string;
+    /** Repository root path for @-mention completion. */
+    repoRoot?: string;
     gitBranch?: string;
     contextWindowTokens?: number;
     activeSkills?: string[];
@@ -159,6 +165,7 @@ export async function runInteractiveTui(
   let autocompleteVisible = false;
   let autocompleteDraft: string | null = null;
   let autocompleteVisibleRows = 0;
+  let autocompleteIsFile = false;
   let interrupted = false;
   let pasteBuffer = '';
   let pasteActive = false;
@@ -169,6 +176,11 @@ export async function runInteractiveTui(
   let busyAnimationFrame = 0;
   let userScrolledUp = false;
   let modelPalette: ModelPalette = getModelPalette(options?.modelLabel ?? '');
+
+  /** Working directory for path completion. */
+  const cwd = options?.cwd ?? process.cwd();
+  /** Repository root for @-mention completion. */
+  const repoRoot = options?.repoRoot ?? process.cwd();
 
   /** Query the ScrollBox to determine if user has scrolled away from bottom. */
   const isScrolledAwayFromBottom = (): boolean => {
@@ -260,6 +272,7 @@ export async function runInteractiveTui(
     if (!text) return;
     prompt = '';
     autocompleteDraft = null;
+    autocompleteIsFile = false;
     promptDirty = true;
     void submit(text);
   };
@@ -277,15 +290,19 @@ export async function runInteractiveTui(
     const currentInputValue =
       autocompleteDraft ?? (promptDirty || !inputForAutocomplete ? prompt : readPromptValue(inputForAutocomplete));
     if (currentInputValue.startsWith('/') && !busy) {
+      autocompleteIsFile = false;
       autocompleteDraft = currentInputValue;
       autocompleteItems = slashAutocompleteItems(currentInputValue);
       autocompleteIndex = Math.min(autocompleteIndex, Math.max(0, autocompleteItems.length - 1));
       autocompleteVisible = autocompleteItems.length > 0;
-    } else {
+    } else if (!autocompleteIsFile) {
       autocompleteDraft = null;
       autocompleteItems = [];
       autocompleteIndex = 0;
       autocompleteVisible = false;
+    } else {
+      // File/path autocomplete is active — keep as-is
+      autocompleteDraft = null;
     }
     const nextAutocompleteVisibleRows = autocompleteVisible
       ? Math.min(
@@ -350,6 +367,13 @@ export async function runInteractiveTui(
           handleInputSubmit,
           (value, input) => {
             if (autocompleteDraft !== null) return;
+            // Clear file/path autocomplete when the user types
+            if (autocompleteIsFile) {
+              autocompleteIsFile = false;
+              autocompleteVisible = false;
+              autocompleteItems = [];
+              autocompleteIndex = 0;
+            }
             const previousPrompt = prompt;
             prompt = value;
             placePromptCursorAtEnd(input, value);
@@ -746,12 +770,14 @@ export async function runInteractiveTui(
       await options?.runLiminalLayer?.();
       prompt = '';
       autocompleteDraft = null;
+      autocompleteIsFile = false;
       promptDirty = true;
       render();
       return;
     }
     prompt = '';
     autocompleteDraft = null;
+    autocompleteIsFile = false;
     promptDirty = true;
     statusOverride = '';
     busy = true;
@@ -974,6 +1000,7 @@ export async function runInteractiveTui(
     if (behavior === 'clear_prompt') {
       prompt = '';
       autocompleteDraft = null;
+      autocompleteIsFile = false;
       promptDirty = true;
       setPromptValue(input, '');
       statusOverride = '';
@@ -988,6 +1015,7 @@ export async function runInteractiveTui(
     ctrlCPressedAt = Date.now();
     prompt = '';
     autocompleteDraft = null;
+    autocompleteIsFile = false;
     promptDirty = true;
     statusOverride = '';
     render();
@@ -1025,6 +1053,7 @@ export async function runInteractiveTui(
     if (autocompleteVisible) {
       autocompleteVisible = false;
       autocompleteDraft = null;
+      autocompleteIsFile = false;
       render();
       return;
     }
@@ -1037,14 +1066,51 @@ export async function runInteractiveTui(
   }
 
   /** Tab: autocomplete completion / cycling */
-  function handleTab(): void {
+  function handleTab(shift = false): void {
     if (autocompleteVisible && autocompleteItems.length > 0) {
-      if (autocompleteItems.length === 1) {
-        syncPromptValue(autocompleteItems[0] ?? prompt);
+      if (autocompleteItems.length === 1 || (autocompleteIsFile && shift)) {
+        // Accept the (single) selected completion
+        const value = autocompleteItems[0] ?? prompt;
         autocompleteVisible = false;
         autocompleteDraft = null;
+        autocompleteIsFile = false;
+        syncPromptValue(value);
       } else {
-        autocompleteIndex = (autocompleteIndex + 1) % autocompleteItems.length;
+        // Cycle through items
+        const delta = shift ? -1 : 1;
+        autocompleteIndex = (autocompleteIndex + delta + autocompleteItems.length) % autocompleteItems.length;
+
+        // For file/path autocomplete, update prompt live as user cycles
+        if (autocompleteIsFile) {
+          const value = autocompleteItems[autocompleteIndex] ?? prompt;
+          syncPromptValue(value);
+        }
+      }
+      render();
+      return;
+    }
+
+    // No existing autocomplete — try file/path/@-mention completion
+    if (busy) return;
+    const inputNode = findNode('synax-input');
+    const value = inputNode ? readPromptValue(inputNode) : prompt;
+    if (!value.trim()) return;
+
+    const cursorPos = getInputCursorPosition(inputNode);
+
+    const result = getCompletions(value, cursorPos, cwd, repoRoot);
+    if (result && result.items.length > 0) {
+      autocompleteItems = result.items;
+      autocompleteIndex = 0;
+      autocompleteVisible = true;
+      autocompleteIsFile = true;
+      autocompleteDraft = null;
+
+      // If only one match, complete immediately
+      if (result.items.length === 1) {
+        syncPromptValue(result.items[0] ?? value);
+        autocompleteVisible = false;
+        autocompleteIsFile = false;
       }
       render();
     }
@@ -1053,6 +1119,12 @@ export async function runInteractiveTui(
   function promptValueFromInput(): string {
     const input = renderer.root.findDescendantById('synax-input');
     return input ? readPromptValue(input) : prompt;
+  }
+
+  /** Read the cursor offset from the OpenTUI input widget, defaulting to the end of the value. */
+  function getInputCursorPosition(input: unknown): number {
+    const promptInput = input as { cursorOffset?: number } | undefined;
+    return promptInput?.cursorOffset ?? prompt.length;
   }
 
   function syncPromptValue(value: string): void {
@@ -1253,7 +1325,7 @@ export async function runInteractiveTui(
 
     // --- Tab: autocomplete ---
     if (isTabKey(key.name)) {
-      handleTab();
+      handleTab(key.name === 'shift_tab');
       return;
     }
 
@@ -1395,6 +1467,15 @@ export async function runInteractiveTui(
     if (isEnterKey(key.name) && autocompleteVisible && !busy) {
       if (autocompleteItems.length > 0) {
         const selected = autocompleteItems[autocompleteIndex] ?? prompt;
+        if (autocompleteIsFile) {
+          // File/path autocomplete: insert the completion without submitting
+          autocompleteVisible = false;
+          autocompleteIsFile = false;
+          autocompleteDraft = null;
+          syncPromptValue(selected);
+          key.preventDefault();
+          return;
+        }
         prompt = selected;
         autocompleteDraft = null;
         promptDirty = true;
