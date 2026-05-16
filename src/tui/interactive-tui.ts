@@ -192,6 +192,7 @@ export async function runInteractiveTui(
   // --- Persistent status card state (removed — using activity line instead)
   const activeSubAgents: string[] = [];
   let orchestrationReturnedCount = 0;
+  let orchestrationTotalSteps = 0;
   let orchestrationMode: 'parallel' | 'sequential' | null = null;
   let orchestrationPhase: 'dispatching' | 'synthesizing' | 'committing' | null = null;
 
@@ -599,13 +600,13 @@ export async function runInteractiveTui(
       text = 'working · committing changes';
     } else if (activeSubAgents.length > 0 && orchestrationMode) {
       glyph = activityGlyph(busyAnimationFrame);
-      const total = activeSubAgents.length + orchestrationReturnedCount;
-      if (orchestrationMode === 'sequential') {
-        const step = orchestrationReturnedCount + 1;
-        text = `working · step ${step}/${total} running`;
-      } else {
-        text = `working · ${orchestrationReturnedCount}/${total} agents returned`;
-      }
+      const activityText = computeOrchestrationStepText(
+        orchestrationMode,
+        activeSubAgents.length,
+        orchestrationReturnedCount,
+        orchestrationTotalSteps,
+      );
+      text = `working · ${activityText}`;
     } else if (activeSubAgents.length > 0) {
       glyph = activityGlyph(busyAnimationFrame);
       const total = activeSubAgents.length + orchestrationReturnedCount;
@@ -945,10 +946,11 @@ export async function runInteractiveTui(
       const planEv = event as unknown as {
         payload?: { plan?: unknown; orchestrationMode?: 'parallel' | 'sequential' };
       };
-      const plan = planEv?.payload?.plan as { inline?: boolean } | undefined;
+      const plan = planEv?.payload?.plan as { inline?: boolean; subTasks?: unknown[] } | undefined;
       if (!plan?.inline) {
         orchestrationReturnedCount = 0;
         activeSubAgents.length = 0; // reset for new orchestration
+        orchestrationTotalSteps = plan?.subTasks?.length ?? 0;
         orchestrationMode = planEv?.payload?.orchestrationMode ?? null;
         orchestrationPhase = 'dispatching';
       }
@@ -1713,6 +1715,25 @@ export function activityLineActive(
     busy ||
     (state.terminal === 'running' && state.phase !== 'idle' && state.phase !== 'completed')
   );
+}
+
+/**
+ * Compute the orchestration step text for the activity line.
+ * Separated from the rendering closure so it can be unit-tested directly.
+ */
+export function computeOrchestrationStepText(
+  mode: 'parallel' | 'sequential' | null,
+  activeCount: number,
+  returnedCount: number,
+  totalSteps: number,
+): string {
+  if (mode === 'sequential') {
+    const step = returnedCount + 1;
+    const total = totalSteps > 0 ? totalSteps : activeCount + returnedCount;
+    return `step ${step}/${total} running`;
+  }
+  const total = activeCount + returnedCount;
+  return `${returnedCount}/${total} agents returned`;
 }
 
 function cleanActivitySummary(summary: string): string {
