@@ -320,9 +320,15 @@ export function createChatSession(options: {
     },
     appendSessionEvent: appendSessionEventFn,
     async handleUserMessage(message: string): Promise<ChatTurnReport> {
+      const userMessageAt = new Date().toISOString();
       appendSessionEventFn({
         type: 'user_message',
-        at: new Date().toISOString(),
+        at: userMessageAt,
+        content: message,
+      });
+      eventSink?.({
+        type: 'user_message',
+        timestamp: userMessageAt,
         content: message,
       });
       const config = getConfig();
@@ -344,16 +350,6 @@ export function createChatSession(options: {
         onSessionEvent: (event) => appendSessionEventFn(event),
         onActivity(activity) {
           options.onActivity?.(activity);
-          if (options.tui && activity.kind === 'model_response') {
-            const fullContent = activity.modelOutput || activity.message;
-            if (fullContent.trim().length > 0) {
-              eventSink?.({
-                type: 'assistant_message',
-                timestamp: new Date().toISOString(),
-                content: fullContent,
-              });
-            }
-          }
           if (!options.tui) {
             if (activity.kind === 'model_response') {
               const label = `[synax] model step resp`;
