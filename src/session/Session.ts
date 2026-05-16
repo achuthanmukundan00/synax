@@ -83,6 +83,7 @@ import {
   isRecoverableToolError,
   emitAssistantDelta,
   errorMessage,
+  assistantVisibleContent,
 } from './formatting';
 
 import { buildModelRequest, guardModelRequestMultiStage, classifyResultForRecovery } from './message-assembly';
@@ -93,6 +94,11 @@ import { resolveVerificationContract, checkCompletionAgainstContract } from './v
 
 const DEFAULT_MAX_TOOL_CALLS = 192;
 const MAX_CONSECUTIVE_RECOVERABLE_TOOL_ERRORS = 3;
+
+function finalAnswerFromResponse(response: ChatResponse): string {
+  const visible = assistantVisibleContent(response.content);
+  return visible || response.reasoningContent || '';
+}
 
 // ─── Agent event type guard ──────────────────────────────────────────────────
 
@@ -1011,7 +1017,7 @@ export class Session {
             if (!isSafeToolPreamble(response.content)) {
               return {
                 terminalState: 'model_error',
-                finalAnswer: response.content.trim() || response.reasoningContent || '',
+                finalAnswer: finalAnswerFromResponse(response),
                 reasoningContent: response.reasoningContent,
                 steps: step,
                 toolCalls,
@@ -1126,7 +1132,7 @@ export class Session {
 
             return {
               terminalState: 'completed',
-              finalAnswer: response.content.trim() || response.reasoningContent || '',
+              finalAnswer: finalAnswerFromResponse(response),
               reasoningContent: response.reasoningContent,
               steps: step,
               toolCalls,
@@ -1146,7 +1152,7 @@ export class Session {
             if (this.abortSignal?.aborted) {
               return {
                 terminalState: 'blocked',
-                finalAnswer: response.content.trim() || response.reasoningContent || '',
+                finalAnswer: finalAnswerFromResponse(response),
                 reasoningContent: response.reasoningContent,
                 steps: step,
                 toolCalls,
@@ -1181,7 +1187,7 @@ export class Session {
               });
               return {
                 terminalState: 'budget_exhausted',
-                finalAnswer: response.content.trim() || response.reasoningContent || '',
+                finalAnswer: finalAnswerFromResponse(response),
                 reasoningContent: response.reasoningContent,
                 steps: step,
                 toolCalls,
@@ -1362,7 +1368,7 @@ export class Session {
 
               return {
                 terminalState: 'budget_exhausted',
-                finalAnswer: response.content.trim() || response.reasoningContent || '',
+                finalAnswer: finalAnswerFromResponse(response),
                 reasoningContent: response.reasoningContent,
                 steps: step,
                 toolCalls,
@@ -1394,7 +1400,7 @@ export class Session {
               flushContentToolResults(conversation, response, contentToolResults);
               return {
                 terminalState: 'tool_error',
-                finalAnswer: response.content.trim() || response.reasoningContent || '',
+                finalAnswer: finalAnswerFromResponse(response),
                 reasoningContent: response.reasoningContent,
                 steps: step,
                 toolCalls,
@@ -1406,7 +1412,7 @@ export class Session {
               flushContentToolResults(conversation, response, contentToolResults);
               return {
                 terminalState: result.terminalState ?? 'tool_error',
-                finalAnswer: response.content.trim() || response.reasoningContent || '',
+                finalAnswer: finalAnswerFromResponse(response),
                 reasoningContent: response.reasoningContent,
                 steps: step,
                 toolCalls,

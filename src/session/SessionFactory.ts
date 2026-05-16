@@ -25,6 +25,7 @@ import { loadSkills } from '../agent/skills';
 import { loadSynaxConfig } from '../config/load-config';
 import { eventNow, type AgentEvent } from '../agent/events';
 import { createSession as createStoreSession, generateSessionId, type SessionEvent } from '../sessions/session-store';
+import { assistantVisibleContent } from './formatting';
 import { Session } from './Session';
 import type { AgentConversation } from './types';
 import type { HolographicMemory } from '../memory/HolographicMemory';
@@ -303,8 +304,9 @@ type EventHandler = (event: AgentEvent, at: string) => SessionEvent | null;
 const EVENT_HANDLERS: Record<string, EventHandler> = {
   assistant_message: (event, at) => {
     const content = 'content' in event ? (event as { content?: string }).content : undefined;
-    if (!content) return null;
-    return { type: 'assistant_message', at, content };
+    const visible = assistantVisibleContent(content ?? '');
+    if (!visible) return null;
+    return { type: 'assistant_message', at, content: visible };
   },
 
   tool_started: (event, at) => {
