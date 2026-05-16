@@ -204,7 +204,17 @@ export function normalizeProviderConfig(
   const timeoutMs = p.timeout_ms ?? p.timeoutMs ?? (p.timeout_seconds ?? p.timeoutSeconds ?? 120) * 1000;
   const toolCallParser = p.tool_call_parser ?? p.toolCallParser;
   const maxOutputTokens = p.max_output_tokens ?? p.maxOutputTokens;
-  return { kind, baseUrl, model, toolCallParser, apiKey, customHeaders, timeoutMs, thinkingLevel: opts?.thinkingLevel, maxOutputTokens };
+  return {
+    kind,
+    baseUrl,
+    model,
+    toolCallParser,
+    apiKey,
+    customHeaders,
+    timeoutMs,
+    thinkingLevel: opts?.thinkingLevel,
+    maxOutputTokens,
+  };
 }
 
 export interface ProjectConfig {

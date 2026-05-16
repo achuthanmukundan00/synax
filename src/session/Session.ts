@@ -1072,7 +1072,13 @@ export class Session {
             // without changing any files, inject a nudge to use write/edit tools.
             // This prevents infinite read-only loops that never trigger the
             // verification contract.
-            if (mode === 'patch' && step > 5 && changedFiles.length === 0 && !verificationNudgeInjected) {
+            if (
+              mode === 'patch' &&
+              step > 5 &&
+              toolCalls.length === 0 &&
+              changedFiles.length === 0 &&
+              !verificationNudgeInjected
+            ) {
               verificationNudgeInjected = true;
               const nudge = 'You have not changed any files yet. You must use write or edit to make changes.';
               conversation.messages.push({ role: 'user', content: nudge });
