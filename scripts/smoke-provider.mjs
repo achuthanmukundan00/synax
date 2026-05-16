@@ -26,7 +26,9 @@ import { createServer } from 'http';
 
 const PROVIDER = process.env.SYNAX_LIVE_PROVIDER;
 if (!PROVIDER) {
-  console.log('SKIP: SYNAX_LIVE_PROVIDER not set. Set it to one of: relay, custom, deepseek, openrouter, groq, anthropic');
+  console.log(
+    'SKIP: SYNAX_LIVE_PROVIDER not set. Set it to one of: relay, custom, deepseek, openrouter, groq, anthropic',
+  );
   process.exit(0);
 }
 

@@ -11,9 +11,7 @@ const maxIterations = parseMaxIterations(process.argv[2]);
 const specFiles = listImplementationSpecs();
 
 if (maxIterations > specFiles.length) {
-  throw new Error(
-    `max_iterations (${maxIterations}) exceeds available implementation specs (${specFiles.length})`,
-  );
+  throw new Error(`max_iterations (${maxIterations}) exceeds available implementation specs (${specFiles.length})`);
 }
 
 for (let iteration = 1; iteration <= maxIterations; iteration += 1) {
@@ -100,16 +98,12 @@ Final response:
 }
 
 function runCodex(prompt) {
-  const result = spawnSync(
-    'codex',
-    ['exec', '--cd', repoRoot, '--sandbox', 'workspace-write'],
-    {
-      cwd: repoRoot,
-      input: prompt,
-      stdio: ['pipe', 'inherit', 'inherit'],
-      encoding: 'utf8',
-    },
-  );
+  const result = spawnSync('codex', ['exec', '--cd', repoRoot, '--sandbox', 'workspace-write'], {
+    cwd: repoRoot,
+    input: prompt,
+    stdio: ['pipe', 'inherit', 'inherit'],
+    encoding: 'utf8',
+  });
 
   if (result.error) {
     throw result.error;

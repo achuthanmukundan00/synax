@@ -24,12 +24,12 @@ import { join } from 'node:path';
 
 // ─── Weights (must sum to 1) ─────────────────────────────────
 const WEIGHTS = {
-  testPassRate: 0.30,
-  allTestsPass: 0.20,
+  testPassRate: 0.3,
+  allTestsPass: 0.2,
   noTimeout: 0.15,
-  filesChanged: 0.10,
+  filesChanged: 0.1,
   finalAnswer: 0.05,
-  readBeforeEdit: 0.10,
+  readBeforeEdit: 0.1,
   toolErrorRate: 0.05,
   cleanExit: 0.05,
 };
@@ -212,7 +212,7 @@ function detectReadBeforeEdit(transcript) {
       /\[synax\]\s+tool:\s+read\b/i.test(line) ||
       /\btool:\s*read\b/i.test(line) ||
       /"toolname"\s*:\s*"read"/i.test(line) ||
-      lower.includes("read_before_edit");
+      lower.includes('read_before_edit');
 
     if (isRead) {
       sawRead = true;
