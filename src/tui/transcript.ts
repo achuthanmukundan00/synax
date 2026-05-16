@@ -9,9 +9,6 @@ export interface TranscriptRenderState {
   activityExpanded?: boolean;
 }
 
-/** Breathing glyph sequence for the working indicator. */
-const BREATHING_GLYPHS = ['◌', '◓', '◑', '◒'];
-
 // ─── Tool-summary detection ───────────────────────────────
 
 /** Strip LaTeX math commands that terminals can't render.
@@ -49,7 +46,6 @@ export function renderTranscript(state: TranscriptRenderState, width: number): s
   const blocks: string[][] = [];
   const history = state.run.debugHistory;
   const completed = state.run.terminal === 'completed' || state.run.phase === 'completed';
-  const isWorking = state.run.phase === 'thinking' && state.run.terminal === 'running';
   let lastRenderedProse = '';
   let wasPreviousNote = false;
 
@@ -157,20 +153,6 @@ export function renderTranscript(state: TranscriptRenderState, width: number): s
   if (state.run.terminal !== 'completed' && state.run.terminalIssue) {
     blocks.push(['']);
     blocks.push(renderTerminalIssue(state.run.terminalIssue, width));
-  }
-
-  // Working indicator — placed at the bottom so it remains
-  // visible when the transcript autoscrolls during long workloads.
-  if (isWorking) {
-    const frameIdx = Math.floor((state.run.nowMs / 1000) * 3) % BREATHING_GLYPHS.length;
-    const glyph = `\u001b[1;34m${BREATHING_GLYPHS[frameIdx]}\u001b[0m`;
-    const label = renderWorkingShimmer(state.run.nowMs);
-    blocks.push(['', `${glyph} ${label}`]);
-
-    if (state.activityExpanded) {
-      blocks.push(renderExpandedActivity(state.run, width));
-      blocks.push(['']);
-    }
   }
 
   if (blocks.length === 0) {
@@ -797,23 +779,8 @@ function plural(count: number, singular: string): string {
   return `${count} ${count === 1 ? singular : `${singular}s`}`;
 }
 
-/** Render expanded activity detail: recent timeline items. */
-function renderExpandedActivity(run: RunStateSnapshot, width: number): string[] {
-  const items = run.timeline.slice(-12);
-  if (items.length === 0) return [`  ${dimI('(no activity detail yet)')}`];
-  return items.map((item, idx) => {
-    const prefix = idx === items.length - 1 ? '\u001b[34m→\u001b[0m' : '  ';
-    return `  ${prefix} ${dimI(truncate(item.summary, Math.max(1, width - 6)))}`;
-  });
-}
-
 function dimI(text: string): string {
   return `\u001b[3;90m${text}\u001b[0m`;
-}
-
-function truncate(text: string, max: number): string {
-  if (text.length <= max) return text;
-  return `${text.slice(0, Math.max(0, max - 1))}…`;
 }
 
 // ─── Model prose rendering ─────────────────────────────────
@@ -881,18 +848,6 @@ function renderModelProse(prose: string, width: number, showHeading: boolean): s
     ];
   }
   return wrapped.map((line) => `${continuationIndent}${dimI(line)}`);
-}
-
-function renderWorkingShimmer(nowMs: number): string {
-  const text = 'working';
-  const highlight = Math.floor((nowMs / 120) % (text.length + 3)) - 1;
-  let rendered = '';
-  for (let i = 0; i < text.length; i += 1) {
-    const style =
-      i === highlight ? '\u001b[1;97m' : i === highlight - 1 || i === highlight + 1 ? '\u001b[1;36m' : '\u001b[1;34m';
-    rendered += `${style}${text[i]}\u001b[0m`;
-  }
-  return rendered;
 }
 
 function renderTerminalIssue(issue: string, width: number): string[] {
@@ -1008,7 +963,8 @@ export function renderMarkdownBlock(md: string, width: number): string[] {
   const lines: string[] = [];
   let inCodeBlock = false;
 
-  for (const raw of rawLines) {
+  for (let idx = 0; idx < rawLines.length; idx += 1) {
+    const raw = rawLines[idx] ?? '';
     const line = raw.trimEnd();
 
     // Fenced code blocks
@@ -1025,6 +981,18 @@ export function renderMarkdownBlock(md: string, width: number): string[] {
     // Horizontal rules
     if (/^(?:---+|___+|\*\*\*+)\s*$/.test(line)) {
       lines.push(dim('─'.repeat(Math.min(width - 4, 40))));
+      continue;
+    }
+
+    if (isMarkdownTableRow(line) && isMarkdownTableSeparator(rawLines[idx + 1] ?? '')) {
+      const tableRows: string[] = [line];
+      idx += 2;
+      while (idx < rawLines.length && isMarkdownTableRow(rawLines[idx] ?? '')) {
+        tableRows.push((rawLines[idx] ?? '').trimEnd());
+        idx += 1;
+      }
+      idx -= 1;
+      lines.push(...renderMarkdownTable(tableRows, width));
       continue;
     }
 
@@ -1105,7 +1073,7 @@ export function renderReviewOutput(body: string, width: number): string[] {
     .trim();
   if (!clean) return [`${green('•')} ${boldDim('result')}`];
 
-  const hasMd = /^#{1,3}\s|^[*\-+]\s|^```|^\d+\.\s|^>\s|^---+$/m.test(clean);
+  const hasMd = /^#{1,3}\s|^[*\-+]\s|^```|^\d+\.\s|^>\s|^---+$|^\s*\|.+\|\s*$/m.test(clean);
   // Accent header: dashed rule with bold result label in green
   const accentWidth = Math.max(0, width - 6 - ' result '.length);
   const lines: string[] = [`  ${dim('╌')} ${boldDim('result')} ${green('╌'.repeat(Math.max(0, accentWidth)))}`];
@@ -1125,4 +1093,48 @@ export function renderReviewOutput(body: string, width: number): string[] {
     }
   }
   return lines;
+}
+
+function isMarkdownTableRow(line: string): boolean {
+  const trimmed = line.trim();
+  return trimmed.startsWith('|') && trimmed.endsWith('|') && trimmed.split('|').length >= 4;
+}
+
+function isMarkdownTableSeparator(line: string): boolean {
+  const trimmed = line.trim();
+  if (!isMarkdownTableRow(trimmed)) return false;
+  return trimmed
+    .slice(1, -1)
+    .split('|')
+    .every((cell) => /^:?-{3,}:?$/.test(cell.trim()));
+}
+
+function tableCells(line: string): string[] {
+  return line
+    .trim()
+    .slice(1, -1)
+    .split('|')
+    .map((cell) => cell.trim());
+}
+
+function renderMarkdownTable(rows: string[], width: number): string[] {
+  const parsed = rows.map(tableCells);
+  const columnCount = Math.max(0, ...parsed.map((row) => row.length));
+  if (columnCount === 0) return [];
+  const maxColumnWidth = Math.max(8, Math.floor(Math.max(20, width - 4) / columnCount) - 2);
+  const widths = Array.from({ length: columnCount }, (_, column) =>
+    Math.min(
+      maxColumnWidth,
+      Math.max(4, ...parsed.map((row) => visibleLength(renderInlineMd(row[column] ?? '', maxColumnWidth)))),
+    ),
+  );
+
+  return parsed.map((row, rowIndex) => {
+    const cells = widths.map((cellWidth, column) => {
+      const rendered = renderInlineMd(row[column] ?? '', cellWidth);
+      return clip(rendered, cellWidth).padEnd(cellWidth, ' ');
+    });
+    const line = cells.join(dim('  ')).trimEnd();
+    return rowIndex === 0 ? bold(line) : line;
+  });
 }
