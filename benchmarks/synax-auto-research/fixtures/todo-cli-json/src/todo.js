@@ -8,9 +8,7 @@
 class TodoList {
   constructor(items = []) {
     this.items = items;
-    this.nextId = items.length > 0
-      ? Math.max(...items.map(i => i.id)) + 1
-      : 1;
+    this.nextId = items.length > 0 ? Math.max(...items.map((i) => i.id)) + 1 : 1;
   }
 
   add(description) {
@@ -24,7 +22,7 @@ class TodoList {
   }
 
   done(id) {
-    const item = this.items.find(i => i.id === id);
+    const item = this.items.find((i) => i.id === id);
     if (!item) {
       throw new Error(`Todo #${id} not found.`);
     }
@@ -55,7 +53,7 @@ class TodoList {
       return 'No todos.';
     }
 
-    const lines = this.items.map(item => {
+    const lines = this.items.map((item) => {
       const status = item.done ? '✓' : ' ';
       return `[${status}] #${item.id}: ${item.description}`;
     });

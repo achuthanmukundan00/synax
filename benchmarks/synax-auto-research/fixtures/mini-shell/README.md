@@ -6,10 +6,12 @@ implement the shell from the skeleton so that all tests pass.
 ## Features to Implement
 
 The skeleton already supports:
+
 - Simple external commands via `fork`/`execvp`/`waitpid`
 - The `exit` builtin
 
 Synax must implement:
+
 1. `cd <dir>` and `pwd` builtins
 2. Quoted argument parsing (`"hello world"`, `'hello world'`)
 3. Environment variable expansion (`$HOME`, `"$HOME"`)

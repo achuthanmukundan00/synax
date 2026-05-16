@@ -38,6 +38,7 @@ bash scripts/run-mini-shell-auto-research.sh
 ```
 
 This starts a long unattended run with sensible defaults:
+
 - Fixture: mini-shell
 - Benchmark subject: Synax + Gemma (thinking=off)
 - Improvement agent: Pi + DeepSeek (openrouter, 15-min timeout)
@@ -70,16 +71,16 @@ bash scripts/auto-research-loop.sh \
 
 ## How to Stop
 
-| Method | How |
-|--------|-----|
-| **Stop file** | `touch .auto-research-stop` — clean exit at next iteration |
-| **Ctrl-C** | Immediate interrupt (may leave working tree dirty) |
-| **Max wall minutes** | Loop auto-stops after N minutes (default: 240) |
-| **Max accepted** | Loop auto-stops after N accepted patches |
-| **Max rejected** | Loop auto-stops after N rejected/no-change iterations |
-| **Stop on perfect** | Loop auto-stops after N consecutive perfect scores (default: 2) |
+| Method               | How                                                             |
+| -------------------- | --------------------------------------------------------------- |
+| **Stop file**        | `touch .auto-research-stop` — clean exit at next iteration      |
+| **Ctrl-C**           | Immediate interrupt (may leave working tree dirty)              |
+| **Max wall minutes** | Loop auto-stops after N minutes (default: 240)                  |
+| **Max accepted**     | Loop auto-stops after N accepted patches                        |
+| **Max rejected**     | Loop auto-stops after N rejected/no-change iterations           |
+| **Stop on perfect**  | Loop auto-stops after N consecutive perfect scores (default: 2) |
 
-The stop file is checked at the start of *every iteration*. Once detected,
+The stop file is checked at the start of _every iteration_. Once detected,
 the loop prints the stop reason and exits cleanly without running the agent.
 
 ## Safety Model
@@ -126,6 +127,7 @@ even typecheck or pass tests.
 ### Conservative Acceptance
 
 A candidate is accepted ONLY if:
+
 - `npm run verify` passed (checked before benchmark)
 - `candidateTotal >= baselineTotal + minImprovement` (default min: 0.05)
 - AND `candidateTestPassRate > baselineTestPassRate`
@@ -135,6 +137,7 @@ The scorer and acceptance rule are deterministic. No LLM is involved in the deci
 ### Artifact Logging
 
 Every iteration writes:
+
 - `result.json` — full iteration result with scores, timings, exit codes
 - `pi-agent-prompt.md` — the exact prompt sent to Pi
 - `pi-agent-output.txt` — Pi's stdout/stderr
@@ -146,6 +149,7 @@ Every iteration writes:
 Pi is wrapped with `scripts/with-timeout.sh` (configurable via
 `PI_AUTO_RESEARCH_TIMEOUT_SECONDS`, default 900s). This prevents a single
 agent invocation from hanging the loop indefinitely. The wrapper tries:
+
 1. `gtimeout` (macOS coreutils)
 2. `timeout` (GNU/Linux)
 3. `perl alarm` (macOS built-in)
@@ -154,20 +158,20 @@ agent invocation from hanging the loop indefinitely. The wrapper tries:
 
 All artifacts are under the loop directory (e.g., `./benchmark-artifacts/loop-YYYYMMDD-HHMMSS/`):
 
-| File | Contents |
-|------|----------|
-| `loop-state.json` | Full loop state: start time, stop reason, best scores, all iteration summaries |
-| `iter-N/result.json` | Per-iteration: scores, accept/reject, verify status, timings, changed files, commit SHA |
-| `iter-N/verify-output.txt` | stdout/stderr from `npm run verify` (only when verify ran) |
-| `iter-N/pi-agent-output.txt` | Pi agent stdout/stderr |
-| `iter-N/pi-agent-prompt.md` | Exact prompt sent to Pi (with artifact paths) |
-| `iter-N/agent-report.md` | Pi's own analysis (if it wrote one) |
-| `iter-N/cleanup-report.txt` | What untracked files were removed after rejection |
-| `baseline-iter-0/score.json` | Baseline benchmark score |
-| `baseline-iter-0/transcript.txt` | Synax+Gemma terminal output |
-| `baseline-iter-0/test-output.txt` | Test results from the fixture |
-| `baseline-iter-0/git-diff.txt` | What Synax changed in the fixture |
-| `iter-iter-N/score.json` | Candidate benchmark score |
+| File                              | Contents                                                                                |
+| --------------------------------- | --------------------------------------------------------------------------------------- |
+| `loop-state.json`                 | Full loop state: start time, stop reason, best scores, all iteration summaries          |
+| `iter-N/result.json`              | Per-iteration: scores, accept/reject, verify status, timings, changed files, commit SHA |
+| `iter-N/verify-output.txt`        | stdout/stderr from `npm run verify` (only when verify ran)                              |
+| `iter-N/pi-agent-output.txt`      | Pi agent stdout/stderr                                                                  |
+| `iter-N/pi-agent-prompt.md`       | Exact prompt sent to Pi (with artifact paths)                                           |
+| `iter-N/agent-report.md`          | Pi's own analysis (if it wrote one)                                                     |
+| `iter-N/cleanup-report.txt`       | What untracked files were removed after rejection                                       |
+| `baseline-iter-0/score.json`      | Baseline benchmark score                                                                |
+| `baseline-iter-0/transcript.txt`  | Synax+Gemma terminal output                                                             |
+| `baseline-iter-0/test-output.txt` | Test results from the fixture                                                           |
+| `baseline-iter-0/git-diff.txt`    | What Synax changed in the fixture                                                       |
+| `iter-iter-N/score.json`          | Candidate benchmark score                                                               |
 
 ## Files
 
@@ -199,6 +203,7 @@ benchmark tests whether a local model agent can make meaningful partial
 progress on a multi-feature C codebase under a 5-minute timeout.
 
 Synax must implement (in priority order):
+
 1. `cd` and `pwd` builtins
 2. Quoted argument parsing (single and double quotes)
 3. Environment variable expansion (`$VAR` and `"$VAR"`)
@@ -248,35 +253,35 @@ bash scripts/auto-research-loop.sh \
 
 ### Loop Flags
 
-| Flag | Required | Default | Description |
-|------|----------|---------|-------------|
-| `--max-iterations` | yes | — | Maximum loop iterations |
-| `--timeout-seconds` | no | `300` | Timeout per benchmark trial |
-| `--artifacts-dir` | yes | — | Artifact storage directory |
-| `--agent-cmd` | yes | — | Improvement agent command |
-| `--synax-cmd` | no | `node dist/cli.js` | Synax CLI path |
-| `--fixture` | no | `validate-email` | Fixture name |
-| `--dry-run` | no | `false` | Exercise flow without agent/git |
-| `--patience` | no | `1` | Stop after N no-improvement iterations |
-| `--min-improvement` | no | `0.05` | Min total score delta to accept |
-| `--max-wall-minutes` | no | unset | Stop after N wall-clock minutes |
-| `--max-accepted` | no | unset | Stop after N accepted patches |
-| `--max-rejected` | no | unset | Stop after N rejected/no-change iterations |
-| `--cooldown-seconds` | no | `0` | Sleep between iterations |
-| `--stop-file` | no | `.auto-research-stop` | Path to stop signal file |
-| `--allow-dirty` | no | `false` | Allow running on dirty repo |
-| `--allow-harness-edits` | no | `false` | Disable forbidden-path protection |
-| `--stop-on-perfect` | no | `2` | Stop after N consecutive perfect scores (0 disables) |
+| Flag                    | Required | Default               | Description                                          |
+| ----------------------- | -------- | --------------------- | ---------------------------------------------------- |
+| `--max-iterations`      | yes      | —                     | Maximum loop iterations                              |
+| `--timeout-seconds`     | no       | `300`                 | Timeout per benchmark trial                          |
+| `--artifacts-dir`       | yes      | —                     | Artifact storage directory                           |
+| `--agent-cmd`           | yes      | —                     | Improvement agent command                            |
+| `--synax-cmd`           | no       | `node dist/cli.js`    | Synax CLI path                                       |
+| `--fixture`             | no       | `validate-email`      | Fixture name                                         |
+| `--dry-run`             | no       | `false`               | Exercise flow without agent/git                      |
+| `--patience`            | no       | `1`                   | Stop after N no-improvement iterations               |
+| `--min-improvement`     | no       | `0.05`                | Min total score delta to accept                      |
+| `--max-wall-minutes`    | no       | unset                 | Stop after N wall-clock minutes                      |
+| `--max-accepted`        | no       | unset                 | Stop after N accepted patches                        |
+| `--max-rejected`        | no       | unset                 | Stop after N rejected/no-change iterations           |
+| `--cooldown-seconds`    | no       | `0`                   | Sleep between iterations                             |
+| `--stop-file`           | no       | `.auto-research-stop` | Path to stop signal file                             |
+| `--allow-dirty`         | no       | `false`               | Allow running on dirty repo                          |
+| `--allow-harness-edits` | no       | `false`               | Disable forbidden-path protection                    |
+| `--stop-on-perfect`     | no       | `2`                   | Stop after N consecutive perfect scores (0 disables) |
 
 ### Environment Variables (run-pi-improvement-agent.sh)
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `PI_AUTO_RESEARCH_PROVIDER` | `openrouter` | Pi provider |
-| `PI_AUTO_RESEARCH_MODEL` | `deepseek/deepseek-v4-pro:high` | Pi model |
-| `PI_AUTO_RESEARCH_TOOLS` | `read,bash,edit,write,grep,find,ls` | Pi tool allowlist |
-| `PI_AUTO_RESEARCH_TIMEOUT_SECONDS` | `900` | Pi process timeout |
-| `PI_AUTO_RESEARCH_EXTRA_ARGS` | — | Extra args passed to pi |
+| Variable                           | Default                             | Description             |
+| ---------------------------------- | ----------------------------------- | ----------------------- |
+| `PI_AUTO_RESEARCH_PROVIDER`        | `openrouter`                        | Pi provider             |
+| `PI_AUTO_RESEARCH_MODEL`           | `deepseek/deepseek-v4-pro:high`     | Pi model                |
+| `PI_AUTO_RESEARCH_TOOLS`           | `read,bash,edit,write,grep,find,ls` | Pi tool allowlist       |
+| `PI_AUTO_RESEARCH_TIMEOUT_SECONDS` | `900`                               | Pi process timeout      |
+| `PI_AUTO_RESEARCH_EXTRA_ARGS`      | —                                   | Extra args passed to pi |
 
 ## Scoring Details
 
