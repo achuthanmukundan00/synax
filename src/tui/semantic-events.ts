@@ -259,11 +259,11 @@ export function classifyAgentEvent(event: AgentEvent, state: RunStateSnapshot, n
         }),
       ];
     case 'task_finished': {
+      // Only emit when there is meaningful detail (error, verification result).
+      // The model's assistant_message already provides the visible answer.
       const detail = terminalSummary(event.error ?? event.verification);
-      const summary =
-        detail ||
-        `Run completed · ${event.modelSteps} steps · ${event.toolCalls} tools · ${event.changedFiles.length} files`;
-      return textEvent(event.status === 'completed' ? 'tool_result' : 'result_error', base, 'Result', summary);
+      if (!detail) return [];
+      return textEvent(event.status === 'completed' ? 'tool_result' : 'result_error', base, 'Result', detail);
     }
     case 'error':
       return textEvent('error', base, 'Error', event.message);
