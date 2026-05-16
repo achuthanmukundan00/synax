@@ -80,6 +80,18 @@ describe('PresentationState reducer', () => {
     }
   });
 
+  it('drops assistant_message content that is only a stray closing think tag', () => {
+    const state = reduceEvents([
+      {
+        type: 'assistant_message',
+        timestamp: ts('2026-01-01T00:00:01.000Z'),
+        content: '</think>',
+      },
+    ]);
+
+    expect(state.blocks.filter((b) => b.kind === 'model_output')).toHaveLength(0);
+  });
+
   it('replaces orchestration block in-place on child events', () => {
     const orchestrationEvent: AgentEvent = {
       type: 'orchestration_plan_generated',

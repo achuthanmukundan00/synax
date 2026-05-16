@@ -1,6 +1,9 @@
 import type { ParsedToolCall } from '../llm/tool-calls';
 import {
+  assistantVisibleContent,
+  formatModelResponseActivity,
   isRecoverableToolError,
+  isSafeToolPreamble,
   isWriteRecoverableError,
   isEnoentError,
   isReadPolicyLimitError,
@@ -34,6 +37,47 @@ describe('write recoverable error', () => {
 
   it('is not recoverable for undefined error', () => {
     expect(isWriteRecoverableError(undefined)).toBe(false);
+  });
+});
+
+describe('assistant-visible content sanitization', () => {
+  it('removes stray closing think tags and tool-call markup', () => {
+    const content =
+      '</think>\n\n<tool_call>\n<function=read>\n<parameter=path>\npackage.json\n</parameter>\n</function>\n</tool_call>';
+
+    expect(assistantVisibleContent(content)).toBe('');
+  });
+
+  it('keeps prose around stripped tool-call markup', () => {
+    const content =
+      'I will inspect package.json.\n<tool_call>{"name":"read","arguments":{"path":"package.json"}}</tool_call>';
+
+    expect(assistantVisibleContent(content)).toBe('I will inspect package.json.');
+  });
+
+  it('does not treat raw content-XML tool calls as unsafe final-answer prose', () => {
+    const content =
+      '</think>\n\n<tool_call>\n<function=read>\n<parameter=path>\npackage.json\n</parameter>\n</function>\n</tool_call>';
+
+    expect(isSafeToolPreamble(content)).toBe(true);
+  });
+
+  it('does not render raw tool-call markup as model activity text', () => {
+    const activity = formatModelResponseActivity(
+      {
+        content: '</think>\n\n<tool_call>{"name":"read","arguments":{"path":"package.json"}}</tool_call>',
+        toolCalls: [{ id: 'call_1', name: 'read', arguments: { path: 'package.json' } }],
+        toolCallFormat: 'content_xml',
+        model: 'fake',
+        finishReason: 'stop',
+        usage: null,
+      },
+      1,
+    );
+
+    expect(activity.message).not.toContain('</think>');
+    expect(activity.message).not.toContain('<tool_call>');
+    expect(activity.message).toContain('1 tool call(s): read');
   });
 });
 
