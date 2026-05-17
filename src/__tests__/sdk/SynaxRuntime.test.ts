@@ -23,14 +23,17 @@ import type {
 import type { AgentClient } from '../../session/types';
 import type { ChatOptions, ChatResponse } from '../../llm/types';
 import type { ToolDefinition, ToolResult } from '../../tools/types';
+import { HolographicMemory } from '../../memory/HolographicMemory';
 
 // ─── Fake LLM client ─────────────────────────────────────
 
-function makeFakeClient(responses: Array<{
-  content?: string;
-  toolCalls?: ChatResponse['toolCalls'];
-  toolCallFormat?: 'openai' | 'content_xml' | 'none';
-}>): AgentClient {
+function makeFakeClient(
+  responses: Array<{
+    content?: string;
+    toolCalls?: ChatResponse['toolCalls'];
+    toolCallFormat?: 'openai' | 'content_xml' | 'none';
+  }>,
+): AgentClient {
   const copy = [...responses];
   return {
     async chat(_opts: ChatOptions): Promise<ChatResponse> {
@@ -71,10 +74,12 @@ function makeSpyMemory(): MemoryAdapter & { stored: MemoryEntry[]; searches: str
 
 // ─── Spy policy ──────────────────────────────────────────
 
-function makeSpyPolicy(decisions: {
-  toolUse?: 'allow' | 'deny';
-  fileEdit?: 'allow' | 'deny';
-} = {}): Policy & { toolRequests: ToolUseRequest[]; editPreviews: Array<{ path: string; diff: string }> } {
+function makeSpyPolicy(
+  decisions: {
+    toolUse?: 'allow' | 'deny';
+    fileEdit?: 'allow' | 'deny';
+  } = {},
+): Policy & { toolRequests: ToolUseRequest[]; editPreviews: Array<{ path: string; diff: string }> } {
   const toolRequests: ToolUseRequest[] = [];
   const editPreviews: Array<{ path: string; diff: string }> = [];
   return {
@@ -347,7 +352,6 @@ describe('SynaxRuntime', () => {
     it('HolographicMemory structurally satisfies MemoryAdapter', () => {
       // This is a compile-time check — if HolographicMemory doesn't satisfy
       // MemoryAdapter, this line won't compile.
-      const { HolographicMemory } = require('../../memory/HolographicMemory');
       const adapter: MemoryAdapter = new HolographicMemory(null);
       // HolographicMemory has store/search/buildMemoryIndex/isAvailable
       expect(adapter.store).toBeDefined();
@@ -385,9 +389,15 @@ describe('SynaxRuntime', () => {
   describe('memory adapter error tolerance', () => {
     it('handles adapter store() throwing', async () => {
       const throwingMemory: MemoryAdapter = {
-        store() { throw new Error('store failed'); },
-        search() { return []; },
-        buildMemoryIndex() { return null; },
+        store() {
+          throw new Error('store failed');
+        },
+        search() {
+          return [];
+        },
+        buildMemoryIndex() {
+          return null;
+        },
       };
       const client = makeFakeClient([{ content: 'done.' }]);
       const runtime = new SynaxRuntime({ client, memory: throwingMemory });
@@ -399,9 +409,15 @@ describe('SynaxRuntime', () => {
 
     it('handles adapter search() throwing', async () => {
       const throwingMemory: MemoryAdapter = {
-        store() { /* ok */ },
-        search() { throw new Error('search failed'); },
-        buildMemoryIndex() { return null; },
+        store() {
+          /* ok */
+        },
+        search() {
+          throw new Error('search failed');
+        },
+        buildMemoryIndex() {
+          return null;
+        },
       };
       const client = makeFakeClient([{ content: 'done.' }]);
       const runtime = new SynaxRuntime({ client, memory: throwingMemory });
@@ -412,9 +428,15 @@ describe('SynaxRuntime', () => {
 
     it('handles adapter buildMemoryIndex() throwing', async () => {
       const throwingMemory: MemoryAdapter = {
-        store() { /* ok */ },
-        search() { return []; },
-        buildMemoryIndex() { throw new Error('index failed'); },
+        store() {
+          /* ok */
+        },
+        search() {
+          return [];
+        },
+        buildMemoryIndex() {
+          throw new Error('index failed');
+        },
       };
       const client = makeFakeClient([{ content: 'done.' }]);
       const runtime = new SynaxRuntime({ client, memory: throwingMemory });
@@ -539,9 +561,15 @@ describe('SynaxRuntime', () => {
     it('async store resolves and runtime continues', async () => {
       let stored = false;
       const asyncMemory: MemoryAdapter = {
-        async store() { stored = true; },
-        search() { return []; },
-        buildMemoryIndex() { return null; },
+        async store() {
+          stored = true;
+        },
+        search() {
+          return [];
+        },
+        buildMemoryIndex() {
+          return null;
+        },
       };
       const client = makeFakeClient([{ content: 'done.' }]);
       const runtime = new SynaxRuntime({ client, memory: asyncMemory });
@@ -554,9 +582,15 @@ describe('SynaxRuntime', () => {
 
     it('async search resolves and runtime continues', async () => {
       const asyncMemory: MemoryAdapter = {
-        store() { /* ok */ },
-        async search() { return []; },
-        buildMemoryIndex() { return null; },
+        store() {
+          /* ok */
+        },
+        async search() {
+          return [];
+        },
+        buildMemoryIndex() {
+          return null;
+        },
       };
       const client = makeFakeClient([{ content: 'done.' }]);
       const runtime = new SynaxRuntime({ client, memory: asyncMemory });
@@ -570,9 +604,16 @@ describe('SynaxRuntime', () => {
     it('async buildMemoryIndex resolves and runtime continues', async () => {
       let indexed = false;
       const asyncMemory: MemoryAdapter = {
-        store() { /* ok */ },
-        search() { return []; },
-        async buildMemoryIndex() { indexed = true; return '[memory: active]'; },
+        store() {
+          /* ok */
+        },
+        search() {
+          return [];
+        },
+        async buildMemoryIndex() {
+          indexed = true;
+          return '[memory: active]';
+        },
       };
       const client = makeFakeClient([{ content: 'done.' }]);
       const runtime = new SynaxRuntime({ client, memory: asyncMemory });
@@ -585,9 +626,15 @@ describe('SynaxRuntime', () => {
 
     it('async search rejection is caught and runtime returns structured result', async () => {
       const asyncMemory: MemoryAdapter = {
-        store() { /* ok */ },
-        async search() { throw new Error('search db unreachable'); },
-        buildMemoryIndex() { return null; },
+        store() {
+          /* ok */
+        },
+        async search() {
+          throw new Error('search db unreachable');
+        },
+        buildMemoryIndex() {
+          return null;
+        },
       };
       const client = makeFakeClient([{ content: 'done.' }]);
       const runtime = new SynaxRuntime({ client, memory: asyncMemory });
@@ -601,9 +648,15 @@ describe('SynaxRuntime', () => {
 
     it('async store rejection is caught without unhandled rejection', async () => {
       const asyncMemory: MemoryAdapter = {
-        async store() { throw new Error('storage full'); },
-        search() { return []; },
-        buildMemoryIndex() { return null; },
+        async store() {
+          throw new Error('storage full');
+        },
+        search() {
+          return [];
+        },
+        buildMemoryIndex() {
+          return null;
+        },
       };
       const client = makeFakeClient([{ content: 'done.' }]);
       const runtime = new SynaxRuntime({ client, memory: asyncMemory });
