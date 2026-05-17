@@ -2,7 +2,7 @@
 
 **Period**: April 29 – May 16, 2026  
 **Report compiled**: May 16, 2026  
-**Sources**: Codex history (160 entries), Claude Code history (206 entries), pi sessions (38 dirs), Synax self-sessions
+**Sources**: Codex history (160 entries), DeepSeek via CLI history (206 entries), pi sessions (38 dirs), Synax self-sessions
 
 ---
 
@@ -14,10 +14,10 @@ Four coding agents were used across the Synax project (and sibling projects), of
 |-------|--------|-------------------|-------------|
 | **pi** (Earendil) | Apr 29 – May 16 | 38 session dirs | Architecture research, Relay testing, early Synax TUI scaffolding, portfolio setup |
 | **Codex** (OpenAI) | May 8 – May 16 | 159 history entries | TUI visual design, config/relay setup, Backrooms easter egg, OpenTUI migration, bun migration, TUI polish |
-| **Claude Code** (Anthropic) | May 14 – May 16 | 206 history entries | Synax bug fixing + TUI, AutoCareer, Rentack Dashboard, Resample Lab, wytOS |
+| **DeepSeek via CLI** | May 14 – May 16 | 206 history entries | Synax bug fixing + TUI, AutoCareer, Rentack Dashboard, Resample Lab, wytOS |
 | **Synax** | May 13 – May 16 | Self-referential | Limited production use — mostly testing itself |
 
-**Key observation**: pi was the early-phase agent (architecture, scaffolding), Codex was the velocity agent (rapid feature building and refactoring), and Claude Code was the breadth agent (multi-project work and polish).
+**Key observation**: pi was the early-phase agent (architecture, scaffolding), Codex was the velocity agent (rapid feature building and refactoring), and the DeepSeek-powered CLI was the breadth agent (multi-project work and polish).
 
 ---
 
@@ -67,7 +67,7 @@ This was the most painful phase.
   - Model responses empty (maxTokens not passed to LLM — thinking ate all tokens)
   - Memory leak detected: "11 selection listeners added to CliRenderer"
   - bun-ffi-structs broke overnight when Bun shipped a Rust rewrite
-- **Claude Code** joined on May 14 with a paste of TUI errors and was asked to "systematically debug" from synax's last session logs.
+- The **DeepSeek CLI** joined on May 14 with a paste of TUI errors and was asked to "systematically debug" from synax's last session logs.
 - A hybrid approach was attempted: "hybridize OpenTUI with Pi's better rendering logic," then "commit to building our own TUI package."
 - TUI themes didn't pick up terminal theme. Light mode terminals showed invisible white text.
 - Adaptive frame scheduling spec was written and implemented: idle = 0 FPS, active = up to 60 FPS, markDirty-based.
@@ -75,7 +75,7 @@ This was the most painful phase.
 
 ### Phase 4 — Multi-Project Expansion (May 15–16)
 
-- **Claude Code** pivoted heavily to sibling projects:
+- The **DeepSeek CLI** pivoted heavily to sibling projects:
   - **AutoCareer**: Job search agent platform, resume synthesis, GitHub intelligence, Discord reminders
   - **Rentack Dashboard**: Property swipe UI, styling, deployment
   - **Resample Lab**: Audio DSP tool, Cloudflare Pages + Render deployment, 512MB RAM limit debugging
@@ -94,7 +94,7 @@ This was the most painful phase.
 
 **Codex for rapid iteration**: Codex's high-speed, image-aware workflow was effective for visual TUI design, implementing creative features (Backrooms easter egg), and pounding through bug lists. The user clearly preferred Codex for "vibe" tasks — visual polish, config cleanup, splash screen design.
 
-**Claude Code for multi-project breadth**: Claude Code's subagent orchestration (when it worked) was used across 5+ projects in 2 days. The ability to spawn parallel subagents for reading, fixing, and running was the key pattern.
+**DeepSeek CLI for multi-project breadth**: The CLI agent's subagent orchestration (when it worked) was used across 5+ projects in 2 days. The ability to spawn parallel subagents for reading, fixing, and running was the key pattern.
 
 **Image pasting as a debugging pattern**: Across all agents, the user pasted terminal screenshots extensively. This was the primary debugging mechanism — rather than describing bugs in text, the user showed what the TUI looked like. This worked well for visual bugs but created a dependency on image-capable agents.
 
@@ -114,17 +114,17 @@ This was the most painful phase.
 
 | Pain Point | Agent(s) Affected | Severity |
 |-----------|-------------------|----------|
-| TUI flickering / glitching | Codex, Claude, Synax | **Critical** — never fully fixed, spanned the entire TUI migration |
-| OpenTUI keyboard input broken | Codex, Claude | **Critical** — enter/submit, cursor, arrow nav, slash commands all regressed |
+| TUI flickering / glitching | Codex, DeepSeek, Synax | **Critical** — never fully fixed, spanned the entire TUI migration |
+| OpenTUI keyboard input broken | Codex, DeepSeek | **Critical** — enter/submit, cursor, arrow nav, slash commands all regressed |
 | Agent stops after first turn | Synax, Codex | **Critical** — repeated "Status: completed" with no actual work after prompt 1 |
 | Empty model responses | Codex | **Critical** — maxTokens never passed, thinking ate all output tokens |
 | Subagent orchestration broken | Codex, Synax | **Critical** — EventBus dead code, never wired |
 | Compaction too aggressive | Codex | **High** — effective limit ~114K for 1M model |
 | Token estimation wildly wrong | All | **High** — chars/3 overcounts code 30–50% |
-| Settings menu broken | Codex, Claude | **Medium** — treeBuilt=false needed on every visibility change |
+| Settings menu broken | Codex, DeepSeek | **Medium** — treeBuilt=false needed on every visibility change |
 | Light mode unreadable | Codex | **Medium** — white text on white background |
-| Memory leaks (event listeners) | Claude | **Medium** — 11 selection listeners on CliRenderer |
-| bun-ffi broke on upstream change | Claude | **Medium** — Bun Rust rewrite broke Zig FFI |
+| Memory leaks (event listeners) | DeepSeek | **Medium** — 11 selection listeners on CliRenderer |
+| bun-ffi broke on upstream change | DeepSeek | **Medium** — Bun Rust rewrite broke Zig FFI |
 
 ---
 
@@ -226,7 +226,7 @@ These are the hard-won facts discovered by running Synax against local/relay mod
 - **10+ concurrent fixes in one session**: Large paste-diagnoses with 6+ bugs often resulted in partial fixes and new regressions.
 - **TUI framework internals**: OpenTUI's invisible-layout-on-visible-change behavior took multiple sessions to discover.
 - **bun vs node confusion**: After migrating to bun, agents frequently ran `npm` commands and had to be corrected. The `bun verify` command became a running joke.
-- **git commit co-authorship**: Claude Code auto-added "Co-authored-by: Claude Sonnet" to commits, which the user explicitly rejected: "i am not using claude sonnet i'm using my own local model."
+- **git commit co-authorship**: The CLI auto-added "Co-authored-by" lines to commits, which the user explicitly rejected: "i am not using an external model i'm using my own local model via DeepSeek."
 
 ---
 
@@ -294,7 +294,7 @@ These are the hard-won facts discovered by running Synax against local/relay mod
 |--------|-------|
 | Total agent sessions (pi) | 38 |
 | Total Codex history entries | 160 |
-| Total Claude Code history entries | 206 |
+| Total DeepSeek CLI history entries | 206 |
 | Sibling projects touched by agents | 5 (Synax, Relay, AutoCareer, Rentack, Resample Lab, wytOS, Portfolio) |
 | TUI rewrites/overhauls | 3 (custom diff → OpenTUI → hybrid) |
 | "Use subagents" requests | ~15 |
@@ -305,4 +305,4 @@ These are the hard-won facts discovered by running Synax against local/relay mod
 
 ---
 
-*Report compiled from Codex CLI, Claude Code CLI, pi, and Synax session logs by pi coding agent.*
+*Report compiled from Codex CLI, DeepSeek-powered CLI, pi, and Synax session logs by pi coding agent.*
