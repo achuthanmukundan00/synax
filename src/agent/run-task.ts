@@ -14,18 +14,20 @@ import { VERIFICATION_CONTRACTS, type VerificationContract } from '../session/ve
 import { upsertSessionMeta, findSessionMeta } from '../sessions/session-store';
 import { OrchestrationManager } from '../orchestration/OrchestrationManager';
 import { HandoffManager } from '../handoff/HandoffManager';
-import { createTokenLedger } from '../agent/context-budget';
-import { createInspectionLedger as createInspLedger } from '../tools';
-import type { AgentTurnResult, OrchestrationPlan, SubTask } from '../session/types';
+import type { AgentTurnResult, OrchestrationPlan, SubAgentResult, SubTask } from '../session/types';
 import {
   classifyDispatchIntent,
   buildRepoReconTasks,
   startPlannerTimer,
   markIntentClassified,
+  markStrategySelected,
+  markTasksGenerated,
   markWorkersSpawned,
+  reportPlannerTelemetry,
   type RepoHints,
   type RepoReconTask,
   type DispatchIntent,
+  type PlannerPhaseTiming,
 } from './dispatch-intent';
 
 export interface RunTaskOptions {
@@ -56,7 +58,7 @@ export interface RunTaskOptions {
    *   - Caller must also provide: components, client, metadata, projectConfigOverride
    *   - Caller emits task_started/task_finished events (runAgentTask skips them)
    *   - Caller handles EventStore.closeSession and session-store upsert
-   *   - Caller handles writeRunLog (runAgentTask skips recordRunArtifacts)
+   *   - Run log artifacts are still written (use recordRunArtifacts: false to opt out)
    *   - Files changed include commit-introduced files (beforeHead is captured)
    */
   session?: Session;
@@ -131,6 +133,27 @@ function blockedReport(options: RunTaskOptions, mode: RunMode, messages: string[
   };
 }
 
+/**
+ * Execute a user task through the full agent lifecycle (orchestration, verification, repair).
+ *
+ * **Lifecycle ownership** depends on whether a pre-created `options.session` is provided:
+ *
+ * **Pre-created session** (when `options.session` is set):
+ *   The caller is responsible for:
+ *   - Session lifecycle (EventStore.closeSession, session-store meta upsert)
+ *   - Emitting `task_started` / `task_finished` events
+ *   - Providing components, client, metadata, and projectConfigOverride
+ *
+ *   runAgentTask handles:
+ *   - Orchestration, verification, and repair loops
+ *   - Run log artifact writing (unless `recordRunArtifacts: false`)
+ *   - File change tracking and dirty tree detection
+ *
+ * **Auto-created session** (when `options.session` is NOT set):
+ *   runAgentTask owns the full lifecycle: config loading, LLM client creation,
+ *   session/component construction, EventStore registration and close,
+ *   session-store upsert, task_started/task_finished emission, and run log writing.
+ */
 export async function runAgentTask(options: RunTaskOptions): Promise<RunTaskReport> {
   // ── Fast path: caller provided pre-created session ────────────────────────
   const usePreCreated = options.session !== undefined;
@@ -303,6 +326,10 @@ export async function runAgentTask(options: RunTaskOptions): Promise<RunTaskRepo
   const classifiedTimer = markIntentClassified(plannerTimer);
   const intentElapsed = Math.round(classifiedTimer.intentClassifiedMs! - classifiedTimer.startedMs);
 
+  // Accumulating timer for the full planner lifecycle (immutable chain — each mark
+  // returns a new object carrying all prior timestamps forward).
+  let plannerState: PlannerPhaseTiming = classifiedTimer;
+
   wrappedOnEvent({
     type: 'planner_intent_detected',
     timestamp: eventNow(),
@@ -328,6 +355,8 @@ export async function runAgentTask(options: RunTaskOptions): Promise<RunTaskRepo
     plan = buildReconOrchestrationPlan(reconTasks, options.repoRoot, options.task);
     strategyLabel = 'repo_reconnaissance';
     forcedMode = 'parallel';
+    plannerState = markStrategySelected(plannerState);
+    plannerState = markTasksGenerated(plannerState);
 
     wrappedOnEvent({
       type: 'planner_strategy_selected',
@@ -354,6 +383,7 @@ export async function runAgentTask(options: RunTaskOptions): Promise<RunTaskRepo
     if (delegation.mode === 'parallel' || delegation.mode === 'sequential') {
       forcedMode = delegation.mode;
     }
+    plannerState = markStrategySelected(plannerState);
 
     wrappedOnEvent({
       type: 'planner_strategy_selected',
@@ -367,12 +397,14 @@ export async function runAgentTask(options: RunTaskOptions): Promise<RunTaskRepo
 
     // Call LLM planner for decomposition
     planResult = await session.planOrchestratedTurn(planningTask, forcedMode);
+    plannerState = markTasksGenerated(plannerState);
 
     // ═══ LLM planning fallback ════════════════════════════════════════════
   } else {
     // Auto-detect strategy via budget estimation
     const estimate = await session.estimateTaskBudget(options.task);
     strategyLabel = estimate.strategy;
+    plannerState = markStrategySelected(plannerState);
 
     wrappedOnEvent({
       type: 'planner_strategy_selected',
@@ -386,6 +418,7 @@ export async function runAgentTask(options: RunTaskOptions): Promise<RunTaskRepo
 
     if (strategyLabel === 'orchestrate' || strategyLabel === 'decompose') {
       planResult = await session.planOrchestratedTurn(options.task, undefined);
+      plannerState = markTasksGenerated(plannerState);
     }
   }
 
@@ -417,7 +450,42 @@ export async function runAgentTask(options: RunTaskOptions): Promise<RunTaskRepo
     });
 
     orchestrationUsed = true;
-    markWorkersSpawned(plannerTimer);
+
+    // ── Bridge sub-agent results into parent session conversation ──
+    // The orchestration path bypasses session.startTurn(), so the parent
+    // conversation is never populated with what sub-agents found. Push
+    // structured summaries here so follow-up turns have model-visible context.
+    session.conversation.messages.push({
+      role: 'user',
+      content: options.task,
+    });
+    for (const result of orchestrationResult.results) {
+      session.conversation.messages.push({
+        role: 'assistant',
+        content: compactChildSummary(result),
+      });
+    }
+    session.conversation.messages.push({
+      role: 'assistant',
+      content: orchestrationResult.conclusion,
+    });
+
+    plannerState = markWorkersSpawned(plannerState);
+
+    // Report planner telemetry
+    const telemetry = reportPlannerTelemetry(
+      plannerState,
+      dispatchIntent.kind,
+      strategyLabel,
+      agentCount,
+      strategyLabel !== 'repo_reconnaissance',
+      strategyLabel === 'repo_reconnaissance',
+    );
+    const telemetryMsg = `planner telemetry: ${telemetry.elapsedMs}ms · ${telemetry.intent} · ${telemetry.strategy} · ${telemetry.agentCount} agents · ${telemetry.usedFastPath ? 'fast-path' : 'LLM'}`;
+    options.onActivity?.({
+      kind: 'model',
+      message: telemetryMsg,
+    });
 
     wrappedOnEvent({
       type: 'dispatch_workers_completed',
@@ -438,13 +506,7 @@ export async function runAgentTask(options: RunTaskOptions): Promise<RunTaskRepo
         })),
       ),
       changedFiles: orchestrationResult.changedFiles,
-      conversation: {
-        messages: [],
-        inspectionLedger: createInspLedger(),
-        latestCompaction: null,
-        tokenLedger: createTokenLedger(),
-        assemblyStats: null,
-      },
+      conversation: session.conversation,
       error: orchestrationResult.error,
     };
   } else if (forceOrchestrate) {
@@ -453,11 +515,6 @@ export async function runAgentTask(options: RunTaskOptions): Promise<RunTaskRepo
         ? (planResult.error ?? 'planner returned inline')
         : 'planner returned no sub-tasks';
     const message = `Explicit ${strategyLabel} was requested, but Synax could not generate a valid sub-agent plan (${reason}). Refusing to continue inline because that would ignore the requested execution mode.`;
-    wrappedOnEvent({
-      type: 'assistant_message',
-      timestamp: eventNow(),
-      content: message,
-    });
     turn = {
       terminalState: 'blocked',
       finalAnswer: message,
@@ -629,6 +686,10 @@ export async function runAgentTask(options: RunTaskOptions): Promise<RunTaskRepo
       : [];
   const filesChanged = unique([...turn.changedFiles, ...repairedTurn.changedFiles, ...changedByCommit]);
   const finalDirtyTree = await detectDirtyTree(options.repoRoot);
+  // Emit final consolidated answer as a single assistant_message per turn.
+  // (Not a duplicate of per-turn assistant_message events emitted by Session execution.)
+  // Pre-created path: routes through session.onEvent -> eventSink + EventStore + JSONL.
+  // Auto-created path: routes through agentSession.wrappedOnEvent (same sinks).
   if (finalAnswer.trim().length > 0) {
     wrappedOnEvent({
       type: 'assistant_message',
@@ -655,17 +716,18 @@ export async function runAgentTask(options: RunTaskOptions): Promise<RunTaskRepo
     error: turn.error,
   });
 
-  // ─── Close observability session (skip when caller owns lifecycle) ───
-  if (!usePreCreated && components.eventStore) {
-    components.eventStore.closeSession(components.sessionId, terminalState, {
-      steps: turn.steps + (repairedTurn === turn ? 0 : repairedTurn.steps),
-      toolCalls: turn.toolCalls.length + (repairedTurn === turn ? 0 : repairedTurn.toolCalls.length),
-      changedFiles: filesChanged,
-    });
-  }
-
-  // Finalize in session-store for /resume discoverability (skip when caller owns lifecycle)
+  // ── Lifecycle cleanup (skipped for pre-created sessions where caller owns lifecycle) ──
   if (!usePreCreated) {
+    // Close EventStore observability session (caller manages EventStore lifecycle)
+    if (components.eventStore) {
+      components.eventStore.closeSession(components.sessionId, terminalState, {
+        steps: turn.steps + (repairedTurn === turn ? 0 : repairedTurn.steps),
+        toolCalls: turn.toolCalls.length + (repairedTurn === turn ? 0 : repairedTurn.toolCalls.length),
+        changedFiles: filesChanged,
+      });
+    }
+
+    // Upsert session metadata for /resume discoverability (caller manages session-store lifecycle)
     try {
       const existing = findSessionMeta(components.sessionId);
       upsertSessionMeta({
@@ -685,7 +747,8 @@ export async function runAgentTask(options: RunTaskOptions): Promise<RunTaskRepo
     }
   }
 
-  if (options.recordRunArtifacts !== false && !usePreCreated) {
+  // Write run log artifact (always written unless caller explicitly opts out via recordRunArtifacts: false)
+  if (options.recordRunArtifacts !== false) {
     await writeRunLog(options.repoRoot, {
       task: options.task,
       mode,
@@ -818,6 +881,29 @@ function buildReconOrchestrationPlan(tasks: RepoReconTask[], _repoRoot: string, 
 
 function unique(values: string[]): string[] {
   return [...new Set(values)];
+}
+
+/**
+ * Compact structured summary of a sub-agent result for parent conversation
+ * context. Preserves newlines in findings so the model can read them
+ * naturally on the next turn. Truncates finalAnswer to 1,200 chars.
+ */
+function compactChildSummary(result: SubAgentResult): string {
+  const parts: string[] = [];
+  parts.push(`[Subagent result: ${result.subTaskId}]`);
+  parts.push(`Status: ${result.terminalState}`);
+  if (result.changedFiles.length > 0) {
+    parts.push(`Files changed: ${result.changedFiles.join(', ')}`);
+  }
+  parts.push(`Tool calls: ${result.toolCalls}`);
+  if (result.finalAnswer) {
+    const truncated = result.finalAnswer.length > 1200 ? result.finalAnswer.slice(0, 1200) + '...' : result.finalAnswer;
+    parts.push(`── Findings ──\n${truncated}\n──`);
+  }
+  if (result.error) {
+    parts.push(`Error: ${result.error.slice(0, 300)}`);
+  }
+  return parts.join('\n');
 }
 
 async function gitHead(repoRoot: string): Promise<string | null> {
