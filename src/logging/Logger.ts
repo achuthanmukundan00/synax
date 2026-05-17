@@ -53,6 +53,9 @@ export interface LoggerOptions {
   level: LogLevel;
   sessionId?: string;
   eventStore?: LoggerEventStore;
+  /** When true, suppresses stdout/stderr writes (for TUI mode where the terminal
+   *  buffer is managed by the TUI renderer). EventStore writes still happen. */
+  quiet?: boolean;
 }
 
 export class Logger {
@@ -60,12 +63,14 @@ export class Logger {
   private sessionId?: string;
   private eventStore?: LoggerEventStore;
   private baseContext: LogContext;
+  private quiet: boolean;
 
   constructor(options: LoggerOptions) {
     this.level = options.level;
     this.sessionId = options.sessionId;
     this.eventStore = options.eventStore;
     this.baseContext = options.sessionId ? { sessionId: options.sessionId } : {};
+    this.quiet = options.quiet ?? false;
   }
 
   /** Check whether a given level should be emitted. */
@@ -73,12 +78,13 @@ export class Logger {
     return LEVEL_ORDER[level] >= LEVEL_ORDER[this.level];
   }
 
-  /** Create a child logger that inherits level and merges context. */
+  /** Create a child logger that inherits level, quiet flag, and merges context. */
   child(context: LogContext): Logger {
     const child = new Logger({
       level: this.level,
       sessionId: context.sessionId ?? this.sessionId,
       eventStore: this.eventStore,
+      quiet: this.quiet,
     });
     child.baseContext = { ...this.baseContext, ...context };
     return child;
@@ -135,11 +141,14 @@ export class Logger {
     const safeMsg = redactSecrets(msg);
 
     // Output to stdout/stderr (human-readable structured JSON)
-    const line = formatLogLine(level, timestamp, safeMsg, entry);
-    if (level === 'warn' || level === 'error') {
-      process.stderr.write(line + '\n');
-    } else {
-      process.stdout.write(line + '\n');
+    // Only write when not in quiet mode (TUI manages its own terminal buffer).
+    if (!this.quiet) {
+      const line = formatLogLine(level, timestamp, safeMsg, entry);
+      if (level === 'warn' || level === 'error') {
+        process.stderr.write(line + '\n');
+      } else {
+        process.stdout.write(line + '\n');
+      }
     }
 
     // Write info+ to EventStore if available
@@ -207,11 +216,12 @@ export function isLogLevel(value: string): value is LogLevel {
 /**
  * Create a root logger using the resolved global log level.
  */
-export function createLogger(options?: { sessionId?: string; eventStore?: LoggerEventStore }): Logger {
+export function createLogger(options?: { sessionId?: string; eventStore?: LoggerEventStore; quiet?: boolean }): Logger {
   return new Logger({
     level: resolveLogLevel(),
     sessionId: options?.sessionId,
     eventStore: options?.eventStore,
+    quiet: options?.quiet,
   });
 }
 

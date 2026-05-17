@@ -18,7 +18,8 @@ export type SemanticEventClass =
   | 'note'
   | 'assistant_text'
   | 'dispatch'
-  | 'agent_status';
+  | 'agent_status'
+  | 'thinking';
 
 export type RiskLevel = 'low' | 'medium' | 'high';
 
@@ -275,32 +276,11 @@ export function classifyAgentEvent(event: AgentEvent, state: RunStateSnapshot, n
     case 'error':
       return textEvent('error', base, 'Error', event.message);
     case 'orchestration_plan_generated': {
-      const planPayload = event.payload;
-      if ('inline' in planPayload.plan && planPayload.plan.inline) return [];
-      const plan = planPayload.plan;
-      const subTasks = plan.subTasks ?? [];
-      const mode = planPayload.orchestrationMode ?? (plan.strategy === 'decompose' ? 'sequential' : 'parallel');
-      const maxDisplay = 6;
-      const shown = subTasks.slice(0, maxDisplay);
-      const overflow = subTasks.length - shown.length;
-      const agentLines = shown.map(
-        (st: { id: string; description: string }) =>
-          `  ${st.id}: ${st.description.slice(0, 100)}${st.description.length > 100 ? '…' : ''}`,
-      );
-      if (overflow > 0) agentLines.push(`  … and ${overflow} more`);
-      const shortMission = (planPayload.task || '').slice(0, 80);
-      const bodyParts: string[] = [];
-      if (shortMission) bodyParts.push(`Mission: ${shortMission}${planPayload.task.length > 80 ? '…' : ''}`);
-      bodyParts.push(...agentLines);
-      // Guard: normalize "1 agents · parallel" and improve wording
-      const title = formatDispatchTitle(mode, subTasks.length, plan.strategy);
-      return [
-        semantic('dispatch', base, {
-          type: 'text',
-          title,
-          body: bodyParts.join('\n'),
-        }),
-      ];
+      // The verbose plan card (with mission text and task descriptions) is no
+      // longer shown in the transcript. The compact dispatch_started card and
+      // worker-running lifecycle cards replace it. The plan data is still
+      // available in internal telemetry and EventStore.
+      return [];
     }
     case 'dispatch_started': {
       const payload = event as import('../agent/events').DispatchStartedEvent;

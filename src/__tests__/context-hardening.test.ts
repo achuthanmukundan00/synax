@@ -1120,13 +1120,13 @@ describe('model message assembly', () => {
     const tool4 = lastReqMsgs.find((m) => m.role === 'tool' && m.tool_call_id === '4');
     expect(tool4).toBeDefined();
     const t4 = tool4 as NonNullable<typeof tool4>;
-    expect(t4.content).not.toContain('_compacted');
+    expect(t4.content).not.toContain('"summary"');
 
     // Tool result for id='1' should be compacted (old, outside last 3 turns)
     const tool1 = lastReqMsgs.find((m) => m.role === 'tool' && m.tool_call_id === '1');
     expect(tool1).toBeDefined();
     const t1 = tool1 as NonNullable<typeof tool1>;
-    expect(t1.content).toContain('_compacted');
+    expect(t1.content).toContain('"summary"');
     expect(t1.content.length).toBeLessThan(600);
   });
 
@@ -1231,7 +1231,7 @@ describe('model message assembly', () => {
     const tool1 = msgs.find((m) => m.role === 'tool' && m.tool_call_id === '1');
     expect(tool1).toBeDefined();
     const t1 = tool1 as NonNullable<typeof tool1>;
-    expect(t1.content).toContain('_compacted');
+    expect(t1.content).toContain('"summary"');
     expect(t1.content).toContain('src/main.ts');
   });
 
@@ -1361,7 +1361,7 @@ describe('model message assembly', () => {
     const tool1 = msgs.find((m) => m.role === 'tool' && m.tool_call_id === '1');
     expect(tool1).toBeDefined();
     const t1 = tool1 as NonNullable<typeof tool1>;
-    expect(t1.content).toContain('_compacted');
+    expect(t1.content).toContain('"summary"');
   });
 
   it('orientation marks compacted files as not model-visible for editing', async () => {

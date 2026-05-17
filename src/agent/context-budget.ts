@@ -60,6 +60,7 @@ const MAX_STRUCTURED_SECTION_CHARS = 2000;
 const CHARS_PER_ESTIMATED_TOKEN = 4;
 const CJK_CHARS_PER_ESTIMATED_TOKEN = 1.5;
 const DENSE_TEXT_CHARS_PER_ESTIMATED_TOKEN = 2;
+const CODE_CHARS_PER_ESTIMATED_TOKEN = 5;
 
 // ---------------------------------------------------------------------------
 // Settings resolution
@@ -87,8 +88,14 @@ export function resolveContextBudgetSettings(config: {
     config.contextBudgetTokens ??
     DEFAULT_SETTINGS.contextWindowTokens;
 
-  const reservedOutputTokens =
-    config.strategyReserveTokens ?? config.reservedOutputTokens ?? DEFAULT_SETTINGS.reservedOutputTokens;
+  // Strategy reserve tokens are ADDITIVE to the configured output reservation.
+  // They serve different purposes: reservedOutputTokens reserves space for the
+  // model's response, while strategyReserveTokens accounts for planning/decomposition
+  // overhead. Making them alternatives would cause the strategy to eat into the
+  // output budget, leading to premature exhaustion.
+  const baseReserved = config.reservedOutputTokens ?? DEFAULT_SETTINGS.reservedOutputTokens;
+  const strategyExtra = config.strategyReserveTokens ?? 0;
+  const reservedOutputTokens = baseReserved + strategyExtra;
 
   return {
     contextWindowTokens,
@@ -123,7 +130,37 @@ export function estimateTokens(text: string): number {
     return Math.ceil(text.length / DENSE_TEXT_CHARS_PER_ESTIMATED_TOKEN);
   }
 
+  // Code-like text uses chars/5 instead of chars/4 to avoid overcounting
+  // code by 30-50%. Source code has more characters per token than prose
+  // due to whitespace, indentation, and verbose naming patterns.
+  if (isCodeText(text)) {
+    return Math.ceil(text.length / CODE_CHARS_PER_ESTIMATED_TOKEN);
+  }
+
   return Math.ceil(text.length / CHARS_PER_ESTIMATED_TOKEN);
+}
+
+/**
+ * Detect whether text looks like source code vs prose.
+ * Uses structural heuristics: indentation ratio and programming symbols.
+ */
+function isCodeText(text: string): boolean {
+  if (text.length < 200) return false;
+
+  const lines = text.split('\n');
+  if (lines.length < 5) return false;
+
+  const nonEmptyLines = lines.filter((l) => l.trim().length > 0);
+  if (nonEmptyLines.length < 3) return false;
+
+  const indentedCount = nonEmptyLines.filter((l) => /^\s+/.test(l)).length;
+  const indentRatio = indentedCount / nonEmptyLines.length;
+  if (indentRatio < 0.3) return false;
+
+  const structSymbols = (text.match(/[{}[\]();,]/g) || []).length;
+  if (structSymbols < text.length * 0.01) return false;
+
+  return true;
 }
 
 export function estimateMessageTokens(message: AgentMessage): number {
@@ -1067,10 +1104,9 @@ function compactToolResultMessage(
       toolName: toolResult.toolName,
       error: toolResult.error,
       output: summary,
-      _compacted: true,
-      contentSummary: summaryContent
-        ? `Previous ${toolResult.toolName} result was compacted. ${summaryContent}`
-        : `Previous ${toolResult.toolName} result was compacted to save context space. The metadata is authoritative — re-run the tool for full output.`,
+      summary:
+        summaryContent ||
+        `Previous ${toolResult.toolName} result was compacted. Metadata is authoritative — re-run the tool for full output.`,
     }),
   };
 }
@@ -1142,7 +1178,6 @@ function summarizeReadOutput(out: Record<string, unknown>, readCounts?: Map<stri
 
   const summary: Record<string, unknown> = {
     path,
-    _compacted: true,
   };
 
   if (omitted) {
@@ -1201,7 +1236,6 @@ function summarizeListOutput(out: Record<string, unknown>): Record<string, unkno
 
   const summary: Record<string, unknown> = {
     path,
-    _compacted: true,
   };
 
   if (files) {
@@ -1238,7 +1272,6 @@ function summarizeSearchOutput(out: Record<string, unknown>): Record<string, unk
     query,
     matchCount,
     truncated,
-    _compacted: true,
     contentSummary: truncated ? contentSummary + ' Results were truncated.' : contentSummary,
   };
 }
@@ -1253,7 +1286,6 @@ function summarizeGitStatusOutput(out: Record<string, unknown>): Record<string, 
   return {
     lineCount,
     truncated,
-    _compacted: true,
     contentSummary: truncated ? contentSummary + ' (truncated).' : contentSummary,
   };
 }
@@ -1268,7 +1300,6 @@ function summarizeGitDiffOutput(out: Record<string, unknown>): Record<string, un
   return {
     lineCount,
     truncated,
-    _compacted: true,
     contentSummary: truncated ? contentSummary + ' (truncated).' : contentSummary,
   };
 }
@@ -1303,7 +1334,6 @@ function summarizeBashOutput(out: Record<string, unknown>): Record<string, unkno
     stdoutPreview: clipped(stdout.trim(), 400) || undefined,
     stderrPreview: clipped(stderr.trim(), 300) || undefined,
     safetyWarnings,
-    _compacted: true,
     _compactionReason: `output exceeds ${FULL_OUTPUT_THRESHOLD} bytes`,
     contentSummary: command
       ? `Bash command "${command}" exited with code ${exitCode ?? '?'} and produced ${totalBytes} byte(s) of output. Use bash to re-run if needed.`

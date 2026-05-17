@@ -120,7 +120,7 @@ export function buildModelRequest(
       ? [
           {
             role: 'system',
-            content: `Note: ${stats.compactedToolResults} older tool result(s) have been summarized to save context space. The metadata is complete — each compacted result includes a "contentSummary" field describing what was originally returned. Use the appropriate tool (read, bash, etc.) to fetch full content if needed. Treat all metadata (paths, line ranges, counts) as authoritative.`,
+            content: `Note: ${stats.compactedToolResults} older tool result(s) have been summarized to save context space. The metadata is complete — each compacted result includes a "summary" field describing what was originally returned. Use the appropriate tool (read, bash, etc.) to fetch full content if needed. Treat all metadata (paths, line ranges, counts) as authoritative.`,
           },
           ...withOrientation,
         ]

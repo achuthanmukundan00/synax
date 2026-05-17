@@ -203,6 +203,7 @@ export function createChatSession(options: {
     contextWindow: modelContextWindow,
     modelContextWindow,
     sessionId,
+    quiet: options.tui,
   });
 
   // Register in EventStore with retry on ID collision

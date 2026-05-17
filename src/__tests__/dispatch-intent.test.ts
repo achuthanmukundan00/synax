@@ -108,6 +108,43 @@ describe('classifyDispatchIntent', () => {
     const result = classifyDispatchIntent('');
     expect(result.kind).toBe('requires_llm_planning');
   });
+
+  // ─── Regression: subagent as subject matter (not delegation intent) ───
+
+  it('does NOT fire on "agent/session/subagent code paths"', () => {
+    const result = classifyDispatchIntent(
+      'inspect the agent/session/subagent code paths and summarize how dispatch works. do not edit files.',
+    );
+    expect(result.kind).not.toBe('explicit_delegation');
+  });
+
+  it('does NOT fire on "explain the subagent architecture"', () => {
+    const result = classifyDispatchIntent('explain the subagent architecture');
+    expect(result.kind).not.toBe('explicit_delegation');
+  });
+
+  it('does NOT fire on "find bugs in dispatch-intent.ts"', () => {
+    const result = classifyDispatchIntent('find bugs in dispatch-intent.ts');
+    expect(result.kind).not.toBe('explicit_delegation');
+  });
+
+  it('still fires on "use exactly 2 parallel subagents"', () => {
+    const result = classifyDispatchIntent('use exactly 2 parallel subagents to inspect the repo');
+    expect(result.kind).toBe('explicit_delegation');
+    if (result.kind === 'explicit_delegation') {
+      expect(result.mode).toBe('parallel');
+    }
+  });
+
+  it('still fires on "fan out with subagents"', () => {
+    const result = classifyDispatchIntent('fan out with subagents and summarize findings');
+    expect(result.kind).toBe('explicit_delegation');
+  });
+
+  it('still fires on "delegate this task to agents"', () => {
+    const result = classifyDispatchIntent('delegate this task to agents');
+    expect(result.kind).toBe('explicit_delegation');
+  });
 });
 
 // ─── detectExplicitDelegationIntent ──────────────────────────────────────────

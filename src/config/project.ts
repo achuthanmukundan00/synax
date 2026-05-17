@@ -85,12 +85,21 @@ function providerPresetDefaults(preset: string): ProviderConfig {
 }
 
 function providerPresetContextWindowDefault(preset: string): number | undefined {
-  switch (canonicalProviderPreset(preset)) {
-    case 'relay':
-      return 131_072;
-    default:
-      return undefined;
-  }
+  // Return the preset's known context window so config DEFAULTS (131072) does
+  // not override providers with larger windows (e.g., DeepSeek's 1M).
+  // Returns undefined for presets without a known window, letting the code
+  // below fall through to either the user's explicit setting or DEFAULTS.
+  const presetWindows: Record<string, number> = {
+    relay: 131_072,
+    deepseek: 1_000_000,
+    openai: 128_000,
+    anthropic: 200_000,
+    openrouter: 64_000,
+    groq: 128_000,
+    mistral: 128_000,
+    together: 128_000,
+  };
+  return presetWindows[canonicalProviderPreset(preset)];
 }
 
 function canonicalProviderPreset(preset: string): string {

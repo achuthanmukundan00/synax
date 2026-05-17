@@ -75,8 +75,4 @@ export const SCROLL_STEP_ROWS = 9;
 export const SCROLL_PAGE_FACTOR = 0.7;
 
 /** Event types that update state but should NOT create visible transcript cards. */
-export const TRANSIENT_EVENT_TYPES = new Set([
-  'tool_started' as const,
-  'command_output' as const,
-  'model_step_started' as const,
-]);
+export const TRANSIENT_EVENT_TYPES = new Set(['command_output' as const, 'model_step_started' as const]);

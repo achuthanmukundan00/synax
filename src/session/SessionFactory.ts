@@ -73,6 +73,8 @@ export interface CreateSessionComponentsOptions {
   title?: string;
   /** Pre-generated session ID. When provided, skips auto-generation. */
   sessionId?: string;
+  /** Suppress logger stdout/stderr writes (for TUI mode). */
+  quiet?: boolean;
 }
 
 /**
@@ -89,7 +91,9 @@ export function createSessionComponents(options: CreateSessionComponentsOptions)
   const tokenCounter = new TokenCounter();
   const costTracker = new CostTracker(tokenCounter, options.modelId);
   const memory = eventStore?.memory ?? null;
-  const logger = eventStore ? createLogger({ sessionId, eventStore }) : createLogger();
+  const logger = eventStore
+    ? createLogger({ sessionId, eventStore, quiet: options.quiet })
+    : createLogger({ quiet: options.quiet });
 
   // ── Skills: auto-discovered + config-based ────────────────
   let skillMessages: string[] | undefined;
