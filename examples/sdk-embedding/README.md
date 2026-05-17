@@ -1,0 +1,187 @@
+# SDK embedding: AutoCareer + Synax
+
+Embed Synax as a single-agent coding runtime for AI-assisted resume/job tasks.
+
+```
+AutoCareer
+  ┌─────────────────────────────────────┐
+  │  new SynaxRuntime({                 │
+  │    model, tools, memory,            │
+  │    policy, onEvent                  │
+  │  })                                 │
+  │  result = await runtime.run({       │
+  │    input: "draft a bullet point..." │
+  │  })                                 │
+  └──────────┬──────────────────────────┘
+             │ RuntimeEvent stream
+             ▼
+        { status, output,
+          filesChanged,
+          toolCalls, steps }
+```
+
+## Quick start
+
+```ts
+import { SynaxRuntime } from 'synax';
+import type { RuntimeResult, RuntimeEvent } from 'synax';
+
+const runtime = new SynaxRuntime({
+  model: {
+    baseUrl: 'http://127.0.0.1:11434/v1',
+    model: 'qwen3:8b',
+  },
+  workingDir: '/home/user/project',
+});
+
+const result: RuntimeResult = await runtime.run({
+  input: 'Fix the login button alignment',
+});
+
+console.log(result.status);   // 'completed'
+console.log(result.output);   // final answer
+console.log(result.filesChanged);
+```
+
+## AutoCareer example
+
+This example shows a realistic AutoCareer integration:
+
+- **Memory adapter** backed by SQLite (via HolographicMemory)
+- **Custom tool** `draftResumeBullet` that the model can call
+- **Event streaming** for progress in the UI
+- **Result handling** for both success and failure
+
+```ts
+import { SynaxRuntime, HolographicMemory } from 'synax';
+import type {
+  RuntimeEvent, RuntimeResult,
+  ToolDefinition, ToolResult,
+} from 'synax';
+
+// ── Custom tool: draft a resume bullet point ──────────────
+const draftBulletTool: ToolDefinition = {
+  name: 'draftResumeBullet',
+  description: 'Draft a resume bullet point given the context',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      role: { type: 'string' },
+      accomplishment: { type: 'string' },
+    },
+    required: ['role', 'accomplishment'],
+  },
+  safetyPolicy: { readOnly: true, rejectsUnsafePaths: false, boundedOutput: true },
+  ledgerBehavior: 'none',
+  async execute(input: { role: string; accomplishment: string }): Promise<ToolResult> {
+    const bullet = `• ${input.role}: ${input.accomplishment}`;
+    return { success: true, toolName: 'draftResumeBullet', output: { bullet } };
+  },
+};
+
+// ── Memory adapter: persist across jobs ───────────────────
+const memory = new HolographicMemory('autocareer-memory.db');
+
+// ── Events: show progress ─────────────────────────────────
+function onEvent(e: RuntimeEvent): void {
+  switch (e.type) {
+    case 'started':
+      console.log('Job started');
+      break;
+    case 'model_step':
+      process.stdout.write('.');
+      break;
+    case 'tool_start':
+      console.log(`\n[${e.toolName}] running...`);
+      break;
+    case 'tool_finish':
+      console.log(`[${e.toolName}] ${e.success ? 'done' : 'failed'}`);
+      break;
+    case 'error':
+      console.error(`Error: ${e.message}`);
+      break;
+    case 'complete':
+      console.log(`\nStatus: ${e.status}`);
+      break;
+  }
+}
+
+// ── Runtime ───────────────────────────────────────────────
+const runtime = new SynaxRuntime({
+  model: {
+    baseUrl: process.env.LLM_BASE_URL ?? 'http://127.0.0.1:11434/v1',
+    model: process.env.LLM_MODEL ?? 'qwen3:8b',
+  },
+  tools: [draftBulletTool],
+  memory,
+  onEvent,
+  workingDir: process.cwd(),
+});
+
+// ── Run ───────────────────────────────────────────────────
+const result: RuntimeResult = await runtime.run({
+  input: 'Draft a resume bullet for my role as a software engineer',
+});
+
+// ── Handle result ─────────────────────────────────────────
+if (result.status === 'completed') {
+  console.log('Output:', result.output);
+  console.log(`Tools used: ${result.toolCalls}, Steps: ${result.steps}`);
+} else {
+  console.error(`Failed (${result.status}): ${result.error}`);
+}
+```
+
+## Events
+
+Events are emitted in this order during a run:
+
+| Order | Event         | When                         |
+|-------|---------------|------------------------------|
+| 1     | `started`     | Run begins                   |
+| 2+    | `model_step`  | Model is thinking            |
+| 3+    | `tool_start`  | A tool starts executing      |
+| 4+    | `tool_finish` | A tool finishes (success/err)|
+| 5+    | `error`       | Recoverable error occurred   |
+| last  | `complete`    | Run finished with status     |
+
+## Result shape
+
+```ts
+interface RuntimeResult {
+  status:        'completed' | 'error' | 'blocked' | 'policy_blocked';
+  output:        string;         // model's final answer
+  filesChanged:  string[];       // files modified
+  toolCalls:     number;         // tool invocations
+  steps:         number;         // model turns
+  error?:        string;         // present on failure
+}
+```
+
+## What is NOT exposed
+
+SynaxRuntime intentionally hides internal state:
+- No `AgentConversation` — message history stays private
+- No `Session` — turn loop is encapsulated
+- No `EventBus` — only mapped `RuntimeEvent` objects reach the caller
+- No handoff, orchestration, or subagents — single-agent only
+
+## Memory adapter notes
+
+Memory adapter methods (`store`, `search`, `buildMemoryIndex`) accept both sync and
+async implementations. Sync adapters (e.g. in-memory) return values directly. Async
+adapters (e.g. Postgres, Redis) return Promises — the runtime `await`s them
+automatically. The existing `HolographicMemory` (SQLite) is sync by default.
+
+## Public imports
+
+```ts
+import { SynaxRuntime } from 'synax';
+import { HolographicMemory } from 'synax';
+
+import type { MemoryAdapter, MemoryEntry, MemorySearchResult } from 'synax';
+import type { Policy, ToolUseRequest, FileEditPreview } from 'synax';
+import type { RuntimeEvent, RuntimeResult, RuntimeConfig, RuntimeRunInput } from 'synax';
+import type { ModelConfig } from 'synax';
+import type { ToolDefinition, ToolResult } from 'synax';
+```

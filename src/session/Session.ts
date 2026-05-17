@@ -343,12 +343,12 @@ export class Session {
   getModelTools(): ToolDefinition[] {
     const builtins = buildModelFacingTools({ bashEnabled: this.bashEnabled, mode: this.mode });
     const registryTools = this.registry.list();
-    // Exclude builtins that are already provided by registry to allow overrides,
-    // and exclude inspection tools (read/write/edit/bash) which are already in builtins.
+    // Exclude inspection tools which are internal runner infrastructure,
+    // not model-facing tools. Only custom tools registered by API consumers pass through.
     const customTools = registryTools.filter(
       (t) =>
         !builtins.find((b) => b.name === t.name) &&
-        !['read', 'write', 'edit', 'bash', 'search_memory', 'view_image'].includes(t.name),
+        !['list_files', 'read_file_range', 'search_text', 'show_git_status', 'show_git_diff'].includes(t.name),
     );
     return [...builtins, ...customTools];
   }
@@ -671,7 +671,7 @@ export class Session {
     let consecutiveRecoverableToolErrors = 0;
 
     // ── Build memory index once per turn (tells model what's searchable) ─
-    const memoryIndex = this.memory?.buildMemoryIndex() ?? null;
+    const memoryIndex = (await this.memory?.buildMemoryIndex()) ?? null;
 
     // ── Steering: abort before any work ────────────────────────────
     if (this.abortSignal?.aborted) {
@@ -713,7 +713,7 @@ export class Session {
       };
     }
 
-    const tools = buildModelFacingTools({ bashEnabled, mode });
+    const tools = this.getModelTools();
     conversation.messages.push({ role: 'user', content: task });
 
     // ── Spans & lifecycle ──────────────────────────────────────────────

@@ -52,3 +52,20 @@ export type { Skill, SkillDiscovery, SkillFrontmatter } from './skills/types';
 
 export type { ToolRegistry, ToolDefinition, ToolResult, ToolSafetyPolicy } from './tools/types';
 export type { AgentEvent, TerminalState } from './agent/events';
+
+// ─── SDK v0.1 — embeddable single-agent runtime ─────────────────
+
+export { SynaxRuntime } from './sdk/SynaxRuntime';
+export type {
+  ModelConfig,
+  MemoryAdapter,
+  Policy,
+  ApprovalDecision,
+  ToolUseRequest,
+  FileEditPreview,
+  RuntimeEvent,
+  RuntimeStatus,
+  RuntimeResult,
+  RuntimeConfig,
+  RuntimeRunInput,
+} from './sdk/types';

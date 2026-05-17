@@ -27,6 +27,7 @@ export function createToolRegistry(options: ToolRegistryOptions): ToolRegistry {
         throw new Error(`Tool already registered: ${definition.name}`);
       }
       byName.set(definition.name, definition);
+      tools.push(definition);
     },
 
     async execute(name: string, input: unknown): Promise<ToolResult> {
