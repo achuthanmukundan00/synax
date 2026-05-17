@@ -1,7 +1,6 @@
 import { Command } from 'commander';
 import { runAgentTask } from '../agent/run-task';
 import { normalizeRunMode, type RunMode } from '../agent/task-policy';
-import { TuiRenderer } from '../agent/renderers';
 import type { AgentEvent } from '../agent/events';
 import { loadProjectConfig, toProviderFactoryInput } from '../config/project';
 import { loadSynaxConfig } from '../config/load-config';
@@ -25,7 +24,7 @@ export function runCommand(program: Command): void {
     .option('-y, --yes', 'Accept previewed replacement edits in non-interactive runs')
     .option('--verification-profile <profile>', 'Verification profile: quick or full')
     .option('--repair-attempts <count>', 'Bounded verification repair attempts')
-    .option('--tui', 'Render run control surface TUI')
+    .option('--tui', 'Open the full-screen chat TUI when no --task is supplied')
     .option('--cmux-mode', 'Reduce OpenTUI frame rate and live nodes for many parallel terminal sessions')
     .option('--budget <amount>', 'Maximum API cost budget in USD (e.g. 0.50)')
     .option('--strategy <mode>', 'Context strategy override: aggressive, moderate, light, none, or off')
@@ -48,12 +47,10 @@ export function runCommand(program: Command): void {
       }) => {
         if (options.task) {
           const collectedEvents: AgentEvent[] = [];
-          const renderer = options.tui ? new TuiRenderer() : null;
           try {
             const repairAttemptsResult = parseRepairAttempts(options.repairAttempts);
             if (!repairAttemptsResult.ok) {
               console.error(`[synax] ${repairAttemptsResult.error}`);
-              renderer?.finish?.();
               process.exitCode = 1;
               return;
             }
@@ -78,36 +75,25 @@ export function runCommand(program: Command): void {
                       timestamp: new Date().toISOString(),
                       content: fullContent,
                     };
-                    renderer?.onEvent(event);
-                    if (!renderer) collectedEvents.push(event);
+                    collectedEvents.push(event);
                   }
                 }
-                if (renderer) return;
                 console.log(`[synax] ${activity.kind}: ${activity.message}`);
               },
               onEvent(event) {
-                renderer?.onEvent(event);
-                if (!renderer) {
-                  collectedEvents.push(event);
-                  if (event.type === 'patch_preview') {
-                    console.log(`[synax] patch preview: ${event.path}`);
-                    console.log(event.diff || '(no changes)');
-                  }
+                collectedEvents.push(event);
+                if (event.type === 'patch_preview') {
+                  console.log(`[synax] patch preview: ${event.path}`);
+                  console.log(event.diff || '(no changes)');
                 }
               },
             });
-            renderer?.finish?.();
-            if (!renderer) {
-              const state = reduceEvents(collectedEvents);
-              process.stdout.write(renderPlainText(state, { showPatchPreviews: true }));
-            } else if (report.terminalState !== 'completed') {
-              printTuiFailure(report);
-            }
+            const state = reduceEvents(collectedEvents);
+            process.stdout.write(renderPlainText(state, { showPatchPreviews: true }));
             if (report.terminalState !== 'completed') {
               process.exitCode = 1;
             }
           } catch (error) {
-            renderer?.finish?.();
             const message = error instanceof Error ? error.message : String(error);
             const logger = createLogger();
             logger.error('Provider or task failure', error instanceof Error ? error : new Error(message));
@@ -244,40 +230,4 @@ function parseRepairAttempts(
     return { ok: false, error: `--repair-attempts must be between 0 and ${MAX_REPAIR_ATTEMPTS}` };
   }
   return { ok: true, value: parsed };
-}
-
-function printTuiFailure(report: Awaited<ReturnType<typeof runAgentTask>>): void {
-  console.error(`[synax] Run failed: ${report.terminalState}`);
-  if (report.error) {
-    console.error(`[synax] Next: ${classifyFailureNextAction(report.error)}`);
-    console.error(report.error);
-  }
-}
-
-function classifyFailureNextAction(error: string): string {
-  const lower = error.toLowerCase();
-  if (
-    lower.includes('provider error') ||
-    lower.includes('connection failed') ||
-    lower.includes('network error') ||
-    lower.includes('timed out') ||
-    lower.includes('api key') ||
-    lower.includes('401') ||
-    lower.includes('403') ||
-    lower.includes('429') ||
-    lower.includes('deepseek')
-  ) {
-    return 'check provider/server/config, then rerun';
-  }
-  if (lower.includes('context budget') || lower.includes('max tool calls')) {
-    return 'narrow the prompt or raise the configured budget/limits';
-  }
-  if (
-    lower.includes('malformed tool call') ||
-    lower.includes('ambiguous mixed output') ||
-    lower.includes('recoverable tool errors')
-  ) {
-    return 're-prompt Synax with a smaller, more explicit task';
-  }
-  return 'inspect the error below, then rerun';
 }

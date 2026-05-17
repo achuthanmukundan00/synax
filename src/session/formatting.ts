@@ -201,6 +201,22 @@ export function isPrematureCompletionClaim(text: string, changedFiles: string[] 
   return prematurePhrases.some((phrase) => tail.includes(phrase));
 }
 
+/**
+ * Detect a model response that is only a generic status line rather than
+ * a substantive answer — e.g. "Status: completed\nWorking tree: dirty".
+ * Such responses should not be treated as valid completions after tool use.
+ */
+export function isGenericStatusOnlyFinalAnswer(text: string): boolean {
+  const lines = text
+    .split('\n')
+    .map((l) => l.trim().toLowerCase())
+    .filter((l) => l.length > 0);
+  if (lines.length === 0) return true;
+  const statusPattern = /^status:\s*(completed|failed|error|running|pending|skipped)$/;
+  const worktreePattern = /^working\s+tree:\s*(clean|dirty)$/;
+  return lines.length <= 2 && lines.every((l) => statusPattern.test(l) || worktreePattern.test(l));
+}
+
 // ─── Tool-call safety preamble check ─────────────────────────────────────────
 
 export function isSafeToolPreamble(text: string): boolean {

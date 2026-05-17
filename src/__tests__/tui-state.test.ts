@@ -269,7 +269,7 @@ describe('tui-state', () => {
         toolName: 'bash',
         summary: 'completed',
         status: 'ok',
-        detail: 'stdout:\n M src/tui/layout.ts',
+        detail: 'stdout:\n M src/tui/interactive-tui.ts',
       },
       3,
     );
@@ -277,7 +277,7 @@ describe('tui-state', () => {
     expect(state.debugHistory.map((item) => item.kind)).toEqual(['model', 'tool_call', 'tool_result']);
     expect(state.debugHistory[0].detail).toContain('checking status');
     expect(state.debugHistory[1].detail).toContain('git status --short');
-    expect(state.debugHistory[2].detail).toContain('M src/tui/layout.ts');
+    expect(state.debugHistory[2].detail).toContain('M src/tui/interactive-tui.ts');
   });
 
   it('appends streaming assistant deltas into one model transcript entry', () => {
@@ -301,7 +301,9 @@ describe('tui-state', () => {
 
     expect(state.debugHistory).toHaveLength(1);
     expect(state.debugHistory[0].kind).toBe('model');
-    expect(state.debugHistory[0].detail).toBe('checking files\nI will read package.json.');
+    expect(state.debugHistory[0].detail).toBe(
+      '<thinking>checking </thinking><thinking>files\n</thinking>I will read package.json.',
+    );
   });
 
   it('does not duplicate token fragments from streaming delta events (regression)', () => {
@@ -357,7 +359,7 @@ describe('tui-state', () => {
         timestamp: new Date(2).toISOString(),
         toolCallId: 'call_1',
         toolName: 'read',
-        summary: '{"path":"src/tui/transcript.ts"}',
+        summary: '{"path":"src/tui/semantic-events.ts"}',
       },
       2,
     );
@@ -408,7 +410,7 @@ describe('tui-state', () => {
         maxToolCalls: 10,
         modelSteps: 3,
         maxModelSteps: 10,
-        changedFiles: ['src/tui/layout.ts', 'src/agent/tui-state.ts'],
+        changedFiles: ['src/tui/interactive-tui.ts', 'src/agent/tui-state.ts'],
         workingTreeClean: true,
         verification: 'npm test passed',
       },
@@ -429,7 +431,7 @@ describe('tui-state', () => {
         timestamp: new Date(1).toISOString(),
         toolCallId: 'read-1',
         toolName: 'read',
-        summary: '{"path":"src/tui/layout.ts"}',
+        summary: '{"path":"src/tui/interactive-tui.ts"}',
       },
       1,
     );
@@ -440,7 +442,7 @@ describe('tui-state', () => {
         timestamp: new Date(2).toISOString(),
         toolCallId: 'edit-1',
         toolName: 'edit',
-        summary: '{"path":"src/tui/layout.ts"}',
+        summary: '{"path":"src/tui/interactive-tui.ts"}',
       },
       2,
     );
@@ -451,8 +453,8 @@ describe('tui-state', () => {
         timestamp: new Date(2).toISOString(),
         toolCallId: 'edit-1',
         toolName: 'edit',
-        path: 'src/tui/layout.ts',
-        diff: '--- src/tui/layout.ts\n+++ src/tui/layout.ts\n-old\n+new',
+        path: 'src/tui/interactive-tui.ts',
+        diff: '--- src/tui/interactive-tui.ts\n+++ src/tui/interactive-tui.ts\n-old\n+new',
       },
       2,
     );
@@ -478,7 +480,7 @@ describe('tui-state', () => {
         maxToolCalls: 10,
         modelSteps: 1,
         maxModelSteps: 10,
-        changedFiles: ['src/tui/layout.ts'],
+        changedFiles: ['src/tui/interactive-tui.ts'],
         workingTreeClean: true,
         verification: 'npm test passed',
       },
@@ -486,9 +488,9 @@ describe('tui-state', () => {
     );
 
     expect(state.toolInvocationCount).toBe(2);
-    expect(state.filesChangedThisRun).toEqual(['src/tui/layout.ts']);
+    expect(state.filesChangedThisRun).toEqual(['src/tui/interactive-tui.ts']);
     expect(state.workingTreeClean).toBe(true);
-    expect(state.changes.items).toEqual([{ path: 'src/tui/layout.ts', op: 'edit' }]);
+    expect(state.changes.items).toEqual([{ path: 'src/tui/interactive-tui.ts', op: 'edit' }]);
     expect(state.statusNote).toBe('completed: 1 model step, 2 tool calls, 1 file changed');
   });
 
@@ -501,19 +503,19 @@ describe('tui-state', () => {
         timestamp: new Date(1).toISOString(),
         toolCallId: 'call_1',
         toolName: 'edit',
-        path: 'src/tui/layout.ts',
-        diff: '--- src/tui/layout.ts\n+++ src/tui/layout.ts\n-old\n+new',
+        path: 'src/tui/interactive-tui.ts',
+        diff: '--- src/tui/interactive-tui.ts\n+++ src/tui/interactive-tui.ts\n-old\n+new',
       },
       2,
     );
 
     expect(state.changes.items[state.changes.items.length - 1]).toEqual({
       op: 'edit',
-      path: 'src/tui/layout.ts',
+      path: 'src/tui/interactive-tui.ts',
     });
     expect(state.patchPreview).toEqual({
-      path: 'src/tui/layout.ts',
-      diff: '--- src/tui/layout.ts\n+++ src/tui/layout.ts\n-old\n+new',
+      path: 'src/tui/interactive-tui.ts',
+      diff: '--- src/tui/interactive-tui.ts\n+++ src/tui/interactive-tui.ts\n-old\n+new',
     });
   });
 

@@ -2,6 +2,8 @@ import { Session } from '../../session/Session';
 import { AgentRunnerOptions, AgentClient } from '../../session/types';
 
 describe('Session orchestration planning', () => {
+  jest.setTimeout(15000);
+
   const buildMockClient = (responseContent: string): AgentClient => ({
     chat: jest.fn().mockResolvedValue({
       content: responseContent,

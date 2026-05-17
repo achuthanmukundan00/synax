@@ -5,7 +5,8 @@
  */
 
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'http';
-import { classifyStatus, createOpenAICompatibleClient } from '../llm/client';
+import { classifyStatus, createOpenAICompatibleClient, parseSuccessResponse } from '../llm/client';
+import { ensureParsersRegistered } from '../llm/tool-calls';
 import { createContextLedger } from '../tools';
 import { normalizeProviderConfig, validateConfig, type ProviderConfig } from '../config/project';
 import type { NormalizedProviderConfig } from '../llm/types';
@@ -823,5 +824,138 @@ describe('LLM client — image content blocks', () => {
     } finally {
       stderrSpy.mockRestore();
     }
+  });
+});
+
+// ─── Reasoning-content tool-call extraction ─────────────────────────────────
+
+describe('parseSuccessResponse — tool calls from reasoning_content', () => {
+  beforeAll(() => {
+    ensureParsersRegistered();
+  });
+
+  test('extracts Qwen3 XML tool calls from reasoning_content when content is empty', () => {
+    const body = JSON.stringify({
+      model: 'qwen-test',
+      choices: [
+        {
+          message: {
+            role: 'assistant',
+            content: '',
+            reasoning_content:
+              'I need to read the package.json file.\n</think>\n<tool_call>\n<function=read>\n<parameter=path>./src/agent/dispatch-intent.ts</parameter>\n</function>\n</tool_call>',
+          },
+          finish_reason: 'stop',
+        },
+      ],
+    });
+
+    const result = parseSuccessResponse(body, 'generic');
+    expect(result.toolCalls).toHaveLength(1);
+    expect(result.toolCalls[0].name).toBe('read');
+    expect(result.toolCalls[0].arguments).toEqual({ path: './src/agent/dispatch-intent.ts' });
+    expect(result.reasoningContent).toContain('package.json');
+  });
+
+  test('extracts Hermes-style JSON tool calls from reasoning_content', () => {
+    const body = JSON.stringify({
+      model: 'test-model',
+      choices: [
+        {
+          message: {
+            role: 'assistant',
+            content: '',
+            reasoning_content:
+              'I should read the file.\n<tool_call>{"name":"read","arguments":{"path":"package.json"}}</tool_call>',
+          },
+          finish_reason: 'stop',
+        },
+      ],
+    });
+
+    const result = parseSuccessResponse(body, 'generic');
+    expect(result.toolCalls).toHaveLength(1);
+    expect(result.toolCalls[0].name).toBe('read');
+    expect(result.toolCalls[0].arguments).toEqual({ path: 'package.json' });
+  });
+
+  test('extracts tool calls when content has stray </think> and Qwen3 XML', () => {
+    const body = JSON.stringify({
+      model: 'qwen-test',
+      choices: [
+        {
+          message: {
+            role: 'assistant',
+            content:
+              '</think> <tool_call> <function=read> <parameter=path>./src/agent/dispatch-intent.ts</parameter> </function> </tool_call>',
+            reasoning_content: 'Let me think about the best approach...\n</think>',
+          },
+          finish_reason: 'stop',
+        },
+      ],
+    });
+
+    const result = parseSuccessResponse(body, 'generic');
+    expect(result.toolCalls).toHaveLength(1);
+    expect(result.toolCalls[0].name).toBe('read');
+  });
+
+  test('does not extract tool calls from reasoning_content when none are present', () => {
+    const body = JSON.stringify({
+      model: 'test-model',
+      choices: [
+        {
+          message: {
+            role: 'assistant',
+            content: '',
+            reasoning_content: 'Just some regular reasoning without tool calls.',
+          },
+          finish_reason: 'stop',
+        },
+      ],
+    });
+
+    const result = parseSuccessResponse(body, 'generic');
+    expect(result.toolCalls).toHaveLength(0);
+    expect(result.toolCallFormat).toBe('none');
+  });
+
+  test('returns empty toolCalls when content has tool-call XML but reasoning does not', () => {
+    // This tests the case where content has no tool calls (just prose) and
+    // reasoning is also clean — normal completion path.
+    const body = JSON.stringify({
+      model: 'test-model',
+      choices: [
+        {
+          message: {
+            role: 'assistant',
+            content: 'I have completed the task. Here is a summary of the changes I made.',
+            reasoning_content: 'Let me summarize the work done...',
+          },
+          finish_reason: 'stop',
+        },
+      ],
+    });
+
+    const result = parseSuccessResponse(body, 'generic');
+    expect(result.toolCalls).toHaveLength(0);
+    expect(result.toolCallFormat).toBe('none');
+  });
+
+  test('throws ModelToolCallParseError for malformed tool-call XML that cannot be repaired', () => {
+    const body = JSON.stringify({
+      model: 'qwen-test',
+      choices: [
+        {
+          message: {
+            role: 'assistant',
+            content: '<tool_call><garbage nope="x"><broken></tool_call>',
+          },
+          finish_reason: 'stop',
+        },
+      ],
+    });
+
+    expect(() => parseSuccessResponse(body, 'generic')).toThrow('model emitted malformed tool call output');
   });
 });

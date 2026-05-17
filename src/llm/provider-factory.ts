@@ -122,6 +122,10 @@ function resolveProviderConfig(input: ProviderFactoryInput): ResolvedProviderFac
   const apiKey = resolveApiKey(input, preset.apiKeyEnv);
 
   const model = input.model ?? preset.defaultModel ?? '';
+  // Context window: explicit input overrides preset, preset overrides default.
+  // The config DEFAULTS (contextWindowTokens: 131072) should not override
+  // known provider presets — that's handled by ensuring toProviderFactoryInput
+  // only passes an explicit user setting. Here we trust the input or preset.
   const contextWindow = input.contextWindow ?? preset.contextWindow ?? 131072;
 
   // Merge default headers from preset with custom headers

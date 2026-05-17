@@ -37,6 +37,9 @@ describe('theme system', () => {
       'error',
       'note',
       'assistant_text',
+      'dispatch',
+      'agent_status',
+      'thinking',
     ];
     for (const name of getPaletteNames()) {
       const pal = getPalette(name);

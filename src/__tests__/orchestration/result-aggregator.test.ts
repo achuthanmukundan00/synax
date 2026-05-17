@@ -25,8 +25,9 @@ function makeResult(
   terminalState: import('../../session/types').AgentTerminalState = 'completed',
   toolCalls = changedFiles.length * 2,
   error?: string,
+  finalAnswer?: string,
 ): SubAgentResult {
-  return { subTaskId, terminalState, changedFiles, toolCalls, error };
+  return { subTaskId, terminalState, changedFiles, toolCalls, error, finalAnswer };
 }
 
 describe('result-aggregator', () => {
@@ -128,6 +129,104 @@ describe('result-aggregator', () => {
       expect(aggregated.conclusion).toContain('Sub-task Results');
       expect(aggregated.conclusion).toContain('Files Changed');
       expect(aggregated.conclusion).toContain('src/a.ts');
+    });
+
+    it('includes findings from child finalAnswer', () => {
+      const plan = makePlan(1);
+      const results = [
+        makeResult(
+          'tui-inspect',
+          [],
+          'completed',
+          25,
+          undefined,
+          [
+            'Found buffer overflow in parseRawInput() on multi-byte sequences.',
+            'Race condition in finalize() during cleanup.',
+          ].join('\n'),
+        ),
+      ];
+
+      const aggregated = aggregateResults(plan, results);
+      expect(aggregated.conclusion).toContain('Findings:');
+      expect(aggregated.conclusion).toContain('buffer overflow');
+      expect(aggregated.conclusion).toContain('Race condition');
+      expect(aggregated.conclusion).toContain('parseRawInput');
+    });
+
+    it('includes findings for multiple children', () => {
+      const plan = makePlan(2);
+      const results = [
+        makeResult('tui-inspect', [], 'completed', 25, undefined, 'Found TUI bug.'),
+        makeResult('session-inspect', [], 'completed', 27, undefined, 'Found Session bug.'),
+      ];
+
+      const aggregated = aggregateResults(plan, results);
+      // Both child IDs should appear
+      expect(aggregated.conclusion).toContain('tui-inspect');
+      expect(aggregated.conclusion).toContain('session-inspect');
+      // Both findings should appear
+      expect(aggregated.conclusion).toContain('Found TUI bug.');
+      expect(aggregated.conclusion).toContain('Found Session bug.');
+      // Summary should show 2/2
+      expect(aggregated.conclusion).toContain('2/2');
+    });
+
+    it('truncates long child findings', () => {
+      const plan = makePlan(1);
+      const longFindings = 'A'.repeat(600);
+      const results = [makeResult('task-1', [], 'completed', 10, undefined, longFindings)];
+
+      const aggregated = aggregateResults(plan, results);
+      // Should be truncated (400 limit) — 400 chars + '...' = 403
+      expect(aggregated.conclusion).toContain('...');
+      expect(aggregated.conclusion).not.toContain('A'.repeat(500));
+    });
+
+    it('limits findings to 5 lines', () => {
+      const plan = makePlan(1);
+      const manyLines = Array.from({ length: 10 }, (_, i) => `Line ${i + 1}`).join('\n');
+      const results = [makeResult('task-1', [], 'completed', 10, undefined, manyLines)];
+
+      const aggregated = aggregateResults(plan, results);
+      expect(aggregated.conclusion).toContain('Line 1');
+      expect(aggregated.conclusion).toContain('Line 5');
+      expect(aggregated.conclusion).not.toContain('Line 6');
+      expect(aggregated.conclusion).toContain('...');
+    });
+
+    it('uses finished wording for partial completion', () => {
+      const plan = makePlan(2);
+      const results = [
+        makeResult('task-1', ['src/a.ts'], 'completed'),
+        makeResult('task-2', [], 'blocked', 0, 'blocked'),
+      ];
+
+      const aggregated = aggregateResults(plan, results);
+      expect(aggregated.conclusion).toContain('Orchestration finished');
+      expect(aggregated.conclusion).toContain('1/2');
+      expect(aggregated.conclusion).not.toContain('Orchestration completed');
+    });
+
+    it('uses completed wording for full success', () => {
+      const plan = makePlan(2);
+      const results = [
+        makeResult('task-1', ['src/a.ts'], 'completed'),
+        makeResult('task-2', ['src/b.ts'], 'completed'),
+      ];
+
+      const aggregated = aggregateResults(plan, results);
+      expect(aggregated.conclusion).toContain('Orchestration completed');
+      expect(aggregated.conclusion).toContain('2/2');
+    });
+
+    it('skips findings section when finalAnswer is absent', () => {
+      const plan = makePlan(1);
+      const results = [makeResult('task-1', ['src/a.ts'], 'completed', 5)];
+
+      const aggregated = aggregateResults(plan, results);
+      expect(aggregated.conclusion).not.toContain('Findings:');
+      expect(aggregated.conclusion).toContain('Sub-task Results');
     });
   });
 });

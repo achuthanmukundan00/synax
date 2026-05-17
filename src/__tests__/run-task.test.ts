@@ -24,6 +24,35 @@ jest.mock('../llm/client', () => ({
   }),
 }));
 
+jest.mock('../orchestration/OrchestrationManager', () => ({
+  OrchestrationManager: {
+    execute: jest.fn().mockImplementation(() =>
+      Promise.resolve({
+        terminalState: 'completed',
+        conclusion: 'All sub-tasks completed.',
+        results: [
+          {
+            subTaskId: 'task-1',
+            terminalState: 'completed',
+            changedFiles: ['src/foo.ts'],
+            toolCalls: 3,
+            finalAnswer: 'Found the bug in src/foo.ts',
+          },
+          {
+            subTaskId: 'task-2',
+            terminalState: 'completed',
+            changedFiles: [],
+            toolCalls: 2,
+            finalAnswer: 'Everything looks good in src/bar.ts',
+          },
+        ],
+        changedFiles: ['src/foo.ts'],
+        toolCalls: 5,
+      }),
+    ),
+  },
+}));
+
 import { runAgentTask } from '../agent/run-task';
 
 function resetTmp(): void {
@@ -148,6 +177,44 @@ describe('runAgentTask patch approval', () => {
     expect(JSON.stringify(requests[0])).toContain('use parallel sub-agents to read docs and specs');
     expect(events.map((event) => event.type)).toContain('orchestration_plan_generated');
     expect(events.map((event) => event.type)).toContain('assistant_message');
+  });
+
+  it('bridges sub-agent results into parent conversation context via orchestration', async () => {
+    const events: AgentEvent[] = [];
+    // LLM planner returns a valid decomposition plan → orchestration executes
+    responses = [
+      {
+        content: JSON.stringify({
+          planId: 'test-plan',
+          subtasks: [
+            {
+              id: 'task-1',
+              description: 'first task',
+              fileScope: ['src/'],
+              dependencies: [],
+              estimatedTokens: 8000,
+            },
+          ],
+          strategy: 'orchestrate',
+        }),
+      },
+    ];
+
+    const report = await runAgentTask({
+      repoRoot: TMP,
+      task: 'use parallel sub-agents to investigate',
+      onEvent: (event) => events.push(event),
+    });
+
+    expect(report.terminalState).toBe('completed');
+    expect(report.finalAnswer).toBe('All sub-tasks completed.');
+    const eventTypes = events.map((e) => e.type);
+    expect(eventTypes).toContain('dispatch_started');
+    expect(eventTypes).toContain('dispatch_workers_completed');
+    // assistant_message should carry the orchestration conclusion
+    const assistantMsgs = events.filter((e) => e.type === 'assistant_message');
+    expect(assistantMsgs.length).toBeGreaterThanOrEqual(1);
+    expect((assistantMsgs[assistantMsgs.length - 1] as any).content).toBe('All sub-tasks completed.');
   });
 
   it('emits verification lifecycle events in correct order', async () => {

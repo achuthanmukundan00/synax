@@ -108,16 +108,42 @@ function buildConclusion(
   // Summary line
   const completed = results.filter((r) => r.terminalState === 'completed').length;
   const total = results.length;
-  parts.push(`Orchestration completed: ${completed}/${total} sub-tasks finished.`);
+  const allDone = completed === total;
+  parts.push(`${allDone ? 'Orchestration completed' : 'Orchestration finished'}: ${completed}/${total} sub-tasks.`);
   parts.push('');
 
   // Per-sub-task results
   parts.push('## Sub-task Results');
   for (const result of results) {
     const statusIcon = result.terminalState === 'completed' ? '✅' : '❌';
+    parts.push('');
     parts.push(`${statusIcon} **${result.subTaskId}** (${result.terminalState})`);
-    parts.push(`   Files changed: ${result.changedFiles.length > 0 ? result.changedFiles.join(', ') : '(none)'}`);
     parts.push(`   Tool calls: ${result.toolCalls}`);
+
+    // Include findings from child's finalAnswer when available
+    if (result.finalAnswer) {
+      const maxFindings = 5;
+      const maxChars = 400;
+      const text =
+        result.finalAnswer.length > maxChars ? result.finalAnswer.slice(0, maxChars) + '...' : result.finalAnswer;
+      const lines = text
+        .split('\n')
+        .map((l) => l.trim())
+        .filter((l) => l.length > 0);
+      if (lines.length > 0) {
+        parts.push(`   Findings:`);
+        for (const line of lines.slice(0, maxFindings)) {
+          parts.push(`     ${line}`);
+        }
+        if (lines.length > maxFindings) {
+          parts.push(`     ...`);
+        }
+      }
+    }
+
+    if (result.changedFiles.length > 0) {
+      parts.push(`   Files changed: ${result.changedFiles.join(', ')}`);
+    }
     if (result.error) {
       parts.push(`   Error: ${result.error}`);
     }

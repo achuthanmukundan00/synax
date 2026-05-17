@@ -1,5 +1,4 @@
 import type { AgentEvent } from './events';
-export { TuiRenderer } from './tui-renderer';
 
 export interface AgentRenderer {
   onEvent(event: AgentEvent): void;

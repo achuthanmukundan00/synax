@@ -709,16 +709,30 @@ describe('shared bounded agent runner', () => {
   });
 
   it('does not expose raw content-XML tool-call markup as a final answer', async () => {
+    // Create the file the tool call will read so the tool succeeds
+    writeFileSync(join(TMP, 'package.json'), JSON.stringify({ name: 'test' }), 'utf-8');
     const client = fakeClient([
       {
         content:
           '</think>\n\n<tool_call>\n<function=read>\n<parameter=path>\npackage.json\n</parameter>\n</function>\n</tool_call>',
+        // The real parser extracts tool calls from content-XML; fakeClient
+        // bypasses parsing so we mirror what the parser would produce.
+        toolCalls: [{ id: 'call_1', name: 'read', arguments: { path: 'package.json' } }],
+      },
+      {
+        content: 'Inspected package.json.',
+        toolCalls: [],
       },
     ]);
 
     const result = await runTurn({ repoRoot: TMP, task: 'answer', client });
 
-    expect(result).toMatchObject({ terminalState: 'completed', finalAnswer: '', steps: 1 });
+    expect(result).toMatchObject({ terminalState: 'completed', steps: 2 });
+    expect(result.toolCalls).toHaveLength(1);
+    expect(result.toolCalls[0].name).toBe('read');
+    // Raw tool-call XML must not leak into the final answer
+    expect(result.finalAnswer).not.toContain('<tool_call>');
+    expect(result.finalAnswer).not.toContain('</think>');
   });
 
   it('fails closed on ambiguous mixed output with tool calls and final text', async () => {
@@ -931,7 +945,7 @@ describe('shared bounded agent runner', () => {
     });
 
     expect(result.terminalState).toBe('completed');
-    expect(client.requests).toHaveLength(1);
+    expect(client.requests).toHaveLength(2);
     expect(result.conversation.latestCompaction).not.toBeNull();
     expect((client.requests[0].messages as Array<{ role: string; content: string }>)[1]).toMatchObject({
       role: 'system',
@@ -1304,7 +1318,7 @@ describe('shared bounded agent runner', () => {
     expect(client.requests).toHaveLength(2);
     const secondRequest = client.requests[1].messages as Array<{ role: string; name?: string; content: string }>;
     const bashResult = secondRequest.find((message) => message.role === 'tool' && message.name === 'bash');
-    expect(bashResult?.content).toContain('"_compacted":true');
+    expect(bashResult?.content).toContain('"summary"');
     expect(bashResult?.content).toContain('"command"');
     expect(bashResult?.content).not.toContain('x'.repeat(1000));
   });
@@ -1497,7 +1511,7 @@ describe('shared bounded agent runner', () => {
 
     expect(
       conversation.messages.filter((message) => message.role === 'user').map((message) => message.content),
-    ).toEqual(['one', 'two']);
+    ).toEqual(['one', 'two', expect.stringContaining('You responded with text but did not use any tools')]);
   });
 
   it('compacts large read results even in recent turns to bound prompt growth', async () => {
@@ -1524,7 +1538,7 @@ describe('shared bounded agent runner', () => {
     );
 
     // At least one tool message should be compacted (the large file read)
-    const hasCompacted = toolMessages.some((m) => m.content.includes('"_compacted":true'));
+    const hasCompacted = toolMessages.some((m) => m.content.includes('"summary"'));
     expect(hasCompacted).toBe(true);
   });
 

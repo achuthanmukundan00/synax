@@ -160,10 +160,8 @@ const EXPLICIT_DELEGATION_PATTERNS: Array<{ regex: RegExp; mode: 'parallel' | 's
   // Explicit parallel subagents
   { regex: /\bparallel\s+sub-?agents?\b/i, mode: 'parallel' },
   { regex: /\bsequential\s+sub-?agents?\b/i, mode: 'sequential' },
-  // "use agents", "use subagents", "use sub-agents" — must come before generic sub-?agents?
+  // "use agents", "use subagents", "use sub-agents"
   { regex: /\buse\s+(sub-?)?agents?\b/i, mode: 'auto' },
-  // Generic subagent mentions
-  { regex: /\bsub-?agents?\b/i, mode: 'auto' },
   // Alternative delegation phrasing
   { regex: /\b(?:delegate|fan\s*out|spawn\s+agents?|dispatch\s+agents?)\b/i, mode: 'auto' },
   // "parallel agents"
@@ -219,7 +217,9 @@ export function detectRepoReconIntent(prompt: string): boolean {
     if (pattern.test(prompt)) return true;
   }
 
-  // Heuristic: look for "read all" + code/repo in the prompt
+  // Heuristic: "read all the code, I want to ask you questions about it"
+  // Requires all three signals to avoid false positives like
+  // "read the code for the bug" (read + code, but no questions intent).
   const lower = prompt.toLowerCase();
   const hasReadIntent = /\bread\b/.test(lower);
   const hasRepoRef = /\b(repo|code|codebase|files|source)\b/.test(lower);

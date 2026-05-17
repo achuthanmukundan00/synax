@@ -652,7 +652,7 @@ function appendToLatestModelDetail(state: RunStateSnapshot, content: string): st
 
 function formatAssistantDelta(content?: string, reasoningContent?: string): string {
   const parts: string[] = [];
-  if (reasoningContent) parts.push(reasoningContent);
+  if (reasoningContent) parts.push(`<thinking>${reasoningContent}</thinking>`);
   if (content) parts.push(content);
   return parts.join('');
 }

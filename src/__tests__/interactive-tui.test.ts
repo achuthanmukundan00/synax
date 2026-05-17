@@ -2,12 +2,8 @@ import { createChatSession, shouldUseInteractiveTui } from '../commands/chat';
 import { applyEventToRunState, createInitialRunStateSnapshot } from '../agent/tui-state';
 import { resolveCoreVisualProfile } from '../tui/core-visual-profile';
 import { CORE_HEIGHT, CORE_WIDTH, modeColor, renderAiCore, renderDottedCore } from '../tui/ai-core';
-import { DiffRenderer } from '../tui/diff-renderer';
-import { LayerStack } from '../tui/layer-manager';
-import { maxHistoryScrollOffset, renderLayout } from '../tui/layout';
 import { renderAnsiTokenStreamFrame, tokenStreamFrameText } from '../tui/token-stream';
 import { createInputParser, parseInputChunk } from '../tui/input';
-import { createTerminalSession } from '../tui/terminal';
 import { renderSettings } from '../settings/settings-renderer';
 import { createSettingsState, settingsReducer } from '../settings/settings-state';
 import { classifyAgentEvent, semanticEventsFromDebugHistory } from '../tui/semantic-events';
@@ -31,23 +27,6 @@ import {
 } from '../tui/opentui-artifact-renderer';
 import { detectColorFgBgTheme, getPalette } from '../tui/theme';
 import type { EffectiveSynaxConfig } from '../config/schema';
-import { PassThrough, Writable } from 'stream';
-
-class CapturingWritable extends Writable {
-  public chunks: string[] = [];
-  isTTY = true;
-  columns = 80;
-  rows = 24;
-
-  _write(chunk: unknown, _encoding: BufferEncoding, callback: (error?: Error | null) => void): void {
-    this.chunks.push(Buffer.isBuffer(chunk) ? chunk.toString('utf8') : String(chunk));
-    callback();
-  }
-
-  text(): string {
-    return this.chunks.join('');
-  }
-}
 
 type FakeOpenTuiNode = {
   type: string;
@@ -61,7 +40,20 @@ function createFakeOpenTuiCore(): any {
     props,
     children,
   });
+  const StyledText = class {
+    chunks: { __isChunk: true; text: string }[];
+    constructor(c: any[]) {
+      this.chunks = c;
+    }
+  };
+  const chunk = (text: string): { __isChunk: true; text: string } => ({
+    __isChunk: true,
+    text,
+  });
   return {
+    StyledText,
+    italic: (input: string | { __isChunk: true; text: string }) => (typeof input === 'string' ? chunk(input) : input),
+    dim: (input: string | { __isChunk: true; text: string }) => (typeof input === 'string' ? chunk(input) : input),
     Box: (props: Record<string, unknown>, ...children: FakeOpenTuiNode[]) => node('Box', props, children),
     ScrollBox: (props: Record<string, unknown>, ...children: FakeOpenTuiNode[]) => node('ScrollBox', props, children),
     Text: (props: Record<string, unknown>) => node('Text', props),
@@ -70,8 +62,22 @@ function createFakeOpenTuiCore(): any {
   };
 }
 
+function extractTextFromContent(content: unknown): string[] {
+  if (!content || typeof content !== 'object') return [];
+  const obj = content as any;
+  if (obj.__isChunk) return [obj.text];
+  if (Array.isArray(obj.chunks))
+    return obj.chunks.filter((c: any) => c && typeof c === 'object' && c.__isChunk).map((c: any) => c.text);
+  return [];
+}
+
 function collectTextContent(node: FakeOpenTuiNode): string[] {
-  const here = node.type === 'Text' && typeof node.props.content === 'string' ? [node.props.content] : [];
+  const here =
+    node.type === 'Text'
+      ? typeof node.props.content === 'string'
+        ? [node.props.content]
+        : extractTextFromContent(node.props.content)
+      : [];
   return [...here, ...node.children.flatMap(collectTextContent)];
 }
 
@@ -84,21 +90,8 @@ function findNodeById(node: FakeOpenTuiNode, id: string): FakeOpenTuiNode | unde
   return undefined;
 }
 
-function createTtyInput(): PassThrough & {
-  isTTY?: boolean;
-  setRawMode?: (mode: boolean) => void;
-  resume: () => void;
-  pause: () => void;
-} {
-  const stdin = new PassThrough() as PassThrough & {
-    isTTY?: boolean;
-    setRawMode?: (mode: boolean) => void;
-    resume: () => void;
-    pause: () => void;
-  };
-  stdin.isTTY = true;
-  stdin.setRawMode = jest.fn();
-  return stdin;
+function collectNodes(node: FakeOpenTuiNode): FakeOpenTuiNode[] {
+  return [node, ...node.children.flatMap(collectNodes)];
 }
 
 describe('interactive tui wiring', () => {
@@ -144,6 +137,80 @@ describe('OpenTUI startup layout', () => {
     expect(findNodeById(root, 'synax-location')).toBeUndefined();
   });
 
+  it('uses a thin fixed card accent and stable prompt prefix', () => {
+    const core = createFakeOpenTuiCore();
+    const root = renderArtifactRoot(
+      core,
+      [],
+      {
+        model: 'qwen3-local',
+        filesTouched: [],
+        uptimeLabel: '0:00',
+      },
+      {
+        status: 'Ready.',
+        prompt: '',
+        placeholder: 'Ask Synax...',
+        hints: 'Enter send',
+      },
+      100,
+    ) as unknown as FakeOpenTuiNode;
+    const card = renderArtifactCard(core, {
+      id: 'result-1',
+      class: 'tool_result',
+      timestamp: '2026-05-16T00:00:00.000Z',
+      artifact: { type: 'text', title: 'Result', body: 'Done.' },
+      metadata: {},
+    } as any) as unknown as FakeOpenTuiNode;
+
+    const inputFrame = findNodeById(root, 'synax-input-frame');
+    const promptPrefix = inputFrame?.children[0];
+
+    expect(promptPrefix?.props.width).toBe(2);
+    expect(card.children[0]?.props.width).toBe(1);
+  });
+
+  it('gives card body text the available width instead of min-content wrapping', () => {
+    const core = createFakeOpenTuiCore();
+    const card = renderArtifactCard(core, {
+      id: 'result-wrap',
+      class: 'tool_result',
+      timestamp: '2026-05-16T00:00:00.000Z',
+      artifact: {
+        type: 'text',
+        title: 'Result',
+        body: 'Deleted `src/__tests__/layout-input-dock.test.ts` and `src/__tests__/transcript.test.ts`.',
+      },
+      metadata: {},
+    } as any) as unknown as FakeOpenTuiNode;
+    const body = card.children[1];
+    const textNodes = collectNodes(card).filter((node) => node.type === 'Text');
+
+    expect(body?.props.flexBasis).toBe(0);
+    expect(body?.props.minWidth).toBe(0);
+    expect(textNodes.some((node) => node.props.width === '100%' && node.props.wrapMode === 'word')).toBe(true);
+  });
+
+  it('renders collapsed thinking cards as a cleaned sentence preview', () => {
+    const core = createFakeOpenTuiCore();
+    const card = renderArtifactCard(core, {
+      id: 'thinking-1',
+      class: 'thinking',
+      timestamp: '2026-05-16T00:00:00.000Z',
+      artifact: {
+        type: 'text',
+        title: 'Thinking',
+        body: 'Let me also check the diff summary to understand what changes are pending.',
+      },
+      metadata: {},
+    } as any) as unknown as FakeOpenTuiNode;
+    const text = collectTextContent(card).join('\n');
+
+    expect(text).toContain('◇ Let me also check the diff summary');
+    expect(text).not.toContain('\nme\n');
+    expect(text).not.toContain('◇ ock');
+  });
+
   it('uses full-height feed layout once visible events exist', () => {
     const core = createFakeOpenTuiCore();
     const root = renderArtifactRoot(
@@ -183,6 +250,56 @@ describe('OpenTUI startup layout', () => {
 
     expect(root.props.height).toBe(40);
     expect(root.children[0].props.flexGrow).toBe(1);
+  });
+
+  it('backs the settings overlay across the full terminal height', () => {
+    const core = createFakeOpenTuiCore();
+    const root = renderArtifactRoot(
+      core,
+      [
+        {
+          id: 'event-1',
+          class: 'tool_result',
+          timestamp: '2026-05-16T00:00:00.000Z',
+          artifact: { type: 'text', title: 'Result', body: 'conversation behind settings' },
+          metadata: {},
+        } as any,
+      ],
+      {
+        model: 'qwen3-local',
+        filesTouched: [],
+        uptimeLabel: '0:00',
+      },
+      {
+        status: 'Ready.',
+        prompt: '',
+        placeholder: 'Ask Synax...',
+        hints: 'Enter send',
+      },
+      100,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      ['┌ Settings ┐', '│ Model    │', '└ Esc close┘'],
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      40,
+    ) as unknown as FakeOpenTuiNode;
+    const overlay = findNodeById(root, 'synax-settings');
+    const backingRows = collectNodes(root).filter((node) =>
+      String(node.props.id ?? '').startsWith('synax-settings-backdrop-'),
+    );
+
+    expect(overlay?.props.height).toBe(40);
+    expect(overlay?.props.zIndex).toBe(100);
+    expect(backingRows).toHaveLength(37);
+    expect(
+      backingRows.every((node) => node.type === 'Box' && node.props.width === '100%' && node.props.backgroundColor),
+    ).toBe(true);
   });
 
   it('moves the prompt dock to the bottom as soon as the first run starts', () => {
@@ -452,103 +569,6 @@ describe('prompt value helpers', () => {
   });
 });
 
-describe('terminal session', () => {
-  it('does not emit mouse-enable sequences by default (copy-safe)', () => {
-    const stdout = new CapturingWritable();
-    const stdin = new PassThrough() as PassThrough & {
-      isTTY?: boolean;
-      setRawMode?: (mode: boolean) => void;
-      resume: () => void;
-      pause: () => void;
-    };
-    stdin.isTTY = true;
-    stdin.setRawMode = jest.fn();
-    const terminal = createTerminalSession({ stdin, stdout });
-
-    terminal.start();
-
-    const output = stdout.chunks.join('');
-    expect(output).not.toContain('\u001b[?1000h');
-    expect(output).not.toContain('\u001b[?1006h');
-    expect(output).not.toContain('\u001b[?1002h');
-    expect(output).not.toContain('\u001b[?1003h');
-  });
-
-  it('cleanup defensively emits mouse-disable sequences', () => {
-    const stdout = new CapturingWritable();
-    const stdin = createTtyInput();
-    const terminal = createTerminalSession({ stdin, stdout });
-
-    terminal.start();
-    const startOutput = stdout.chunks.join('');
-    // Even without mouse enabled, cleanup emits disable sequences (defensive).
-    expect(startOutput).not.toContain('\u001b[?1000h');
-
-    terminal.stop();
-    const fullOutput = stdout.chunks.join('');
-    expect(fullOutput).toContain('\u001b[?1006l');
-    expect(fullOutput).toContain('\u001b[?1000l');
-  });
-
-  it('enables mouse reporting when enableMouse option is true', () => {
-    const stdout = new CapturingWritable();
-    const stdin = createTtyInput();
-    const terminal = createTerminalSession({ stdin, stdout }, { enableMouse: true });
-
-    terminal.start();
-
-    const output = stdout.chunks.join('');
-    expect(output).toContain('\u001b[?1000h');
-    expect(output).toContain('\u001b[?1006h');
-  });
-
-  it('runtime enableMouse/disableMouse toggles emit correct sequences', () => {
-    const stdout = new CapturingWritable();
-    const stdin = createTtyInput();
-    const terminal = createTerminalSession({ stdin, stdout });
-
-    terminal.start();
-    stdout.chunks = []; // reset
-
-    terminal.enableMouse();
-    let output = stdout.chunks.join('');
-    expect(output).toContain('\u001b[?1000h');
-    expect(output).toContain('\u001b[?1006h');
-
-    stdout.chunks = [];
-    terminal.disableMouse();
-    output = stdout.chunks.join('');
-    expect(output).toContain('\u001b[?1006l');
-    expect(output).toContain('\u001b[?1000l');
-  });
-
-  it('enableMouse is idempotent (does not emit duplicates)', () => {
-    const stdout = new CapturingWritable();
-    const stdin = createTtyInput();
-    const terminal = createTerminalSession({ stdin, stdout });
-
-    terminal.start();
-    terminal.enableMouse();
-    const first = stdout.chunks.join('');
-    // eslint-disable-next-line no-control-regex
-    const count1000h = (first.match(/\u001b\[\?1000h/g) || []).length;
-    expect(count1000h).toBe(1);
-  });
-
-  it('enables bracketed paste for the TUI input dock', () => {
-    const stdout = new CapturingWritable();
-    const stdin = createTtyInput();
-    const terminal = createTerminalSession({ stdin, stdout });
-
-    terminal.start();
-    terminal.stop();
-
-    const output = stdout.chunks.join('');
-    expect(output).toContain('\u001b[?2004h');
-    expect(output).toContain('\u001b[?2004l');
-  });
-});
-
 describe('OpenTUI artifact scrolling', () => {
   it('scrolls the artifact history with OpenTUI delta as the first argument', () => {
     const scrollBy = jest.fn();
@@ -705,53 +725,6 @@ describe('OpenTUI polish helpers', () => {
   });
 });
 
-describe('diff renderer', () => {
-  it('clips render scope to viewport height', () => {
-    const diff = new DiffRenderer();
-    const lines = Array.from({ length: 50 }, (_, i) => `line-${i}`);
-    const out = diff.render(lines, 20, 5);
-    expect(out).toContain('\u001b[5;1H\u001b[0m\u001b[2Kline-4');
-    expect(out).not.toContain('line-8');
-  });
-
-  it('clips by visible width instead of raw ansi length', () => {
-    const diff = new DiffRenderer();
-    const line = '\u001b[1;37mSynax\u001b[0m idle 0:13';
-    const out = diff.render([line], 16, 1);
-    expect(out).toContain('\u001b[1;37mSynax\u001b[0m');
-    expect(out).toContain('idle 0:13');
-  });
-
-  it('clears stale characters when a changed line gets shorter', () => {
-    const diff = new DiffRenderer();
-    diff.render(['abcdef'], 8, 1);
-
-    const out = diff.render(['xy'], 8, 1);
-
-    expect(out).toContain('\u001b[1;1H\u001b[0m\u001b[2Kxy\u001b[0m');
-  });
-
-  it('avoids writing into the last terminal column to prevent prompt autowrap', () => {
-    const diff = new DiffRenderer();
-    const out = diff.render(['abcdefgh'], 8, 1);
-
-    expect(out).toContain('\u001b[1;1H\u001b[0m\u001b[2Kabcdefg\u001b[0m');
-    expect(out).not.toContain('\u001b[1;1Habcdefgh');
-  });
-
-  it('can invalidate cached lines after an external alternate-screen renderer runs', () => {
-    const diff = new DiffRenderer();
-    diff.render(['same'], 10, 1);
-    expect(diff.render(['same'], 10, 1)).toBe('');
-
-    diff.reset();
-    const out = diff.render(['same'], 10, 1);
-
-    expect(out).toContain('\u001b[2J');
-    expect(out).toContain('same');
-  });
-});
-
 describe('settings renderer', () => {
   it('shows Tab as the settings tab navigation key', () => {
     const config: EffectiveSynaxConfig = {
@@ -770,26 +743,6 @@ describe('settings renderer', () => {
     expect(plain).not.toContain('←/→ tabs');
     expect(plain).toContain('Settings  Model | Providers | Skills | MCP | Config | Help');
     expect(renderSettings(state, 100, 24).join('\n')).toContain('\u001b[7m Model \u001b[0m');
-  });
-});
-
-describe('autocomplete overlay renderer', () => {
-  it('renders commands list when no input is focused', () => {
-    // Autocomplete rendering is now handled by LayerStack composition
-    // in the paint() function. The overlay lines are module-private.
-    // This test validates that LayerStack correctly composes overlays.
-    const stack = new LayerStack();
-    const baseLines = Array.from({ length: 18 }, (_, i) => `line-${i}`);
-    stack.set('base', 0, { render: () => baseLines });
-    stack.set('overlay', 1, {
-      render: () => ['  -- commands --', '    /settings - Open settings menu', '    /model - Select model'],
-      region: { start: 15, end: 18 },
-    });
-    const result = stack.render(18, 40);
-    expect(result).toHaveLength(18);
-    expect(result[15]).toContain('-- commands --');
-    // Base lines should be preserved outside the overlay region
-    expect(result[0].trimEnd()).toBe(baseLines[0]);
   });
 });
 
@@ -955,1285 +908,6 @@ describe('ai core renderer', () => {
   });
 });
 
-describe('interactive layout visual agreements', () => {
-  it('matches the idle large-core render snapshot', () => {
-    const lines = renderLayout(
-      {
-        run: createInitialRunStateSnapshot(0),
-        objectiveInput: '',
-        coreMode: 'idle',
-        nowMs: 2000,
-      },
-      80,
-      24,
-    );
-
-    expect(snapshotText(lines)).toMatchSnapshot();
-  });
-
-  it('matches the active docked-core render snapshot', () => {
-    const run = {
-      ...createInitialRunStateSnapshot(0),
-      phase: 'tool_execution' as const,
-      modelId: 'qwen-local',
-      providerName: 'Relay',
-      coreLoaded: true,
-      debugHistory: [
-        { atMs: 1, kind: 'model' as const, summary: 'model response', detail: 'Inspecting files before editing.' },
-        {
-          atMs: 2,
-          kind: 'tool_call' as const,
-          summary: 'bash call',
-          detail: 'bash\n{"command":"npm test -- src/__tests__/interactive-tui.test.ts"}',
-        },
-        { atMs: 3, kind: 'tool_result' as const, summary: 'bash ok', detail: 'exit code: 0\nPASS' },
-      ],
-    };
-
-    expect(
-      snapshotText(
-        renderLayout(
-          {
-            run,
-            objectiveInput: 'continue polishing the feed',
-            coreMode: 'bash',
-            nowMs: 2000,
-          },
-          120,
-          32,
-        ),
-      ),
-    ).toMatchSnapshot();
-  });
-
-  it('matches the completed render snapshot', () => {
-    const run = {
-      ...createInitialRunStateSnapshot(0),
-      phase: 'completed' as const,
-      terminal: 'completed' as const,
-      statusNote: 'completed: 3 model steps, 4 tool calls, 2 files changed',
-      filesChangedThisRun: ['src/tui/transcript.ts', 'src/tui/layout.ts'],
-      toolInvocationCount: 4,
-      workingTreeClean: false,
-      verification: {
-        ...createInitialRunStateSnapshot(0).verification,
-        state: 'passed' as const,
-        summary: 'focused tests passed',
-        currentCheckLabel: 'npm test -- src/__tests__/interactive-tui.test.ts',
-      },
-    };
-
-    expect(
-      snapshotText(
-        renderLayout(
-          {
-            run,
-            objectiveInput: '',
-            coreMode: 'completed',
-            nowMs: 2000,
-          },
-          120,
-          32,
-        ),
-      ),
-    ).toMatchSnapshot();
-  });
-
-  it('freezes the header timer after a run reaches a terminal state', () => {
-    const run = {
-      ...createInitialRunStateSnapshot(0),
-      phase: 'completed' as const,
-      terminal: 'completed' as const,
-      nowMs: 25_000,
-    };
-
-    const plain = renderLayout(
-      {
-        run,
-        objectiveInput: '',
-        coreMode: 'completed',
-        nowMs: 90_000,
-      },
-      100,
-      24,
-    )
-      .map(stripAnsi)
-      .join('\n');
-
-    expect(plain).toContain(`Ready  0:25`);
-  });
-
-  it('renders terminal-state status bars in the header without redundant final summary blocks', () => {
-    const success = {
-      ...createInitialRunStateSnapshot(0),
-      phase: 'completed' as const,
-      terminal: 'completed' as const,
-    };
-    const blocked = {
-      ...createInitialRunStateSnapshot(0),
-      phase: 'blocked' as const,
-      terminal: 'blocked' as const,
-      terminalIssue: 'operator input required',
-    };
-    const failed = {
-      ...createInitialRunStateSnapshot(0),
-      phase: 'error' as const,
-      terminal: 'failed' as const,
-      terminalIssue: 'runtime error',
-    };
-
-    // Header phase label renders terminal state (no synthetic final summary block).
-    const successPlain = renderLayout({ run: success, objectiveInput: '', coreMode: 'completed', nowMs: 0 }, 100, 24)
-      .map((line) => stripAnsi(line))
-      .join('\n');
-    const blockedPlain = renderLayout({ run: blocked, objectiveInput: '', coreMode: 'blocked', nowMs: 0 }, 100, 24)
-      .map((line) => stripAnsi(line))
-      .join('\n');
-    const failedPlain = renderLayout({ run: failed, objectiveInput: '', coreMode: 'failure', nowMs: 0 }, 100, 24)
-      .map((line) => stripAnsi(line))
-      .join('\n');
-
-    expect(successPlain).toContain('Ready');
-    expect(blockedPlain).toContain('Blocked');
-    expect(failedPlain).toContain('Error');
-    // No synthetic final summary block rendered.
-    expect(successPlain).not.toContain('final      completed');
-    expect(blockedPlain).not.toContain('final      blocked');
-    expect(failedPlain).not.toContain('final      failed');
-  });
-
-  it('matches the blocked budget-exhausted render snapshot', () => {
-    const run = {
-      ...createInitialRunStateSnapshot(0),
-      phase: 'budget_exhausted' as const,
-      terminal: 'blocked' as const,
-      terminalIssue: 'max steps exceeded: 32',
-      statusNote: 'blocked: 32/32 model steps, 10 tool calls',
-    };
-
-    expect(
-      snapshotText(
-        renderLayout(
-          {
-            run,
-            objectiveInput: '',
-            coreMode: 'blocked',
-            nowMs: 2000,
-          },
-          120,
-          32,
-        ),
-      ),
-    ).toMatchSnapshot();
-  });
-
-  it('matches the narrow terminal fallback snapshot', () => {
-    const run = {
-      ...createInitialRunStateSnapshot(0),
-      phase: 'thinking' as const,
-      debugHistory: [
-        { atMs: 1, kind: 'model' as const, summary: 'model response', detail: 'Inspecting files before editing.' },
-      ],
-    };
-
-    expect(
-      snapshotText(
-        renderLayout(
-          {
-            run,
-            objectiveInput: 'short task',
-            coreMode: 'thinking',
-            nowMs: 2000,
-          },
-          56,
-          18,
-        ),
-      ),
-    ).toMatchSnapshot();
-  });
-
-  it('wraps long model notes instead of clipping them with ellipses', () => {
-    const longInstruction =
-      'Read the configuration file, then update the provider model setting, then run typecheck and report the exact command result so the user can follow the instruction without guessing. TAIL_MARKER';
-    const run = {
-      ...createInitialRunStateSnapshot(0),
-      phase: 'thinking' as const,
-      debugHistory: [{ atMs: 1, kind: 'model' as const, summary: 'model response', detail: longInstruction }],
-    };
-
-    const plain = renderLayout(
-      {
-        run,
-        objectiveInput: '',
-        coreMode: 'thinking',
-        nowMs: 5000,
-      },
-      72,
-      24,
-    )
-      .map(stripAnsi)
-      .join('\n');
-
-    const noteLines = plain
-      .split('\n')
-      .filter(
-        (line) =>
-          (line.includes('Read the configuration') || line.includes('TAIL_MARKER')) && !line.includes('working'),
-      );
-
-    expect(noteLines.join('\n')).toContain('TAIL_MARKER');
-    // Model notes now use pink star glyph and bold 'note' label, but prose wraps without ellipsis truncation.
-    expect(noteLines.join('\n')).not.toContain('…');
-  });
-
-  it('uses the compact core on the empty idle surface at medium widths', () => {
-    const run = createInitialRunStateSnapshot(0);
-    const lines = renderLayout(
-      {
-        run,
-        objectiveInput: 'Refine TUI core alignment',
-        coreMode: 'idle',
-        nowMs: 1500,
-      },
-      80,
-      24,
-    );
-
-    expect(lines).toHaveLength(24);
-    for (const line of lines) {
-      expect(stripAnsi(line).length).toBe(80);
-    }
-    const plain = lines.map((line) => stripAnsi(line)).join('\n');
-    expect(plain).not.toContain('Field');
-    expect(plain).not.toContain('contained local intelligence runtime');
-    expect(plain).toMatch(/[.·●◎╱╲]/);
-  });
-
-  it('renders read, command, edit, verification, and final summary blocks as the main surface', () => {
-    const run = {
-      ...createInitialRunStateSnapshot(0),
-      runId: 'run-1',
-      phase: 'completed' as const,
-      providerLabel: 'qwen @ http://127.0.0.1:1234/v1',
-      objective: {
-        label: 'Improve TUI observability',
-        currentPhase: 'completed' as const,
-        nextCheckpoint: 'run finalized',
-      },
-      statusNote: 'completed: 3 model steps, 4 tool calls, 2 files changed',
-      lastModelOutput: 'Implemented the transcript layout and verified focused tests.',
-      changes: {
-        items: [
-          { path: 'src/tui/layout.ts', op: 'edit' as const },
-          { path: 'src/__tests__/interactive-tui.test.ts', op: 'edit' as const },
-        ],
-        overflowCount: 0,
-      },
-      filesChangedThisRun: ['src/tui/layout.ts', 'src/__tests__/interactive-tui.test.ts'],
-      workingTreeClean: true,
-      toolInvocationCount: 3,
-      verification: {
-        ...createInitialRunStateSnapshot(0).verification,
-        state: 'passed' as const,
-        checksPassed: 1,
-        summary: 'all tests passed (1.2s)',
-        currentCheckLabel: 'npm test src/__tests__/interactive-tui.test.ts',
-      },
-      patchPreview: {
-        path: 'src/tui/layout.ts',
-        diff: '@@ -1,2 +1,2 @@\n-old dashboard\n+new transcript',
-      },
-      debugHistory: [
-        {
-          atMs: 1,
-          kind: 'model' as const,
-          summary: 'Inspecting TUI runtime state and renderer boundaries.',
-          detail: '<thinking>hidden chain</thinking>Inspecting TUI runtime state and renderer boundaries.',
-        },
-        {
-          atMs: 2,
-          kind: 'tool_call' as const,
-          summary: 'read call',
-          detail: 'read\n{"path":"src/tui/layout.ts","startLine":1,"endLine":120}',
-        },
-        {
-          atMs: 3,
-          kind: 'tool_result' as const,
-          summary: 'read ok',
-          detail: 'export function renderLayout(...) { ... }',
-        },
-        {
-          atMs: 4,
-          kind: 'tool_call' as const,
-          summary: 'bash call',
-          detail: 'bash\n{"command":"npm test src/__tests__/interactive-tui.test.ts"}',
-        },
-        {
-          atMs: 5,
-          kind: 'tool_result' as const,
-          summary: 'bash ok',
-          detail: 'exit code: 0\nduration: 1.2s\nPASS src/__tests__/interactive-tui.test.ts',
-        },
-        {
-          atMs: 6,
-          kind: 'tool_call' as const,
-          summary: 'edit call',
-          detail: 'edit\n{"path":"src/tui/layout.ts"}',
-        },
-      ],
-    };
-    const lines = renderLayout(
-      {
-        run,
-        objectiveInput: '',
-        coreMode: 'completed',
-        nowMs: 2000,
-      },
-      120,
-      46,
-    );
-    const plain = lines.map((line) => stripAnsi(line)).join('\n');
-
-    expect(plain).not.toContain('model qwen');
-    expect(plain).not.toContain('tools 3');
-    expect(plain).not.toContain('files 2');
-    expect(plain).toContain('hidden chain');
-    expect(plain).toContain('read, bash');
-    expect(plain).toContain('read src/tui/layout.ts');
-    expect(plain).toContain('npm test src/__tests__/interactive-tui.test.ts');
-    expect(plain).toContain('edit       src/tui/layout.ts');
-    expect(plain).toContain('-old dashboard');
-    expect(plain).toContain('+new transcript');
-    // Final summary block is not rendered; completion is in the header and runtime panel.
-    expect(plain).not.toContain('final      completed');
-    expect(plain).not.toContain('objective  Improve TUI observability');
-    expect(plain).not.toContain('changed    2 files');
-    expect(plain).not.toContain('tools      3 calls');
-    expect(plain).not.toContain('commands   npm test src/__tests__/interactive-tui.test.ts');
-  });
-
-  it('strips terminal control sequences from command output before rendering', () => {
-    const run = {
-      ...createInitialRunStateSnapshot(0),
-      phase: 'tool_execution' as const,
-      debugHistory: [
-        {
-          atMs: 1,
-          kind: 'tool_call' as const,
-          summary: 'bash call',
-          detail: 'bash\n{"command":"clear"}',
-        },
-        {
-          atMs: 2,
-          kind: 'tool_result' as const,
-          summary: 'bash ok',
-          detail: 'exit code: 0\nstdout:\n\u001b[H\u001b[2J\u001b[3J',
-        },
-      ],
-    };
-
-    const rendered = renderLayout({ run, objectiveInput: '', coreMode: 'bash', nowMs: 2000 }, 100, 24).join('\n');
-
-    expect(rendered).not.toContain('\u001b[H');
-    expect(rendered).not.toContain('\u001b[2J');
-    expect(rendered).not.toContain('\u001b[3J');
-  });
-
-  it('renders failed command output and blocker in the transcript summary', () => {
-    const run = {
-      ...createInitialRunStateSnapshot(0),
-      phase: 'verifying' as const,
-      terminal: 'failed' as const,
-      terminalIssue: 'verification failed: Jest assertion failed',
-      riskLine: 'verification failed: Jest assertion failed',
-      objective: {
-        label: 'Fix TUI transcript',
-        currentPhase: 'verifying' as const,
-        nextCheckpoint: 'inspect terminal issue',
-      },
-      verification: {
-        ...createInitialRunStateSnapshot(0).verification,
-        state: 'failed' as const,
-        checksFailed: 1,
-        summary: 'Expected transcript to contain read block',
-        currentCheckLabel: 'npm test',
-      },
-      debugHistory: [
-        {
-          atMs: 1,
-          kind: 'tool_call' as const,
-          summary: 'bash call',
-          detail: 'bash\n{"command":"npm test"}',
-        },
-        {
-          atMs: 2,
-          kind: 'tool_result' as const,
-          summary: 'bash error',
-          detail:
-            'exit code: 1\nduration: 4.4s\nFAIL src/__tests__/interactive-tui.test.ts\nExpected transcript to contain read block',
-        },
-      ],
-    };
-    const plain = renderLayout(
-      {
-        run,
-        objectiveInput: '',
-        coreMode: 'failure',
-        nowMs: 5000,
-      },
-      100,
-      30,
-    )
-      .map((line) => stripAnsi(line))
-      .join('\n');
-
-    expect(plain).toContain('FAIL src/__tests__/interactive-tui.test.ts');
-    // Verification state and blocker are in the runtime panel, not a synthetic final-summary block.
-    expect(plain).not.toContain('verify     failed');
-    expect(plain).not.toContain('blocker    verification failed: Jest assertion failed');
-  });
-
-  it('preserves git diff ANSI colors in command output', () => {
-    const run = {
-      ...createInitialRunStateSnapshot(0),
-      debugHistory: [
-        {
-          atMs: 1,
-          kind: 'tool_call' as const,
-          summary: 'bash call',
-          detail: 'bash\n{"command":"git diff src/tui/transcript.ts"}',
-        },
-        {
-          atMs: 2,
-          kind: 'tool_result' as const,
-          summary: 'bash ok',
-          detail:
-            'exit code: 1\n\u001b[1mdiff --git a/src/tui/transcript.ts b/src/tui/transcript.ts\u001b[0m\n\u001b[31m-old line\u001b[0m\n\u001b[32m+new line\u001b[0m',
-        },
-      ],
-    };
-
-    const rendered = renderLayout(
-      {
-        run,
-        objectiveInput: '',
-        coreMode: 'thinking',
-        nowMs: 2000,
-      },
-      100,
-      30,
-    ).join('\n');
-
-    expect(rendered).toContain('\u001b[31m-old line\u001b[0m');
-    expect(rendered).toContain('\u001b[32m+new line\u001b[0m');
-  });
-
-  it('adds ANSI colors to plain git diff command output', () => {
-    const run = {
-      ...createInitialRunStateSnapshot(0),
-      debugHistory: [
-        {
-          atMs: 1,
-          kind: 'tool_call' as const,
-          summary: 'bash call',
-          detail: 'bash\n{"command":"git diff -- src/tui/transcript.ts | head -60"}',
-        },
-        {
-          atMs: 2,
-          kind: 'tool_result' as const,
-          summary: 'bash changed',
-          detail:
-            'exit code: 0\ndiff --git a/src/tui/transcript.ts b/src/tui/transcript.ts\n@@ -1,2 +1,2 @@\n-old line\n+new line',
-        },
-      ],
-    };
-
-    const rendered = renderLayout(
-      {
-        run,
-        objectiveInput: '',
-        coreMode: 'thinking',
-        nowMs: 2000,
-      },
-      100,
-      30,
-    ).join('\n');
-
-    expect(rendered).toContain('\u001b[1;37mdiff --git a/src/tui/transcript.ts b/src/tui/transcript.ts\u001b[0m');
-    expect(rendered).toContain('\u001b[36m@@ -1,2 +1,2 @@\u001b[0m');
-    expect(rendered).toContain('\u001b[31m-old line\u001b[0m');
-    expect(rendered).toContain('\u001b[32m+new line\u001b[0m');
-  });
-
-  it('does not color command exit codes red in the transcript', () => {
-    const run = {
-      ...createInitialRunStateSnapshot(0),
-      debugHistory: [
-        {
-          atMs: 1,
-          kind: 'tool_call' as const,
-          summary: 'bash call',
-          detail: 'bash\n{"command":"git diff --quiet"}',
-        },
-        {
-          atMs: 2,
-          kind: 'tool_result' as const,
-          summary: 'bash changed',
-          detail: 'exit code: 1\nworking tree differs',
-        },
-      ],
-    };
-
-    const rendered = renderLayout(
-      {
-        run,
-        objectiveInput: '',
-        coreMode: 'thinking',
-        nowMs: 2000,
-      },
-      100,
-      30,
-    ).join('\n');
-
-    expect(rendered).toContain('exit 1');
-    expect(rendered).not.toContain('\u001b[1;31mexit 1\u001b[0m');
-  });
-
-  it('parses camelCase command exit codes as successful results', () => {
-    const run = {
-      ...createInitialRunStateSnapshot(0),
-      phase: 'completed' as const,
-      terminal: 'completed' as const,
-      debugHistory: [
-        {
-          atMs: 1,
-          kind: 'tool_call' as const,
-          summary: 'bash call',
-          detail: 'bash\n{"command":"npm test"}',
-        },
-        {
-          atMs: 2,
-          kind: 'tool_result' as const,
-          summary: 'bash ok',
-          detail: 'stdout:\nPASS src/__tests__/interactive-tui.test.ts\nexitCode: 0',
-        },
-      ],
-    };
-    const plain = renderLayout(
-      {
-        run,
-        objectiveInput: '',
-        coreMode: 'completed',
-        nowMs: 5000,
-      },
-      100,
-      30,
-    )
-      .map((line) => stripAnsi(line))
-      .join('\n');
-
-    // Successful exit 0 is suppressed from command display.
-    expect(plain).toContain('npm test');
-    expect(plain).not.toContain('exit 0');
-    expect(plain).not.toContain('exit 1');
-  });
-
-  it('switches to compact core mode after the first run event and hides it on small terminals', () => {
-    const run = {
-      ...createInitialRunStateSnapshot(0),
-      phase: 'thinking' as const,
-      debugHistory: [
-        { atMs: 1, kind: 'model' as const, summary: 'model response', detail: 'Inspecting files before editing.' },
-      ],
-    };
-
-    const mediumPlain = renderLayout(
-      {
-        run,
-        objectiveInput: '',
-        coreMode: 'thinking',
-        nowMs: 2000,
-      },
-      92,
-      24,
-    )
-      .map((line) => stripAnsi(line))
-      .join('\n');
-    const smallPlain = renderLayout(
-      {
-        run,
-        objectiveInput: '',
-        coreMode: 'thinking',
-        nowMs: 2000,
-      },
-      56,
-      18,
-    )
-      .map((line) => stripAnsi(line))
-      .join('\n');
-
-    expect(mediumPlain).toContain('Inspecting files before editing.');
-    expect(smallPlain).toContain('Synax');
-    expect(smallPlain).toContain('Inspecting files before editing.');
-  });
-
-  it('renders a closed input dock with cwd and branch instead of model id', () => {
-    const run = createInitialRunStateSnapshot(0);
-    run.lastModelOutput = 'The renderer now keeps the prompt inside a proper box.';
-    const lines = renderLayout(
-      {
-        run,
-        objectiveInput: 'Implement fixed-footprint reactor core rendering',
-        coreMode: 'thinking',
-        nowMs: 2000,
-        lastModelOutput: 'raw parser chatter should stay out of default TUI',
-        modelLabel: 'Qwen3.6-35B-A3B-UD-IQ3_XXS.gguf',
-        cwdLabel: '~/workspace/git/.worktrees/synax-tui',
-        gitBranch: 'dev/tui',
-      },
-      90,
-      28,
-    );
-    const plain = lines.map((line) => stripAnsi(line)).join('\n');
-    const dock = lines.slice(-4).map(stripAnsi);
-
-    expect(plain).not.toContain('Directive');
-    expect(plain).toContain('The renderer now keeps the prompt inside a proper box.');
-    // Flat dock: blank, hr line, prompt line, continuation, no box borders or metadata
-    expect(dock[0].trim()).toBe('');
-    expect(dock[1].trimStart().startsWith('─')).toBe(true);
-    expect(dock[2].trimStart().startsWith('>')).toBe(true);
-  });
-
-  it('keeps the input dock inside the terminal write-safe column', () => {
-    const lines = renderLayout(
-      {
-        run: createInitialRunStateSnapshot(0),
-        objectiveInput: 'Inspect the prompt border',
-        coreMode: 'idle',
-        nowMs: 2000,
-        cwdLabel: '~/workspace/git/.worktrees/synax-tui',
-        gitBranch: 'dev/tui',
-      },
-      90,
-      24,
-    ).map(stripAnsi);
-    const dock = lines.slice(-4);
-
-    expect(lines).toHaveLength(24);
-    expect(lines.every((line) => line.length === 90)).toBe(true);
-    // Flat dock: blank line, hr line, prompt line, continuation line
-    expect(dock[1].trimStart().startsWith('─')).toBe(true);
-    expect(dock[2].trimStart().startsWith('>')).toBe(true);
-    expect(dock.every((line) => line.length === 90)).toBe(true);
-  });
-
-  it('reserves a blank gutter between long transcript output and the input dock', () => {
-    const run = {
-      ...createInitialRunStateSnapshot(0),
-      phase: 'completed' as const,
-      debugHistory: Array.from({ length: 32 }, (_, index) => ({
-        atMs: index,
-        kind: 'model' as const,
-        summary: `model event ${index}`,
-        detail: `model event ${index}`,
-      })),
-    };
-    const lines = renderLayout(
-      {
-        run,
-        objectiveInput: '',
-        coreMode: 'completed',
-        nowMs: 2000,
-        historyScrollOffset: 0,
-      },
-      90,
-      24,
-    ).map(stripAnsi);
-
-    expect(lines.at(-4)?.trim()).toBe('');
-    expect(lines.at(-2)?.trimStart().startsWith('─')).toBe(true);
-    // Empty input now shows a placeholder instead of blank line.
-    expect(lines.at(-1)).toContain('Ask Synax');
-  });
-
-  it('renders unloaded core as inert and still', () => {
-    const first = renderDottedCore({ mode: 'unloaded', frame: 1, width: 20, height: 7 });
-    const second = renderDottedCore({ mode: 'unloaded', frame: 20, width: 20, height: 7 });
-
-    expect(first.map(stripAnsi)).toEqual(second.map(stripAnsi));
-    expect(first.join('')).not.toContain('\u001b[38;2;');
-  });
-
-  it('renders core telemetry as a structured module panel', () => {
-    const run = {
-      ...createInitialRunStateSnapshot(0),
-      phase: 'completed' as const,
-      providerLabel: 'Qwen3.6-35B-A3B-UD-IQ3_XXS.gguf @ http://127.0.0.1:1234/v1',
-      providerName: 'llama.cpp',
-      modelId: 'Qwen3.6-35B-A3B-UD-IQ3_XXS.gguf',
-      coreLoaded: true,
-      contextUsedTokens: 8192,
-      contextWindowTokens: 131072,
-      thinkingEnabled: undefined,
-      sessionSpendLabel: undefined,
-      toolInvocationCount: 1,
-      statusNote: 'completed: 13 model steps, 1 tool call, 0 files changed',
-      debugHistory: [
-        {
-          atMs: 1,
-          kind: 'tool_call' as const,
-          summary: 'bash call',
-          detail: 'bash\n{"command":"git status --short"}',
-        },
-      ],
-    };
-
-    const plain = renderLayout(
-      {
-        run,
-        objectiveInput: '',
-        coreMode: 'completed',
-        nowMs: 2000,
-      },
-      120,
-      30,
-    )
-      .map((line) => stripAnsi(line))
-      .join('\n');
-
-    expect(plain).not.toContain('unknown');
-    expect(plain).not.toContain('Core loaded');
-    expect(plain).not.toContain('Session $');
-    expect(plain).not.toContain('tools used bash');
-  });
-
-  it('summarizes diff stat command output into semantic file change rows', () => {
-    const run = {
-      ...createInitialRunStateSnapshot(0),
-      debugHistory: [
-        {
-          atMs: 1,
-          kind: 'tool_call' as const,
-          summary: 'bash call',
-          detail: 'bash\n{"command":"git diff --stat"}',
-        },
-        {
-          atMs: 2,
-          kind: 'tool_result' as const,
-          summary: 'bash ok',
-          detail:
-            'exit code: 0\nsrc/__tests__/interactive-tui.test.ts | 46 +++++++++++++++++++++\nsrc/tui/layout.ts | 12 ++++++',
-        },
-      ],
-    };
-
-    const plain = renderLayout(
-      {
-        run,
-        objectiveInput: '',
-        coreMode: 'thinking',
-        nowMs: 2000,
-      },
-      100,
-      30,
-    )
-      .map((line) => stripAnsi(line))
-      .join('\n');
-
-    expect(plain).toContain('changed  src/__tests__/interactive-tui.test.ts  +46 lines');
-    expect(plain).not.toContain('+++++++++++++++++++++');
-  });
-
-  it('surfaces compact operational summaries with the latest model reply', () => {
-    const run = {
-      ...createInitialRunStateSnapshot(0),
-      phase: 'completed' as const,
-      statusNote: 'completed: 2 model steps, 1 tool call, 1 file changed',
-      lastModelOutput: 'Updated the TUI state and verified the focused tests.',
-    };
-    const lines = renderLayout(
-      {
-        run,
-        objectiveInput: '',
-        coreMode: 'completed',
-        nowMs: 2000,
-      },
-      100,
-      28,
-    );
-    const plain = lines.map((line) => stripAnsi(line)).join('\n');
-
-    expect(plain).toContain('Updated the TUI state and verified the focused tests.');
-  });
-
-  it('surfaces patch preview diffs from run state', () => {
-    const run = {
-      ...createInitialRunStateSnapshot(0),
-      patchPreview: {
-        path: 'src/tui/layout.ts',
-        diff: '--- src/tui/layout.ts\n+++ src/tui/layout.ts\n-old\n+new',
-      },
-    };
-    const lines = renderLayout(
-      {
-        run,
-        objectiveInput: '',
-        coreMode: 'thinking',
-        nowMs: 2000,
-      },
-      100,
-      32,
-    );
-    const plain = lines.map((line) => stripAnsi(line)).join('\n');
-
-    expect(plain).toContain('Diff preview: src/tui/layout.ts');
-    expect(plain).toContain('--- src/tui/layout.ts');
-    expect(plain).toContain('+++ src/tui/layout.ts');
-    expect(plain).toContain('-old');
-    expect(plain).toContain('+new');
-    expect(lines.join('\n')).toContain('\u001b[31m-old\u001b[0m');
-    expect(lines.join('\n')).toContain('\u001b[32m+new\u001b[0m');
-  });
-
-  it('renders edit tool result diffs with ANSI colors', () => {
-    const run = {
-      ...createInitialRunStateSnapshot(0),
-      debugHistory: [
-        {
-          atMs: 1,
-          kind: 'tool_call' as const,
-          summary: 'edit call',
-          detail: 'edit\n{"path":"src/tui/layout.ts","oldStr":"old","newStr":"new"}',
-        },
-        {
-          atMs: 2,
-          kind: 'tool_result' as const,
-          summary: 'edit ok',
-          detail: JSON.stringify(
-            {
-              success: true,
-              toolName: 'edit',
-              output: {
-                path: 'src/tui/layout.ts',
-                diff: '--- src/tui/layout.ts\n+++ src/tui/layout.ts\n-old\n+new',
-              },
-            },
-            null,
-            2,
-          ),
-        },
-      ],
-    };
-
-    const rendered = renderLayout(
-      {
-        run,
-        objectiveInput: '',
-        coreMode: 'thinking',
-        nowMs: 2000,
-      },
-      100,
-      32,
-    ).join('\n');
-
-    expect(rendered).toContain('\u001b[31m-old\u001b[0m');
-    expect(rendered).toContain('\u001b[32m+new\u001b[0m');
-  });
-
-  it('renders debug history as segmented transcript blocks', () => {
-    const run = {
-      ...createInitialRunStateSnapshot(0),
-      debugHistory: [
-        { atMs: 1, kind: 'model' as const, summary: 'model response', detail: 'I will check git status.' },
-        {
-          atMs: 2,
-          kind: 'tool_call' as const,
-          summary: 'bash call',
-          detail: 'bash\n{"command":"git status --short"}',
-        },
-        {
-          atMs: 3,
-          kind: 'tool_result' as const,
-          summary: 'bash ok',
-          detail: 'stdout:\n M src/tui/layout.ts',
-        },
-      ],
-    };
-    const lines = renderLayout(
-      {
-        run,
-        objectiveInput: '',
-        coreMode: 'thinking',
-        nowMs: 2000,
-        historyScrollOffset: 0,
-      },
-      100,
-      36,
-    );
-    const plain = lines.map((line) => stripAnsi(line)).join('\n');
-
-    expect(plain).not.toContain('Transcript');
-    expect(plain).toContain('I will check git status.');
-    expect(plain).toContain('$ git status --short');
-    // No exit code in tool result — suppressed from display.
-    expect(plain).not.toContain('exit 1');
-    expect(plain).toContain('M src/tui/layout.ts');
-  });
-
-  it('keeps completed run summaries above the next submitted prompt', () => {
-    let run = createInitialRunStateSnapshot(0);
-    run = applyEventToRunState(
-      run,
-      {
-        type: 'task_started',
-        timestamp: '2026-05-06T12:00:00.000Z',
-        mode: 'interactive',
-        profile: 'default',
-        endpoint: 'http://127.0.0.1:1234/v1',
-        model: 'local-model',
-        providerName: 'Relay',
-        contextBudgetTokens: 0,
-        maxModelSteps: 0,
-        maxToolCalls: 0,
-        tools: [],
-        task: 'first task',
-      },
-      1,
-    );
-    run = applyEventToRunState(
-      run,
-      {
-        type: 'assistant_message',
-        timestamp: '2026-05-06T12:00:01.000Z',
-        content: 'Finished the first task.',
-      },
-      2,
-    );
-    run = applyEventToRunState(
-      run,
-      {
-        type: 'task_finished',
-        timestamp: '2026-05-06T12:00:02.000Z',
-        status: 'completed',
-        toolCalls: 0,
-        maxToolCalls: 0,
-        modelSteps: 1,
-        maxModelSteps: 1,
-        changedFiles: [],
-        workingTreeClean: true,
-        verification: 'passed',
-      },
-      3,
-    );
-    run = applyEventToRunState(
-      run,
-      {
-        type: 'task_started',
-        timestamp: '2026-05-06T12:00:03.000Z',
-        mode: 'interactive',
-        profile: 'default',
-        endpoint: 'http://127.0.0.1:1234/v1',
-        model: 'local-model',
-        providerName: 'Relay',
-        contextBudgetTokens: 0,
-        maxModelSteps: 0,
-        maxToolCalls: 0,
-        tools: [],
-        task: 'second task should be visible',
-      },
-      4,
-    );
-
-    const plain = renderLayout(
-      {
-        run,
-        objectiveInput: '',
-        coreMode: 'thinking',
-        nowMs: 4000,
-        historyScrollOffset: 0,
-      },
-      100,
-      32,
-    )
-      .map((line) => stripAnsi(line))
-      .join('\n');
-
-    // No synthetic final summary block; the model review output appears for the
-    // completed run and the next user prompt follows.
-    const reviewIndex = plain.indexOf('Finished the first task.');
-    const nextPromptIndex = plain.indexOf('second task should be visible');
-
-    expect(run.terminal).toBe('running');
-    expect(reviewIndex).toBeGreaterThanOrEqual(0);
-    expect(nextPromptIndex).toBeGreaterThan(reviewIndex);
-    expect(plain.match(/final {6}completed/g) || []).toHaveLength(0);
-  });
-
-  it('renders wrapped user prompts with the prompt label only on the first line', () => {
-    let run = createInitialRunStateSnapshot(0);
-    run = applyEventToRunState(
-      run,
-      {
-        type: 'task_started',
-        timestamp: '2026-05-06T12:00:00.000Z',
-        mode: 'interactive',
-        profile: 'default',
-        endpoint: 'http://127.0.0.1:1234/v1',
-        model: 'local-model',
-        providerName: 'Relay',
-        contextBudgetTokens: 0,
-        maxModelSteps: 0,
-        maxToolCalls: 0,
-        tools: [],
-        task: 'can you please commit the unstaged work on the branch into an organized set of commits? one swath of work is for the documentation and another is for settings UI/TUI bug fixes.',
-      },
-      1,
-    );
-
-    const plain = renderLayout(
-      {
-        run,
-        objectiveInput: '',
-        coreMode: 'thinking',
-        nowMs: 2000,
-      },
-      100,
-      28,
-    )
-      .map((line) => stripAnsi(line))
-      .join('\n');
-
-    expect(plain).toContain('user prompt');
-    // The prompt text wraps cleanly within the box.
-    expect(plain).toContain('settings UI/TUI');
-    expect(plain).toContain('bug fixes.');
-  });
-
-  it('uses the compact core visual on the welcome screen at medium widths', () => {
-    const mediumPlain = renderLayout(
-      {
-        run: createInitialRunStateSnapshot(0),
-        objectiveInput: '',
-        coreMode: 'idle',
-        nowMs: 2000,
-      },
-      92,
-      24,
-    )
-      .map((line) => stripAnsi(line))
-      .join('\n');
-
-    expect(mediumPlain).toMatch(/[·●◎╱╲]/);
-  });
-
-  it('renders multi-line slash command output without 3-line cap', () => {
-    const run = {
-      ...createInitialRunStateSnapshot(0),
-      debugHistory: [
-        {
-          atMs: 1,
-          kind: 'command' as const,
-          summary: '/help',
-          detail: [
-            'Chat Commands',
-            '-------------',
-            '/help                      Show this help panel',
-            '/settings                  Show provider, agent, tool, and verification settings',
-            '/tools                     Show model-facing tools',
-            '/budget                    Show context and loop limits',
-            '/test-provider             Probe provider models and chat endpoints',
-          ].join('\n'),
-        },
-      ],
-    };
-    const plain = renderLayout(
-      {
-        run,
-        objectiveInput: '',
-        coreMode: 'idle',
-        nowMs: 2000,
-      },
-      100,
-      30,
-    )
-      .map((line) => stripAnsi(line))
-      .join('\n');
-
-    expect(plain).toContain('Show this help panel');
-    expect(plain).toContain('Show provider, agent, tool, and');
-    expect(plain).toContain('verification settings');
-    expect(plain).toContain('Show model-facing tools');
-    expect(plain).toContain('Show context and loop limits');
-    expect(plain).toContain('Probe provider models and chat endpoints');
-  });
-
-  it('truncates long paths and commands without wrapping artifacts', () => {
-    const longPath =
-      'src/components/surfaces/very/deeply/nested/local-model-runtime-feed-event-renderer-with-extra-detail.tsx';
-    const longCommand =
-      'npm test -- src/__tests__/interactive-tui.test.ts --runInBand --verbose --detectOpenHandles --testNamePattern "renders a compact semantic operational feed"';
-    const run = {
-      ...createInitialRunStateSnapshot(0),
-      debugHistory: [
-        {
-          atMs: 1,
-          kind: 'tool_call' as const,
-          summary: 'read call',
-          detail: `read\n{"path":"${longPath}","startLine":1,"endLine":240}`,
-        },
-        { atMs: 2, kind: 'tool_result' as const, summary: 'read ok', detail: 'ok' },
-        {
-          atMs: 3,
-          kind: 'tool_call' as const,
-          summary: 'bash call',
-          detail: `bash\n{"command":"${longCommand.replace(/"/g, '\\"')}"}`,
-        },
-        { atMs: 4, kind: 'tool_result' as const, summary: 'bash ok', detail: 'exit code: 0\nPASS' },
-      ],
-    };
-    const lines = renderLayout(
-      {
-        run,
-        objectiveInput: '',
-        coreMode: 'thinking',
-        nowMs: 2000,
-      },
-      82,
-      30,
-    ).map(stripAnsi);
-    const plain = lines.join('\n');
-
-    expect(plain).toContain('read       src/components/surfaces');
-    expect(plain).toContain('…');
-    expect(plain).toContain('$ npm test');
-    expect(lines.every((line) => line.length === 82)).toBe(true);
-  });
-
-  it('renders blocked budget exhaustion with current step budget when available', () => {
-    const run = {
-      ...createInitialRunStateSnapshot(0),
-      phase: 'budget_exhausted' as const,
-      terminal: 'blocked' as const,
-      terminalIssue: 'max steps exceeded: 32',
-      objective: {
-        label: 'read project files',
-        currentPhase: 'budget_exhausted' as const,
-        nextCheckpoint: 'context budget exhausted',
-      },
-      statusNote: 'blocked: 32/32 model steps, 10 tool calls',
-    };
-    const plain = renderLayout(
-      {
-        run,
-        objectiveInput: '',
-        coreMode: 'blocked',
-        nowMs: 2000,
-      },
-      120,
-      30,
-    )
-      .map(stripAnsi)
-      .join('\n');
-
-    expect(plain).toContain('Budget exhausted');
-    // Final summary block is not rendered; budget-exhausted state is in header.
-    expect(plain).not.toContain('final      blocked');
-    expect(plain).not.toContain('blocker    max steps exceeded: 32');
-  });
-
-  it('clamps transcript scroll offsets at the oldest and newest entries', () => {
-    const run = {
-      ...createInitialRunStateSnapshot(0),
-      phase: 'thinking' as const,
-      debugHistory: Array.from({ length: 16 }, (_, index) => ({
-        atMs: index,
-        kind: 'model' as const,
-        summary: `model event ${index}`,
-        detail: `model event ${index}`,
-      })),
-    };
-
-    const oldestPlain = renderLayout(
-      {
-        run,
-        objectiveInput: '',
-        coreMode: 'thinking',
-        nowMs: 2000,
-        historyScrollOffset: 999,
-      },
-      90,
-      24,
-    )
-      .map((line) => stripAnsi(line))
-      .join('\n');
-    const newestPlain = renderLayout(
-      {
-        run,
-        objectiveInput: '',
-        coreMode: 'thinking',
-        nowMs: 2000,
-        historyScrollOffset: -999,
-      },
-      90,
-      24,
-    )
-      .map((line) => stripAnsi(line))
-      .join('\n');
-
-    expect(oldestPlain).toContain('model event 0');
-    expect(oldestPlain).toContain('model event 4');
-    expect(oldestPlain).not.toContain('model event 15');
-    expect(newestPlain).toContain('model event 15');
-    expect(newestPlain).not.toContain('model event 0');
-    expect(
-      maxHistoryScrollOffset(
-        {
-          run,
-          objectiveInput: '',
-          coreMode: 'thinking',
-          nowMs: 2000,
-        },
-        90,
-        24,
-      ),
-    ).toBeGreaterThanOrEqual(0);
-  });
-
-  it('allows scrolling through a single long completed transcript entry', () => {
-    const longFinalAnswer = Array.from(
-      { length: 80 },
-      (_, index) => `completed transcript paragraph ${index} with enough prose to wrap in the terminal viewport`,
-    ).join('\n');
-    const run = {
-      ...createInitialRunStateSnapshot(0),
-      phase: 'completed' as const,
-      terminal: 'completed' as const,
-      debugHistory: [
-        {
-          atMs: 1,
-          kind: 'model' as const,
-          summary: 'final answer',
-          detail: longFinalAnswer,
-        },
-      ],
-    };
-
-    const maxOffset = maxHistoryScrollOffset(
-      {
-        run,
-        objectiveInput: '',
-        coreMode: 'completed',
-        nowMs: 2000,
-      },
-      90,
-      24,
-    );
-
-    expect(maxOffset).toBeGreaterThan(40);
-  });
-});
-
 describe('artifact-first tui event model', () => {
   it('classifies task, tool, patch, and completion events as semantic artifacts', () => {
     let state = createInitialRunStateSnapshot(0);
@@ -2354,7 +1028,7 @@ describe('artifact-first tui event model', () => {
 });
 
 describe('orchestration semantic events', () => {
-  it('classifyAgentEvent with orchestration_plan_generated returns dispatch event', () => {
+  it('classifyAgentEvent with orchestration_plan_generated returns empty (card removed)', () => {
     const state = createInitialRunStateSnapshot(0);
     const event = {
       type: 'orchestration_plan_generated' as const,
@@ -2391,17 +1065,7 @@ describe('orchestration semantic events', () => {
       },
     };
     const result = classifyAgentEvent(event, state, 1);
-    expect(result).toHaveLength(1);
-    expect(result[0].class).toBe('dispatch');
-    expect(result[0].artifact).toEqual(
-      expect.objectContaining({
-        type: 'text',
-        title: expect.stringContaining('2 agents · parallel'),
-      }),
-    );
-    if (result[0].artifact.type === 'text') {
-      expect(result[0].artifact.body).toContain('Fix all lint errors');
-    }
+    expect(result).toHaveLength(0);
   });
 
   it('classifyAgentEvent with inline plan returns empty', () => {
@@ -2519,10 +1183,6 @@ function stripAnsi(input: string): string {
   return input.replace(/\u001b\[[0-9;]*m/g, '');
 }
 
-function snapshotText(lines: string[]): string {
-  return lines.map((line) => stripAnsi(line).trimEnd()).join('\n');
-}
-
 function extractTrueColors(input: string): Array<{ r: number; g: number; b: number }> {
   // eslint-disable-next-line no-control-regex
   return Array.from(input.matchAll(/\u001b\[38;2;(\d+);(\d+);(\d+)m/g), ([, r, g, b]) => ({
@@ -2537,15 +1197,14 @@ function isWarningAmber(color: { r: number; g: number; b: number }): boolean {
 }
 
 describe('dispatch card conciseness', () => {
-  it('truncates long mission text', () => {
+  it('orchestration_plan_generated returns no visible card', () => {
     const state = createInitialRunStateSnapshot(0);
-    const longMission = 'A'.repeat(500);
     const event: Parameters<typeof classifyAgentEvent>[0] = {
       type: 'orchestration_plan_generated' as const,
       timestamp: new Date(0).toISOString(),
       payload: {
         sessionId: 'session-1',
-        task: longMission,
+        task: 'Any mission text',
         plan: {
           planId: 'plan-1',
           strategy: 'orchestrate' as const,
@@ -2566,180 +1225,61 @@ describe('dispatch card conciseness', () => {
       },
     };
     const result = classifyAgentEvent(event, state, 1);
+    // Orchestration plan cards are removed — only dispatch_started creates the header.
+    expect(result).toHaveLength(0);
+  });
+
+  it('dispatch_started returns compact card with no mission or task descriptions', () => {
+    const state = createInitialRunStateSnapshot(0);
+    const event: Parameters<typeof classifyAgentEvent>[0] = {
+      type: 'dispatch_started' as const,
+      timestamp: new Date(0).toISOString(),
+      strategy: 'orchestrate',
+      agentCount: 2,
+      mode: 'parallel',
+    };
+    const result = classifyAgentEvent(event, state, 1);
     expect(result).toHaveLength(1);
+    expect(result[0].class).toBe('dispatch');
+    expect(result[0].artifact.type).toBe('text');
     if (result[0].artifact.type === 'text') {
-      expect(result[0].artifact.body).toContain('Mission:');
-      expect(result[0].artifact.body).toContain('…');
-      expect(result[0].artifact.body).not.toContain('A'.repeat(300));
+      expect(result[0].artifact.title).toBe('Dispatch · 2 agents · parallel');
+      // Body should be empty — no mission, no task descriptions
+      expect(result[0].artifact.body).toBe('');
     }
   });
 
-  it('truncates long sub-task descriptions', () => {
+  it('dispatch_started returns compact card for sequential mode', () => {
     const state = createInitialRunStateSnapshot(0);
-    const longDesc = 'X'.repeat(500);
     const event: Parameters<typeof classifyAgentEvent>[0] = {
-      type: 'orchestration_plan_generated' as const,
+      type: 'dispatch_started' as const,
       timestamp: new Date(0).toISOString(),
-      payload: {
-        sessionId: 'session-1',
-        task: 'Short mission',
-        plan: {
-          planId: 'plan-1',
-          strategy: 'orchestrate' as const,
-          subTasks: [
-            {
-              id: 'agent-1',
-              description: longDesc,
-              estimatedBudget: 1000,
-              fileScope: ['src/a.ts'],
-              dependencies: [],
-              verification: { level: 'none' as const, label: 'none' },
-            },
-          ],
-          estimatedTotalTokens: 1000,
-          repoMetadata: { fileCount: 5, totalKB: 50, sourceKB: 40 },
-          contextWindowTokens: 131072,
-        },
-      },
+      strategy: 'orchestrate',
+      agentCount: 3,
+      mode: 'sequential',
     };
     const result = classifyAgentEvent(event, state, 1);
     expect(result).toHaveLength(1);
     if (result[0].artifact.type === 'text') {
-      expect(result[0].artifact.body).toContain('agent-1:');
-      expect(result[0].artifact.body).toContain('…');
-      expect(result[0].artifact.body).not.toContain('X'.repeat(200));
+      expect(result[0].artifact.title).toBe('Sequential plan · 3 steps');
+      expect(result[0].artifact.body).toBe('');
     }
   });
 
-  it('limits sub-task lines and shows overflow indicator', () => {
+  it('dispatch_started with 1 agent normalizes to delegated', () => {
     const state = createInitialRunStateSnapshot(0);
-    const subTasks = Array.from({ length: 10 }, (_, i) => ({
-      id: `agent-${i + 1}`,
-      description: `Sub-task ${i + 1}`,
-      estimatedBudget: 1000,
-      fileScope: ['src/a.ts'],
-      dependencies: [],
-      verification: { level: 'none' as const, label: 'none' },
-    }));
     const event: Parameters<typeof classifyAgentEvent>[0] = {
-      type: 'orchestration_plan_generated' as const,
+      type: 'dispatch_started' as const,
       timestamp: new Date(0).toISOString(),
-      payload: {
-        sessionId: 'session-1',
-        task: 'Many sub-tasks',
-        plan: {
-          planId: 'plan-1',
-          strategy: 'orchestrate' as const,
-          subTasks,
-          estimatedTotalTokens: 10000,
-          repoMetadata: { fileCount: 20, totalKB: 200, sourceKB: 150 },
-          contextWindowTokens: 131072,
-        },
-      },
+      strategy: 'orchestrate',
+      agentCount: 1,
+      mode: 'parallel',
     };
     const result = classifyAgentEvent(event, state, 1);
     expect(result).toHaveLength(1);
     if (result[0].artifact.type === 'text') {
-      expect(result[0].artifact.body).toContain('agent-1');
-      expect(result[0].artifact.body).toContain('agent-6');
-      expect(result[0].artifact.body).not.toContain('agent-7');
-      expect(result[0].artifact.body).toContain('4 more');
-    }
-  });
-
-  it('shows sub-task count and mode in title', () => {
-    const state = createInitialRunStateSnapshot(0);
-    const event: Parameters<typeof classifyAgentEvent>[0] = {
-      type: 'orchestration_plan_generated' as const,
-      timestamp: new Date(0).toISOString(),
-      payload: {
-        sessionId: 'session-1',
-        task: 'test',
-        plan: {
-          planId: 'plan-1',
-          strategy: 'orchestrate' as const,
-          subTasks: [
-            {
-              id: 'a1',
-              description: 'd1',
-              estimatedBudget: 500,
-              fileScope: [],
-              dependencies: [],
-              verification: { level: 'none' as const, label: 'none' },
-            },
-            {
-              id: 'a2',
-              description: 'd2',
-              estimatedBudget: 500,
-              fileScope: [],
-              dependencies: [],
-              verification: { level: 'none' as const, label: 'none' },
-            },
-            {
-              id: 'a3',
-              description: 'd3',
-              estimatedBudget: 500,
-              fileScope: [],
-              dependencies: [],
-              verification: { level: 'none' as const, label: 'none' },
-            },
-          ],
-          estimatedTotalTokens: 1500,
-          repoMetadata: { fileCount: 5, totalKB: 50, sourceKB: 40 },
-          contextWindowTokens: 131072,
-        },
-      },
-    };
-    const result = classifyAgentEvent(event, state, 1);
-    expect(result).toHaveLength(1);
-    if (result[0].artifact.type === 'text') {
-      expect(result[0].artifact.title).toBe('Dispatch · 3 agents · parallel');
-    }
-  });
-
-  it('shows "Sequential plan" title when orchestrationMode is sequential', () => {
-    const state = createInitialRunStateSnapshot(0);
-    const event: Parameters<typeof classifyAgentEvent>[0] = {
-      type: 'orchestration_plan_generated' as const,
-      timestamp: new Date(0).toISOString(),
-      payload: {
-        sessionId: 'session-1',
-        task: 'do steps in order',
-        plan: {
-          planId: 'plan-1',
-          strategy: 'orchestrate' as const,
-          subTasks: [
-            {
-              id: 'step1',
-              description: 'first step',
-              estimatedBudget: 500,
-              fileScope: [],
-              dependencies: [],
-              verification: { level: 'none' as const, label: 'none' },
-            },
-            {
-              id: 'step2',
-              description: 'second step',
-              estimatedBudget: 500,
-              fileScope: [],
-              dependencies: [],
-              verification: { level: 'none' as const, label: 'none' },
-            },
-          ],
-          estimatedTotalTokens: 1000,
-          repoMetadata: { fileCount: 5, totalKB: 50, sourceKB: 40 },
-          contextWindowTokens: 131072,
-        },
-        orchestrationMode: 'sequential',
-      },
-    };
-    const result = classifyAgentEvent(event, state, 1);
-    expect(result).toHaveLength(1);
-    if (result[0].artifact.type === 'text') {
-      expect(result[0].artifact.title).toBe('Sequential plan · 2 steps');
-      expect(result[0].artifact.body).toContain('step1:');
-      expect(result[0].artifact.body).toContain('step2:');
-      expect(result[0].artifact.body).not.toContain('agents');
+      expect(result[0].artifact.title).toBe('Delegated · 1 agent');
+      expect(result[0].artifact.body).toBe('');
     }
   });
 });

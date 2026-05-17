@@ -193,11 +193,11 @@ function parseSuccessResponse(bodyText: string, parserMode: ToolCallParserMode):
     source: 'openai' | 'content' | 'none';
     calls: import('./tool-calls').ParsedToolCall[];
   };
+  const parserId = resolveParserId(parserMode);
   if (standardToolCallResult.calls.length > 0) {
     fallbackToolCallResult = { ok: true, source: 'none', calls: [] };
   } else {
     // Resolve parser mode to a parser ID and use the registry
-    const parserId = resolveParserId(parserMode);
     const parserResult = toolCallParserRegistry.parse(parserId, content);
     if (parserResult.ok) {
       fallbackToolCallResult = {
@@ -212,6 +212,31 @@ function parseSuccessResponse(bodyText: string, parserMode: ToolCallParserMode):
         fallbackToolCallResult = repairedResult;
       } else {
         throw modelToolCallParseError(parserResult.error ?? 'content parser failed');
+      }
+    }
+  }
+
+  // Step 3: If no tool calls found in content, check reasoningContent.
+  // Some inference engines route tool-call XML (emitted after </think>) to
+  // the reasoning_content field rather than the content field.
+  if (fallbackToolCallResult.calls.length === 0 && reasoningContent && /<tool_call>/i.test(reasoningContent)) {
+    const { content: cleaned } = sanitizeReasoning(reasoningContent);
+    if (cleaned) {
+      let rcResult = toolCallParserRegistry.parse(parserId, cleaned);
+      // If the configured parser doesn't understand Qwen3 XML (e.g. generic),
+      // try the qwen3_xml parser as a fallback.
+      if ((!rcResult.ok || rcResult.calls.length === 0) && parserId !== 'qwen3_xml') {
+        const xmlResult = toolCallParserRegistry.parse('qwen3_xml', cleaned);
+        if (xmlResult.ok && xmlResult.calls.length > 0) {
+          rcResult = xmlResult;
+        }
+      }
+      if (rcResult.ok && rcResult.calls.length > 0) {
+        fallbackToolCallResult = {
+          ok: true,
+          source: 'content',
+          calls: rcResult.calls,
+        };
       }
     }
   }
@@ -501,6 +526,14 @@ function tryRepairAndParse(content: string, parserId: string): RepairParseSucces
     const result = toolCallParserRegistry.parse(parserId, xmlRepaired.repaired);
     if (result.ok && result.calls.length > 0) {
       return { ok: true, source: 'content', calls: result.calls };
+    }
+    // If the configured parser can't handle the XML format (e.g. generic parser
+    // on Qwen3 XML), try the qwen3_xml parser as fallback.
+    if (parserId !== 'qwen3_xml') {
+      const xmlResult = toolCallParserRegistry.parse('qwen3_xml', xmlRepaired.repaired);
+      if (xmlResult.ok && xmlResult.calls.length > 0) {
+        return { ok: true, source: 'content', calls: xmlResult.calls };
+      }
     }
   }
 
