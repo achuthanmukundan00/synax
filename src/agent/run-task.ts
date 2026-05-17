@@ -267,6 +267,9 @@ export async function runAgentTask(options: RunTaskOptions): Promise<RunTaskRepo
     });
 
     session = agentSession.session;
+    // Dual routing: the factory's wrappedOnEvent calls both options.onEvent
+    // (for TUI / CLI forwarding) and components.eventStore (for EventStore
+    // persistence) — this is intentional, not a double emission.
     wrappedOnEvent = agentSession.wrappedOnEvent;
   }
 
@@ -745,20 +748,20 @@ export async function runAgentTask(options: RunTaskOptions): Promise<RunTaskRepo
     } catch {
       // Best-effort
     }
-  }
 
-  // Write run log artifact (always written unless caller explicitly opts out via recordRunArtifacts: false)
-  if (options.recordRunArtifacts !== false) {
-    await writeRunLog(options.repoRoot, {
-      task: options.task,
-      mode,
-      terminalState,
-      changedFiles: filesChanged,
-      filesRead,
-      checkpointId: checkpointRecord?.id,
-      verification: verification.state,
-      error: turn.error,
-    });
+    // Write run log artifact (skipped when caller explicitly opts out via recordRunArtifacts: false)
+    if (options.recordRunArtifacts !== false) {
+      await writeRunLog(options.repoRoot, {
+        task: options.task,
+        mode,
+        terminalState,
+        changedFiles: filesChanged,
+        filesRead,
+        checkpointId: checkpointRecord?.id,
+        verification: verification.state,
+        error: turn.error,
+      });
+    }
   }
 
   return {
