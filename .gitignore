@@ -24,3 +24,9 @@ worlds/*/sources/*
 !worlds/*/self.md
 !worlds/*/world.md
 !worlds/*/pulse.md
+
+# Local/editor/agent state
+.DS_Store
+.pi/
+.synax/
+.synax.toml
