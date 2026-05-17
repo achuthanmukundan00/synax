@@ -85,7 +85,7 @@ context_window = 128000
 ```toml
 [provider]
 provider = "anthropic"
-model = "claude-sonnet-4-5-20250929"
+model = "frontier-sonnet-4-5-20250929"
 api_key_env = "ANTHROPIC_API_KEY"
 context_window = 200000
 ```

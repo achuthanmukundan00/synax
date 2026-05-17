@@ -4,10 +4,10 @@
  * Centralized adapter: model name → color palette for splash accents,
  * activity indicator, model name display, status glyphs, and animations.
  *
- * Detects at least: qwen, deepseek, claude, openai, gemini, and unknown/default.
+ * Detects at least: qwen, deepseek, frontier, openai, gemini, and unknown/default.
  */
 
-export type ModelFamily = 'qwen' | 'deepseek' | 'claude' | 'openai' | 'gemini' | 'default';
+export type ModelFamily = 'qwen' | 'deepseek' | 'frontier' | 'openai' | 'gemini' | 'default';
 
 export interface AnimationGlyphSet {
   thinking: string[];
@@ -70,8 +70,8 @@ const PALETTES: Record<ModelFamily, ModelPalette> = {
       error: ['▌', '▌', '▌', '▌'],
     },
   },
-  claude: {
-    family: 'claude',
+  frontier: {
+    family: 'frontier',
     primary: '#ac7e58',
     secondary: '#8a6240',
     accent: '#c4986a',
@@ -153,7 +153,7 @@ export function resolveModelFamily(modelId: string): ModelFamily {
   if (!normalized) return 'default';
   if (normalized.includes('qwen')) return 'qwen';
   if (normalized.includes('deepseek')) return 'deepseek';
-  if (normalized.includes('claude')) return 'claude';
+  if (normalized.includes('frontier')) return 'frontier';
   if (normalized.includes('gpt') || normalized.includes('openai')) return 'openai';
   if (normalized.includes('gemini')) return 'gemini';
   return 'default';

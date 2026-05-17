@@ -21,10 +21,10 @@ const PRICING: Record<string, ProviderPricing> = {
   'openai/o1-mini': { inputPer1M: 3.0, outputPer1M: 12.0 },
 
   // Anthropic
-  'anthropic/claude-sonnet-4-20250514': { inputPer1M: 3.0, outputPer1M: 15.0 },
-  'anthropic/claude-3-5-sonnet': { inputPer1M: 3.0, outputPer1M: 15.0 },
-  'anthropic/claude-3-5-haiku': { inputPer1M: 0.8, outputPer1M: 4.0 },
-  'anthropic/claude-3-opus': { inputPer1M: 15.0, outputPer1M: 75.0 },
+  'anthropic/frontier-sonnet-4-20250514': { inputPer1M: 3.0, outputPer1M: 15.0 },
+  'anthropic/frontier-3-5-sonnet': { inputPer1M: 3.0, outputPer1M: 15.0 },
+  'anthropic/frontier-3-5-haiku': { inputPer1M: 0.8, outputPer1M: 4.0 },
+  'anthropic/frontier-3-opus': { inputPer1M: 15.0, outputPer1M: 75.0 },
 
   // DeepSeek
   'deepseek/deepseek-chat': { inputPer1M: 0.14, outputPer1M: 0.28 },

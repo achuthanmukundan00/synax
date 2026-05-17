@@ -25,7 +25,7 @@ describe('PresentationState reducer', () => {
         mode: 'patch',
         profile: 'default',
         endpoint: 'https://api.anthropic.com',
-        model: 'claude-sonnet-4-20250514',
+        model: 'frontier-sonnet-4-20250514',
         providerName: 'Anthropic',
         contextBudgetTokens: 32000,
         maxModelSteps: 16,
@@ -296,7 +296,7 @@ describe('PresentationState reducer', () => {
         type: 'session_start',
         timestamp: ts('2026-01-01T00:00:00.000Z'),
         mode: 'patch',
-        model: 'claude',
+        model: 'frontier',
       },
     ]);
     expect(state.blocks.filter((b) => b.kind === 'debug_detail' && b.tag === 'lifecycle')).toHaveLength(1);

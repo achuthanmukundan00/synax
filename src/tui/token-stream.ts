@@ -27,7 +27,7 @@ const QWEN_FRAMES: TokenStreamFrame[] = [
   roles('╲·:●:·╱', ['cool', 'dim', 'active', 'hot', 'cool', 'dim', 'cool']),
 ];
 
-const CLAUDE_FRAMES: TokenStreamFrame[] = [
+const FRONTIER_FRAMES: TokenStreamFrame[] = [
   roles('.·:●:·.', ['field', 'dim', 'active', 'hot', 'cool', 'dim', 'field']),
   roles('·.:●:.·', ['dim', 'field', 'active', 'hot', 'cool', 'field', 'dim']),
   roles('.::◉::.', ['field', 'active', 'active', 'hot', 'cool', 'cool', 'field']),
@@ -50,7 +50,7 @@ const GEMINI_FRAMES: TokenStreamFrame[] = [
 
 const FRAME_SETS: Partial<Record<ModelFamily, TokenStreamFrame[]>> = {
   qwen: QWEN_FRAMES,
-  claude: CLAUDE_FRAMES,
+  frontier: FRONTIER_FRAMES,
   deepseek: DEEPSEEK_FRAMES,
   gemini: GEMINI_FRAMES,
 };
@@ -89,7 +89,7 @@ const HEX_BY_ROLE: Record<ModelFamily, Record<TokenGlyphRole, string>> = {
     hot: '#eef7ff',
     cool: '#8be9fd',
   },
-  claude: {
+  frontier: {
     rear: '#5a3e28',
     dim: '#8a6240',
     field: '#ac7e58',

@@ -4,7 +4,7 @@
  * Local models frequently leak reasoning text into the visible output stream.
  * This module provides sanitization for:
  * - `<think>...</think>` blocks (Qwen, DeepSeek)
- * - `<thinking>...</thinking>` blocks (Claude-style, various)
+ * - `<thinking>...</thinking>` blocks (Frontier-style, various)
  * - ` response/` fenced code blocks (DeepSeek)
  * - DeepSeek reasoning_content leakage into content field
  *

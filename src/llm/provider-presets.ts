@@ -108,7 +108,7 @@ const providerPresets: Record<ProviderId, ProviderPreset> = {
     apiKeyEnv: 'ANTHROPIC_API_KEY',
     apiKeyRequired: true,
     cloud: true,
-    defaultModel: 'claude-sonnet-4-5-20250929',
+    defaultModel: 'frontier-sonnet-4-5-20250929',
     contextWindow: 200000,
     supportsStreaming: true,
     supportsToolCalling: false, // tool use adapter not implemented yet in this PR

@@ -80,7 +80,7 @@ This was the most painful phase.
   - **Rentack Dashboard**: Property swipe UI, styling, deployment
   - **Resample Lab**: Audio DSP tool, Cloudflare Pages + Render deployment, 512MB RAM limit debugging
   - **wytOS**: Creative memory/OS project
-- **Codex** continued on Synax TUI: AI core morphology splash system with model-specific visual profiles (Qwen=crystalline, Claude=organic, DeepSeek=furnace, Gemini=twin)
+- **Codex** continued on Synax TUI: AI core morphology splash system with model-specific visual profiles (Qwen=crystalline, Frontier=organic, DeepSeek=furnace, Gemini=twin)
 - Codex also worked on token stream indicators: `˙·.:●:.·˙` shimmering glyph system with per-glyph color roles
 - **Synax** itself was used sparingly — last session shows it partially working but with serious bugs: "after the first turn it seems to just not work," agent returns only "Status: completed / Working tree: clean" after first prompt.
 

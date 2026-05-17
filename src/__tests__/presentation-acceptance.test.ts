@@ -130,7 +130,7 @@ describe('Morphology TUI acceptance', () => {
     it('renders rejected stale cwd memory', () => {
       const state: PresentationState = {
         ...createInitialPresentationState(),
-        blocks: [{ kind: 'runtime_status', label: 'model', value: 'claude @ api', priority: 'line' }],
+        blocks: [{ kind: 'runtime_status', label: 'model', value: 'frontier @ api', priority: 'line' }],
         memoryDecisions: [
           {
             label: 'cwd',

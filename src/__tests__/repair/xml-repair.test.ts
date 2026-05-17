@@ -87,8 +87,7 @@ describe('repairXml — missing closing tags', () => {
 
 describe('repairXml — extra closing tags', () => {
   test('strips extra </tool_call> from the end', () => {
-    const input =
-      '<tool_call>\n<function=read>\n</function>\n</tool_call>\n</tool_call>\n</tool_call>';
+    const input = '<tool_call>\n<function=read>\n</function>\n</tool_call>\n</tool_call>\n</tool_call>';
     const result = repairXml(input);
     expect(result).not.toBeNull();
     // Count closing tool_call tags
@@ -195,8 +194,7 @@ describe('repairXml — mixed content extraction', () => {
 
 describe('repairXml — bare function name wrapping', () => {
   test('wraps bare function name inside <tool_call> with <function=> tag', () => {
-    const input =
-      '<tool_call>\nread\n<parameter=path>foo</parameter>\n</tool_call>';
+    const input = '<tool_call>\nread\n<parameter=path>foo</parameter>\n</tool_call>';
     const result = repairXml(input);
     expect(result).not.toBeNull();
     expect(result!.repaired).toContain('<function=read>');
@@ -210,8 +208,7 @@ describe('repairXml — bare function name wrapping', () => {
 
 describe('repairXml — case insensitive tags', () => {
   test('handles uppercase <TOOL_CALL> tags', () => {
-    const input =
-      '<TOOL_CALL>\n<FUNCTION=read>\n<PARAMETER=path>foo</PARAMETER>\n</FUNCTION>\n</TOOL_CALL>';
+    const input = '<TOOL_CALL>\n<FUNCTION=read>\n<PARAMETER=path>foo</PARAMETER>\n</FUNCTION>\n</TOOL_CALL>';
     const result = repairXml(input);
     expect(result).not.toBeNull();
     // The repair normalizes to lowercase
@@ -220,8 +217,7 @@ describe('repairXml — case insensitive tags', () => {
   });
 
   test('handles mixed-case <Tool_Call> tags', () => {
-    const input =
-      '<Tool_Call>\n<Function=read>\n<Parameter=path>foo</Parameter>\n</Function>\n</Tool_Call>';
+    const input = '<Tool_Call>\n<Function=read>\n<Parameter=path>foo</Parameter>\n</Function>\n</Tool_Call>';
     const result = repairXml(input);
     expect(result).not.toBeNull();
     // Should still detect and process these tags
@@ -239,8 +235,7 @@ describe('repairXml — downstream parse after repair', () => {
   test('repaired malformed XML can be parsed as valid tool calls', () => {
     // Missing </function> inside tool_call — repair should fix it, then
     // parseSuccessResponse should extract the tool call.
-    const input =
-      '<tool_call>\n<function=read>\n<parameter=path>./README.md</parameter>\n</tool_call>';
+    const input = '<tool_call>\n<function=read>\n<parameter=path>./README.md</parameter>\n</tool_call>';
     const repaired = repairXml(input);
     expect(repaired).not.toBeNull();
 

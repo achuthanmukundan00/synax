@@ -76,7 +76,7 @@ describe('Provider presets registry', () => {
       expect(p.apiKeyEnv).toBe('ANTHROPIC_API_KEY');
       expect(p.apiKeyRequired).toBe(true);
       expect(p.cloud).toBe(true);
-      expect(p.defaultModel).toBe('claude-sonnet-4-5-20250929');
+      expect(p.defaultModel).toBe('frontier-sonnet-4-5-20250929');
       expect(p.contextWindow).toBe(200000);
       expect(p.supportsToolCalling).toBe(false); // not implemented yet
     });

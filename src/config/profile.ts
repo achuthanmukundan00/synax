@@ -39,7 +39,7 @@ export interface FullProfile {
   config: ConfigProfile;
 }
 
-const INSTRUCTION_FILES = ['AGENTS.md', 'CLAUDE.md', '.cursorrules', '.clinerules', 'README.md', '.synax.md'];
+const INSTRUCTION_FILES = ['AGENTS.md', 'FRONTIER.md', '.cursorrules', '.clinerules', 'README.md', '.synax.md'];
 
 /**
  * Detect git profile by running git commands.

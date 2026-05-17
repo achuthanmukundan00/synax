@@ -232,9 +232,9 @@ describe('renderPlainText', () => {
   describe('runtime_status', () => {
     it('renders line priority by default', () => {
       const output = renderPlainText(
-        stateWithBlocks([{ kind: 'runtime_status', label: 'model', value: 'claude-sonnet @ api', priority: 'line' }]),
+        stateWithBlocks([{ kind: 'runtime_status', label: 'model', value: 'frontier-sonnet @ api', priority: 'line' }]),
       );
-      expect(output).toContain('[model] claude-sonnet @ api');
+      expect(output).toContain('[model] frontier-sonnet @ api');
     });
 
     it('hides detail priority by default', () => {
@@ -280,7 +280,7 @@ describe('renderPlainText', () => {
     it('renders multiple blocks in order with blank line separators', () => {
       const output = renderPlainText(
         stateWithBlocks([
-          { kind: 'runtime_status', label: 'model', value: 'claude', priority: 'line' },
+          { kind: 'runtime_status', label: 'model', value: 'frontier', priority: 'line' },
           { kind: 'tool_activity', toolName: 'read', phase: 'started', summary: 'Reading' },
           { kind: 'model_output', role: 'primary', text: 'Answer' },
         ]),

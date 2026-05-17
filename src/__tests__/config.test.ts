@@ -128,10 +128,10 @@ describe('parseTomlString', () => {
   });
 
   it('parses legacy provider-scoped core visual profile aliases', () => {
-    const result = parseTomlString(['[provider]', 'core_visual_profile = "Claude"'].join('\n'));
+    const result = parseTomlString(['[provider]', 'core_visual_profile = "Frontier"'].join('\n'));
 
     expect(result.errors).toHaveLength(0);
-    expect(result.config.coreVisualProfile).toBe('claude');
+    expect(result.config.coreVisualProfile).toBe('frontier');
   });
 
   it('parses agent snake_case budget settings', () => {
@@ -533,10 +533,10 @@ thinking_levels = ["off", "auto"]
   });
 
   it('parses core visual profile overrides for the TUI', () => {
-    const { config, errors } = parseSynaxToml('coreVisualProfile = "claude"\n');
+    const { config, errors } = parseSynaxToml('coreVisualProfile = "frontier"\n');
 
     expect(errors).toHaveLength(0);
-    expect(config.coreVisualProfile).toBe('claude');
+    expect(config.coreVisualProfile).toBe('frontier');
   });
 
   it('parses legacy provider-scoped core visual profile overrides case-insensitively', () => {
@@ -617,7 +617,7 @@ id = "deepseek-chat"
       `
 [active]
 provider = "anthropic"
-model = "claude-3-5-haiku-20241022"
+model = "frontier-3-5-haiku-20241022"
 
 [providers.anthropic]
 compatibility = "anthropic-compatible"
@@ -625,7 +625,7 @@ base_url = "https://api.anthropic.com/v1"
 api_key_env = "ANTHROPIC_API_KEY"
 
 [[providers.anthropic.models]]
-id = "claude-3-5-haiku-20241022"
+id = "frontier-3-5-haiku-20241022"
 `,
       'utf-8',
     );
@@ -634,7 +634,7 @@ id = "claude-3-5-haiku-20241022"
       const effective = loadSynaxConfig(TMP);
       // Provider selection should stick — the API key error is surfaced later by createLLMClient
       expect(effective.active.provider).toBe('anthropic');
-      expect(effective.active.model).toBe('claude-3-5-haiku-20241022');
+      expect(effective.active.model).toBe('frontier-3-5-haiku-20241022');
     } finally {
       if (originalKey === undefined) {
         delete process.env.ANTHROPIC_API_KEY;
@@ -807,14 +807,14 @@ model = "Qwen3.6-35B-A3B-UD-IQ3_XXS.gguf"
 kind = "openai-compatible"
 base_url = "http://127.0.0.1:1234/v1"
 model = "Qwen3.6-35B-A3B-UD-IQ3_XXS.gguf"
-coreVisualProfile = "Claude"
+coreVisualProfile = "Frontier"
 `,
       'utf-8',
     );
 
     const effective = loadSynaxConfig(TMP);
 
-    expect(effective.coreVisualProfile).toBe('claude');
+    expect(effective.coreVisualProfile).toBe('frontier');
   });
 
   it('falls back to first enabled provider when active is missing', () => {
@@ -1053,14 +1053,14 @@ describe('serializeEffectiveConfig (TOML hardening)', () => {
       },
       skills: { enabled: [], disabled: [] },
       mcp: { servers: {} },
-      coreVisualProfile: 'claude',
+      coreVisualProfile: 'frontier',
       source: null,
       errors: [],
     };
 
     const toml = serializeEffectiveConfig(config);
 
-    expect(toml).toContain('coreVisualProfile = "claude"');
+    expect(toml).toContain('coreVisualProfile = "frontier"');
   });
 });
 

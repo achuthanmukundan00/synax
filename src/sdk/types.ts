@@ -8,6 +8,10 @@
 
 import type { MemoryEntry, MemorySearchResult } from '../memory/HolographicMemory';
 import type { ToolDefinition } from '../tools/types';
+import type { ContextBudgetSettings } from '../agent/context-budget';
+import type { Logger } from '../logging';
+import type { RunMode } from '../agent/task-policy';
+import type { AgentBudgetSnapshot, AgentActivity } from '../session/types';
 
 // Re-export memory types so SDK consumers can implement MemoryAdapter
 export type { MemoryEntry, MemorySearchResult };
@@ -80,10 +84,22 @@ export interface Policy {
 export type RuntimeEvent =
   | { type: 'started'; timestamp: string }
   | { type: 'model_step'; content: string; timestamp: string }
+  | { type: 'model_response'; content: string; timestamp: string }
+  | { type: 'model_step_started'; stepIndex: number; timestamp: string }
   | { type: 'tool_start'; toolName: string; args: unknown; timestamp: string }
   | { type: 'tool_finish'; toolName: string; success: boolean; error?: string; timestamp: string }
+  | { type: 'task_started'; timestamp: string }
+  | { type: 'task_finished'; timestamp: string }
   | { type: 'error'; message: string; timestamp: string }
-  | { type: 'complete'; status: RuntimeStatus; timestamp: string };
+  | { type: 'complete'; status: RuntimeStatus; timestamp: string }
+  | {
+      type: 'token_usage';
+      inputTokens: number;
+      outputTokens: number;
+      totalTokens: number;
+      step: number;
+      timestamp: string;
+    };
 
 export type RuntimeStatus = 'completed' | 'error' | 'blocked' | 'policy_blocked';
 
@@ -123,8 +139,24 @@ export interface RuntimeConfig {
   policy?: Policy;
   /** Called for each RuntimeEvent during run(). */
   onEvent?: (event: RuntimeEvent) => void;
+  /** Agent run mode. Defaults to 'patch'. */
+  mode?: RunMode;
+  /** Called with budget snapshots during a run. */
+  onBudget?: (snapshot: AgentBudgetSnapshot) => void;
+  /** Called with activity updates during a run. */
+  onActivity?: (activity: AgentActivity) => void;
   /** Working directory for file operations. Defaults to process.cwd(). */
   workingDir?: string;
+  /** Stable session ID for memory persistence across runs. */
+  sessionId?: string;
+  /** Enable bash/shell tools. Default true. */
+  bashEnabled?: boolean;
+  /** Context budget settings for the session. */
+  contextBudget?: Partial<ContextBudgetSettings>;
+  /** Max output tokens per model response. */
+  maxOutputTokens?: number;
+  /** Logger for structured logging. */
+  logger?: Logger;
 }
 
 // ─── RuntimeRunInput ─────────────────────────────────────
@@ -134,4 +166,8 @@ export interface RuntimeRunInput {
   input: string;
   /** Optional context string prepended to the task. */
   context?: string;
+  /** AbortSignal for cancellation. */
+  signal?: AbortSignal;
+  /** Per-run session ID override. Takes precedence over config-level sessionId. */
+  sessionId?: string;
 }

@@ -166,7 +166,7 @@ function memoryConflictFixture(): PresentationState {
   ];
 
   const blocks: PresentationBlock[] = [
-    { kind: 'runtime_status', label: 'model', value: 'claude-sonnet-4 @ api.anthropic.com', priority: 'line' },
+    { kind: 'runtime_status', label: 'model', value: 'frontier-sonnet-4 @ api.anthropic.com', priority: 'line' },
     { kind: 'runtime_status', label: 'mode', value: 'patch', priority: 'line' },
     { kind: 'runtime_status', label: 'context', value: '4500 / 32000 (14%)', priority: 'detail' },
     {

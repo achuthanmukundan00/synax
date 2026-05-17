@@ -1,4 +1,4 @@
-export type CoreVisualProfileId = 'default' | 'qwen' | 'openai' | 'claude' | 'deepseek' | 'gemini';
+export type CoreVisualProfileId = 'default' | 'qwen' | 'openai' | 'frontier' | 'deepseek' | 'gemini';
 
 export type CoreVisualMode = 'model' | 'default' | 'off';
 
@@ -99,10 +99,10 @@ const PROFILES: Record<CoreVisualProfileId, CoreVisualProfile> = {
     },
     colorRole: 'green',
   },
-  claude: {
-    id: 'claude',
-    label: 'Claude',
-    match: [/claude/i],
+  frontier: {
+    id: 'frontier',
+    label: 'Frontier',
+    match: [/frontier/i],
     glyphs: {
       nucleus: '◉',
       secondary: '◎',
@@ -172,7 +172,7 @@ export function resolveCoreVisualProfile(modelId: string, options: CoreVisualRes
   const override = resolveOverride(normalized, options.overrides);
   if (override) return PROFILES[override];
 
-  for (const profile of [PROFILES.qwen, PROFILES.openai, PROFILES.claude, PROFILES.deepseek, PROFILES.gemini]) {
+  for (const profile of [PROFILES.qwen, PROFILES.openai, PROFILES.frontier, PROFILES.deepseek, PROFILES.gemini]) {
     if (profile.match.some((pattern) => pattern.test(modelId))) return profile;
   }
 

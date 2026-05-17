@@ -136,14 +136,19 @@ if (result.status === 'completed') {
 
 Events are emitted in this order during a run:
 
-| Order | Event         | When                         |
-|-------|---------------|------------------------------|
-| 1     | `started`     | Run begins                   |
-| 2+    | `model_step`  | Model is thinking            |
-| 3+    | `tool_start`  | A tool starts executing      |
-| 4+    | `tool_finish` | A tool finishes (success/err)|
-| 5+    | `error`       | Recoverable error occurred   |
-| last  | `complete`    | Run finished with status     |
+| Order | Event              | When                              |
+|-------|--------------------|-----------------------------------|
+| 1     | `started`          | Run begins                        |
+| 2+    | `model_step`       | Model is thinking                 |
+| 3+    | `model_step_started` | Model step turn begins          |
+| 4+    | `task_started`     | Run-level task started            |
+| 5+    | `model_response`   | Raw model response text           |
+| 6+    | `tool_start`       | A tool starts executing           |
+| 7+    | `tool_finish`      | A tool finishes (success/err)     |
+| 8+    | `task_finished`    | Run-level task finished           |
+| 9+    | `token_usage`      | Token consumption snapshot        |
+| 10+   | `error`            | Recoverable error occurred        |
+| last  | `complete`         | Run finished with status          |
 
 ## Result shape
 
@@ -181,7 +186,48 @@ import { HolographicMemory } from 'synax';
 
 import type { MemoryAdapter, MemoryEntry, MemorySearchResult } from 'synax';
 import type { Policy, ToolUseRequest, FileEditPreview } from 'synax';
-import type { RuntimeEvent, RuntimeResult, RuntimeConfig, RuntimeRunInput } from 'synax';
-import type { ModelConfig } from 'synax';
+import type { RuntimeEvent, RuntimeResult, RuntimeConfig, RuntimeRunInput, RuntimeStatus } from 'synax';
+import type { ModelConfig, RunMode } from 'synax';
 import type { ToolDefinition, ToolResult } from 'synax';
 ```
+
+## Config options
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `model` | `ModelConfig` | required | LLM endpoint config |
+| `memory` | `MemoryAdapter` | null | Pluggable memory backend |
+| `tools` | `ToolDefinition[]` | [] | Custom tools for the model |
+| `policy` | `Policy` | — | Approval policy for tool/file-edit |
+| `mode` | `RunMode` | `'patch'` | Agent mode (`read-only`, `patch`, `verify`, `docs`) |
+| `onEvent` | `(e: RuntimeEvent) => void` | — | Event stream callback |
+| `onBudget` | `(s: AgentBudgetSnapshot) => void` | — | Token budget snapshots |
+| `onActivity` | `(a: AgentActivity) => void` | — | Activity updates |
+| `sessionId` | `string` | auto | Stable ID for memory persistence |
+| `bashEnabled` | `boolean` | true | Enable shell tools |
+| `contextBudget` | `Partial<ContextBudgetSettings>` | — | Token budget limits |
+| `maxOutputTokens` | `number` | — | Per-response token cap |
+| `logger` | `Logger` | — | Structured logging |
+| `workingDir` | `string` | `process.cwd()` | File operation root |
+
+## Run input options
+
+| Option | Type | Description |
+|--------|------|-------------|
+| `input` | `string` | The task description |
+| `context` | `string` | Prepended context |
+| `sessionId` | `string` | Per-run session ID (overrides config) |
+| `signal` | `AbortSignal` | Cancellation handle |
+
+## Memory adapter health
+
+Check bridge health with `getMemoryStatus()`:
+
+```ts
+const status = runtime.getMemoryStatus();
+if (status && !status.available) {
+  console.warn(`Memory degraded: ${status.storeErrors} store errors`);
+}
+```
+
+Returns `null` when no adapter is configured, or `{ available, storeErrors, searchErrors, indexErrors }`.
