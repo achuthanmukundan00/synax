@@ -29,3 +29,6 @@ export type {
 
 export type { ParsedToolCall } from './tool-calls';
 export type { ToolCallParseResult, ToolCallParseFailureReason, ToolCallParserMode } from './tool-calls';
+
+export { createLLMClient } from './provider-factory';
+export type { ProviderFactoryInput, ProviderFactoryResult } from './provider-factory';

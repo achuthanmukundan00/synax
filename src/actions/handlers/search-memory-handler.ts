@@ -44,7 +44,7 @@ export const handleSearchMemory: ActionHandler = async (action, context): Promis
   const maxResults = input.maxResults && input.maxResults > 0 ? Math.min(input.maxResults, 20) : 10;
 
   try {
-    const results = memory.search(query, maxResults);
+    const results = await memory.search(query, maxResults);
 
     // Format results for model consumption
     const formatted = results.map((r, i) => ({
