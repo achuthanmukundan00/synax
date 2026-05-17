@@ -4,16 +4,23 @@ dist/
 coverage/
 .idea/
 .vscode/
-*.lock
-*.tgz
 .env
 .env.*
-.synax.toml
-.synax/
-.worktrees/
+*.db
+*.db-shm
+*.db-wal
 
-# wrangler files
-.wrangler
-.dev.vars*
-!.dev.vars.example
-!.env.example
+# Runtime world artifacts; keep directory skeletons and seed docs tracked.
+worlds/*/dreams/*.md
+worlds/*/inbox/*
+worlds/*/outbox/*
+worlds/*/patch_suggestions/*.md
+worlds/*/plans/*.md
+worlds/*/reflections/*.md
+worlds/*/short_term_memory/*
+worlds/*/long_term_memory/*
+worlds/*/sources/*
+!worlds/**/.gitkeep
+!worlds/*/self.md
+!worlds/*/world.md
+!worlds/*/pulse.md
