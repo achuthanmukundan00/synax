@@ -95,9 +95,8 @@ import { resolveVerificationContract, checkCompletionAgainstContract } from './v
 const DEFAULT_MAX_TOOL_CALLS = 192;
 const MAX_CONSECUTIVE_RECOVERABLE_TOOL_ERRORS = 3;
 
-function finalAnswerFromResponse(response: ChatResponse): string {
-  const visible = assistantVisibleContent(response.content);
-  return visible || response.reasoningContent || '';
+export function finalAnswerFromResponse(response: ChatResponse): string {
+  return assistantVisibleContent(response.content) || '';
 }
 
 // ─── Agent event type guard ──────────────────────────────────────────────────
@@ -106,7 +105,7 @@ function finalAnswerFromResponse(response: ChatResponse): string {
  * Set of event type strings that belong to the public AgentEvent discriminated
  * union (src/agent/events.ts). Internal EventBus lifecycle events are excluded.
  */
-const AGENT_EVENT_TYPES: Set<string> = new Set([
+export const AGENT_EVENT_TYPES: Set<string> = new Set([
   'task_started',
   'model_step_started',
   'context_budget_updated',
