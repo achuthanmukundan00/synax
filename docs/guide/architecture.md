@@ -2,6 +2,9 @@
 
 Synax is a TypeScript-first local coding agent built as a modular pipeline. This document describes the runtime architecture, module responsibilities, data flow, and extension points.
 
+Super-specific daemon, world-document, pulse, dream, and career behavior lives
+outside Synax. See `docs/architecture/super-boundary.md`.
+
 ## High-Level Diagram
 
 ```

@@ -95,7 +95,7 @@ api_key_env = "DEEPSEEK_API_KEY"
 ```toml
 [provider]
 provider = "anthropic"
-model = "claude-sonnet-4-5-20250929"
+model = "frontier-sonnet-4-5-20250929"
 api_key_env = "ANTHROPIC_API_KEY"
 ```
 

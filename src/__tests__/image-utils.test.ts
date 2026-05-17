@@ -177,8 +177,8 @@ describe('image-utils — isVisionCapableModel', () => {
     expect(isVisionCapableModel('gpt-4o')).toBe(true);
     expect(isVisionCapableModel('gpt-4-turbo')).toBe(true);
     expect(isVisionCapableModel('gpt-4-vision')).toBe(true);
-    expect(isVisionCapableModel('claude-3-opus')).toBe(true);
-    expect(isVisionCapableModel('claude-3.5-sonnet')).toBe(true);
+    expect(isVisionCapableModel('frontier-3-opus')).toBe(true);
+    expect(isVisionCapableModel('frontier-3.5-sonnet')).toBe(true);
     expect(isVisionCapableModel('gemini-2.0-flash')).toBe(true);
     expect(isVisionCapableModel('gemini-pro-vision')).toBe(true);
     expect(isVisionCapableModel('llava-v1.6')).toBe(true);

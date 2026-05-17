@@ -1297,7 +1297,7 @@ export class Session {
         this.tracer && options.turnSpan
           ? this.tracer.startChildSpan(options.turnSpan, 'tool_execution', { toolName: call.name })
           : undefined;
-    
+
       if (options.toolCalls.length >= options.maxToolCalls) {
         if (this.tracer && toolExecSpan) {
           this.tracer.addEvent(toolExecSpan, 'max_tool_calls_exceeded', { limit: options.maxToolCalls });
@@ -1337,7 +1337,7 @@ export class Session {
           conversation: options.conversation,
         };
       }
-    
+
       this.onActivity?.({
         kind: 'tool',
         message: describeToolCall(call.name, call.arguments as Record<string, unknown>),
@@ -1356,7 +1356,7 @@ export class Session {
         summary: JSON.stringify(call.arguments).slice(0, 180),
         detail: JSON.stringify(call.arguments, null, 2),
       });
-    
+
       // Lifecycle: tool_execution_start
       this.eventBus.emit({
         type: 'tool_execution_start',
@@ -1366,7 +1366,7 @@ export class Session {
         toolName: call.name,
         arguments: call.arguments as Record<string, unknown>,
       });
-    
+
       // Control hook: pre_tool_use
       const preToolDecision = await this.eventBus.emitControl({
         type: 'pre_tool_use',
@@ -1376,7 +1376,7 @@ export class Session {
         toolName: call.name,
         arguments: call.arguments as Record<string, unknown>,
       });
-    
+
       if (preToolDecision.allow === false) {
         this.logger?.warn('Tool call blocked by pre_tool_use hook', {
           toolName: call.name,
@@ -1398,7 +1398,7 @@ export class Session {
         });
         continue;
       }
-    
+
       const result = await this.executor.execute(
         call,
         {
@@ -1428,7 +1428,7 @@ export class Session {
         },
         options.identicalBashCounts,
       );
-    
+
       if (call.name === 'read') {
         options.totalReadCalls += 1;
         options.totalReadResultTokens += estimateReadResultTokens(result.toolResult);
@@ -1438,8 +1438,15 @@ export class Session {
         success: result.success,
         error: result.error,
       });
-      appendToolResult(options.conversation, options.response, call, result.toolResult, contentToolResults, options.contextBudget);
-    
+      appendToolResult(
+        options.conversation,
+        options.response,
+        call,
+        result.toolResult,
+        contentToolResults,
+        options.contextBudget,
+      );
+
       // Memory: store tool result with persistent sessionId
       this.memory?.store({
         sessionId: this.sessionId,
@@ -1449,7 +1456,7 @@ export class Session {
         filePaths: result.changedFile ? [result.changedFile] : undefined,
         content: JSON.stringify(result.toolResult).slice(0, 8000),
       });
-    
+
       this.eventBus.emit({
         type: 'tool_finished',
         timestamp: eventNow(),
@@ -1460,7 +1467,7 @@ export class Session {
         summary: result.success ? 'completed' : (result.error ?? 'failed'),
         detail: formatToolResultDetail(result.toolResult),
       });
-    
+
       this.eventBus.emit({
         type: 'tool_execution_end',
         timestamp: eventNow(),
@@ -1470,14 +1477,14 @@ export class Session {
         success: result.success,
         error: result.error,
       });
-    
+
       if (result.changedFile) options.changedFiles.push(result.changedFile);
-    
+
       if (this.tracer && toolExecSpan) {
         this.tracer.addEvent(toolExecSpan, 'tool_finished', { success: result.success, error: result.error });
         this.tracer.endSpan(toolExecSpan);
       }
-    
+
       // ── Post-tool budget check ───────────────────────────────
       const afterToolMessages = buildModelRequest(
         options.conversation,
@@ -1496,7 +1503,7 @@ export class Session {
           toolName: call.name,
           stepIndex: options.step,
         });
-    
+
         const handoffResult = await this.tryHandoffRecovery(
           4,
           options.conversation,
@@ -1517,7 +1524,7 @@ export class Session {
             conversation: options.conversation,
           };
         }
-    
+
         return {
           terminalResult: {
             terminalState: 'budget_exhausted',
@@ -1545,7 +1552,7 @@ export class Session {
           conversation: options.conversation,
         };
       }
-    
+
       // ── Error recovery classification ────────────────────────
       if (result.success) {
         options.consecutiveRecoverableToolErrors = 0;

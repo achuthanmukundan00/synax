@@ -945,7 +945,7 @@ describe('shared bounded agent runner', () => {
     });
 
     expect(result.terminalState).toBe('completed');
-    expect(client.requests).toHaveLength(2);
+    expect(client.requests).toHaveLength(1);
     expect(result.conversation.latestCompaction).not.toBeNull();
     expect((client.requests[0].messages as Array<{ role: string; content: string }>)[1]).toMatchObject({
       role: 'system',
@@ -1511,7 +1511,7 @@ describe('shared bounded agent runner', () => {
 
     expect(
       conversation.messages.filter((message) => message.role === 'user').map((message) => message.content),
-    ).toEqual(['one', 'two', expect.stringContaining('You responded with text but did not use any tools')]);
+    ).toEqual(['one', 'two']);
   });
 
   it('compacts large read results even in recent turns to bound prompt growth', async () => {

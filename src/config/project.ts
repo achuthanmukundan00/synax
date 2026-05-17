@@ -372,7 +372,7 @@ export function generateDefaultConfig(): string {
     '[tools.bash]',
     'enabled = true',
     '',
-    '# Core visual profile: "model" (auto-detect), "default", "qwen", "openai", "claude", "deepseek", "gemini"',
+    '# Core visual profile: "model" (auto-detect), "default", "qwen", "openai", "frontier", "deepseek", "gemini"',
     'coreVisualProfile = "model"',
     '',
     '[provider]',
@@ -443,7 +443,7 @@ export function validateConfig(config: ProjectConfig): ValidationError[] {
     if (typeof config.coreVisualProfile !== 'string') {
       errors.push({ path: 'coreVisualProfile', message: 'must be a string' });
     } else {
-      const validProfiles: string[] = ['model', 'default', 'qwen', 'openai', 'claude', 'deepseek', 'gemini'];
+      const validProfiles: string[] = ['model', 'default', 'qwen', 'openai', 'frontier', 'deepseek', 'gemini'];
       if (!validProfiles.includes(config.coreVisualProfile)) {
         errors.push({ path: 'coreVisualProfile', message: `must be one of: ${validProfiles.join(', ')}` });
       }

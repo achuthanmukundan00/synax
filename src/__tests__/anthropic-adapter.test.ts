@@ -62,8 +62,8 @@ describe('Anthropic adapter — basic chat', () => {
           id: 'msg_test123',
           type: 'message',
           role: 'assistant',
-          model: 'claude-sonnet-4-5-20250929',
-          content: [{ type: 'text', text: 'Hello from Claude' }],
+          model: 'frontier-sonnet-4-5-20250929',
+          content: [{ type: 'text', text: 'Hello from Frontier' }],
           stop_reason: 'end_turn',
           stop_sequence: null,
           usage: { input_tokens: 15, output_tokens: 8 },
@@ -80,7 +80,7 @@ describe('Anthropic adapter — basic chat', () => {
   it('POSTs to /v1/messages with correct headers', async () => {
     const adapter = createAnthropicAdapter({
       apiKey: 'sk-ant-test',
-      model: 'claude-sonnet-4-5-20250929',
+      model: 'frontier-sonnet-4-5-20250929',
       baseUrl: getServerUrl(srv),
     });
 
@@ -98,7 +98,7 @@ describe('Anthropic adapter — basic chat', () => {
   it('maps user messages to Anthropic format', async () => {
     const adapter = createAnthropicAdapter({
       apiKey: 'sk-ant-test',
-      model: 'claude-sonnet-4-5-20250929',
+      model: 'frontier-sonnet-4-5-20250929',
       baseUrl: getServerUrl(srv),
     });
 
@@ -112,7 +112,7 @@ describe('Anthropic adapter — basic chat', () => {
   it('maps assistant messages correctly', async () => {
     const adapter = createAnthropicAdapter({
       apiKey: 'sk-ant-test',
-      model: 'claude-sonnet-4-5-20250929',
+      model: 'frontier-sonnet-4-5-20250929',
       baseUrl: getServerUrl(srv),
     });
 
@@ -133,7 +133,7 @@ describe('Anthropic adapter — basic chat', () => {
   it('maps system prompt to top-level system field', async () => {
     const adapter = createAnthropicAdapter({
       apiKey: 'sk-ant-test',
-      model: 'claude-sonnet-4-5-20250929',
+      model: 'frontier-sonnet-4-5-20250929',
       baseUrl: getServerUrl(srv),
     });
 
@@ -154,7 +154,7 @@ describe('Anthropic adapter — basic chat', () => {
   it('joins multiple system messages', async () => {
     const adapter = createAnthropicAdapter({
       apiKey: 'sk-ant-test',
-      model: 'claude-sonnet-4-5-20250929',
+      model: 'frontier-sonnet-4-5-20250929',
       baseUrl: getServerUrl(srv),
     });
 
@@ -174,7 +174,7 @@ describe('Anthropic adapter — basic chat', () => {
   it('sets max_tokens and temperature', async () => {
     const adapter = createAnthropicAdapter({
       apiKey: 'sk-ant-test',
-      model: 'claude-sonnet-4-5-20250929',
+      model: 'frontier-sonnet-4-5-20250929',
       baseUrl: getServerUrl(srv),
     });
 
@@ -193,7 +193,7 @@ describe('Anthropic adapter — basic chat', () => {
   it('defaults max_tokens to 4096 when not specified', async () => {
     const adapter = createAnthropicAdapter({
       apiKey: 'sk-ant-test',
-      model: 'claude-sonnet-4-5-20250929',
+      model: 'frontier-sonnet-4-5-20250929',
       baseUrl: getServerUrl(srv),
     });
 
@@ -216,8 +216,8 @@ describe('Anthropic adapter — response mapping', () => {
           id: 'msg_test123',
           type: 'message',
           role: 'assistant',
-          model: 'claude-sonnet-4-5-20250929',
-          content: [{ type: 'text', text: 'Hello from Claude' }],
+          model: 'frontier-sonnet-4-5-20250929',
+          content: [{ type: 'text', text: 'Hello from Frontier' }],
           stop_reason: 'end_turn',
           stop_sequence: null,
           usage: { input_tokens: 10, output_tokens: 5 },
@@ -233,18 +233,18 @@ describe('Anthropic adapter — response mapping', () => {
   it('maps content to ChatResponse.content', async () => {
     const adapter = createAnthropicAdapter({
       apiKey: 'sk-ant-test',
-      model: 'claude-sonnet-4-5-20250929',
+      model: 'frontier-sonnet-4-5-20250929',
       baseUrl: getServerUrl(srv),
     });
 
     const resp = await adapter.chat({ messages: [{ role: 'user', content: 'hi' }] });
-    expect(resp.content).toBe('Hello from Claude');
+    expect(resp.content).toBe('Hello from Frontier');
   });
 
   it('maps stop_reason end_turn to stop', async () => {
     const adapter = createAnthropicAdapter({
       apiKey: 'sk-ant-test',
-      model: 'claude-sonnet-4-5-20250929',
+      model: 'frontier-sonnet-4-5-20250929',
       baseUrl: getServerUrl(srv),
     });
 
@@ -255,7 +255,7 @@ describe('Anthropic adapter — response mapping', () => {
   it('maps usage tokens', async () => {
     const adapter = createAnthropicAdapter({
       apiKey: 'sk-ant-test',
-      model: 'claude-sonnet-4-5-20250929',
+      model: 'frontier-sonnet-4-5-20250929',
       baseUrl: getServerUrl(srv),
     });
 
@@ -270,18 +270,18 @@ describe('Anthropic adapter — response mapping', () => {
   it('maps model from response', async () => {
     const adapter = createAnthropicAdapter({
       apiKey: 'sk-ant-test',
-      model: 'claude-sonnet-4-5-20250929',
+      model: 'frontier-sonnet-4-5-20250929',
       baseUrl: getServerUrl(srv),
     });
 
     const resp = await adapter.chat({ messages: [{ role: 'user', content: 'hi' }] });
-    expect(resp.model).toBe('claude-sonnet-4-5-20250929');
+    expect(resp.model).toBe('frontier-sonnet-4-5-20250929');
   });
 
   it('returns empty toolCalls', async () => {
     const adapter = createAnthropicAdapter({
       apiKey: 'sk-ant-test',
-      model: 'claude-sonnet-4-5-20250929',
+      model: 'frontier-sonnet-4-5-20250929',
       baseUrl: getServerUrl(srv),
     });
 
@@ -299,7 +299,7 @@ describe('Anthropic adapter — response mapping', () => {
           id: 'msg_test',
           type: 'message',
           role: 'assistant',
-          model: 'claude-sonnet-4-5-20250929',
+          model: 'frontier-sonnet-4-5-20250929',
           content: [{ type: 'text', text: 'truncated' }],
           stop_reason: 'max_tokens',
           stop_sequence: null,
@@ -310,7 +310,7 @@ describe('Anthropic adapter — response mapping', () => {
 
     const adapter = createAnthropicAdapter({
       apiKey: 'sk-ant-test',
-      model: 'claude-sonnet-4-5-20250929',
+      model: 'frontier-sonnet-4-5-20250929',
       baseUrl: getServerUrl(srv),
     });
 
@@ -339,7 +339,7 @@ describe('Anthropic adapter — error handling', () => {
 
     const adapter = createAnthropicAdapter({
       apiKey: 'bad-key',
-      model: 'claude-sonnet-4-5-20250929',
+      model: 'frontier-sonnet-4-5-20250929',
       baseUrl: getServerUrl(srv),
     });
 
@@ -358,7 +358,7 @@ describe('Anthropic adapter — error handling', () => {
 
     const adapter = createAnthropicAdapter({
       apiKey: 'sk-ant-test',
-      model: 'claude-sonnet-4-5-20250929',
+      model: 'frontier-sonnet-4-5-20250929',
       baseUrl: getServerUrl(srv),
     });
 
@@ -372,7 +372,7 @@ describe('Anthropic adapter — error handling', () => {
   it('throws clear error when tools are requested', async () => {
     const adapter = createAnthropicAdapter({
       apiKey: 'sk-ant-test',
-      model: 'claude-sonnet-4-5-20250929',
+      model: 'frontier-sonnet-4-5-20250929',
       baseUrl: 'http://127.0.0.1:1',
     });
 
@@ -387,7 +387,7 @@ describe('Anthropic adapter — error handling', () => {
   it('throws when no valid messages remain', async () => {
     const adapter = createAnthropicAdapter({
       apiKey: 'sk-ant-test',
-      model: 'claude-sonnet-4-5-20250929',
+      model: 'frontier-sonnet-4-5-20250929',
       baseUrl: 'http://127.0.0.1:1',
     });
 

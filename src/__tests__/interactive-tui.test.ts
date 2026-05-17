@@ -751,7 +751,7 @@ describe('ai core renderer', () => {
     expect(resolveCoreVisualProfile('Qwen3.6-35B-A3B-UD-IQ3_XXS.gguf').id).toBe('qwen');
     expect(resolveCoreVisualProfile('gpt-5.5-thinking').id).toBe('openai');
     expect(resolveCoreVisualProfile('OPENAI/local-compatible').id).toBe('openai');
-    expect(resolveCoreVisualProfile('claude-sonnet-4.5').id).toBe('claude');
+    expect(resolveCoreVisualProfile('frontier-sonnet-4.5').id).toBe('frontier');
     expect(resolveCoreVisualProfile('deepseekv4-pro').id).toBe('deepseek');
     expect(resolveCoreVisualProfile('gemini-2.5-pro').id).toBe('gemini');
     expect(resolveCoreVisualProfile('local-unknown-model.gguf').id).toBe('default');
@@ -760,23 +760,23 @@ describe('ai core renderer', () => {
     expect(resolveCoreVisualProfile('deepseek-r1').motion.scanStyle).toBe('beam');
   });
 
-  it('renders distinct inner morphology for qwen, claude, and default profiles in the same state', () => {
+  it('renders distinct inner morphology for qwen, frontier, and default profiles in the same state', () => {
     const base = { mode: 'thinking' as const, frame: 8, width: 24, height: 9, unicode: true };
     const qwen = renderDottedCore({ ...base, profile: resolveCoreVisualProfile('qwen3-local') })
       .map(stripAnsi)
       .join('\n');
-    const claude = renderDottedCore({ ...base, profile: resolveCoreVisualProfile('claude-sonnet-4.5') })
+    const frontier = renderDottedCore({ ...base, profile: resolveCoreVisualProfile('frontier-sonnet-4.5') })
       .map(stripAnsi)
       .join('\n');
     const fallback = renderDottedCore({ ...base, profile: resolveCoreVisualProfile('unknown-local') })
       .map(stripAnsi)
       .join('\n');
 
-    expect(qwen).not.toEqual(claude);
+    expect(qwen).not.toEqual(frontier);
     expect(qwen).not.toEqual(fallback);
-    expect(claude).not.toEqual(fallback);
+    expect(frontier).not.toEqual(fallback);
     expect(qwen).toMatch(/[╱╲]/);
-    expect(claude).toMatch(/[◎◉]/);
+    expect(frontier).toMatch(/[◎◉]/);
     expect(fallback).toMatch(/[●◎]/);
   });
 
@@ -785,18 +785,18 @@ describe('ai core renderer', () => {
     const openai = renderDottedCore({ ...base, profile: resolveCoreVisualProfile('gpt-5') })
       .map(stripAnsi)
       .join('\n');
-    const claude = renderDottedCore({ ...base, profile: resolveCoreVisualProfile('claude-sonnet-4.5') })
+    const frontier = renderDottedCore({ ...base, profile: resolveCoreVisualProfile('frontier-sonnet-4.5') })
       .map(stripAnsi)
       .join('\n');
 
-    for (const rendered of [openai, claude]) {
+    for (const rendered of [openai, frontier]) {
       expect(rendered).toMatch(/[╭╮╰╯]/);
       expect(rendered).toMatch(/[─│]/);
     }
 
-    expect(openai).not.toEqual(claude);
+    expect(openai).not.toEqual(frontier);
     expect(openai).not.toMatch(/[╱╲]/);
-    expect(claude).toMatch(/[◎◉]/);
+    expect(frontier).toMatch(/[◎◉]/);
   });
 
   it('renders prominent model-specific morphology signatures', () => {
@@ -808,7 +808,7 @@ describe('ai core renderer', () => {
       openai: renderDottedCore({ ...base, profile: resolveCoreVisualProfile('gpt-5') })
         .map(stripAnsi)
         .join('\n'),
-      claude: renderDottedCore({ ...base, profile: resolveCoreVisualProfile('claude-sonnet-4.5') })
+      frontier: renderDottedCore({ ...base, profile: resolveCoreVisualProfile('frontier-sonnet-4.5') })
         .map(stripAnsi)
         .join('\n'),
       deepseek: renderDottedCore({ ...base, profile: resolveCoreVisualProfile('deepseek-v4') })
@@ -823,7 +823,7 @@ describe('ai core renderer', () => {
     expect(profiles.qwen).toMatch(/[╱╲]/);
     expect(profiles.openai).toMatch(/[◎●]/);
     expect(profiles.openai).not.toMatch(/[╱╲]/);
-    expect(profiles.claude).toMatch(/[◎◉]/);
+    expect(profiles.frontier).toMatch(/[◎◉]/);
     expect(profiles.deepseek).toMatch(/[═━◎◉]/);
     expect(profiles.gemini).toMatch(/●[\s\S]*●/);
     expect(profiles.gemini).toMatch(/│/);

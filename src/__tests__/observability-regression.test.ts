@@ -59,7 +59,7 @@ function seedTestSessions(store: EventStore, count: number): string[] {
       id,
       repoRoot: '/tmp/test-repo',
       mode: i % 2 === 0 ? 'patch' : 'read-only',
-      model: i % 4 === 0 ? 'openai/gpt-4o-mini' : 'anthropic/claude-sonnet-4-20250514',
+      model: i % 4 === 0 ? 'openai/gpt-4o-mini' : 'anthropic/frontier-sonnet-4-20250514',
       createdAt: new Date(Date.now() - i * 60_000).toISOString(),
       steps: terminalState === 'completed' ? 2 : 0,
       toolCalls: terminalState === 'completed' ? 3 : 0,

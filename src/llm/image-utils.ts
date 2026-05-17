@@ -183,9 +183,9 @@ export function isVisionCapableModel(modelId: string): boolean {
     /\bo3\b/,
     /\bo4-mini\b/,
     // Anthropic
-    /\bclaude[\s-]*3\b/,
-    /\bclaude[\s-]*3[.\s-]*5\b/,
-    /\bclaude[\s-]*4\b/,
+    /\bfrontier[\s-]*3\b/,
+    /\bfrontier[\s-]*3[.\s-]*5\b/,
+    /\bfrontier[\s-]*4\b/,
     // Google
     /\bgemini.*(?:flash|pro|vision|2)/,
     /\bgemma[\s-]*3\b/,

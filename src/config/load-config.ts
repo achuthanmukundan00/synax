@@ -86,16 +86,16 @@ const DEFAULT_MODELS: Record<string, ResolvedModelConfig[]> = {
   ],
   anthropic: [
     {
-      id: 'claude-sonnet-4-20250514',
-      displayName: 'Claude Sonnet 4',
+      id: 'frontier-sonnet-4-20250514',
+      displayName: 'Frontier Sonnet 4',
       contextWindow: 200_000,
       supportsThinking: true,
       thinkingLevels: ['off', 'low', 'medium', 'high'],
       defaultThinkingLevel: 'off',
     },
     {
-      id: 'claude-3-5-haiku-20241022',
-      displayName: 'Claude 3.5 Haiku',
+      id: 'frontier-3-5-haiku-20241022',
+      displayName: 'Frontier 3.5 Haiku',
       contextWindow: 200_000,
       supportsThinking: false,
       thinkingLevels: [],
@@ -487,7 +487,7 @@ export function validateSynaxConfig(config: SynaxConfig): string[] {
   }
 
   if (config.coreVisualProfile !== undefined && !isCoreVisualProfile(config.coreVisualProfile)) {
-    errors.push('coreVisualProfile must be one of: model, default, qwen, openai, claude, deepseek, gemini');
+    errors.push('coreVisualProfile must be one of: model, default, qwen, openai, frontier, deepseek, gemini');
   }
 
   return errors;
@@ -869,7 +869,7 @@ function tomlTableKey(key: string): string {
 }
 
 function isCoreVisualProfile(value: string): boolean {
-  return ['model', 'default', 'qwen', 'openai', 'claude', 'deepseek', 'gemini'].includes(value);
+  return ['model', 'default', 'qwen', 'openai', 'frontier', 'deepseek', 'gemini'].includes(value);
 }
 
 function normalizeCoreVisualProfile(value: string): string {

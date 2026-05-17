@@ -271,7 +271,7 @@ function glyphSet(
       line: (angle) => (Math.abs(Math.sin(angle)) > Math.abs(Math.cos(angle)) ? '|' : '-'),
     };
   }
-  if (visualProfile.id === 'claude') {
+  if (visualProfile.id === 'frontier') {
     return {
       small: '.',
       mid: '·',

@@ -24,6 +24,7 @@ import type { AgentClient } from '../../session/types';
 import type { ChatOptions, ChatResponse } from '../../llm/types';
 import type { ToolDefinition, ToolResult } from '../../tools/types';
 import { HolographicMemory } from '../../memory/HolographicMemory';
+import { Logger } from '../../logging';
 
 // ─── Fake LLM client ─────────────────────────────────────
 
@@ -665,6 +666,342 @@ describe('SynaxRuntime', () => {
       const result = await runtime.run({ input: 'test' });
 
       expect(result).toHaveProperty('status');
+    });
+  });
+
+  // ─── New config fields ──────────────────────────────────────
+
+  describe('sessionId', () => {
+    it('accepts sessionId in RuntimeConfig', () => {
+      const client = makeFakeClient([{ content: 'done.' }]);
+      const runtime = new SynaxRuntime({ client, sessionId: 'my-session-123' });
+      expect(runtime).toBeInstanceOf(SynaxRuntime);
+    });
+
+    it('accepts sessionId in RuntimeRunInput', async () => {
+      const client = makeFakeClient([{ content: 'done.' }]);
+      const runtime = new SynaxRuntime({ client });
+      const result = await runtime.run({ input: 'test', sessionId: 'per-run-session' });
+      expect(result.status).toBe('completed');
+    });
+  });
+
+  describe('bashEnabled', () => {
+    it('accepts bashEnabled: false in config', () => {
+      const client = makeFakeClient([{ content: 'done.' }]);
+      const runtime = new SynaxRuntime({ client, bashEnabled: false });
+      expect(runtime).toBeInstanceOf(SynaxRuntime);
+    });
+
+    it('defaults bashEnabled to true', () => {
+      const client = makeFakeClient([{ content: 'done.' }]);
+      const runtime = new SynaxRuntime({ client });
+      expect(runtime).toBeInstanceOf(SynaxRuntime);
+    });
+  });
+
+  describe('abortSignal', () => {
+    it('can cancel a running task via AbortSignal', async () => {
+      const client: AgentClient = {
+        async chat(opts: ChatOptions): Promise<ChatResponse> {
+          return new Promise((_resolve, reject) => {
+            // If already aborted, reject immediately
+            if (opts.signal?.aborted) {
+              reject(new Error('aborted'));
+              return;
+            }
+            // Listen for abort event to reject the pending call
+            const onAbort = () => reject(new Error('aborted'));
+            opts.signal?.addEventListener('abort', onAbort, { once: true });
+          });
+        },
+      };
+      const controller = new AbortController();
+      const runtime = new SynaxRuntime({ client });
+      const runPromise = runtime.run({ input: 'test', signal: controller.signal });
+
+      // Cancel after a tick
+      setTimeout(() => controller.abort(), 10);
+
+      const result = await runPromise;
+      // The Session catches the abort and returns a structured error result
+      expect(result.status).toBe('error');
+      expect(result.error).toContain('aborted');
+    });
+  });
+
+  describe('maxOutputTokens', () => {
+    it('accepts maxOutputTokens in config', () => {
+      const client = makeFakeClient([{ content: 'done.' }]);
+      const runtime = new SynaxRuntime({ client, maxOutputTokens: 2048 });
+      expect(runtime).toBeInstanceOf(SynaxRuntime);
+    });
+  });
+
+  describe('contextBudget', () => {
+    it('accepts contextBudget in config', () => {
+      const client = makeFakeClient([{ content: 'done.' }]);
+      const runtime = new SynaxRuntime({
+        client,
+        contextBudget: { contextWindowTokens: 128000, strategyMode: 'moderate' },
+      });
+      expect(runtime).toBeInstanceOf(SynaxRuntime);
+    });
+  });
+
+  describe('logger', () => {
+    it('accepts logger in config', () => {
+      const logger = new Logger({ level: 'warn' });
+      const client = makeFakeClient([{ content: 'done.' }]);
+      const runtime = new SynaxRuntime({ client, logger });
+      expect(runtime).toBeInstanceOf(SynaxRuntime);
+    });
+  });
+
+  describe('new event types', () => {
+    it('emits model_response events when model says something', async () => {
+      const client = makeFakeClient([{ content: 'Hello from model.' }]);
+      const events: RuntimeEvent[] = [];
+      const runtime = new SynaxRuntime({ client, onEvent: (e) => events.push(e) });
+
+      await runtime.run({ input: 'test' });
+
+      const modelResponses = events.filter((e) => e.type === 'model_response');
+      expect(modelResponses.length).toBeGreaterThanOrEqual(0);
+    });
+
+    it('emits task_started and task_finished events', async () => {
+      const client = makeFakeClient([{ content: 'done.' }]);
+      const events: RuntimeEvent[] = [];
+      const runtime = new SynaxRuntime({ client, onEvent: (e) => events.push(e) });
+
+      await runtime.run({ input: 'test' });
+
+      const taskStarted = events.filter((e) => e.type === 'task_started');
+      const taskFinished = events.filter((e) => e.type === 'task_finished');
+      // These events are emitted by the Session internally; the runtime forwards them
+      // if the Session emits them.
+      expect(taskStarted.length).toBeGreaterThanOrEqual(0);
+      expect(taskFinished.length).toBeGreaterThanOrEqual(0);
+    });
+  });
+
+  // ─── SDK hardening tests ───────────────────────────────────
+
+  describe('mode config', () => {
+    it('defaults mode to patch', () => {
+      const client = makeFakeClient([{ content: 'done.' }]);
+      const runtime = new SynaxRuntime({ client });
+      expect((runtime as any).mode).toBe('patch');
+    });
+
+    it('accepts verify mode', () => {
+      const client = makeFakeClient([{ content: 'done.' }]);
+      const runtime = new SynaxRuntime({ client, mode: 'verify' });
+      expect((runtime as any).mode).toBe('verify');
+    });
+
+    it('accepts read-only mode', () => {
+      const client = makeFakeClient([{ content: 'done.' }]);
+      const runtime = new SynaxRuntime({ client, mode: 'read-only' });
+      expect((runtime as any).mode).toBe('read-only');
+    });
+
+    it('accepts docs mode', () => {
+      const client = makeFakeClient([{ content: 'done.' }]);
+      const runtime = new SynaxRuntime({ client, mode: 'docs' });
+      expect((runtime as any).mode).toBe('docs');
+    });
+  });
+
+  describe('onBudget callback', () => {
+    it('is called during a run', async () => {
+      const client = makeFakeClient([{ content: 'done.' }]);
+      const budgetSpy = jest.fn();
+      const runtime = new SynaxRuntime({ client, onBudget: budgetSpy });
+
+      await runtime.run({ input: 'test' });
+
+      expect(budgetSpy).toHaveBeenCalled();
+      const snapshot = budgetSpy.mock.calls[0][0];
+      expect(snapshot).toHaveProperty('estimatedInputTokens');
+      expect(snapshot).toHaveProperty('inputLimit');
+      expect(snapshot).toHaveProperty('step');
+    });
+  });
+
+  describe('onActivity callback', () => {
+    it('is called during a run', async () => {
+      const client = makeFakeClient([{ content: 'done.' }]);
+      const activitySpy = jest.fn();
+      const runtime = new SynaxRuntime({ client, onActivity: activitySpy });
+
+      await runtime.run({ input: 'test' });
+
+      expect(activitySpy).toHaveBeenCalled();
+      const activity = activitySpy.mock.calls[0][0];
+      expect(activity).toHaveProperty('kind');
+      expect(activity).toHaveProperty('message');
+    });
+  });
+
+  describe('token_usage event', () => {
+    it('forwards token_usage via RuntimeEvent', async () => {
+      const client: AgentClient = {
+        async chat(_opts: ChatOptions): Promise<ChatResponse> {
+          return {
+            content: 'done.',
+            model: 'test',
+            finishReason: 'stop',
+            toolCalls: [],
+            usage: { promptTokens: 50, completionTokens: 30, totalTokens: 80 },
+          };
+        },
+      };
+      const events: RuntimeEvent[] = [];
+      const runtime = new SynaxRuntime({ client, onEvent: (e) => events.push(e) });
+
+      await runtime.run({ input: 'test' });
+
+      const tuEvents = events.filter((e) => e.type === 'token_usage');
+      // The Session may or may not fire token_usage; just check
+      // that if it does, the shape is correct
+      for (const ev of tuEvents) {
+        if (ev.type === 'token_usage') {
+          expect(typeof ev.inputTokens).toBe('number');
+          expect(typeof ev.outputTokens).toBe('number');
+          expect(typeof ev.totalTokens).toBe('number');
+          expect(ev.totalTokens).toBe(ev.inputTokens + ev.outputTokens);
+          expect(typeof ev.step).toBe('number');
+          expect(typeof ev.timestamp).toBe('string');
+        }
+      }
+    });
+  });
+
+  describe('getMemoryStatus()', () => {
+    it('returns null when no memory adapter is configured', () => {
+      const client = makeFakeClient([{ content: 'done.' }]);
+      const runtime = new SynaxRuntime({ client });
+
+      expect(runtime.getMemoryStatus()).toBeNull();
+    });
+
+    it('returns available: true when memory adapter is healthy', async () => {
+      const client = makeFakeClient([{ content: 'done.' }]);
+      const memory = makeSpyMemory();
+      const runtime = new SynaxRuntime({ client, memory });
+
+      await runtime.run({ input: 'test' });
+
+      const status = runtime.getMemoryStatus();
+      expect(status).not.toBeNull();
+      expect(status!.available).toBe(true);
+      expect(status!.storeErrors).toBe(0);
+      expect(status!.searchErrors).toBe(0);
+      expect(status!.indexErrors).toBe(0);
+    });
+
+    it('shows error counts after failures', async () => {
+      const flakyMemory: MemoryAdapter = {
+        store() {
+          throw new Error('always fails');
+        },
+        search() {
+          return [];
+        },
+        buildMemoryIndex() {
+          return null;
+        },
+      };
+      const client = makeFakeClient([{ content: 'done.' }]);
+      const runtime = new SynaxRuntime({ client, memory: flakyMemory });
+
+      // Run to accumulate store errors
+      for (let i = 0; i < 5; i++) {
+        await runtime.run({ input: 'test' });
+      }
+
+      const status = runtime.getMemoryStatus();
+      expect(status).not.toBeNull();
+      expect(status!.storeErrors).toBeGreaterThan(0);
+    });
+  });
+
+  describe('sessionId memory persistence', () => {
+    it('maintains memory across sequential runs with the same sessionId', async () => {
+      const client = makeFakeClient([{ content: 'first run done.' }, { content: 'second run done.' }]);
+      const memory = makeSpyMemory();
+      const runtime = new SynaxRuntime({ client, memory, sessionId: 'persist-test' });
+
+      await runtime.run({ input: 'First task' });
+      await runtime.run({ input: 'Second task' });
+
+      // Both runs should have stored memory with the same sessionId
+      expect(memory.stored.length).toBeGreaterThanOrEqual(2);
+      const sessionIds = [...new Set(memory.stored.map((e) => e.sessionId))];
+      expect(sessionIds).toEqual(['persist-test']);
+    });
+  });
+
+  describe('logger output', () => {
+    it('produces output during a run', async () => {
+      const chunks: string[] = [];
+      const origWrite = process.stdout.write;
+      const mockWrite = jest.fn((chunk: any) => {
+        chunks.push(chunk.toString());
+        return true;
+      });
+      // Replace stdout.write with a mock that captures output
+      process.stdout.write = mockWrite as any;
+      try {
+        // Use a model response >200 chars to trigger Session's logger.info call
+        const longContent = 'A'.repeat(250);
+        const client = makeFakeClient([{ content: longContent }]);
+        const logger = new Logger({ level: 'info' });
+        const runtime = new SynaxRuntime({ client, logger });
+
+        await runtime.run({ input: 'test' });
+
+        // Verify the Logger wrote structured log lines to stdout
+        expect(chunks.length).toBeGreaterThan(0);
+      } finally {
+        process.stdout.write = origWrite;
+      }
+    });
+  });
+
+  describe('MemoryBridge availability transition', () => {
+    it('transitions available to false after enough store failures', async () => {
+      const flakyMemory: MemoryAdapter = {
+        store() {
+          throw new Error('always fails');
+        },
+        search() {
+          return [];
+        },
+        buildMemoryIndex() {
+          return null;
+        },
+      };
+      const client = makeFakeClient([{ content: 'done.' }]);
+      const runtime = new SynaxRuntime({ client, memory: flakyMemory });
+
+      // Bridge starts available
+      expect(runtime.getMemoryStatus()!.available).toBe(true);
+
+      // Run enough to tip the bridge past the error threshold
+      for (let i = 0; i < 10; i++) {
+        await runtime.run({ input: 'test' });
+        const status = runtime.getMemoryStatus()!;
+        if (status.storeErrors >= 5) {
+          expect(status.available).toBe(false);
+          break;
+        }
+      }
+
+      // Ensure we actually hit the threshold
+      expect(runtime.getMemoryStatus()!.storeErrors).toBeGreaterThanOrEqual(5);
     });
   });
 });

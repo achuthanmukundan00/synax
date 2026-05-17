@@ -128,7 +128,7 @@ describe('CLI', () => {
       try {
         writeFileSync(
           path.join(cwd, '.synax.toml'),
-          ['[active]', 'provider = "anthropic"', 'model = "claude-sonnet-4-20250514"'].join('\n'),
+          ['[active]', 'provider = "anthropic"', 'model = "frontier-sonnet-4-20250514"'].join('\n'),
           'utf-8',
         );
         const output = runSynax(['chat'], { cwd });

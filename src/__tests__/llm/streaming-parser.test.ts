@@ -23,9 +23,7 @@ interface MockRequest {
   body: string;
 }
 
-function createMockServer(
-  handler: (req: MockRequest, res: ServerResponse<IncomingMessage>) => void,
-): Promise<Server> {
+function createMockServer(handler: (req: MockRequest, res: ServerResponse<IncomingMessage>) => void): Promise<Server> {
   const srv = createServer((req, res) => {
     const chunks: string[] = [];
     req.on('data', (c) => chunks.push(String(c)));
@@ -164,7 +162,9 @@ describe('streaming parser — reasoning_content edge cases', () => {
       // Third: tool_call delta (native OpenAI format)
       res.write(
         `data: ${JSON.stringify({
-          choices: [{ delta: { tool_calls: [{ index: 0, id: 'call_r1', function: { name: 'read', arguments: '' } }] } }],
+          choices: [
+            { delta: { tool_calls: [{ index: 0, id: 'call_r1', function: { name: 'read', arguments: '' } }] } },
+          ],
         })}\n\n`,
       );
       // Fourth: content tool call body + tool_call args

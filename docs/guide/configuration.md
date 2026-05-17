@@ -118,7 +118,7 @@ Use `model` to choose the AI core morphology from the active model ID. You can a
 coreVisualProfile = "qwen"
 ```
 
-Canonical values are lowercase: `model`, `default`, `qwen`, `openai`, `claude`, `deepseek`, and `gemini`.
+Canonical values are lowercase: `model`, `default`, `qwen`, `openai`, `frontier`, `deepseek`, and `gemini`.
 Synax also accepts `core_visual_profile` and legacy `[provider]`-scoped placement for compatibility.
 
 ## Legacy Format (backward compatible)

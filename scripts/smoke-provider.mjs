@@ -75,7 +75,7 @@ const PRESETS = {
     baseUrl: 'https://api.anthropic.com',
     apiKeyEnv: 'ANTHROPIC_API_KEY',
     apiKeyRequired: true,
-    model: process.env.SYNAX_ANTHROPIC_MODEL || 'claude-sonnet-4-5-20250929',
+    model: process.env.SYNAX_ANTHROPIC_MODEL || 'frontier-sonnet-4-5-20250929',
   },
 };
 

@@ -20,13 +20,10 @@ import type { AgentEvent, ToolEvent } from '../agent/events';
 import type { PatchPreview } from '../agent/patch';
 import type { ToolDefinition, ToolRegistry } from '../tools/types';
 import type { HolographicMemory, MemoryEntry, MemorySearchResult, HandoffManifest } from '../memory/HolographicMemory';
-import type {
-  MemoryAdapter,
-  RuntimeConfig,
-  RuntimeEvent,
-  RuntimeResult,
-  RuntimeRunInput,
-} from './types';
+import type { ContextBudgetSettings } from '../agent/context-budget';
+import type { Logger } from '../logging';
+import type { RunMode } from '../agent/task-policy';
+import type { MemoryAdapter, RuntimeConfig, RuntimeEvent, RuntimeResult, RuntimeRunInput } from './types';
 
 // ─── Memory Bridge ─────────────────────────────────────────
 // Wraps an external MemoryAdapter to satisfy Session's HolographicMemory-shaped
@@ -43,7 +40,7 @@ class MemoryBridge {
   }
 
   get isAvailable(): boolean {
-    return true;
+    return this.storeErrorCount < 5 && this.searchErrorCount < 5 && this.indexErrorCount < 5;
   }
 
   /** Fire-and-forget store. Handles both sync throws and async rejections. */
@@ -122,16 +119,25 @@ export class SynaxRuntime {
   private memory: MemoryAdapter | null;
   private tools: ToolDefinition[];
   private policy?: RuntimeConfig['policy'];
+  private mode: RunMode;
   private onEvent?: RuntimeConfig['onEvent'];
+  private onBudget?: RuntimeConfig['onBudget'];
+  private onActivity?: RuntimeConfig['onActivity'];
   private workingDir: string;
   private registry: ToolRegistry;
+  private sessionId?: string;
+  private bashEnabled: boolean;
+  private contextBudget?: Partial<ContextBudgetSettings>;
+  private maxOutputTokens?: number;
+  private logger?: Logger;
+  private memoryBridge: MemoryBridge | null = null;
 
   constructor(config: RuntimeConfig) {
     if (config.client) {
       this.client = config.client;
     } else if (config.model) {
       const input: ProviderFactoryInput = {
-        provider: config.model.provider === 'openai-compatible' ? 'custom' : (config.model.provider || 'custom'),
+        provider: config.model.provider === 'openai-compatible' ? 'custom' : config.model.provider || 'custom',
         baseUrl: config.model.baseUrl,
         model: config.model.model,
         apiKey: config.model.apiKey,
@@ -148,9 +154,18 @@ export class SynaxRuntime {
     this.memory = config.memory ?? null;
     this.tools = config.tools ?? [];
     this.policy = config.policy;
+    this.mode = config.mode ?? 'patch';
     this.onEvent = config.onEvent;
+    this.onBudget = config.onBudget;
+    this.onActivity = config.onActivity;
     this.workingDir = config.workingDir ?? process.cwd();
+    this.sessionId = config.sessionId;
+    this.bashEnabled = config.bashEnabled ?? true;
+    this.contextBudget = config.contextBudget;
+    this.maxOutputTokens = config.maxOutputTokens;
+    this.logger = config.logger;
     this.registry = createToolRegistry({ repoRoot: this.workingDir });
+    this.memoryBridge = this.memory ? new MemoryBridge(this.memory) : null;
 
     for (const tool of this.tools) {
       this.registry.register(tool);
@@ -173,20 +188,27 @@ export class SynaxRuntime {
 
     emit({ type: 'started', timestamp: eventNow() });
 
-    // Wrap memory adapter so Session can consume it
-    const wrappedMemory: HolographicMemory | null = this.memory
-      ? (new MemoryBridge(this.memory) as unknown as HolographicMemory)
+    // Use pre-built memory bridge so getMemoryStatus() can inspect its state
+    const wrappedMemory: HolographicMemory | null = this.memoryBridge
+      ? (this.memoryBridge as unknown as HolographicMemory)
       : null;
 
     const session = new Session({
       repoRoot: this.workingDir,
       client: this.client,
-      mode: 'patch',
-      bashEnabled: true,
+      sessionId: input.sessionId ?? this.sessionId,
+      mode: this.mode,
+      bashEnabled: this.bashEnabled,
       memory: wrappedMemory,
       registry: this.registry,
       maxToolCalls: 192,
       maxModelSteps: 64,
+      contextBudget: this.contextBudget,
+      abortSignal: input.signal,
+      maxOutputTokens: this.maxOutputTokens,
+      logger: this.logger,
+      onBudget: this.onBudget,
+      onActivity: this.onActivity,
       onEvent: (agentEvent: AgentEvent) => {
         this.forwardAgentEvent(agentEvent, emit);
       },
@@ -237,6 +259,20 @@ export class SynaxRuntime {
     };
   }
 
+  /**
+   * Check the health of the internal MemoryBridge.
+   * Returns null when no memory adapter is configured.
+   */
+  getMemoryStatus(): { available: boolean; storeErrors: number; searchErrors: number; indexErrors: number } | null {
+    if (!this.memoryBridge) return null;
+    return {
+      available: this.memoryBridge.isAvailable,
+      storeErrors: this.memoryBridge.storeErrorCount,
+      searchErrors: this.memoryBridge.searchErrorCount,
+      indexErrors: this.memoryBridge.indexErrorCount,
+    };
+  }
+
   private forwardAgentEvent(event: AgentEvent, emit: (e: RuntimeEvent) => void): void {
     switch (event.type) {
       case 'tool_started': {
@@ -267,6 +303,50 @@ export class SynaxRuntime {
           timestamp: event.timestamp,
         });
         break;
+      case 'assistant_message':
+        emit({
+          type: 'model_response',
+          content: (event as { content: string }).content,
+          timestamp: event.timestamp,
+        });
+        break;
+      case 'model_step_started':
+        emit({
+          type: 'model_step_started',
+          stepIndex: event.stepIndex ?? 0,
+          timestamp: event.timestamp,
+        });
+        break;
+      case 'task_started':
+        emit({
+          type: 'task_started',
+          timestamp: event.timestamp,
+        });
+        break;
+      case 'task_finished':
+        emit({
+          type: 'task_finished',
+          timestamp: event.timestamp,
+        });
+        break;
+      case 'token_usage': {
+        const tu = event as {
+          type: 'token_usage';
+          inputTokens: number;
+          outputTokens: number;
+          stepIndex?: number;
+          timestamp: string;
+        };
+        emit({
+          type: 'token_usage',
+          inputTokens: tu.inputTokens,
+          outputTokens: tu.outputTokens,
+          totalTokens: tu.inputTokens + tu.outputTokens,
+          step: tu.stepIndex ?? 0,
+          timestamp: tu.timestamp,
+        });
+        break;
+      }
       default:
         break;
     }
