@@ -7,6 +7,7 @@ import { resolveCoreVisualProfile } from './core-visual-profile';
 import { visibleLength } from './text-utils';
 import type { ModelPalette } from './model-palette';
 import { getModelPalette } from './model-palette';
+import { stripToolCallMarkup } from './markup-sanitizer';
 import {
   HUNK_PREVIEW_LINES,
   TEXT_PREVIEW_LINES,
@@ -22,6 +23,18 @@ type OpenTuiNode =
   | ReturnType<OpenTuiCore['Box']>
   | ReturnType<OpenTuiCore['Text']>
   | ReturnType<OpenTuiCore['ScrollBox']>;
+
+const CARD_BODY_LAYOUT = {
+  flexGrow: 1,
+  flexShrink: 1,
+  flexBasis: 0,
+  minWidth: 0,
+} as const;
+
+const FULL_WIDTH_TEXT = {
+  width: '100%',
+  wrapMode: 'word',
+} as const;
 
 export interface CheckpointRailEntry {
   title: string;
@@ -89,6 +102,7 @@ const COLORS: Record<SemanticEventClass, string> = {
   assistant_text: '#6272a4',
   dispatch: '#8be9fd',
   agent_status: '#ff79c6',
+  thinking: '#bd93f9',
 };
 
 const GLYPHS: Record<SemanticEventClass, string> = {
@@ -109,6 +123,7 @@ const GLYPHS: Record<SemanticEventClass, string> = {
   assistant_text: '→',
   dispatch: '◇',
   agent_status: '◈',
+  thinking: '◌',
 };
 
 export function renderArtifactRoot(
@@ -216,7 +231,7 @@ export function renderArtifactRoot(
       core.Text({ id: ACTIVITY_TEXT_ID, content: 'Ready.', fg: pal.textAccent }),
     ),
     ...(settingsLines && settingsLines.length > 0
-      ? [renderSettingsOverlay(core, settingsLines, pal, settingsActiveLabel)]
+      ? [renderSettingsOverlay(core, settingsLines, pal, settingsActiveLabel, terminalHeight)]
       : []),
     renderAutocompleteOverlay(core, autocomplete, pal, footerHeight),
     core.Box(
@@ -241,7 +256,7 @@ export function renderArtifactRoot(
           paddingX: 1,
           paddingY: 1,
         },
-        core.Text({ content: '> ', fg: pal.textMuted, width: '10%' }),
+        core.Text({ content: '> ', fg: pal.textMuted, width: 2 }),
         core.Box({ flexGrow: 1 }, input),
       ),
       core.Text({ id: 'synax-hints', content: footer.hints, fg: pal.textAccent }),
@@ -254,12 +269,15 @@ function renderSettingsOverlay(
   lines: string[],
   palette: TuiPalette,
   activeLabel?: string,
+  terminalHeight?: number,
 ): OpenTuiNode {
+  const overlayHeight = terminalHeight ?? '100%';
+  const backingLineCount = typeof terminalHeight === 'number' ? Math.max(0, terminalHeight - lines.length) : 0;
   return core.Box(
     {
       id: 'synax-settings',
       width: '100%',
-      height: lines.length,
+      height: overlayHeight,
       position: 'absolute',
       top: 0,
       left: 0,
@@ -272,6 +290,14 @@ function renderSettingsOverlay(
         id: `synax-settings-line-${index}`,
         content: index === 1 && activeLabel ? styledActiveSettingsLine(core, line, activeLabel, palette) : line,
         ...(index === 1 && activeLabel ? {} : { fg: palette.text }),
+      }),
+    ),
+    ...Array.from({ length: backingLineCount }, (_, index) =>
+      core.Box({
+        id: `synax-settings-backdrop-${index}`,
+        width: '100%',
+        height: 1,
+        backgroundColor: palette.background,
       }),
     ),
   );
@@ -382,6 +408,10 @@ export function renderArtifactCard(
     return renderAgentStatusCard(core, event, palette);
   }
 
+  if (event.class === 'thinking') {
+    return renderThinkingCard(core, event, expanded, onToggleExpand, palette);
+  }
+
   const pal = palette ?? getPalette();
   const color = eventColor(event.class, pal);
   const children = renderPayloadRows(
@@ -410,10 +440,10 @@ export function renderArtifactCard(
         id: event.id,
         width: '100%',
         flexDirection: 'row',
-        marginBottom: 0,
+        marginBottom: 1,
       },
-      core.Box({ width: '10%', minWidth: '10%', marginRight: 1 }, core.Text({ content: ' ', fg: color })),
-      core.Box({ flexGrow: 1, paddingY: 0 }, ...children),
+      core.Box({ width: 1, minWidth: 1, marginRight: 1 }, core.Text({ content: ' ', fg: color })),
+      core.Box({ ...CARD_BODY_LAYOUT, paddingY: 0 }, ...children),
     );
   }
 
@@ -424,10 +454,10 @@ export function renderArtifactCard(
       flexDirection: 'row',
       marginBottom: 1,
     },
-    core.Box({ width: '10%', backgroundColor: color, marginRight: 1 }),
+    core.Box({ width: 1, backgroundColor: color, marginRight: 1 }),
     core.Box(
       {
-        flexGrow: 1,
+        ...CARD_BODY_LAYOUT,
         flexDirection: 'column',
         border: true,
         borderStyle: 'single',
@@ -461,10 +491,10 @@ function renderPersistentStatusCard(core: OpenTuiCore, event: SemanticEvent, pal
       flexDirection: 'row',
       marginBottom: 1,
     },
-    core.Box({ width: '10%', backgroundColor: color, marginRight: 1 }),
+    core.Box({ width: 1, backgroundColor: color, marginRight: 1 }),
     core.Box(
       {
-        flexGrow: 1,
+        ...CARD_BODY_LAYOUT,
         flexDirection: 'column',
         border: true,
         borderStyle: 'single',
@@ -472,8 +502,8 @@ function renderPersistentStatusCard(core: OpenTuiCore, event: SemanticEvent, pal
         paddingX: 1,
         paddingY: 0,
       },
-      core.Text({ content: label, fg: color }),
-      ...(detail ? [core.Text({ content: detail, fg: pal.textAccent })] : []),
+      core.Text({ ...FULL_WIDTH_TEXT, content: label, fg: color }),
+      ...(detail ? [core.Text({ ...FULL_WIDTH_TEXT, content: detail, fg: pal.textAccent })] : []),
     ),
   );
 }
@@ -525,12 +555,13 @@ function renderPayloadRows(
 
   if (payload.type === 'approval') {
     return [
-      core.Text({ content: payload.action, fg: pal.text }),
+      core.Text({ ...FULL_WIDTH_TEXT, content: payload.action, fg: pal.text }),
       core.Text({
+        ...FULL_WIDTH_TEXT,
         content: `Risk: ${payload.details}   [${payload.riskLevel.toUpperCase()}]`,
         fg: riskColor(payload.riskLevel),
       }),
-      core.Text({ content: payload.choices.join('   '), fg: pal.textAccent }),
+      core.Text({ ...FULL_WIDTH_TEXT, content: payload.choices.join('   '), fg: pal.textAccent }),
     ];
   }
 
@@ -541,7 +572,7 @@ function renderPayloadRows(
     }
     // Skip inner title when it duplicates the card crown (crown already shows "Result")
     const titleRows: OpenTuiNode[] =
-      payload.title !== 'Result' ? [core.Text({ content: payload.title, fg: color })] : [];
+      payload.title !== 'Result' ? [core.Text({ ...FULL_WIDTH_TEXT, content: payload.title, fg: color })] : [];
     return [
       ...titleRows,
       ...renderResultMarkdown(core, payload.body, pal),
@@ -553,7 +584,7 @@ function renderPayloadRows(
   }
   // Error card: full bordered.
   return [
-    core.Text({ content: payload.title, fg: color }),
+    core.Text({ ...FULL_WIDTH_TEXT, content: payload.title, fg: color }),
     ...textPayloadRows(core, payload.body, eventClass, expanded, pal),
     ...(eventClass === 'error'
       ? [actionText(core, '[Retry] [Skip] [Show raw]', pal.textAccent)]
@@ -589,7 +620,7 @@ function renderResultMarkdown(core: OpenTuiCore, body: string, palette: TuiPalet
           nodes.push(
             core.Box(
               { paddingLeft: 2, flexDirection: 'column' },
-              ...codeBlockLines.map((cl) => core.Text({ content: cl, fg: palette.info })),
+              ...codeBlockLines.map((cl) => core.Text({ ...FULL_WIDTH_TEXT, content: cl, fg: palette.info })),
             ),
           );
           codeBlockLines.length = 0;
@@ -624,14 +655,20 @@ function renderResultMarkdown(core: OpenTuiCore, body: string, palette: TuiPalet
       const level = hMatch[1].length;
       const text = plainInlineMarkdown(hMatch[2]);
       const hColor = level <= 2 ? palette.brand : palette.warning;
-      nodes.push(core.Text({ content: text, fg: hColor }));
+      nodes.push(core.Text({ ...FULL_WIDTH_TEXT, content: text, fg: hColor }));
       continue;
     }
 
     // Bullet lists
     const bMatch = line.match(/^\s*[-*+]\s+(.+)/);
     if (bMatch) {
-      nodes.push(core.Text({ content: styledInlineMarkdown(core, `• ${bMatch[1]}`, palette), fg: palette.text }));
+      nodes.push(
+        core.Text({
+          ...FULL_WIDTH_TEXT,
+          content: styledInlineMarkdown(core, `• ${bMatch[1]}`, palette),
+          fg: palette.text,
+        }),
+      );
       continue;
     }
 
@@ -640,6 +677,7 @@ function renderResultMarkdown(core: OpenTuiCore, body: string, palette: TuiPalet
     if (nMatch) {
       nodes.push(
         core.Text({
+          ...FULL_WIDTH_TEXT,
           content: styledInlineMarkdown(core, `${nMatch[1]}${nMatch[2]} ${nMatch[3]}`, palette),
           fg: palette.text,
         }),
@@ -652,6 +690,7 @@ function renderResultMarkdown(core: OpenTuiCore, body: string, palette: TuiPalet
     if (qMatch && qMatch[1]) {
       nodes.push(
         core.Text({
+          ...FULL_WIDTH_TEXT,
           content: styledInlineMarkdown(core, qMatch[1], palette, palette.textMuted),
           fg: palette.textMuted,
         }),
@@ -661,11 +700,11 @@ function renderResultMarkdown(core: OpenTuiCore, body: string, palette: TuiPalet
 
     // Empty lines
     if (!line.trim()) {
-      nodes.push(core.Text({ content: '', fg: palette.text }));
+      nodes.push(core.Text({ ...FULL_WIDTH_TEXT, content: '', fg: palette.text }));
       continue;
     }
 
-    nodes.push(core.Text({ content: styledInlineMarkdown(core, line, palette), fg: palette.text }));
+    nodes.push(core.Text({ ...FULL_WIDTH_TEXT, content: styledInlineMarkdown(core, line, palette), fg: palette.text }));
   }
 
   return nodes;
@@ -708,7 +747,7 @@ function renderResultTable(core: OpenTuiCore, rows: string[], palette: TuiPalett
       })
       .join('  ')
       .trimEnd();
-    return core.Text({ content, fg: rowIndex === 0 ? palette.brand : palette.text });
+    return core.Text({ ...FULL_WIDTH_TEXT, content, fg: rowIndex === 0 ? palette.brand : palette.text });
   });
 }
 
@@ -722,7 +761,7 @@ function textPayloadRows(
   const lines = body.split('\n');
   const visibleLines = eventClass === 'tool_result' || expanded ? lines : lines.slice(0, TEXT_PREVIEW_LINES);
   const fg = eventClass === 'tool_result' ? palette.text : palette.textMuted;
-  return visibleLines.map((line) => core.Text({ content: line, fg }));
+  return visibleLines.map((line) => core.Text({ ...FULL_WIDTH_TEXT, content: line, fg }));
 }
 
 function isExpandableText(body: string, eventClass: SemanticEventClass, expanded: boolean): boolean {
@@ -900,6 +939,7 @@ function stripAnsi(text: string): string {
 
 function actionText(core: OpenTuiCore, content: string, fg: string, onToggle?: () => void): OpenTuiNode {
   return core.Text({
+    ...FULL_WIDTH_TEXT,
     content,
     fg,
     onMouseDown: (event: { stopPropagation?: () => void; preventDefault?: () => void }) => {
@@ -958,12 +998,14 @@ function renderCompactBand(
 
   if (payload.type === 'plan') {
     return core.Text({
+      ...FULL_WIDTH_TEXT,
       content: `${glyph} ${payload.title}`,
       fg: color,
     });
   }
   if (payload.type === 'edit') {
     return core.Text({
+      ...FULL_WIDTH_TEXT,
       content: `${glyph} ${payload.file}   +${payload.linesAdded} ~${payload.linesModified} -${payload.linesRemoved}   ${payload.summary.slice(0, 50)}`,
       fg: color,
     });
@@ -974,6 +1016,7 @@ function renderCompactBand(
         ? ` [${payload.hunks.length - HUNK_PREVIEW_LINES} more]`
         : '';
     return core.Text({
+      ...FULL_WIDTH_TEXT,
       content: `${glyph} ${payload.file}${countLabel}`,
       fg: color,
     });
@@ -981,36 +1024,42 @@ function renderCompactBand(
   if (payload.type === 'command') {
     const status = payload.exitCode === undefined ? '' : payload.exitCode === 0 ? ' ok' : ` exit ${payload.exitCode}`;
     return core.Text({
+      ...FULL_WIDTH_TEXT,
       content: `${glyph} ${(payload.command || 'command').slice(0, 60)}${status}`,
       fg: payload.exitCode && payload.exitCode !== 0 ? palette.error : color,
     });
   }
   if (payload.type === 'tool_result') {
     return core.Text({
+      ...FULL_WIDTH_TEXT,
       content: `${glyph} ${payload.summary || payload.title}`,
       fg: payload.status === 'error' ? palette.error : palette.text,
     });
   }
   if (payload.type === 'commit') {
     return core.Text({
+      ...FULL_WIDTH_TEXT,
       content: `${glyph} ${payload.message.slice(0, 70)}`,
       fg: color,
     });
   }
   if (payload.type === 'checkpoint') {
     return core.Text({
+      ...FULL_WIDTH_TEXT,
       content: `${glyph} ${payload.title}   ${payload.hash ?? ''}`,
       fg: color,
     });
   }
   if (payload.type === 'status') {
     return core.Text({
+      ...FULL_WIDTH_TEXT,
       content: payload.label,
       fg: color,
     });
   }
   // Default compact band for any other payload.
   return core.Text({
+    ...FULL_WIDTH_TEXT,
     content: `${glyph} ${payload.type}`,
     fg: palette.textMuted,
   });
@@ -1030,9 +1079,9 @@ function renderResultStats(core: OpenTuiCore, event: SemanticEvent, palette: Tui
   if (fileCount && fileCount > 0) parts.push(`Touched files: ${fileCount}`);
   // Commands count is not tracked directly — approximate from file count.
   if (parts.length > 0) {
-    return core.Text({ content: parts.join('   '), fg: palette.textAccent });
+    return core.Text({ ...FULL_WIDTH_TEXT, content: parts.join('   '), fg: palette.textAccent });
   }
-  return core.Text({ content: '', fg: palette.textAccent });
+  return core.Text({ ...FULL_WIDTH_TEXT, content: '', fg: palette.textAccent });
 }
 
 /** Render a compact horizontal diagnostic band for slash command output.
@@ -1063,9 +1112,9 @@ function renderDiagnosticCard(
   const summary = summaryLine.length > 80 ? `${summaryLine.slice(0, 77)}...` : summaryLine;
 
   return [
-    core.Text({ content: `${payload.title}  —  ${summary}`, fg: color }),
+    core.Text({ ...FULL_WIDTH_TEXT, content: `${payload.title}  —  ${summary}`, fg: color }),
     ...(lines.length > 2
-      ? [core.Text({ content: `[${lines.length - 1} lines of detail]`, fg: palette.textAccent })]
+      ? [core.Text({ ...FULL_WIDTH_TEXT, content: `[${lines.length - 1} lines of detail]`, fg: palette.textAccent })]
       : []),
   ];
 }
@@ -1087,11 +1136,11 @@ function renderDispatchCard(core: OpenTuiCore, event: SemanticEvent, palette?: T
       flexDirection: 'row',
       marginBottom: 0,
     },
-    core.Box({ width: '10%', minWidth: '10%', marginRight: 1 }, core.Text({ content: ' ', fg: color })),
+    core.Box({ width: 1, minWidth: 1, marginRight: 1 }, core.Text({ content: ' ', fg: color })),
     core.Box(
-      { flexGrow: 1, flexDirection: 'column', paddingY: 0 },
-      core.Text({ content: `◇ ${title}`, fg: color }),
-      ...bodyLines.map((line) => core.Text({ content: `  ${line}`, fg: pal.textAccent })),
+      { ...CARD_BODY_LAYOUT, flexDirection: 'column', paddingY: 0 },
+      core.Text({ ...FULL_WIDTH_TEXT, content: `◇ ${title}`, fg: color }),
+      ...bodyLines.map((line) => core.Text({ ...FULL_WIDTH_TEXT, content: `  ${line}`, fg: pal.textAccent })),
     ),
   );
 }
@@ -1115,8 +1164,11 @@ function renderAgentStatusCard(core: OpenTuiCore, event: SemanticEvent, palette?
         flexDirection: 'row',
         marginBottom: 0,
       },
-      core.Box({ width: '10%', minWidth: '10%', marginRight: 1 }, core.Text({ content: ' ', fg: color })),
-      core.Box({ flexGrow: 1, paddingY: 0 }, core.Text({ content: `◈ ${name} · running`, fg: color })),
+      core.Box({ width: 1, minWidth: 1, marginRight: 1 }, core.Text({ content: ' ', fg: color })),
+      core.Box(
+        { ...CARD_BODY_LAYOUT, paddingY: 0 },
+        core.Text({ ...FULL_WIDTH_TEXT, content: `◈ ${name} · running`, fg: color }),
+      ),
     );
   }
 
@@ -1130,10 +1182,10 @@ function renderAgentStatusCard(core: OpenTuiCore, event: SemanticEvent, palette?
         flexDirection: 'row',
         marginBottom: 1,
       },
-      core.Box({ width: '10%', backgroundColor: color, marginRight: 1 }),
+      core.Box({ width: 1, backgroundColor: color, marginRight: 1 }),
       core.Box(
         {
-          flexGrow: 1,
+          ...CARD_BODY_LAYOUT,
           flexDirection: 'column',
           border: true,
           borderStyle: 'single',
@@ -1142,7 +1194,7 @@ function renderAgentStatusCard(core: OpenTuiCore, event: SemanticEvent, palette?
           paddingX: 1,
           paddingY: 0,
         },
-        core.Text({ content: body, fg: color }),
+        core.Text({ ...FULL_WIDTH_TEXT, content: body, fg: color }),
       ),
     );
   }
@@ -1162,10 +1214,10 @@ function renderAgentStatusCard(core: OpenTuiCore, event: SemanticEvent, palette?
       flexDirection: 'row',
       marginBottom: 1,
     },
-    core.Box({ width: '10%', backgroundColor: color, marginRight: 1 }),
+    core.Box({ width: 1, backgroundColor: color, marginRight: 1 }),
     core.Box(
       {
-        flexGrow: 1,
+        ...CARD_BODY_LAYOUT,
         flexDirection: 'column',
         border: true,
         borderStyle: 'single',
@@ -1174,10 +1226,93 @@ function renderAgentStatusCard(core: OpenTuiCore, event: SemanticEvent, palette?
         paddingX: 1,
         paddingY: 0,
       },
-      core.Text({ content: statsParts.length > 0 ? statsParts.join(' · ') : '', fg: pal.textAccent }),
+      core.Text({
+        ...FULL_WIDTH_TEXT,
+        content: statsParts.length > 0 ? statsParts.join(' · ') : '',
+        fg: pal.textAccent,
+      }),
       ...(body.trim()
         ? renderResultMarkdown(core, body, pal)
-        : [core.Text({ content: '(no output)', fg: pal.textMuted })]),
+        : [core.Text({ ...FULL_WIDTH_TEXT, content: '(no output)', fg: pal.textMuted })]),
     ),
   );
+}
+
+function renderThinkingCard(
+  core: OpenTuiCore,
+  event: SemanticEvent,
+  expanded = false,
+  onToggleExpand?: (id: string) => void,
+  palette?: TuiPalette,
+): OpenTuiNode {
+  const pal = palette ?? getPalette();
+  const payload = event.artifact;
+  const title = payload.type === 'text' ? payload.title : 'Thinking';
+  const body = payload.type === 'text' ? payload.body : '';
+  const active = /^thinking/i.test(title);
+  const color = active ? pal.semantic.thinking : pal.textAccent;
+  const normalized = normalizeThinkingText(body);
+  const bodyLines = normalized.split('\n').filter((line) => line.trim().length > 0);
+  const preview = thinkingPreview(normalized);
+  const shown = expanded ? bodyLines : [preview];
+  const eventId = event.id;
+
+  return core.Box(
+    {
+      id: event.id,
+      width: '100%',
+      flexDirection: 'row',
+      marginBottom: 1,
+    },
+    core.Box({ width: 1, backgroundColor: color, marginRight: 1 }),
+    core.Box(
+      {
+        ...CARD_BODY_LAYOUT,
+        flexDirection: 'column',
+        border: true,
+        borderStyle: 'single',
+        borderColor: color,
+        title: `  ◌  ${title}  `,
+        paddingX: 1,
+        paddingY: 0,
+      },
+      core.Text({
+        ...FULL_WIDTH_TEXT,
+        content: new (core as any).StyledText([
+          core.italic(core.dim(active && !expanded ? shimmerThinkingLine(preview) : (shown[0] ?? preview))),
+        ]),
+        fg: pal.textMuted,
+        onMouseDown: (mouseEvent: { stopPropagation?: () => void; preventDefault?: () => void }) => {
+          mouseEvent.stopPropagation?.();
+          mouseEvent.preventDefault?.();
+          onToggleExpand?.(eventId);
+        },
+      }),
+      ...(expanded
+        ? shown.slice(1).map((line) =>
+            core.Text({
+              ...FULL_WIDTH_TEXT,
+              content: new (core as any).StyledText([core.italic(core.dim(line))]),
+              fg: pal.textMuted,
+            }),
+          )
+        : [core.Text({ ...FULL_WIDTH_TEXT, content: '[Ctrl+O expand]', fg: pal.textAccent })]),
+    ),
+  );
+}
+
+function shimmerThinkingLine(text: string): string {
+  return `◇ ${text}`;
+}
+
+function normalizeThinkingText(text: string): string {
+  return stripToolCallMarkup(text)
+    .replace(/\s+([,.;:!?])/g, '$1')
+    .trim();
+}
+
+function thinkingPreview(text: string): string {
+  if (!text) return 'waiting for reasoning tokens';
+  const maxLength = 120;
+  return text.length > maxLength ? `${text.slice(0, maxLength - 1).trimEnd()}…` : text;
 }

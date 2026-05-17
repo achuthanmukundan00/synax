@@ -16,8 +16,7 @@ import {
   type SettingsTab,
 } from '../settings/settings-state';
 import { getCommand } from '../settings/slash-command-registry';
-import type { InputStreamLike } from './terminal';
-import type { Writable } from 'node:stream';
+import type { Readable, Writable } from 'node:stream';
 import {
   renderArtifactRoot,
   renderArtifactCard,
@@ -39,6 +38,7 @@ import {
 import { getPalette, detectThemeMode, type TuiPalette } from './theme';
 import { tuiStats } from './telemetry';
 import { tokenStreamFrame, tokenStreamFrameText, tokenStreamRoleColor } from './token-stream';
+import { stripToolCallMarkup } from './markup-sanitizer';
 import {
   AdaptiveRenderScheduler,
   CMUX_ACTIVE_FPS,
@@ -63,9 +63,17 @@ import {
 } from './tui-constants';
 import { padAnsi, visibleLength } from './text-utils';
 import { getModelPalette, type ModelPalette } from './model-palette';
-import { parseInputChunk } from './input';
+import { createInputParser, parseInputChunk } from './input';
 
 type OpenTuiCore = typeof import('@opentui/core');
+type InputStreamLike = Readable & {
+  isTTY?: boolean;
+  setRawMode?: (mode: boolean) => void;
+  resume: () => void;
+  pause: () => void;
+};
+const ENABLE_BRACKETED_PASTE = '\x1b[?2004h';
+const DISABLE_BRACKETED_PASTE = '\x1b[?2004l';
 
 import {
   resolveCtrlCBehavior,
@@ -147,6 +155,7 @@ export async function runInteractiveTui(
     backgroundColor: '#050505',
     consoleMode: 'disabled',
   });
+  stdout.write(ENABLE_BRACKETED_PASTE);
 
   let state: RunStateSnapshot = createInitialRunStateSnapshot(Date.now());
   let events: SemanticEvent[] = [];
@@ -173,6 +182,9 @@ export async function runInteractiveTui(
   let pasteActive = false;
   let pasteBlockCount = 0;
   const pasteBlocks: { blockNumber: number; charCount: number }[] = [];
+  const bracketedPasteParser = createInputParser();
+  let rawPasteActive = false;
+  let activeThinkingEventId: string | null = null;
   let expandCollapseVersion = 0;
   let promptDirty = false;
   let layoutDirty = false;
@@ -624,7 +636,7 @@ export async function runInteractiveTui(
       text = `working · ${orchestrationReturnedCount}/${total} agents returned`;
     } else if (state.phase === 'thinking') {
       glyph = activityGlyph(busyAnimationFrame);
-      text = `thinking · ${activitySummary(state)}`;
+      text = 'thinking';
     } else if (state.phase === 'tool_execution') {
       glyph = activityGlyph(busyAnimationFrame);
       text = `working · ${activitySummary(state)}`;
@@ -947,10 +959,106 @@ export async function runInteractiveTui(
     }
   };
 
+  const appendPromptText = (value: string): void => {
+    if (!value) return;
+    const input = renderer.root.findDescendantById('synax-input');
+    const currentPrompt = input ? readPromptValue(input) : prompt;
+    syncPromptValue(`${currentPrompt}${value}`);
+  };
+
+  const appendPasteText = (value: string): void => {
+    if (!value) return;
+    pasteBlockCount++;
+    pasteBlocks.push({ blockNumber: pasteBlockCount, charCount: value.length });
+    appendPromptText(value);
+  };
+
+  /**
+   * Strip protocol XML markup from reasoning content before display.
+   * Prevents raw </think>, <tool_call>, <function=...> tags from
+   * leaking into the user-visible Thinking card.
+   *
+   * Safe for streaming: strips complete blocks AND bare tags so
+   * cross-chunk blocks are handled when the accumulated body is
+   * re-sanitized after each append.
+   */
+  const sanitizeThinkingContent = (text: string): string => {
+    let result = stripToolCallMarkup(text);
+    // If only a non-word character remains (◇, bullet, etc.), strip it
+    if (/^\W+$/.test(result)) result = '';
+    return result;
+  };
+
+  const upsertThinkingCard = (chunk: string): void => {
+    const text = chunk;
+    const sanitized = sanitizeThinkingContent(text);
+    if (!sanitized.trim()) return;
+    if (!activeThinkingEventId) {
+      activeThinkingEventId = `thinking-${Date.now()}-${events.length}`;
+      events.push({
+        id: activeThinkingEventId,
+        class: 'thinking',
+        timestamp: Date.now(),
+        artifact: { type: 'text', title: 'Thinking', body: sanitized.trimStart() },
+        metadata: { model: state.modelId || undefined },
+      });
+      events = events.slice(Math.max(0, events.length - MAX_TRANSCRIPT_EVENTS));
+      eventsVersion++;
+      return;
+    }
+
+    const index = events.findIndex((existing) => existing.id === activeThinkingEventId);
+    const existing = index >= 0 ? events[index] : undefined;
+    if (!existing || existing.artifact.type !== 'text') {
+      activeThinkingEventId = null;
+      upsertThinkingCard(chunk);
+      return;
+    }
+    const next = {
+      ...existing,
+      timestamp: Date.now(),
+      artifact: {
+        ...existing.artifact,
+        body: `${existing.artifact.body}${sanitized}`,
+      },
+    };
+    // Re-sanitize the accumulated body to catch protocol tags that
+    // spanned multiple streaming chunks and are now complete.
+    next.artifact.body = sanitizeThinkingContent(next.artifact.body).trim();
+    if (!next.artifact.body) {
+      events = events.filter((e) => e.id !== activeThinkingEventId);
+      activeThinkingEventId = null;
+      eventsVersion++;
+      return;
+    }
+    events = [...events.slice(0, index), next, ...events.slice(index + 1)];
+    eventsVersion++;
+  };
+
+  const stopThinkingCard = (): void => {
+    if (!activeThinkingEventId) return;
+    const index = events.findIndex((existing) => existing.id === activeThinkingEventId);
+    const existing = index >= 0 ? events[index] : undefined;
+    activeThinkingEventId = null;
+    if (!existing || existing.artifact.type !== 'text') return;
+    events = [
+      ...events.slice(0, index),
+      { ...existing, artifact: { ...existing.artifact, title: 'Stopped thinking' } },
+      ...events.slice(index + 1),
+    ];
+    eventsVersion++;
+  };
+
   session.setEventSink?.((event) => {
     if (exiting) return;
     if (event.type === 'task_started' || event.type === 'user_message') {
       hasAssistantResultThisTurn = false;
+    }
+    if (event.type === 'assistant_delta' && event.reasoningContent) {
+      upsertThinkingCard(event.reasoningContent);
+    }
+    if (event.type === 'tool_started') {
+      stopThinkingCard();
     }
     state = applyEventToRunState(state, event, Date.now());
     const newEvents = classifyAgentEvent(event, state, Date.now());
@@ -1332,6 +1440,36 @@ export async function runInteractiveTui(
     return true;
   }
 
+  function handleRawBracketedPasteInput(sequence: string): boolean {
+    const startsPaste = sequence.includes('\x1b[200~');
+    const endsPaste = sequence.includes('\x1b[201~');
+    if (!rawPasteActive && !startsPaste) return false;
+    rawPasteActive = rawPasteActive || startsPaste;
+    const parsed = bracketedPasteParser.parse(sequence);
+    if (endsPaste) rawPasteActive = false;
+
+    for (const event of parsed) {
+      if (event.type === 'paste') {
+        appendPasteText(event.value ?? '');
+        continue;
+      }
+      if (event.type === 'text') {
+        appendPromptText(event.value ?? '');
+        continue;
+      }
+      if (event.type === 'newline') {
+        appendPromptText('\n');
+        continue;
+      }
+      if (event.type === 'submit') {
+        const value = promptValueFromInput();
+        if (value.trim()) handleInputSubmit(value);
+      }
+    }
+    render('input', { immediate: true });
+    return true;
+  }
+
   /** Autocomplete up/down navigation */
   function handleAutocompleteNav(key: { name: string; preventDefault?: () => void }): void {
     if (isUpKey(key.name)) {
@@ -1380,6 +1518,7 @@ export async function runInteractiveTui(
     render();
   }
 
+  renderer.prependInputHandler(handleRawBracketedPasteInput);
   renderer.prependInputHandler(handleRawSlashAutocompleteInput);
   renderer.prependInputHandler(handleRawHistoryScrollInput);
 
@@ -1407,6 +1546,17 @@ export async function runInteractiveTui(
     // --- Ctrl+R: raw event stream debug overlay ---
     if (key.ctrl && key.name === 'r') {
       handleCtrlR();
+      return;
+    }
+
+    if (key.ctrl && key.name === 'o') {
+      const id = activeThinkingEventId ?? latestThinkingEventId(events);
+      if (id) {
+        expandedState[id] = !expandedState[id];
+        tuiStats.recordExpandToggle();
+        expandCollapseVersion++;
+        render('input', { immediate: true });
+      }
       return;
     }
 
@@ -1635,6 +1785,7 @@ export async function runInteractiveTui(
 
   renderScheduler.dispose();
   if (resizeDebounce) clearTimeout(resizeDebounce);
+  stdout.write(DISABLE_BRACKETED_PASTE);
   session.setEventSink?.(null);
 }
 
@@ -1698,6 +1849,14 @@ async function loadOpenTuiCore(): Promise<OpenTuiCore> {
 function visibleEvents(events: SemanticEvent[], state: RunStateSnapshot): SemanticEvent[] {
   if (events.length > 0) return events;
   return semanticEventsFromDebugHistory(state);
+}
+
+function latestThinkingEventId(events: SemanticEvent[]): string | undefined {
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const event = events[index];
+    if (event?.class === 'thinking') return event.id;
+  }
+  return undefined;
 }
 
 function railState(
