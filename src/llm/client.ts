@@ -602,7 +602,7 @@ export function createOpenAICompatibleClient(
           preserveReasoningContent: Boolean(isDeepSeek || thinkingEnabled),
           requireReasoningContent: Boolean(thinkingEnabled),
         }),
-        temperature: opts.temperature ?? 0,
+        ...(opts.temperature !== undefined ? { temperature: opts.temperature } : {}),
         stream: Boolean(opts.onDelta),
         max_tokens: opts.maxTokens ?? 8192,
         ...(opts.tools && opts.tools.length > 0

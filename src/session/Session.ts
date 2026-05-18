@@ -924,7 +924,6 @@ export class Session {
               response = await this.client.chat({
                 messages: assembled,
                 tools,
-                temperature: 0,
                 maxTokens: this.maxOutputTokens,
                 signal: this.abortSignal,
                 onDelta: (delta) => emitAssistantDelta(this, delta),
@@ -940,7 +939,6 @@ export class Session {
               response = await this.client.chat({
                 messages: assembled,
                 tools,
-                temperature: 0,
                 maxTokens: this.maxOutputTokens,
                 signal: this.abortSignal,
                 onDelta: (delta) => emitAssistantDelta(this, delta),
