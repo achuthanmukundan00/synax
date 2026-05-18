@@ -12,6 +12,7 @@ import type { ContextBudgetSettings } from '../agent/context-budget';
 import { estimateTokens, truncateForTokenBudget } from '../agent/context-budget';
 import { eventNow, type AgentEvent } from '../agent/events';
 import { sanitizeReasoning } from '../llm/repair/reasoning-sanitizer';
+import { STATUS_ONLY_PATTERNS } from './tool-definitions';
 import type { AgentMessage, AgentConversation, AgentActivity } from './types';
 
 // ─── Response formatting ─────────────────────────────────────────────────────
@@ -21,6 +22,16 @@ export function assistantVisibleContent(content: string): string {
     .content.replace(/<tool_call>[\s\S]*?<\/tool_call>/gi, '')
     .replace(/<\|tool_call\|>[\s\S]*/gi, '')
     .trim();
+}
+
+/**
+ * Check whether a final answer string is a status-only placeholder that
+ * should be rejected (e.g. "completed", "Status: completed", empty).
+ */
+export function isStatusOnlyOutput(output: string): boolean {
+  const trimmed = output.trim();
+  if (trimmed.length === 0) return true;
+  return STATUS_ONLY_PATTERNS.some((p) => p.test(trimmed));
 }
 
 export function assistantMessage(response: ChatResponse, settings?: ContextBudgetSettings): AgentMessage {

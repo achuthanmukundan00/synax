@@ -84,6 +84,7 @@ import {
   emitAssistantDelta,
   errorMessage,
   assistantVisibleContent,
+  isStatusOnlyOutput,
 } from './formatting';
 
 import { buildModelRequest, guardModelRequestMultiStage, classifyResultForRecovery } from './message-assembly';
@@ -96,7 +97,10 @@ const DEFAULT_MAX_TOOL_CALLS = 192;
 const MAX_CONSECUTIVE_RECOVERABLE_TOOL_ERRORS = 3;
 
 export function finalAnswerFromResponse(response: ChatResponse): string {
-  return assistantVisibleContent(response.content) || '';
+  const visible = assistantVisibleContent(response.content) || '';
+  // Reject status-only placeholder outputs (e.g. "completed", empty string)
+  if (isStatusOnlyOutput(visible)) return '';
+  return visible;
 }
 
 // ─── Agent event type guard ──────────────────────────────────────────────────
@@ -299,8 +303,23 @@ export class Session {
   // ── Static factory ──────────────────────────────────────────────────────
 
   /** Create a fresh agent conversation with the Synax system prompt. */
-  static createConversation(options: { skillMessages?: string[] } = {}): AgentConversation {
-    const messages: AgentMessage[] = [{ role: 'system', content: systemPrompt() }];
+  static createConversation(options: {
+    skillMessages?: string[];
+    tools?: string[];
+    memoryWired?: boolean;
+    hasMutationTools?: boolean;
+  } = {}): AgentConversation {
+    const toolNames = options.tools && options.tools.length > 0
+      ? options.tools
+      : ['read', 'write', 'edit', 'bash', 'search_memory', 'save_memory', 'view_image'];
+    const messages: AgentMessage[] = [{
+      role: 'system',
+      content: systemPrompt({
+        tools: toolNames,
+        memoryWired: options.memoryWired,
+        hasMutationTools: options.hasMutationTools,
+      }),
+    }];
     if (options.skillMessages && options.skillMessages.length > 0) {
       for (const message of options.skillMessages) {
         if (message.trim().length === 0) continue;
@@ -320,7 +339,17 @@ export class Session {
 
   /** Reset this session's conversation to a fresh state (preserves event subscriptions). */
   resetConversation(options: { skillMessages?: string[] } = {}): void {
-    const messages: AgentMessage[] = [{ role: 'system', content: systemPrompt() }];
+    const tools = this.getModelTools();
+    const toolNames = tools.map((t) => t.name);
+    const hasMutation = toolNames.some((n) => n === 'write' || n === 'edit' || n === 'bash' || n === 'save_memory');
+    const messages: AgentMessage[] = [{
+      role: 'system',
+      content: systemPrompt({
+        tools: toolNames,
+        memoryWired: this.memory !== null && this.memory.isAvailable,
+        hasMutationTools: hasMutation,
+      }),
+    }];
     if (options.skillMessages && options.skillMessages.length > 0) {
       for (const message of options.skillMessages) {
         if (message.trim().length === 0) continue;

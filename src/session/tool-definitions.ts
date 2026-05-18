@@ -2,11 +2,54 @@
  * Tool definitions — model-facing tool schemas and the Synax system prompt.
  *
  * Extracted from Session.ts. These are pure data — no state, no side effects.
+ *
+ * System prompt tool names are generated from actual tool manifests, not
+ * hardcoded. A test enforces that prompt claims match registered tools.
  */
 
 import { type ToolDefinition } from '../tools/types';
 import { getAllowedModelTools } from '../agent/task-policy';
 import type { ModelToolSurfaceOptions } from './types';
+
+// ─── Tool name constants (single source of truth) ────────────────────────────
+
+export const TOOL_NAMES = {
+  read: 'read',
+  write: 'write',
+  edit: 'edit',
+  bash: 'bash',
+  search_memory: 'search_memory',
+  save_memory: 'save_memory',
+  view_image: 'view_image',
+} as const;
+
+/** All model-facing tool names that may appear in the system prompt. */
+export const ALL_MODEL_FACING_TOOL_NAMES: readonly string[] = [
+  TOOL_NAMES.read,
+  TOOL_NAMES.write,
+  TOOL_NAMES.edit,
+  TOOL_NAMES.bash,
+  TOOL_NAMES.search_memory,
+  TOOL_NAMES.save_memory,
+  TOOL_NAMES.view_image,
+];
+
+// ─── Status-only answer patterns to reject ───────────────────────────────────
+
+/**
+ * Patterns that indicate a model produced a status-only final answer
+ * instead of actual user-visible output. These are rejected.
+ */
+export const STATUS_ONLY_PATTERNS: readonly RegExp[] = [
+  /^completed\s*$/i,
+  /^status:\s*completed\s*$/i,
+  /^working tree:\s*(clean|dirty)\s*$/i,
+  /^completed,\s*working tree (clean|dirty)\s*$/i,
+  /^done\s*$/i,
+  /^ok\s*$/i,
+  /^finished\s*$/i,
+  /^\s*$/,
+];
 
 // ─── Model-facing tool definitions ───────────────────────────────────────────
 
@@ -157,6 +200,47 @@ export function buildModelFacingTools(options: ModelToolSurfaceOptions = {}): To
     });
   }
 
+  // save_memory: mutation tool for explicit persistence (mode-gated like write/edit)
+  if (allowedNames.includes(TOOL_NAMES.save_memory)) {
+    tools.push({
+      name: TOOL_NAMES.save_memory,
+      description:
+        'Save a memory entry for future retrieval. Use this to persist notes, preferences, ' +
+        'findings, or decisions that should survive across turns and sessions. ' +
+        'Content is indexed for search_memory lookup. ' +
+        'Use search_memory first to avoid duplicates.',
+      inputSchema: {
+        type: 'object',
+        required: ['content'],
+        properties: {
+          content: {
+            type: 'string',
+            description: 'Text content to persist. Be specific so future searches find it.',
+          },
+          domainTags: {
+            type: 'array',
+            items: { type: 'string' },
+            description: 'Optional domain tags for categorization (e.g. ["autocareer", "preference"]).',
+          },
+        },
+        additionalProperties: false,
+      },
+      safetyPolicy: {
+        readOnly: false,
+        rejectsUnsafePaths: false,
+        boundedOutput: true,
+      },
+      ledgerBehavior: 'none',
+      async execute() {
+        return {
+          success: false,
+          toolName: TOOL_NAMES.save_memory,
+          error: 'handled by the agent runner',
+        };
+      },
+    });
+  }
+
   // search_memory: always available (read-only, no fs access)
   tools.push({
     name: 'search_memory',
@@ -231,19 +315,82 @@ export function buildModelFacingTools(options: ModelToolSurfaceOptions = {}): To
 
 // ─── System prompt ───────────────────────────────────────────────────────────
 
-/** The canonical Synax system prompt. Exported for reuse by delegation layers. */
-export function systemPrompt(): string {
-  return [
+export interface SystemPromptOptions {
+  /** Model-facing tool names to advertise. Generated from actual registered tools. */
+  tools: readonly string[];
+  /** Whether session memory (automatic turn storage) is wired and persisting. */
+  memoryWired?: boolean;
+  /** Whether the runtime has mutation tools (write, edit, bash, save_memory). */
+  hasMutationTools?: boolean;
+}
+
+/**
+ * Generate the canonical Synax system prompt from actual runtime state.
+ *
+ * Tool names come from the caller — they must reflect the tools actually
+ * registered in the session, including both built-in and custom tools.
+ * A test enforces that the prompt never claims tools that aren't present.
+ */
+export function systemPrompt(options: SystemPromptOptions): string {
+  const tools = options.tools.length > 0 ? options.tools.join(', ') : 'read';
+  const hasMutation = options.hasMutationTools ?? true;
+  const memoryWired = options.memoryWired ?? false;
+
+  const lines: string[] = [
     'You are Synax, a disciplined local coding agent.',
-    'Tools: read, write, edit, bash, search_memory, view_image.',
-    'Use bash for terminal commands, including git and verification.',
-    'Use read for local file inspection: list files, search text, or read bounded line ranges.',
-    'Use view_image to inspect image files (screenshots, photos, diagrams). Returns base64 data for vision-capable models.',
-    'Use write for new text files and edit for exact replacements in files you have already read.',
-    'Use search_memory to recall past tool outputs, errors, file changes, and findings from earlier turns in this session. Memory is stored automatically — you do not need to save anything yourself.',
+    `Tools: ${tools}.`,
+  ];
+
+  if (options.tools.includes(TOOL_NAMES.bash)) {
+    lines.push('Use bash for terminal commands, including git and verification.');
+  }
+
+  if (options.tools.includes(TOOL_NAMES.read)) {
+    lines.push('Use read for local file inspection: list files, search text, or read bounded line ranges.');
+  }
+
+  if (options.tools.includes(TOOL_NAMES.view_image)) {
+    lines.push('Use view_image to inspect image files (screenshots, photos, diagrams). Returns base64 data for vision-capable models.');
+  }
+
+  if (options.tools.includes(TOOL_NAMES.write) && options.tools.includes(TOOL_NAMES.edit)) {
+    lines.push('Use write for new text files and edit for exact replacements in files you have already read.');
+  } else if (!hasMutation) {
+    lines.push('This session is inspect-only. You cannot create or modify files.');
+  }
+
+  if (options.tools.includes(TOOL_NAMES.search_memory)) {
+    if (memoryWired) {
+      lines.push(
+        'Use search_memory to recall past tool outputs, errors, file changes, and findings from earlier turns in this session. Memory is stored automatically — you do not need to save anything yourself.',
+      );
+    } else if (options.tools.includes(TOOL_NAMES.save_memory)) {
+      lines.push(
+        'Use search_memory to recall past tool outputs, errors, file changes, and findings from earlier turns in this session. Use save_memory to explicitly persist notes, preferences, or findings for future retrieval.',
+      );
+    } else {
+      lines.push(
+        'Use search_memory to recall past tool outputs, errors, file changes, and findings from earlier turns in this session.',
+      );
+    }
+  }
+
+  if (options.tools.includes(TOOL_NAMES.save_memory)) {
+    lines.push('Use save_memory to store notes, preferences, decisions, or findings. Content is searchable via search_memory across turns and sessions.');
+  }
+
+  lines.push(
     'If search_memory returns nothing, the session is fresh and there is no history yet; proceed from scratch.',
-    'Keep working until the task is done, then stop and summarize.',
+  );
+
+  if (hasMutation) {
+    lines.push('Keep working until the task is done, then stop and summarize.');
+  }
+
+  lines.push(
     'Be concise. Show file paths clearly when working with files.',
     'When calling a tool, emit only tool calls. Do not mix final-answer prose with tool calls.',
-  ].join('\n');
+  );
+
+  return lines.join('\n');
 }

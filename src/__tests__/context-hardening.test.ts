@@ -111,7 +111,7 @@ function fakeClient(
     requests,
     async chat(options) {
       requests.push(JSON.parse(JSON.stringify(options)));
-      const next = responses.shift() ?? { content: 'done', toolCalls: [] };
+      const next = responses.shift() ?? { content: 'all done', toolCalls: [] };
       return {
         content: next.content ?? '',
         model: 'fake',
@@ -766,9 +766,9 @@ describe('preflight enforcement within tool loop', () => {
     });
 
     // Read-loop errors are recoverable: the model sees the error and can adapt.
-    // After exhausting responses, fakeClient returns a 'done' final answer.
+    // After exhausting responses, fakeClient returns a final answer.
     expect(result.terminalState).toBe('completed');
-    expect(result.finalAnswer).toBe('done');
+    expect(result.finalAnswer).toBe('all done');
     // The loop-detection error was delivered to the model as a tool result
     const toolMsgs = client.requests.flatMap((r: unknown) =>
       (((r as Record<string, unknown>).messages as Array<Record<string, unknown>>) ?? []).filter(
@@ -929,7 +929,7 @@ describe('progressive loop resistance', () => {
       { toolCalls: [{ id: '2', name: 'read', arguments: { path: 'a.txt' } }] },
       { toolCalls: [{ id: '3', name: 'read', arguments: { path: 'a.txt' } }] },
       { toolCalls: [{ id: '4', name: 'read', arguments: { path: 'a.txt' } }] },
-      { content: 'ok' },
+      { content: 'Read loop detected — continuing with what I have.' },
     ]);
 
     const result = await runTurn({
@@ -942,7 +942,7 @@ describe('progressive loop resistance', () => {
     // Read-loop errors are recoverable: the model sees the error and can adapt.
     // After the loop detection, the model gives a final answer instead of dying.
     expect(result.terminalState).toBe('completed');
-    expect(result.finalAnswer).toBe('ok');
+    expect(result.finalAnswer).toBe('Read loop detected — continuing with what I have.');
     // The loop-detection error was delivered to the model as a tool result
     const toolMsgs = client.requests.flatMap((r: unknown) =>
       (((r as Record<string, unknown>).messages as Array<Record<string, unknown>>) ?? []).filter(

@@ -17,11 +17,13 @@ export interface UnsupportedTaskGuardResult {
 const DOCS_MUTATION_ROOTS = ['README.md', 'AGENTS.md', 'docs/', 'specs/'];
 
 export function getAllowedModelTools(mode: RunMode, bashEnabled: boolean): string[] {
-  const base = bashEnabled ? ['read', 'bash', 'search_memory', 'view_image'] : ['read', 'search_memory', 'view_image'];
+  const base = bashEnabled
+    ? ['read', 'bash', 'search_memory', 'view_image']
+    : ['read', 'search_memory', 'view_image'];
   if (mode === 'read-only' || mode === 'verify') {
     return base;
   }
-  return [...base, 'write', 'edit'];
+  return [...base, 'write', 'edit', 'save_memory'];
 }
 
 export function normalizeRunMode(mode: string | undefined): RunMode {

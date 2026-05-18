@@ -55,7 +55,13 @@ export interface ViewImageAction {
   path: string;
 }
 
-export type AgentAction = ReadAction | EditAction | WriteAction | BashAction | SearchMemoryAction | ViewImageAction;
+export interface SaveMemoryAction {
+  kind: 'save_memory';
+  content: string;
+  domainTags?: string[];
+}
+
+export type AgentAction = ReadAction | EditAction | WriteAction | BashAction | SearchMemoryAction | SaveMemoryAction | ViewImageAction;
 
 // ─── Execution context ────────────────────────────────────
 
@@ -150,6 +156,15 @@ export function toAgentAction(call: ParsedToolCall): AgentAction | null {
         kind: 'search_memory',
         query: args.query.trim(),
         maxResults: typeof args.maxResults === 'number' ? args.maxResults : undefined,
+      };
+    case 'save_memory':
+      if (typeof args.content !== 'string' || args.content.trim().length === 0) {
+        return null;
+      }
+      return {
+        kind: 'save_memory',
+        content: args.content.trim(),
+        domainTags: Array.isArray(args.domainTags) ? args.domainTags.filter((t: unknown) => typeof t === 'string') : undefined,
       };
     case 'view_image':
       if (typeof args.path !== 'string' || args.path.trim().length === 0) {

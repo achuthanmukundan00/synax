@@ -62,6 +62,7 @@ describe('shared bounded agent runner', () => {
       'write',
       'edit',
       'bash',
+      'save_memory',
       'search_memory',
       'view_image',
     ]);
@@ -85,13 +86,17 @@ describe('shared bounded agent runner', () => {
     expect(priorFinal?.tool_calls).toBeUndefined();
   });
 
-  it('keeps the system prompt focused on the four model-facing tools', async () => {
-    const client = fakeClient([{ content: 'done' }]);
+  it('keeps the system prompt focused on the model-facing tools', async () => {
+    const client = fakeClient([{ content: 'all done' }]);
 
     await runTurn({ repoRoot: TMP, task: 'hello', client });
 
     const system = client.requests[0].messages[0].content as string;
-    expect(system).toContain('Tools: read, write, edit, bash, search_memory, view_image.');
+    expect(system).toContain('You are Synax, a disciplined local coding agent.');
+    // All model-facing tools are present (order may vary; prompt is generated dynamically)
+    for (const tool of ['read', 'write', 'edit', 'bash', 'save_memory', 'search_memory', 'view_image']) {
+      expect(system).toContain(tool);
+    }
     expect(system).not.toContain('GIT WORKFLOWS');
     expect(system).not.toContain('git tool');
   });
@@ -116,6 +121,7 @@ describe('shared bounded agent runner', () => {
       'read',
       'write',
       'edit',
+      'save_memory',
       'search_memory',
       'view_image',
     ]);
@@ -124,6 +130,7 @@ describe('shared bounded agent runner', () => {
       'write',
       'edit',
       'bash',
+      'save_memory',
       'search_memory',
       'view_image',
     ]);
@@ -139,6 +146,7 @@ describe('shared bounded agent runner', () => {
       'write',
       'edit',
       'bash',
+      'save_memory',
       'search_memory',
       'view_image',
     ]);
@@ -1003,7 +1011,7 @@ describe('shared bounded agent runner', () => {
       { toolCalls: [{ id: '2', name: 'read', arguments: { path: 'a.txt' } }] },
       { toolCalls: [{ id: '3', name: 'read', arguments: { path: 'a.txt' } }] },
       { toolCalls: [{ id: '4', name: 'read', arguments: { path: 'a.txt' } }] },
-      { content: 'done' },
+      { content: 'Read loop resolved — proceeding.' },
     ]);
 
     const result = await runTurn({ repoRoot: TMP, task: 'loop read', client, maxSteps: 8 });
@@ -1011,7 +1019,7 @@ describe('shared bounded agent runner', () => {
     // Read-loop errors are recoverable: the model sees the error and can adapt.
     // The agent completes with the model's final answer rather than dying.
     expect(result.terminalState).toBe('completed');
-    expect(result.finalAnswer).toBe('done');
+    expect(result.finalAnswer).toBe('Read loop resolved — proceeding.');
     expect(result.toolCalls).toEqual([
       { name: 'read', success: true, error: undefined },
       { name: 'read', success: true, error: undefined },
