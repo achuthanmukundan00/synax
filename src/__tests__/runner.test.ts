@@ -565,7 +565,12 @@ describe('shared bounded agent runner', () => {
     expect(client.requests[1].messages).not.toEqual(
       expect.arrayContaining([expect.objectContaining({ role: 'tool', tool_call_id: 'call_1' })]),
     );
-    expect(client.requests[1].messages.at(-1)?.content).toContain('"path":"a.txt"');
+    // Tool result should appear in the assembled messages (may not be last due to
+    // runtime-state tail injected after conversation for prompt-cache stability).
+    const hasToolResult = client.requests[1].messages.some(
+      (m) => typeof m.content === 'string' && m.content.includes('"path":"a.txt"'),
+    );
+    expect(hasToolResult).toBe(true);
   });
 
   it('groups multiple content-parsed tool results into one Qwen-style response message', async () => {
@@ -1346,7 +1351,10 @@ describe('shared bounded agent runner', () => {
       finalAnswer: 'final from inspected context',
       steps: 2,
     });
-    expect(finalRequest.messages.at(-1)).toMatchObject({ role: 'tool' });
+    // Tool result should be present (may not be last due to runtime-state tail
+    // appended after conversation for prompt-cache stability).
+    const hasToolResult = finalRequest.messages.some((m) => m.role === 'tool');
+    expect(hasToolResult).toBe(true);
     expect(
       finalRequest.messages.some(
         (message) => typeof message.content === 'string' && message.content.includes('Final step: answer now'),

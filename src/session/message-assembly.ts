@@ -25,36 +25,59 @@ import type { AgentMessage, AgentConversation, AgentTurnResult } from './types';
 
 export const MAX_TOTAL_READS_PER_TURN = 64;
 
-// ─── Orientation injection ───────────────────────────────────────────────────
+// ─── Mutable runtime-state insertion ──────────────────────────────────────────
 
-export function injectOrientation(
-  messages: AgentMessage[],
+/**
+ * Append mutable runtime-state messages at the tail of the model request.
+ *
+ * DESIGN RATIONALE — prompt-cache stability:
+ * Provider prompt caching (Anthropic, OpenAI) relies on shared prefixes across
+ * requests. Messages that change across steps — orientation, memory index,
+ * compaction notes — must be placed AFTER the stable conversation prefix so
+ * the cache can reuse the system prompt and early conversation history.
+ *
+ * This function collects all mutable runtime messages and appends them as a
+ * single tail block after the conversation. The caller is responsible for
+ * building the stable prefix (system prompt + conversation messages) separately.
+ */
+export function appendMutableRuntimeState(
+  stableMessages: AgentMessage[],
+  ...runtimeBlocks: (AgentMessage | null)[]
+): AgentMessage[] {
+  const runtime = runtimeBlocks.filter(
+    (m): m is AgentMessage => m !== null && (m.content?.trim().length ?? 0) > 0,
+  );
+  if (runtime.length === 0) return stableMessages;
+  return [...stableMessages, ...runtime];
+}
+
+// ─── Orientation message builder ──────────────────────────────────────────────
+
+/**
+ * Build an orientation system message describing what the agent has inspected.
+ * Returns null when nothing has been inspected yet (no message needed).
+ */
+export function buildOrientationMessage(
   ledger: InspectionLedger,
   readCounts?: Map<string, number>,
   compactedFilePaths?: string[],
-): AgentMessage[] {
+): AgentMessage | null {
   const orientation = ledger.getOrientation(readCounts, compactedFilePaths);
   if (!orientation.includes('(nothing inspected yet)')) {
-    return [{ role: 'system', content: orientation }, ...messages];
+    return { role: 'system', content: orientation };
   }
-  return messages;
+  return null;
 }
 
-// ─── Memory index injection ──────────────────────────────────────────────────
+// ─── Memory index message builder ─────────────────────────────────────────────
 
 /**
- * Inject a compact FTS5 memory index as a system message.
- * Tells the model what's searchable in memory without burning context on content.
- * Returns the messages unchanged if the index is null/empty.
+ * Build a memory-index system message that tells the model what's searchable.
+ * Returns null when the index is empty or unavailable.
  */
-export function injectMemoryIndex(messages: AgentMessage[], index: string | null): AgentMessage[] {
-  if (!index) return messages;
-  // Inject after the first system message (main prompt), before rest
-  const result = [...messages];
-  const sysIdx = result.findIndex((m) => m.role === 'system');
-  const insertAt = sysIdx >= 0 ? sysIdx + 1 : 0;
-  result.splice(insertAt, 0, { role: 'system', content: index });
-  return result;
+export function buildMemoryIndexMessage(index: string | null): AgentMessage | null {
+  if (!index) return null;
+  return { role: 'system', content: index };
 }
 
 // ─── Model request builder ───────────────────────────────────────────────────
@@ -106,27 +129,29 @@ export function buildModelRequest(
 
   conversation.assemblyStats = stats;
 
-  const withOrientation = injectOrientation(
-    assembled,
+  // ── Build mutable runtime-state messages (appended at tail for cache stability) ──
+  const orientationMsg = buildOrientationMessage(
     conversation.inspectionLedger,
     readCounts,
     stats.compactedFilePaths,
   );
-
-  // When tool results were compacted, add an explanatory system message
-  // so the model understands the compacted format and treats metadata as authoritative.
-  const withCompactionNote: AgentMessage[] =
+  const memoryMsg = buildMemoryIndexMessage(memoryIndex ?? null);
+  const compactionNoteMsg: AgentMessage | null =
     stats.compactedToolResults > 0
-      ? [
-          {
-            role: 'system',
-            content: `Note: ${stats.compactedToolResults} older tool result(s) have been summarized to save context space. The metadata is complete — each compacted result includes a "summary" field describing what was originally returned. Use the appropriate tool (read, bash, etc.) to fetch full content if needed. Treat all metadata (paths, line ranges, counts) as authoritative.`,
-          },
-          ...withOrientation,
-        ]
-      : withOrientation;
+      ? {
+          role: 'system',
+          content: `Note: ${stats.compactedToolResults} older tool result(s) have been summarized to save context space. The metadata is complete — each compacted result includes a "summary" field describing what was originally returned. Use the appropriate tool (read, bash, etc.) to fetch full content if needed. Treat all metadata (paths, line ranges, counts) as authoritative.`,
+        }
+      : null;
 
-  const withMemory = injectMemoryIndex(withCompactionNote, memoryIndex ?? null);
+  // Append mutable state at tail so the stable prefix (system prompt +
+  // conversation history) remains cacheable across steps.
+  const withRuntime = appendMutableRuntimeState(
+    assembled,
+    orientationMsg,
+    memoryMsg,
+    compactionNoteMsg,
+  );
 
   const READ_BUDGET_WARNING_THRESHOLD = Math.floor(MAX_TOTAL_READS_PER_TURN * 0.5);
   const hasReadBudgetPressure =
@@ -147,15 +172,15 @@ export function buildModelRequest(
         'Do not call any more read or inspect tools. Take action with what you have.',
       ].join('\n'),
     };
-    const finalMessages = [...withMemory, warning];
+    const finalMessages = [...withRuntime, warning];
     stats.totalMessagesOut = finalMessages.length;
     stats.estimatedTokensOut = estimateRequestTokens(finalMessages);
     return finalMessages;
   }
 
-  stats.totalMessagesOut = withMemory.length;
-  stats.estimatedTokensOut = estimateRequestTokens(withMemory);
-  return withMemory;
+  stats.totalMessagesOut = withRuntime.length;
+  stats.estimatedTokensOut = estimateRequestTokens(withRuntime);
+  return withRuntime;
 }
 
 // ─── Budget guard ────────────────────────────────────────────────────────────

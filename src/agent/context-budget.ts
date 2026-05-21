@@ -1091,6 +1091,11 @@ function compactToolResultMessage(
   const parsed = tryParseJson(msg.content);
   if (!parsed || typeof parsed !== 'object') return null;
 
+  // Guard: skip already-compacted results so we don't re-compact a summary
+  // into a summary-of-summary (idempotency — the compaction envelope always
+  // includes a top-level "summary" field after first compaction).
+  if (typeof (parsed as Record<string, unknown>).summary === 'string') return null;
+
   const toolResult = parsed as { success?: boolean; toolName?: string; output?: unknown; error?: string };
   const summary = summarizeToolOutput(toolResult.toolName ?? 'unknown', toolResult.output, ledger, readCounts);
   const summaryContent = (summary?.contentSummary as string | undefined) ?? '';
