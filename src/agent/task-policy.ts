@@ -104,7 +104,7 @@ export function guardUnsupportedTask(task: string, shellEnabled: boolean): Unsup
       /\bunstaged changes\b/.test(normalized) ||
       /\bstaged changes\b/.test(normalized) ||
       /\bworking tree\b/.test(normalized) ||
-      /\bchanges\b/.test(normalized));
+      /\b(?:git changes|commit changes|uncommitted changes)\b/i.test(normalized));
 
   if (commitIntent && !shellEnabled) {
     return {

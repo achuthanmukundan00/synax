@@ -31,7 +31,12 @@ export function createToolRegistry(options: ToolRegistryOptions): ToolRegistry {
     },
 
     async execute(name: string, input: unknown): Promise<ToolResult> {
-      const tool = byName.get(name);
+      let tool = byName.get(name);
+      if (!tool) {
+        // Normalize camelCase → snake_case for providers that auto-convert function names
+        const normalized = name.replace(/([A-Z])/g, '_$1').toLowerCase();
+        tool = byName.get(normalized);
+      }
       if (!tool) {
         return { success: false, toolName: name, error: `unknown tool: ${name}` };
       }

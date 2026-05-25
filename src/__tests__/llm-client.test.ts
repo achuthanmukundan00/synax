@@ -93,6 +93,7 @@ describe('LLM client — basic chat', () => {
     expect(captured.method).toBe('POST');
     expect(captured.path).toBe('/chat/completions');
     expect(JSON.parse(captured.body).max_tokens).toBe(32);
+    expect(JSON.parse(captured.body).max_completion_tokens).toBe(32);
     expect(resp.content).toBe('Hello');
     expect(resp.model).toBe('test-model');
     expect(resp.finishReason).toBe('stop');

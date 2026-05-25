@@ -605,6 +605,7 @@ export function createOpenAICompatibleClient(
         ...(opts.temperature !== undefined ? { temperature: opts.temperature } : {}),
         stream: Boolean(opts.onDelta),
         max_tokens: opts.maxTokens ?? 8192,
+        max_completion_tokens: opts.maxTokens ?? 8192,
         ...(opts.tools && opts.tools.length > 0
           ? { tools: opts.tools.map(toOpenAIToolDefinition), tool_choice: 'auto' }
           : {}),
@@ -719,34 +720,63 @@ function normalizeMessagesForProvider(
   const hasReasoningHistory = messages.some(
     (message) => message.role === 'assistant' && typeof message.reasoning_content === 'string',
   );
-  return messages.map((message) => {
-    const normalized = { ...message };
+  const normalized = messages.map((message) => {
+    const n = { ...message };
     // Strip internal compaction markers before sending to the provider.
-    // These are not part of the OpenAI Chat Completions message schema
-    // and cause 400 errors with strict providers (OpenRouter, Relay, DeepSeek).
-    delete (normalized as Record<string, unknown>)._tool_call_ids;
-    delete (normalized as Record<string, unknown>)._tool_result_ids;
+    delete (n as Record<string, unknown>)._tool_call_ids;
+    delete (n as Record<string, unknown>)._tool_result_ids;
 
     // Ensure tool messages have the required tool_call_id
-    if (normalized.role === 'tool' && !('tool_call_id' in normalized)) {
-      (normalized as Record<string, unknown>).tool_call_id = 'unknown';
+    if (n.role === 'tool' && !('tool_call_id' in n)) {
+      (n as Record<string, unknown>).tool_call_id = 'unknown';
     }
-    if (Array.isArray(normalized.tool_calls) && normalized.tool_calls.length === 0) {
-      delete normalized.tool_calls;
+    if (Array.isArray(n.tool_calls) && n.tool_calls.length === 0) {
+      delete n.tool_calls;
     }
     if (!options.preserveReasoningContent) {
-      delete normalized.reasoning_content;
-      return normalized;
+      delete n.reasoning_content;
+      return n;
     }
     if (
-      normalized.role === 'assistant' &&
+      n.role === 'assistant' &&
       (options.requireReasoningContent || hasReasoningHistory) &&
-      normalized.reasoning_content === undefined
+      n.reasoning_content === undefined
     ) {
-      normalized.reasoning_content = '';
+      n.reasoning_content = '';
     }
-    return normalized;
+    return n;
   });
+
+  // ── Safety net: strip orphaned tool_calls ───────────────────────────
+  // Some providers (DeepSeek) strictly validate that every assistant tool_call
+  // is followed by a matching tool message. If tool execution fails in certain
+  // ways, the conversation can end up with orphaned tool_calls. Strip them.
+  for (let i = 0; i < normalized.length; i++) {
+    const msg = normalized[i] as Record<string, unknown>;
+    if (msg.role !== 'assistant' || !msg.tool_calls || !Array.isArray(msg.tool_calls) || (msg.tool_calls as unknown[]).length === 0) continue;
+    const toolCalls = msg.tool_calls as Array<{ id: string }>;
+    // Find all tool messages between this assistant and the next non-tool message
+    const validIds = new Set<string>();
+    for (let j = i + 1; j < normalized.length; j++) {
+      const next = normalized[j] as Record<string, unknown>;
+      if (next.role === 'tool' && next.tool_call_id) {
+        validIds.add(next.tool_call_id as string);
+      } else if (next.role !== 'tool') {
+        break;
+      }
+    }
+    // Filter tool_calls to only those with matching tool results
+    const validCalls = toolCalls.filter(tc => validIds.has(tc.id));
+    if (validCalls.length < toolCalls.length) {
+      if (validCalls.length === 0) {
+        delete (msg as { tool_calls?: unknown }).tool_calls;
+      } else {
+        (msg as { tool_calls: unknown }).tool_calls = validCalls;
+      }
+    }
+  }
+
+  return normalized;
 }
 
 function selectToolCallParserMode(model: string, override?: string): ToolCallParserMode {
