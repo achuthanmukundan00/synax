@@ -8,6 +8,7 @@ export type { ParsedToolCall } from './parsers/types';
 export { sanitizeReasoningTags } from './parsers/utils';
 export { resetCallIdCounter } from './parsers/utils';
 export { ensureParsersRegistered, detectParserId, toolCallParserRegistry } from './parsers/index';
+import { repairJson } from './repair/json-repair';
 
 // Note: ParsedToolCall is re-exported from parsers/types above.
 // The import below is only for internal use (avoiding import loops).
@@ -235,7 +236,31 @@ function parseOpenAIToolCallResult(call: OpenAIToolCall, index: number): ParsedT
   }
   if (typeof call.function.name !== 'string') return { ok: true, call: null };
   const args = parseArgumentsResult(call.function.arguments, 'OpenAI tool call arguments');
-  if (!args.ok) return { ok: false, message: args.message };
+  if (!args.ok) {
+    // Attempt JSON repair on the raw arguments string before giving up
+    const raw = call.function.arguments;
+    if (typeof raw === 'string') {
+      const repaired = repairJson(raw);
+      if (repaired) {
+        try {
+          const parsed = JSON.parse(repaired.repaired) as unknown;
+          if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+            return {
+              ok: true,
+              call: {
+                id: typeof call.id === 'string' && call.id.length > 0 ? call.id : `call_${index + 1}`,
+                name: call.function.name,
+                arguments: parsed as Record<string, unknown>,
+              },
+            };
+          }
+        } catch {
+          // Repair parse also failed
+        }
+      }
+    }
+    return { ok: false, message: args.message };
+  }
   return {
     ok: true,
     call: {
