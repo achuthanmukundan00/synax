@@ -181,8 +181,44 @@ function parseSuccessResponse(bodyText: string, parserMode: ToolCallParserMode):
   const reasoningContent = firstReasoningContent(choice?.message);
   const finishReason = choice?.finish_reason ?? null;
 
-  // Step 1: Parse native OpenAI tool_calls from the API response
-  const standardToolCallResult = parseOpenAIToolCallsResult(choice?.message?.tool_calls);
+  // Step 1: Parse native OpenAI tool_calls from the API response.
+  // If parsing fails due to malformed arguments JSON, attempt repair
+  // on each call's arguments before giving up.
+  let standardToolCallResult = parseOpenAIToolCallsResult(choice?.message?.tool_calls);
+  if (!standardToolCallResult.ok && Array.isArray(choice?.message?.tool_calls)) {
+    // Try to repair each tool call's arguments individually
+    const repaired: import('./tool-calls').ParsedToolCall[] = [];
+    let allRepaired = true;
+    for (const tc of choice.message.tool_calls as Array<{
+      id?: unknown;
+      type?: unknown;
+      function?: { name?: unknown; arguments?: string };
+    }>) {
+      const args = tc?.function?.arguments;
+      if (typeof args !== 'string') {
+        allRepaired = false;
+        break;
+      }
+      const jsonResult = repairJson(args);
+      if (!jsonResult) {
+        allRepaired = false;
+        break;
+      }
+      try {
+        repaired.push({
+          id: String(tc.id ?? `call_${repaired.length}`),
+          name: String(tc.function?.name ?? ''),
+          arguments: JSON.parse(jsonResult.repaired) as Record<string, unknown>,
+        });
+      } catch {
+        allRepaired = false;
+        break;
+      }
+    }
+    if (allRepaired && repaired.length > 0) {
+      standardToolCallResult = { ok: true, source: 'openai', calls: repaired };
+    }
+  }
   if (!standardToolCallResult.ok) {
     throw modelToolCallParseError(standardToolCallResult.message);
   }

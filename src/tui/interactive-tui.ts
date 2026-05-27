@@ -247,6 +247,7 @@ export async function runInteractiveTui(
   let lastRenderedSplashFrame = -1;
   let lastRenderedFooterSignature = '';
   let lastRenderedRootLayoutSignature = '';
+  let lastSlashInfoLineCount = 0;
   const feedModel = new IncrementalFeedModel(liveCardLimit);
 
   const removeRenderedRoot = (): void => {
@@ -349,6 +350,11 @@ export async function runInteractiveTui(
     if (treeBuilt && footerSignature !== lastRenderedFooterSignature) {
       treeBuilt = false;
     }
+    const currentSlashInfoCount = slashInfoLines?.length ?? 0;
+    if (treeBuilt && currentSlashInfoCount !== lastSlashInfoLineCount) {
+      treeBuilt = false;
+      lastSlashInfoLineCount = currentSlashInfoCount;
+    }
     if (treeBuilt && rootLayoutSignature !== lastRenderedRootLayoutSignature) {
       treeBuilt = false;
     }
@@ -420,6 +426,7 @@ export async function runInteractiveTui(
       lastRenderedSplashFrame = splashFrame(state.nowMs);
       lastRenderedFooterSignature = footerSignature;
       lastRenderedRootLayoutSignature = rootLayoutSignature;
+      lastSlashInfoLineCount = currentSlashInfoCount;
       expandCollapseVersion = 0;
       feedModel.reset();
       feedModel.plan(renderedEvents, expandedState);

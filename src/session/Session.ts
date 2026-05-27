@@ -657,7 +657,7 @@ export class Session {
 
     let result = await this.startTurn(task);
     let recoveryAttempt = 0;
-    const MAX_RECOVERY_RETRIES = 2;
+    const MAX_RECOVERY_RETRIES = 5;
 
     while (recoveryAttempt < MAX_RECOVERY_RETRIES) {
       const scenario = classifyResultForRecovery(result);
