@@ -37,7 +37,9 @@ export function stripToolCallMarkup(text: string): string {
       .replace(/=\w+=\w+\s+\S+?(?=\s|$|=\w+=)/gi, ' ')
       // Bare function=read, parameter=path leaked after tag stripping
       .replace(/\b(?:function|parameter)=\w+/gi, ' ')
-      // Collapse multiple whitespace runs
-      .replace(/\s+/g, ' ')
+      // Collapse horizontal whitespace runs (spaces/tabs) but preserve newlines
+      .replace(/[ \t]+/g, ' ')
+      // Normalize multiple consecutive newlines to at most 2
+      .replace(/\n{3,}/g, '\n\n')
   );
 }

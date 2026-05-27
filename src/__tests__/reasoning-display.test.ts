@@ -58,8 +58,20 @@ describe('sanitizeThinkingContent', () => {
     expect(sanitizeThinkingContent('Let me think about this <think>')).toBe('Let me think about this ');
   });
 
-  it('collapses multiple whitespace', () => {
+  it('collapses multiple horizontal whitespace but preserves newlines', () => {
     expect(sanitizeThinkingContent('  a   b   c  ')).toBe(' a b c ');
+  });
+
+  it('preserves newlines in reasoning text', () => {
+    const input = 'Line 1\nLine 2\n\nLine 4';
+    const result = sanitizeThinkingContent(input);
+    expect(result).toContain('\n');
+    expect(result).toMatch(/Line 1\nLine 2\n\nLine 4/);
+  });
+
+  it('normalizes excessive newlines to at most 2', () => {
+    const input = 'a\n\n\n\n\nb';
+    expect(sanitizeThinkingContent(input)).toBe('a\n\nb');
   });
 
   it('strips decoration-only tokens (◇) after sanitization', () => {

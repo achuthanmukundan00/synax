@@ -1305,7 +1305,7 @@ function shimmerThinkingLine(text: string): string {
 
 function normalizeThinkingText(text: string): string {
   return stripToolCallMarkup(text)
-    .replace(/\s+([,.;:!?])/g, '$1')
+    .replace(/[ \t]+([,.;:!?])/g, '$1')
     .trim();
 }
 
