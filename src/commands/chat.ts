@@ -101,7 +101,7 @@ export function inferChatRunMode(message: string): 'read-only' | 'patch' {
     /\b(?:don't|do not|dont|without)\s+(?:edit|change|modify|write|touch)\b/.test(normalized) ||
     /\bgo-?ahead\b/.test(normalized);
   const mutationIntent =
-    /\b(?:fix|edit|change|modify|update|add|remove|delete|implement|create|write|adjust|make)\b/.test(normalized);
+    /\b(?:fix|edit|change|modify|update|add|remove|delete|implement|create|write|adjust|make|build|refactor|generate|scaffold)\b/.test(normalized);
 
   if (readOnlyIntent && !/\b(?:go ahead and|please do it|make the change|apply (?:it|the change))\b/.test(normalized)) {
     return 'read-only';

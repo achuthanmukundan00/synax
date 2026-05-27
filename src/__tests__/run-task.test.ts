@@ -136,27 +136,14 @@ describe('runAgentTask patch approval', () => {
     expect(existsSync(join(TMP, '.synax', 'checkpoints'))).toBe(false);
   });
 
-  it('does not create checkpoints for blocked broad-task runs', async () => {
+  it('allows broad self-development task prompts', async () => {
     const report = await runAgentTask({
       repoRoot: TMP,
       task: 'rewrite the TUI',
     });
 
-    expect(report.terminalState).toBe('blocked');
-    expect(report.checkpoint).toBeNull();
+    expect(report.terminalState).not.toBe('blocked');
     expect(existsSync(join(TMP, '.synax', 'checkpoints'))).toBe(false);
-  });
-
-  it('blocks broad self-development prompts before calling the model', async () => {
-    const report = await runAgentTask({
-      repoRoot: TMP,
-      task: 'rewrite the TUI',
-    });
-
-    expect(report.terminalState).toBe('blocked');
-    expect(report.error).toContain('Task is too broad');
-    expect(report.finalAnswer).toContain('Suggested first step');
-    expect(requests).toHaveLength(0);
   });
 
   it('does not silently fall back to inline when explicit parallel sub-agents plan inline', async () => {

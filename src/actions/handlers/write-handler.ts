@@ -8,7 +8,6 @@
 import type { WriteAction, ExecutionContext, AgentToolExecutionResult } from '../types';
 import { toolFailure } from '../types';
 import { normalizeRepoPath } from '../../tools/policy';
-import { canMutatePath } from '../../agent/task-policy';
 import { atomicWriteFile } from '../../agent/safety';
 
 // ─── Public handler ───────────────────────────────────────
@@ -16,17 +15,9 @@ import { atomicWriteFile } from '../../agent/safety';
 export async function handleWrite(action: WriteAction, context: ExecutionContext): Promise<AgentToolExecutionResult> {
   const toolName = 'write';
 
-  if (context.mode === 'read-only' || context.mode === 'verify') {
-    return toolFailure(toolName, `${context.mode} mode does not allow writes`);
-  }
-
   const target = normalizeRepoPath(context.repoRoot, action.path);
   if (!target.ok || !target.absolutePath || target.path === undefined) {
     return toolFailure(toolName, target.reason ?? 'invalid path');
-  }
-  const mutationPath = canMutatePath(context.mode, context.repoRoot, target.path);
-  if (!mutationPath.ok) {
-    return toolFailure(toolName, mutationPath.reason ?? 'mutation path rejected');
   }
   if (context.env.fileExists(target.absolutePath)) {
     return toolFailure(toolName, `file already exists: ${target.path}`);

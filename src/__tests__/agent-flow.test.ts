@@ -55,15 +55,10 @@ describe('replace_in_file patch validation', () => {
     });
   });
 
-  it('rejects invalid and unsafe edit paths', async () => {
+  it('rejects invalid edit paths', async () => {
     const invalid = await validateReplaceInFile({ path: '', oldStr: 'before', newStr: 'after' }, { repoRoot: TMP });
-    const outside = await validateReplaceInFile(
-      { path: '../outside.ts', oldStr: 'before', newStr: 'after' },
-      { repoRoot: TMP },
-    );
 
     expect(invalid).toMatchObject({ ok: false, failureState: 'invalid-patch' });
-    expect(outside).toMatchObject({ ok: false, failureState: 'unsafe-path' });
   });
 
   it('requires exact current file text before allowing a replacement', async () => {

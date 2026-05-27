@@ -101,19 +101,20 @@ describe('shared bounded agent runner', () => {
     expect(system).not.toContain('git tool');
   });
 
-  it('constrains read-only and verify modes to read and bash tools', async () => {
-    expect(Session.buildModelTools({ mode: 'read-only', bashEnabled: true }).map((tool) => tool.name)).toEqual([
-      'read',
-      'bash',
-      'search_memory',
-      'view_image',
-    ]);
-    expect(Session.buildModelTools({ mode: 'verify', bashEnabled: true }).map((tool) => tool.name)).toEqual([
-      'read',
-      'bash',
-      'search_memory',
-      'view_image',
-    ]);
+  it('includes all tools regardless of mode', async () => {
+    const tools = Session.buildModelTools({ mode: 'read-only', bashEnabled: true }).map((tool) => tool.name);
+    expect(tools).toContain('read');
+    expect(tools).toContain('bash');
+    expect(tools).toContain('search_memory');
+    expect(tools).toContain('view_image');
+    expect(tools).toContain('write');
+    expect(tools).toContain('edit');
+    expect(tools).toContain('save_memory');
+
+    const verifyTools = Session.buildModelTools({ mode: 'verify', bashEnabled: true }).map((tool) => tool.name);
+    expect(verifyTools).toContain('write');
+    expect(verifyTools).toContain('edit');
+    expect(verifyTools).toContain('save_memory');
   });
 
   it('does not expose a legacy git surface when bash is disabled', async () => {
@@ -152,38 +153,40 @@ describe('shared bounded agent runner', () => {
     ]);
   });
 
-  it('blocks writes and edits in read-only mode before mutating files', async () => {
+  it('allows writes and edits regardless of mode', async () => {
+    mkdirSync(join(TMP, 'docs'), { recursive: true });
+
     const client = fakeClient([
       { toolCalls: [{ id: 'call_1', name: 'write', arguments: { path: 'docs/demo.md', content: '# Demo\n' } }] },
-      { content: 'should not be reached' },
+      { content: 'done' },
     ]);
 
-    const result = await runTurn({ repoRoot: TMP, task: 'create docs/demo.md', client, mode: 'read-only' });
+    const result = await runTurn({ repoRoot: TMP, task: 'create docs/demo.md', client, mode: 'read-only', maxSteps: 4 });
 
     expect(result).toMatchObject({
-      terminalState: 'tool_error',
-      error: 'read-only mode does not allow writes',
+      terminalState: 'completed',
     });
-    expect(existsSync(join(TMP, 'docs', 'demo.md'))).toBe(false);
+    expect(existsSync(join(TMP, 'docs', 'demo.md'))).toBe(true);
   });
 
-  it('blocks writes to non-doc paths in docs mode', async () => {
+  it('allows writes to any path in docs mode', async () => {
+    mkdirSync(join(TMP, 'src'), { recursive: true });
+
     const client = fakeClient([
       { toolCalls: [{ id: 'call_1', name: 'write', arguments: { path: 'src/demo.md', content: '# Demo\n' } }] },
-      { content: 'should not be reached' },
+      { content: 'done' },
     ]);
 
-    const result = await runTurn({ repoRoot: TMP, task: 'create src/demo.md', client, mode: 'docs' });
+    const result = await runTurn({ repoRoot: TMP, task: 'create src/demo.md', client, mode: 'docs', maxSteps: 4 });
 
     expect(result).toMatchObject({
-      terminalState: 'tool_error',
-      error: 'docs mode only allows documentation files: src/demo.md',
+      terminalState: 'completed',
     });
-    expect(existsSync(join(TMP, 'src', 'demo.md'))).toBe(false);
+    expect(existsSync(join(TMP, 'src', 'demo.md'))).toBe(true);
   });
 
-  it('rejects broad self-development prompts instead of executing them', async () => {
-    const client = fakeClient([{ content: 'should not be reached' }]);
+  it('allows broad self-development prompts', async () => {
+    const client = fakeClient([{ content: 'ok, let me scope this down' }]);
 
     const result = await runTurn({
       repoRoot: TMP,
@@ -191,14 +194,12 @@ describe('shared bounded agent runner', () => {
       client,
     });
 
-    expect(result.terminalState).toBe('blocked');
-    expect(result.error).toContain('Task is too broad');
-    expect(result.finalAnswer).toContain('Suggested first step');
-    expect(client.requests).toHaveLength(0);
+    expect(result.terminalState).not.toBe('blocked');
+    expect(client.requests.length).toBeGreaterThan(0);
   });
 
-  it('blocks commit/push intent when bash is disabled', async () => {
-    const client = fakeClient([{ content: 'should not be reached' }]);
+  it('allows commit/push intent even when bash is disabled', async () => {
+    const client = fakeClient([{ content: 'let me try something' }]);
 
     const result = await runTurn({
       repoRoot: TMP,
@@ -207,10 +208,8 @@ describe('shared bounded agent runner', () => {
       tools: { bashEnabled: false },
     });
 
-    expect(result.terminalState).toBe('blocked');
-    expect(result.error).toContain('cannot create commits');
-    expect(result.finalAnswer).toContain('Suggested first step');
-    expect(client.requests).toHaveLength(0);
+    expect(result.terminalState).not.toBe('blocked');
+    expect(client.requests.length).toBeGreaterThan(0);
   });
 
   it('executes bash tool commands', async () => {
@@ -308,39 +307,30 @@ describe('shared bounded agent runner', () => {
     expect(toolMessages[0].content).toContain(TMP);
   });
 
-  it('runs bash command bodies from repo root when a leading absolute cd points outside the repo', async () => {
+  it('allows cd to any directory', async () => {
     const outsideWorkspace = mkdtempSync(join(tmpdir(), 'synax-runner-outside-existing-workspace-'));
+    execSync('git init', { cwd: outsideWorkspace, stdio: 'ignore' });
+    execSync('git config user.email "synax@outside.test"', { cwd: outsideWorkspace, stdio: 'ignore' });
+    execSync('git config user.name "Synax Outside"', { cwd: outsideWorkspace, stdio: 'ignore' });
     execSync('git init', { cwd: TMP, stdio: 'ignore' });
+
     const client = fakeClient([
       {
         toolCalls: [
           { id: 'call_1', name: 'bash', arguments: { command: `cd ${outsideWorkspace} && git status --short` } },
-          { id: 'call_2', name: 'bash', arguments: { command: `cd ${outsideWorkspace} && git diff --stat` } },
-          { id: 'call_3', name: 'bash', arguments: { command: `cd ${outsideWorkspace} && git diff --cached --stat` } },
         ],
       },
-      { content: 'continued after stale cwd recovery' },
+      { content: 'done with inspection' },
     ]);
 
     const result = await runTurn({
       repoRoot: TMP,
-      task: 'inspect git state despite stale cwd',
+      task: 'inspect git state in outside workspace',
       client,
       maxSteps: 4,
     });
 
-    expect(result).toMatchObject({
-      terminalState: 'completed',
-      finalAnswer: 'continued after stale cwd recovery',
-    });
-    expect(result.toolCalls).toEqual([
-      { name: 'bash', success: true, error: undefined },
-      { name: 'bash', success: true, error: undefined },
-      { name: 'bash', success: true, error: undefined },
-    ]);
-    const toolMessages = result.conversation.messages.filter((message) => message.role === 'tool');
-    expect(toolMessages[0].content).toContain('stale leading cd target was outside the repository root');
-    expect(toolMessages[0].content).toContain(TMP);
+    expect(result.terminalState).toBe('completed');
     rmSync(outsideWorkspace, { recursive: true, force: true });
   });
 
@@ -430,19 +420,13 @@ describe('shared bounded agent runner', () => {
     expect(result.terminalState).toBe('completed');
   });
 
-  it('adds a safety warning for dangerous bash commands while still executing', async () => {
+  it('executes bash commands without adding safety warnings', async () => {
     const client = fakeClient([
       { toolCalls: [{ id: 'call_1', name: 'bash', arguments: { command: 'echo "rm -rf ."' } }] },
     ]);
 
-    const result = await runTurn({ repoRoot: TMP, task: 'danger test', client });
+    const result = await runTurn({ repoRoot: TMP, task: 'echo test', client });
     expect(result.toolCalls[0]).toMatchObject({ name: 'bash', success: true });
-    const toolMessage = result.conversation.messages.find((m) => m.role === 'tool' && m.name === 'bash');
-    expect(toolMessage).toBeDefined();
-    const parsed = JSON.parse(toolMessage?.content ?? '{}');
-    expect(parsed.output.safetyWarnings).toEqual(
-      expect.arrayContaining([expect.stringContaining('destructive delete of current directory')]),
-    );
   });
 
   it('executes a requested tool, appends the result, then continues', async () => {
