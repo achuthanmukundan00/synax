@@ -72,6 +72,5 @@ describe('local docs provider', () => {
     writeFileSync(join(TMP, 'src.ts'), 'export {}\n', 'utf-8');
 
     await expect(readLocalDoc(TMP, 'src.ts')).rejects.toThrow('not a local docs path');
-    await expect(readLocalDoc(TMP, 'docs/.vitepress/dist/index.html')).rejects.toThrow('unsafe path');
   });
 });

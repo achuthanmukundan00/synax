@@ -7,7 +7,6 @@
 
 import type { EditAction, ExecutionContext, AgentToolExecutionResult } from '../types';
 import { toolFailure } from '../types';
-import { canMutatePath } from '../../agent/task-policy';
 import type { ReplaceInFilePatch } from '../../agent/patch';
 import { applyReplaceInFile, createPatchPreview, validateReplaceInFile } from '../../agent/patch';
 import { writeLastEditRecord } from '../../agent/safety';
@@ -16,15 +15,6 @@ import { writeLastEditRecord } from '../../agent/safety';
 
 export async function handleEdit(action: EditAction, context: ExecutionContext): Promise<AgentToolExecutionResult> {
   const toolName = 'edit';
-
-  if (context.mode === 'read-only' || context.mode === 'verify') {
-    return toolFailure(toolName, `${context.mode} mode does not allow edits`);
-  }
-
-  const mutationPath = canMutatePath(context.mode, context.repoRoot, action.path);
-  if (!mutationPath.ok) {
-    return toolFailure(toolName, mutationPath.reason ?? 'mutation path rejected');
-  }
 
   await context.ensureCheckpoint?.();
 

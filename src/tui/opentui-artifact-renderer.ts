@@ -1278,9 +1278,7 @@ function renderThinkingCard(
       },
       core.Text({
         ...FULL_WIDTH_TEXT,
-        content: new (core as any).StyledText([
-          core.italic(core.dim(active && !expanded ? shimmerThinkingLine(preview) : (shown[0] ?? preview))),
-        ]),
+        content: active && !expanded ? shimmerThinkingLine(preview) : (shown[0] ?? preview),
         fg: pal.textMuted,
         onMouseDown: (mouseEvent: { stopPropagation?: () => void; preventDefault?: () => void }) => {
           mouseEvent.stopPropagation?.();
@@ -1292,7 +1290,7 @@ function renderThinkingCard(
         ? shown.slice(1).map((line) =>
             core.Text({
               ...FULL_WIDTH_TEXT,
-              content: new (core as any).StyledText([core.italic(core.dim(line))]),
+              content: line,
               fg: pal.textMuted,
             }),
           )
