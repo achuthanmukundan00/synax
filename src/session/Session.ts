@@ -89,7 +89,6 @@ import {
 
 import { buildModelRequest, guardModelRequestMultiStage, classifyResultForRecovery } from './message-assembly';
 
-
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const DEFAULT_MAX_TOOL_CALLS = Number.MAX_SAFE_INTEGER;
@@ -302,23 +301,28 @@ export class Session {
   // ── Static factory ──────────────────────────────────────────────────────
 
   /** Create a fresh agent conversation with the Synax system prompt. */
-  static createConversation(options: {
-    skillMessages?: string[];
-    tools?: string[];
-    memoryWired?: boolean;
-    hasMutationTools?: boolean;
-  } = {}): AgentConversation {
-    const toolNames = options.tools && options.tools.length > 0
-      ? options.tools
-      : ['read', 'write', 'edit', 'bash', 'search_memory', 'save_memory', 'view_image'];
-    const messages: AgentMessage[] = [{
-      role: 'system',
-      content: systemPrompt({
-        tools: toolNames,
-        memoryWired: options.memoryWired,
-        hasMutationTools: options.hasMutationTools,
-      }),
-    }];
+  static createConversation(
+    options: {
+      skillMessages?: string[];
+      tools?: string[];
+      memoryWired?: boolean;
+      hasMutationTools?: boolean;
+    } = {},
+  ): AgentConversation {
+    const toolNames =
+      options.tools && options.tools.length > 0
+        ? options.tools
+        : ['read', 'write', 'edit', 'bash', 'search_memory', 'save_memory', 'view_image'];
+    const messages: AgentMessage[] = [
+      {
+        role: 'system',
+        content: systemPrompt({
+          tools: toolNames,
+          memoryWired: options.memoryWired,
+          hasMutationTools: options.hasMutationTools,
+        }),
+      },
+    ];
     if (options.skillMessages && options.skillMessages.length > 0) {
       for (const message of options.skillMessages) {
         if (message.trim().length === 0) continue;
@@ -341,14 +345,16 @@ export class Session {
     const tools = this.getModelTools();
     const toolNames = tools.map((t) => t.name);
     const hasMutation = toolNames.some((n) => n === 'write' || n === 'edit' || n === 'bash' || n === 'save_memory');
-    const messages: AgentMessage[] = [{
-      role: 'system',
-      content: systemPrompt({
-        tools: toolNames,
-        memoryWired: this.memory !== null && this.memory.isAvailable,
-        hasMutationTools: hasMutation,
-      }),
-    }];
+    const messages: AgentMessage[] = [
+      {
+        role: 'system',
+        content: systemPrompt({
+          tools: toolNames,
+          memoryWired: this.memory !== null && this.memory.isAvailable,
+          hasMutationTools: hasMutation,
+        }),
+      },
+    ];
     if (options.skillMessages && options.skillMessages.length > 0) {
       for (const message of options.skillMessages) {
         if (message.trim().length === 0) continue;

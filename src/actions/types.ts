@@ -61,7 +61,14 @@ export interface SaveMemoryAction {
   domainTags?: string[];
 }
 
-export type AgentAction = ReadAction | EditAction | WriteAction | BashAction | SearchMemoryAction | SaveMemoryAction | ViewImageAction;
+export type AgentAction =
+  | ReadAction
+  | EditAction
+  | WriteAction
+  | BashAction
+  | SearchMemoryAction
+  | SaveMemoryAction
+  | ViewImageAction;
 
 // ─── Execution context ────────────────────────────────────
 
@@ -164,7 +171,9 @@ export function toAgentAction(call: ParsedToolCall): AgentAction | null {
       return {
         kind: 'save_memory',
         content: args.content.trim(),
-        domainTags: Array.isArray(args.domainTags) ? args.domainTags.filter((t: unknown) => typeof t === 'string') : undefined,
+        domainTags: Array.isArray(args.domainTags)
+          ? args.domainTags.filter((t: unknown) => typeof t === 'string')
+          : undefined,
       };
     case 'view_image':
       if (typeof args.path !== 'string' || args.path.trim().length === 0) {

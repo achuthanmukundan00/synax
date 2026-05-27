@@ -44,9 +44,7 @@ export function appendMutableRuntimeState(
   stableMessages: AgentMessage[],
   ...runtimeBlocks: (AgentMessage | null)[]
 ): AgentMessage[] {
-  const runtime = runtimeBlocks.filter(
-    (m): m is AgentMessage => m !== null && (m.content?.trim().length ?? 0) > 0,
-  );
+  const runtime = runtimeBlocks.filter((m): m is AgentMessage => m !== null && (m.content?.trim().length ?? 0) > 0);
   if (runtime.length === 0) return stableMessages;
   return [...stableMessages, ...runtime];
 }
@@ -130,11 +128,7 @@ export function buildModelRequest(
   conversation.assemblyStats = stats;
 
   // ── Build mutable runtime-state messages (appended at tail for cache stability) ──
-  const orientationMsg = buildOrientationMessage(
-    conversation.inspectionLedger,
-    readCounts,
-    stats.compactedFilePaths,
-  );
+  const orientationMsg = buildOrientationMessage(conversation.inspectionLedger, readCounts, stats.compactedFilePaths);
   const memoryMsg = buildMemoryIndexMessage(memoryIndex ?? null);
   const compactionNoteMsg: AgentMessage | null =
     stats.compactedToolResults > 0
@@ -146,12 +140,7 @@ export function buildModelRequest(
 
   // Append mutable state at tail so the stable prefix (system prompt +
   // conversation history) remains cacheable across steps.
-  const withRuntime = appendMutableRuntimeState(
-    assembled,
-    orientationMsg,
-    memoryMsg,
-    compactionNoteMsg,
-  );
+  const withRuntime = appendMutableRuntimeState(assembled, orientationMsg, memoryMsg, compactionNoteMsg);
 
   const READ_BUDGET_WARNING_THRESHOLD = Math.floor(MAX_TOTAL_READS_PER_TURN * 0.5);
   const hasReadBudgetPressure =

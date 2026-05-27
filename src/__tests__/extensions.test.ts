@@ -129,6 +129,7 @@ describe('extension interfaces', () => {
       'read',
       'write',
       'edit',
+      'save_memory',
       'search_memory',
       'view_image',
     ]);

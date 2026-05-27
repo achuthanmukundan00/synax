@@ -89,7 +89,6 @@ describe('coding mode mutation tools', () => {
     expect(names).toContain('view_image');
   });
 
-
   it('docs mode includes mutation tools', () => {
     const tools = buildModelFacingTools({ mode: 'docs', bashEnabled: true });
     const names = tools.map((t) => t.name);

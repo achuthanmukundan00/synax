@@ -955,10 +955,12 @@ describe('SynaxRuntime', () => {
       // Replace stdout.write with a mock that captures output
       process.stdout.write = mockWrite as any;
       try {
-        // Use a model response >200 chars to trigger Session's logger.info call
-        const longContent = 'A'.repeat(250);
-        const client = makeFakeClient([{ content: longContent }]);
-        const logger = new Logger({ level: 'info' });
+        // Use a tool call to trigger Session's logger.debug call during tool execution
+        const client = makeFakeClient([
+          { toolCalls: [{ id: '1', name: 'read', arguments: { path: 'test.txt' } }] },
+          { content: 'done' },
+        ]);
+        const logger = new Logger({ level: 'debug' });
         const runtime = new SynaxRuntime({ client, logger });
 
         await runtime.run({ input: 'test' });

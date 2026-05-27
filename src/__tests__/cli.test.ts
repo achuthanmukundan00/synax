@@ -344,6 +344,7 @@ describe('CLI', () => {
           'write',
           'edit',
           'bash',
+          'save_memory',
           'search_memory',
           'view_image',
         ]);
@@ -430,6 +431,7 @@ describe('CLI', () => {
           'write',
           'edit',
           'bash',
+          'save_memory',
           'search_memory',
           'view_image',
         ]);

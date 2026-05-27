@@ -105,14 +105,12 @@ function extractSystemPrompt(messages: Array<{ role: string; content: ChatConten
 function toAnthropicContent(content: ChatContent): string {
   if (typeof content === 'string') return content;
   // Check for image blocks and raise a clear error instead of silently dropping them.
-  const hasImages = content.some(
-    (part): part is import('./types').ImageContentPart => part.type === 'image_url',
-  );
+  const hasImages = content.some((part): part is import('./types').ImageContentPart => part.type === 'image_url');
   if (hasImages) {
     throw Object.assign(
       new Error(
         'Vision review requested image input, but the configured provider/adapter (Anthropic) ' +
-        'does not support image blocks. Use an OpenAI-compatible endpoint for vision tasks.',
+          'does not support image blocks. Use an OpenAI-compatible endpoint for vision tasks.',
       ),
       { name: 'ProviderError', type: 'invalidRequest', retryable: false },
     );

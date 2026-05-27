@@ -34,7 +34,7 @@ export function isStatusOnlyOutput(output: string): boolean {
 }
 
 export function assistantMessage(response: ChatResponse, settings?: ContextBudgetSettings): AgentMessage {
-  let content = response.content;
+  const content = response.content;
   void settings;
   const reasoningContent = response.reasoningContent?.trim();
   const reasoningFields = reasoningContent ? { reasoning_content: reasoningContent } : {};
@@ -94,7 +94,7 @@ export function appendToolResult(
   contentToolResults: Array<{ id: string; content: string }>,
   settings: ContextBudgetSettings,
 ): void {
-  let content = JSON.stringify(toolResult);
+  const content = JSON.stringify(toolResult);
   void settings;
 
   if (toolCallFormat(response) === 'content_xml') {

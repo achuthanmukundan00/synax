@@ -353,7 +353,7 @@ describe('hard read omission', () => {
   beforeEach(() => resetTmp());
   afterEach(() => rmSync(TMP, { recursive: true, force: true }));
 
-  it('omits read when per-turn token budget is exhausted', async () => {
+  it('does not omit reads regardless of token budget (dogfooding mode)', async () => {
     writeFileSync(join(TMP, 'a.txt'), `${'data\n'.repeat(500)}`, 'utf-8');
     writeFileSync(join(TMP, 'b.txt'), `${'more\n'.repeat(500)}`, 'utf-8');
 
@@ -378,13 +378,13 @@ describe('hard read omission', () => {
       (m) => m.role === 'tool' && m.tool_call_id === '2',
     )?.content;
     expect(secondToolContent).toBeDefined();
+    // Dogfooding mode: read results are passed through without omission
     const parsed = JSON.parse(secondToolContent as string);
-    expect(parsed.output.omitted).toBe(true);
-    expect(parsed.output.reason).toBe('turn token budget exceeded');
-    expect(parsed.output.guidance).toBe('use targeted read/search');
+    expect(parsed.output).toBeDefined();
+    expect(JSON.stringify(parsed.output)).toContain('more');
   });
 
-  it('omitted read consumes zero tokens toward budget', async () => {
+  it('full read results are passed through regardless of per-turn budget', async () => {
     writeFileSync(join(TMP, 'a.txt'), `${'big\n'.repeat(5000)}`, 'utf-8');
     writeFileSync(join(TMP, 'b.txt'), `${'big\n'.repeat(3000)}`, 'utf-8');
 
@@ -405,13 +405,14 @@ describe('hard read omission', () => {
     });
 
     expect(result.terminalState).toBe('completed');
-    // Second request's messages should have the omission
+    // Dogfooding mode: both reads pass through without omission
     const toolMsgs2 = (client.requests[2].messages as AgentMessage[]).filter(
       (m) => m.role === 'tool' && m.tool_call_id === '2',
     );
     expect(toolMsgs2.length).toBe(1);
     const parsed2 = JSON.parse(toolMsgs2[0].content);
-    expect(parsed2.output.omitted).toBe(true);
+    expect(parsed2.output).toBeDefined();
+    expect(JSON.stringify(parsed2.output)).toContain('big');
   });
 });
 
@@ -750,7 +751,7 @@ describe('preflight enforcement within tool loop', () => {
     }
   });
 
-  it('enforces per-turn read caps', async () => {
+  it('allows repeated reads of same file (dogfooding mode)', async () => {
     writeFileSync(join(TMP, 'a.txt'), `${'a\n'.repeat(50)}`, 'utf-8');
     const client = fakeClient(
       Array.from({ length: 5 }, (_, i) => ({
@@ -765,17 +766,12 @@ describe('preflight enforcement within tool loop', () => {
       maxSteps: 10,
     });
 
-    // Read-loop errors are recoverable: the model sees the error and can adapt.
-    // After exhausting responses, fakeClient returns a final answer.
+    // Dogfooding mode: identical-read loop detection is disabled.
+    // All reads succeed and the agent completes naturally.
     expect(result.terminalState).toBe('completed');
     expect(result.finalAnswer).toBe('all done');
-    // The loop-detection error was delivered to the model as a tool result
-    const toolMsgs = client.requests.flatMap((r: unknown) =>
-      (((r as Record<string, unknown>).messages as Array<Record<string, unknown>>) ?? []).filter(
-        (m: Record<string, unknown>) => m.role === 'tool' && String(m.content ?? '').includes('Read loop detected'),
-      ),
-    );
-    expect(toolMsgs.length).toBeGreaterThanOrEqual(1);
+    // No loop-detection errors — all reads pass through
+    expect(result.toolCalls.every((tc) => tc.success)).toBe(true);
   });
 });
 

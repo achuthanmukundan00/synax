@@ -64,7 +64,9 @@ export function renderAnsi(state: PresentationState, theme: Theme, options?: Ans
   // Streaming text: show live with synthesis glyph
   if (state.streamingText.trim()) {
     lines.push('');
-    lines.push(`${glyphLabel(theme, theme.glyphs.synthesis, 'working', 'synthesis')}  ${renderWorkingIndicator(theme)}`);
+    lines.push(
+      `${glyphLabel(theme, theme.glyphs.synthesis, 'working', 'synthesis')}  ${renderWorkingIndicator(theme)}`,
+    );
     lines.push('');
     const indent = ' '.repeat(theme.contentIndent);
     lines.push(`${indent}${theme.ansi(theme.colors.muted)}${state.streamingText}${theme.reset}`);

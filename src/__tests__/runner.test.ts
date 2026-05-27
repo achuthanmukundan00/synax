@@ -161,7 +161,13 @@ describe('shared bounded agent runner', () => {
       { content: 'done' },
     ]);
 
-    const result = await runTurn({ repoRoot: TMP, task: 'create docs/demo.md', client, mode: 'read-only', maxSteps: 4 });
+    const result = await runTurn({
+      repoRoot: TMP,
+      task: 'create docs/demo.md',
+      client,
+      mode: 'read-only',
+      maxSteps: 4,
+    });
 
     expect(result).toMatchObject({
       terminalState: 'completed',
@@ -993,36 +999,28 @@ describe('shared bounded agent runner', () => {
     expect(hasToolResult).toBe(true);
   });
 
-  it('fails on the fourth identical read in one turn with actionable guidance', async () => {
+  it('allows multiple identical reads (dogfooding mode, no loop detection)', async () => {
     writeFileSync(join(TMP, 'a.txt'), 'hello\n', 'utf-8');
     const client = fakeClient([
       { toolCalls: [{ id: '1', name: 'read', arguments: { path: 'a.txt' } }] },
       { toolCalls: [{ id: '2', name: 'read', arguments: { path: 'a.txt' } }] },
       { toolCalls: [{ id: '3', name: 'read', arguments: { path: 'a.txt' } }] },
       { toolCalls: [{ id: '4', name: 'read', arguments: { path: 'a.txt' } }] },
-      { content: 'Read loop resolved — proceeding.' },
+      { content: 'All reads completed.' },
     ]);
 
     const result = await runTurn({ repoRoot: TMP, task: 'loop read', client, maxSteps: 8 });
 
-    // Read-loop errors are recoverable: the model sees the error and can adapt.
-    // The agent completes with the model's final answer rather than dying.
+    // Dogfooding mode: identical-read loop detection is disabled.
+    // All reads succeed without error.
     expect(result.terminalState).toBe('completed');
-    expect(result.finalAnswer).toBe('Read loop resolved — proceeding.');
+    expect(result.finalAnswer).toBe('All reads completed.');
     expect(result.toolCalls).toEqual([
       { name: 'read', success: true, error: undefined },
       { name: 'read', success: true, error: undefined },
       { name: 'read', success: true, error: undefined },
-      { name: 'read', success: false, error: expect.stringContaining('Read loop detected') },
+      { name: 'read', success: true, error: undefined },
     ]);
-    // The error message (with orientation) was delivered to the model as a tool result
-    const allToolMessages = client.requests.flatMap((r) =>
-      ((r.messages ?? []) as Array<{ role: string; content: string }>).filter((m) => m.role === 'tool'),
-    );
-    const loopErrorMsg = allToolMessages.find((m) => m.content.includes('Read loop detected'));
-    expect(loopErrorMsg).toBeDefined();
-    const msg = loopErrorMsg as NonNullable<typeof loopErrorMsg>;
-    expect(msg.content).toContain('WORKING CONTEXT');
   });
 
   it('allows absolute read paths', async () => {
@@ -1090,7 +1088,7 @@ describe('shared bounded agent runner', () => {
     ]);
   });
 
-  it('returns a clear tool error when total read calls exceed the per-turn limit', async () => {
+  it('allows unlimited reads per turn (dogfooding mode, no per-turn read cap)', async () => {
     mkdirSync(join(TMP, 'src'), { recursive: true });
     const NUM_READS = 65;
     for (let index = 0; index < NUM_READS; index += 1) {
@@ -1100,26 +1098,18 @@ describe('shared bounded agent runner', () => {
     const toolCallResponses = Array.from({ length: NUM_READS }, (_, index) => ({
       toolCalls: [{ id: String(index + 1), name: 'read', arguments: { path: `src/file-${index}.ts` } }],
     }));
-    const client = fakeClient([...toolCallResponses, { content: 'should not be reached' }]);
+    const client = fakeClient([...toolCallResponses, { content: 'all files inspected' }]);
 
     const result = await runTurn({ repoRoot: TMP, task: 'inspect many files', client, maxModelSteps: 70 });
 
-    // Read-limit errors are recoverable: the model sees the error and can adapt.
-    // The agent completes with the model's final answer rather than dying.
+    // Dogfooding mode: no per-turn read cap. All reads succeed.
     expect(result.terminalState).toBe('completed');
-    expect(result.finalAnswer).toBe('should not be reached');
+    expect(result.finalAnswer).toBe('all files inspected');
     expect(result.toolCalls).toHaveLength(NUM_READS);
-    expect(result.toolCalls.slice(0, 64).every((call) => call.success === true)).toBe(true);
-    expect(result.toolCalls[64]).toEqual({
-      name: 'read',
-      success: false,
-      error: 'total read limit reached for this turn: 64',
-    });
-    // One extra request: the final step where the model sees the limit error and answers
-    expect(client.requests).toHaveLength(NUM_READS + 1);
+    expect(result.toolCalls.every((call) => call.success === true)).toBe(true);
   });
 
-  it('truncates large read outputs before they enter model history', async () => {
+  it('passes through large read outputs untruncated (dogfooding mode)', async () => {
     writeFileSync(join(TMP, 'big.txt'), `${'line\n'.repeat(8000)}`, 'utf-8');
     const client = fakeClient([
       { toolCalls: [{ id: '1', name: 'read', arguments: { path: 'big.txt' } }] },
@@ -1134,14 +1124,15 @@ describe('shared bounded agent runner', () => {
     });
 
     expect(result.terminalState).toBe('completed');
+    // Dogfooding mode: full read output is passed through without truncation
     const toolMessage = (client.requests[1].messages as Array<{ role: string; content: string }>).find(
       (message) => message.role === 'tool',
     );
-    expect(toolMessage?.content).toContain('"truncated":true');
-    expect(toolMessage?.content).toContain('targeted read/search');
+    expect(toolMessage?.content).toContain('line');
+    expect(toolMessage?.content).not.toContain('"truncated":true');
   });
 
-  it('enforces per-turn total read-result token budget', async () => {
+  it('passes through all read results regardless of per-turn token budget (dogfooding mode)', async () => {
     writeFileSync(join(TMP, 'a.txt'), `${'a\n'.repeat(5000)}`, 'utf-8');
     writeFileSync(join(TMP, 'b.txt'), `${'b\n'.repeat(5000)}`, 'utf-8');
     const client = fakeClient([
@@ -1161,11 +1152,12 @@ describe('shared bounded agent runner', () => {
     });
 
     expect(result.terminalState).toBe('completed');
+    // Dogfooding mode: second read is not omitted, full content passed through
     const secondToolMessage = (
       client.requests[2].messages as Array<{ role: string; tool_call_id?: string; content: string }>
     ).find((message) => message.role === 'tool' && message.tool_call_id === '2');
-    expect(secondToolMessage?.content).toContain('"estimatedReturnedTokens":0');
-    expect(secondToolMessage?.content).toContain('turn token budget exceeded');
+    expect(secondToolMessage?.content).toContain('b');
+    expect(secondToolMessage?.content).not.toContain('turn token budget exceeded');
   });
 
   it('allows exact replacement edits even when prior read was truncated', async () => {
@@ -1187,7 +1179,7 @@ describe('shared bounded agent runner', () => {
     expect(readFileSync(join(TMP, 'a.txt'), 'utf-8').startsWith('changed\n')).toBe(true);
   });
 
-  it('terminates deterministically at maxToolCalls', async () => {
+  it('completes all tool calls without maxToolCalls enforcement (dogfooding mode)', async () => {
     const client = fakeClient([
       { toolCalls: [{ id: '1', name: 'read', arguments: {} }] },
       { toolCalls: [{ id: '2', name: 'read', arguments: {} }] },
@@ -1195,8 +1187,10 @@ describe('shared bounded agent runner', () => {
 
     const result = await runTurn({ repoRoot: TMP, task: 'loop', client, maxSteps: 4, maxToolCalls: 1 });
 
-    expect(result).toMatchObject({ terminalState: 'budget_exhausted', error: 'max tool calls exceeded: 1' });
-    expect(result.toolCalls).toHaveLength(1);
+    // Dogfooding mode: maxToolCalls is ignored. Both tool calls execute.
+    expect(result.terminalState).toBe('completed');
+    expect(result.toolCalls).toHaveLength(2);
+    expect(result.toolCalls.every((tc) => tc.success)).toBe(true);
   });
 
   it('stops repeated identical bash commands before exhausting model steps', async () => {
