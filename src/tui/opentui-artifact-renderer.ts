@@ -231,7 +231,7 @@ export function renderArtifactRoot(
       core.Text({ id: ACTIVITY_GLYPH_ID, content: '', width: 11 }),
       core.Text({ id: ACTIVITY_TEXT_ID, content: 'Ready.', fg: pal.textAccent }),
     ),
-    ...(infoLines && infoLines.length > 0 ? [renderSlashInfoPanel(core, infoLines, pal)] : []),
+    ...(infoLines && infoLines.length > 0 ? [renderSlashInfoPanel(core, infoLines, pal, footerHeight)] : []),
     ...(settingsLines && settingsLines.length > 0
       ? [renderSettingsOverlay(core, settingsLines, pal, settingsActiveLabel, terminalHeight)]
       : []),
@@ -305,17 +305,28 @@ function renderSettingsOverlay(
   );
 }
 
-/** Render slash-command info as a compact panel above the footer. */
-function renderSlashInfoPanel(core: OpenTuiCore, lines: string[], palette: TuiPalette): OpenTuiNode {
+/** Render slash-command info as an absolute-positioned panel floating above the footer. */
+function renderSlashInfoPanel(
+  core: OpenTuiCore,
+  lines: string[],
+  palette: TuiPalette,
+  footerHeight: number,
+): OpenTuiNode {
   const maxLines = Math.min(lines.length, 14);
   const displayed = lines.slice(0, maxLines);
+  const panelHeight = displayed.length;
   return core.Box(
     {
       id: 'synax-slash-info',
       width: '100%',
+      height: panelHeight,
+      position: 'absolute',
+      bottom: footerHeight,
+      left: 0,
+      zIndex: 25,
       flexDirection: 'column',
       border: ['top'],
-      borderColor: palette.border,
+      borderColor: palette.semantic?.tool_result ?? palette.brand,
       backgroundColor: palette.background,
       paddingX: 1,
       paddingY: 0,
