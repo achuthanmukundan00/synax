@@ -6,33 +6,16 @@
  */
 
 import type { ReadAction, ExecutionContext, AgentToolExecutionResult } from '../types';
-import { toolFailure } from '../types';
 import type { ToolResult } from '../../tools/types';
-import { estimateTokens, truncateForTokenBudget } from '../../agent/context-budget';
+import { estimateTokens } from '../../agent/context-budget';
 
 // ─── Constants ────────────────────────────────────────────
-
-const MAX_TOTAL_READS_PER_TURN = 64;
-const MAX_IDENTICAL_READS_PER_TURN = 3;
 
 // ─── Public handler ───────────────────────────────────────
 
 export async function handleRead(action: ReadAction, context: ExecutionContext): Promise<AgentToolExecutionResult> {
-  if (context.totalReadCalls >= MAX_TOTAL_READS_PER_TURN) {
-    return toolFailure('read', `total read limit reached for this turn: ${MAX_TOTAL_READS_PER_TURN}`);
-  }
-
   const repetitionKey = readRepetitionKey(action);
   const seenCount = context.identicalReadCounts.get(repetitionKey) ?? 0;
-
-  if (seenCount >= MAX_IDENTICAL_READS_PER_TURN) {
-    const orientation = context.ledger.getOrientation();
-    return toolFailure(
-      'read',
-      `Read loop detected: same file/query read ${seenCount + 1} times. ` +
-        `Use targeted reads or search instead.\n\n${orientation}`,
-    );
-  }
   context.identicalReadCounts.set(repetitionKey, seenCount + 1);
 
   const showNudge = seenCount >= 2;
@@ -140,54 +123,13 @@ function normalizeReadToolResult(
   totalReadResultTokens: number,
   ledger: import('../../tools').InspectionLedger,
 ): ToolResult {
+  // Dogfooding mode: do not truncate read payloads here.
+  // Keep full observability and leave context shaping to higher-level assembly.
+  void settings;
+  void totalReadResultTokens;
+  void ledger;
   if (!result.success) return result;
-  const serialized = JSON.stringify(result.output);
-  const estimatedOriginalTokens = estimateTokens(serialized);
-  const remaining = Math.max(0, settings.maxTotalReadResultTokensPerTurn - totalReadResultTokens);
-  const cap = Math.min(settings.maxSingleReadResultTokens, remaining);
-
-  if (cap <= 0) {
-    const path = readPathFromOutput(result.output);
-    return {
-      success: true,
-      toolName: result.toolName,
-      output: {
-        path,
-        omitted: true,
-        reason: 'turn token budget exceeded',
-        guidance: 'use targeted read/search',
-        estimatedOriginalTokens,
-        estimatedReturnedTokens: 0,
-      },
-    };
-  }
-
-  const truncated = truncateForTokenBudget(serialized, cap);
-  if (!truncated.truncated) {
-    return result;
-  }
-
-  const path = readPathFromOutput(result.output);
-  if (path) ledger.markPathAsTruncated(path);
-
-  return {
-    success: true,
-    toolName: result.toolName,
-    output: {
-      path,
-      estimatedOriginalTokens,
-      estimatedReturnedTokens: estimateTokens(truncated.text),
-      truncated: true,
-      message: 'read result truncated to stay within context budget. Use targeted read/search for more.',
-      content: truncated.text,
-    },
-  };
-}
-
-function readPathFromOutput(output: unknown): string | undefined {
-  if (!output || typeof output !== 'object') return undefined;
-  const path = (output as { path?: unknown }).path;
-  return typeof path === 'string' ? path : undefined;
+  return result;
 }
 
 /**

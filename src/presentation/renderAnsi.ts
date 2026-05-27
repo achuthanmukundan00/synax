@@ -64,7 +64,7 @@ export function renderAnsi(state: PresentationState, theme: Theme, options?: Ans
   // Streaming text: show live with synthesis glyph
   if (state.streamingText.trim()) {
     lines.push('');
-    lines.push(glyphLabel(theme, theme.glyphs.synthesis, 'synthesis', 'synthesis'));
+    lines.push(`${glyphLabel(theme, theme.glyphs.synthesis, 'working', 'synthesis')}  ${renderWorkingIndicator(theme)}`);
     lines.push('');
     const indent = ' '.repeat(theme.contentIndent);
     lines.push(`${indent}${theme.ansi(theme.colors.muted)}${state.streamingText}${theme.reset}`);
@@ -317,6 +317,21 @@ function renderHeader(state: PresentationState, theme: Theme, tw: number): strin
   // Pad header with trailing spaces to visually fill the line
   const padWidth = Math.max(0, tw - visibleLength(header));
   return header + ' '.repeat(padWidth);
+}
+
+function renderWorkingIndicator(theme: Theme): string {
+  const tick = Math.floor(Date.now() / 120) % 6;
+  const dots = '.'.repeat((tick % 3) + 1).padEnd(3, ' ');
+  if (!theme.colors.accent) {
+    return `[${dots}]`;
+  }
+  const cells = ['░', '▒', '▓', '█', '▓', '▒'];
+  const shimmer = cells.map((cell, i) => {
+    const phase = (i + tick) % cells.length;
+    const color = phase === 0 ? theme.colors.label : theme.colors.accent;
+    return `${theme.ansi(color)}${cell}${theme.reset}`;
+  });
+  return `${theme.ansi(theme.colors.accent)}${dots}${theme.reset} ${shimmer.join('')}`;
 }
 
 // ─── Memory section ───────────────────────────────────────────────────────────────

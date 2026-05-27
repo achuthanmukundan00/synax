@@ -23,10 +23,6 @@ export async function handleWrite(action: WriteAction, context: ExecutionContext
     return toolFailure(toolName, `file already exists: ${target.path}`);
   }
 
-  if (Buffer.byteLength(action.content, 'utf-8') > 16 * 1024) {
-    return toolFailure(toolName, 'create_file content is too large; write a smaller text file');
-  }
-
   await context.ensureCheckpoint?.();
   await atomicWriteFile(target.absolutePath, action.content, context.env);
   const written = await context.env.readFile(target.absolutePath);

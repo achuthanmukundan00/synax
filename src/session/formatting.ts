@@ -9,7 +9,6 @@ import type { ChatResponse } from '../llm/types';
 import type { ParsedToolCall } from '../llm/tool-calls';
 import type { ToolResult } from '../tools/types';
 import type { ContextBudgetSettings } from '../agent/context-budget';
-import { estimateTokens, truncateForTokenBudget } from '../agent/context-budget';
 import { eventNow, type AgentEvent } from '../agent/events';
 import { sanitizeReasoning } from '../llm/repair/reasoning-sanitizer';
 import { STATUS_ONLY_PATTERNS } from './tool-definitions';
@@ -35,12 +34,8 @@ export function isStatusOnlyOutput(output: string): boolean {
 }
 
 export function assistantMessage(response: ChatResponse, settings?: ContextBudgetSettings): AgentMessage {
-  const maxOutputTokens = settings?.reservedOutputTokens ?? 8192;
-  const maxOutputChars = Math.max(200, Math.floor(maxOutputTokens * 3));
   let content = response.content;
-  if (content.length > maxOutputChars) {
-    content = content.slice(0, maxOutputChars) + '\n[response truncated]';
-  }
+  void settings;
   const reasoningContent = response.reasoningContent?.trim();
   const reasoningFields = reasoningContent ? { reasoning_content: reasoningContent } : {};
 
@@ -100,11 +95,7 @@ export function appendToolResult(
   settings: ContextBudgetSettings,
 ): void {
   let content = JSON.stringify(toolResult);
-  const estimated = estimateTokens(content);
-  if (estimated > settings.maxSingleReadResultTokens) {
-    const truncated = truncateForTokenBudget(content, settings.maxSingleReadResultTokens);
-    content = truncated.text;
-  }
+  void settings;
 
   if (toolCallFormat(response) === 'content_xml') {
     contentToolResults.push({ id: call.id, content });

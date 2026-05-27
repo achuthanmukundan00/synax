@@ -89,11 +89,10 @@ import {
 
 import { buildModelRequest, guardModelRequestMultiStage, classifyResultForRecovery } from './message-assembly';
 
-import { resolveVerificationContract, checkCompletionAgainstContract } from './verification-contracts';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
-const DEFAULT_MAX_TOOL_CALLS = 192;
+const DEFAULT_MAX_TOOL_CALLS = Number.MAX_SAFE_INTEGER;
 const MAX_CONSECUTIVE_RECOVERABLE_TOOL_ERRORS = 3;
 
 export function finalAnswerFromResponse(response: ChatResponse): string {
@@ -245,7 +244,7 @@ export class Session {
     this.client = options.client;
     this.mode = options.mode ?? 'patch';
     this.maxToolCalls = options.maxToolCalls ?? DEFAULT_MAX_TOOL_CALLS;
-    this.maxModelSteps = options.maxModelSteps ?? 64;
+    this.maxModelSteps = options.maxModelSteps ?? Number.MAX_SAFE_INTEGER;
     this.bashEnabled = options.bashEnabled ?? true;
     this.env = options.env ?? new NodeExecutionEnv();
     this.sessionId = options.sessionId ?? generatePersistentSessionId();
@@ -690,7 +689,6 @@ export class Session {
     const maxToolCalls = this.maxToolCalls;
     let changedFiles: string[] = [];
     let toolCalls: AgentTurnResult['toolCalls'] = [];
-    const turnNudgeState = { verificationInjected: false };
     const readCache = new Map<string, ToolResult>();
     const identicalReadCounts = new Map<string, number>();
     const identicalBashCounts = new Map<string, number>();
@@ -780,6 +778,14 @@ export class Session {
     try {
       turnResult = await (async (): Promise<AgentTurnResult> => {
         for (let step = 1; step <= this.maxModelSteps; step += 1) {
+          if (step % 25 === 0) {
+            this.eventBus.emit({
+              type: 'command_output',
+              timestamp: eventNow(),
+              command: 'progress',
+              content: `[synax] heartbeat: step=${step}, tool_calls=${toolCalls.length}, changed_files=${changedFiles.length}`,
+            });
+          }
           // ── Steering: check abort before each model step ──────────
           if (this.abortSignal?.aborted) {
             return {
@@ -1072,21 +1078,8 @@ export class Session {
           // completion. The model may have been mid-thought or mid-tool-call.
           // Check BEFORE tool-call processing so truncated tool calls are not
           // executed with incomplete arguments.
-          if (response.finishReason === 'length' && !turnNudgeState.verificationInjected) {
-            turnNudgeState.verificationInjected = true;
-            if (this.tracer && toolParseSpan) {
-              this.tracer.endSpan(toolParseSpan);
-            }
-            const continuationNudge =
-              'Your response was truncated (output token limit reached). ' +
-              'Continue from where you left off. If you were about to call a tool, call it now.';
-            conversation.messages.push({ role: 'user', content: continuationNudge });
-            this.logger?.warn('Model response truncated (finish_reason=length), injecting continuation', {
-              stepIndex: step,
-              charLength: response.content.length,
-            });
-            continue;
-          }
+          // Dogfooding mode: don't inject continuation nudges. Let the model
+          // steer recovery organically; observability events remain active.
 
           // ── No tool calls → completion ──────────────────────────────
           if (response.toolCalls.length === 0) {
@@ -1098,72 +1091,8 @@ export class Session {
             // returns a substantial text response without using any tools on the
             // first step, challenge it to actually do work rather than explaining.
             // A response > 200 chars is likely an explanation; short acks are fine.
-            if (
-              step === 1 &&
-              (mode === 'patch' || mode === 'verify') &&
-              response.content.trim().length > 200 &&
-              !turnNudgeState.verificationInjected
-            ) {
-              turnNudgeState.verificationInjected = true;
-              const actionNudge =
-                'You responded with text but did not use any tools. ' +
-                'In this mode you must take action using the available tools (read, write, edit, bash) to complete the task. ' +
-                'Do not just explain what to do — actually do it. Start by reading the relevant files.';
-              conversation.messages.push({ role: 'user', content: actionNudge });
-              this.logger?.info('Model attempted text-only completion on step 1, injecting action nudge', {
-                stepIndex: step,
-                mode,
-              });
-              continue;
-            }
-
-            // ── Step-threshold guard: in patch mode, if the model runs 5+ steps
-            // without changing any files, inject a nudge to use write/edit tools.
-            // This prevents infinite read-only loops that never trigger the
-            // verification contract.
-            if (
-              mode === 'patch' &&
-              step > 5 &&
-              toolCalls.length === 0 &&
-              changedFiles.length === 0 &&
-              !turnNudgeState.verificationInjected
-            ) {
-              turnNudgeState.verificationInjected = true;
-              const nudge = 'You have not changed any files yet. You must use write or edit to make changes.';
-              conversation.messages.push({ role: 'user', content: nudge });
-              this.logger?.info('Model exceeded step threshold without changing files', {
-                stepIndex: step,
-                mode,
-              });
-              continue;
-            }
-
-            // Verification contract check — only enforce when the model has already
-            // attempted mutation tool calls (write, edit). Read-only investigations
-            // and pure-content first-step completions are accepted as-is.
-            // Inject the nudge at most once per turn.
-            const hasMutationAttempts = toolCalls.some((tc) => tc.name === 'write' || tc.name === 'edit');
-            // If we are in a mode that requires verification, check the contract even if no tools were called this turn
-            // (e.g., the model just provided a text response claiming to be done).
-            const isChattyCompletion =
-              (mode === 'patch' || mode === 'verify') &&
-              toolCalls.length === 0 &&
-              changedFiles.length === 0 &&
-              step > 1;
-            const needsVerification = hasMutationAttempts || changedFiles.length > 0 || isChattyCompletion;
-            if (needsVerification && !turnNudgeState.verificationInjected) {
-              const contract = this._verificationContract ?? resolveVerificationContract(mode);
-              const nudge = checkCompletionAgainstContract(
-                contract,
-                { changedFiles, verificationRan: false },
-                'completed',
-              );
-              if (nudge) {
-                turnNudgeState.verificationInjected = true;
-                conversation.messages.push({ role: 'user', content: nudge });
-                continue;
-              }
-            }
+            // Dogfooding mode: disable auto-nudges and verification-contract
+            // enforcement here. Keep raw model behavior observable.
 
             return {
               terminalState: 'completed',
@@ -1325,45 +1254,8 @@ export class Session {
           ? this.tracer.startChildSpan(options.turnSpan, 'tool_execution', { toolName: call.name })
           : undefined;
 
-      if (options.toolCalls.length >= options.maxToolCalls) {
-        if (this.tracer && toolExecSpan) {
-          this.tracer.addEvent(toolExecSpan, 'max_tool_calls_exceeded', { limit: options.maxToolCalls });
-          this.tracer.endSpan(toolExecSpan);
-        }
-        this.eventBus.emit({
-          type: 'tool_execution_end',
-          timestamp: eventNow(),
-          stepIndex: options.step,
-          toolCallId: call.id,
-          toolName: call.name,
-          success: false,
-          error: `max tool calls exceeded: ${options.maxToolCalls}`,
-        });
-        this.logger?.warn('Max tool calls exceeded', {
-          current: options.toolCalls.length,
-          limit: options.maxToolCalls,
-          stepIndex: options.step,
-        });
-        return {
-          terminalResult: {
-            terminalState: 'budget_exhausted',
-            finalAnswer: finalAnswerFromResponse(options.response),
-            reasoningContent: options.response.reasoningContent,
-            steps: options.step,
-            toolCalls: options.toolCalls,
-            changedFiles: options.changedFiles,
-            conversation: options.conversation,
-            error: `max tool calls exceeded: ${options.maxToolCalls}`,
-          },
-          toolCalls: options.toolCalls,
-          changedFiles: options.changedFiles,
-          consecutiveRecoverableToolErrors: options.consecutiveRecoverableToolErrors,
-          totalReadCalls: options.totalReadCalls,
-          totalReadResultTokens: options.totalReadResultTokens,
-          contentToolResults,
-          conversation: options.conversation,
-        };
-      }
+      // Dogfooding mode: do not hard-stop on tool-call count. Observability
+      // is preserved via event stream and progress counters.
 
       this.onActivity?.({
         kind: 'tool',
@@ -1465,6 +1357,14 @@ export class Session {
         success: result.success,
         error: result.error,
       });
+      if (options.toolCalls.length % 100 === 0) {
+        this.eventBus.emit({
+          type: 'command_output',
+          timestamp: eventNow(),
+          command: 'progress',
+          content: `[synax] heartbeat: tool_calls=${options.toolCalls.length}, step=${options.step}, changed_files=${options.changedFiles.length}`,
+        });
+      }
       appendToolResult(
         options.conversation,
         options.response,

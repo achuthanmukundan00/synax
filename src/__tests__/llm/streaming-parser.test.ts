@@ -234,21 +234,52 @@ describe('streaming parser — reasoning_content edge cases', () => {
     expect(resp.content).toBe('Hello');
   });
 
-  test('non-JSON SSE data throws a parse error', async () => {
+  test('non-JSON SSE data is skipped without aborting the stream', async () => {
     srv = await createMockServer((_req, res) => {
       res.writeHead(200, { 'Content-Type': 'text/event-stream' });
       res.write('data: {not valid json\n\n');
+      res.write(
+        `data: ${JSON.stringify({
+          choices: [{ delta: { content: 'still works' }, finish_reason: 'stop' }],
+        })}\n\n`,
+      );
       res.end('data: [DONE]\n\n');
     });
 
     const client = createOpenAICompatibleClient(makeConfig({ baseUrl: getServerUrl(srv) }));
+    const response = await client.chat({
+      messages: [{ role: 'user', content: 'hi' }],
+      onDelta: () => {},
+    });
+    expect(response.content).toContain('still works');
+  });
 
-    await expect(
-      client.chat({
-        messages: [{ role: 'user', content: 'hi' }],
-        onDelta: () => {},
-      }),
-    ).rejects.toThrow();
+  test('joins multi-line SSE data payloads before JSON parse', async () => {
+    srv = await createMockServer((_req, res) => {
+      res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+      // One SSE event split across multiple data: lines.
+      res.write('data: {\n');
+      res.write('data:   "choices": [{"delta": {"reasoning_content": "The user asks\\\\nfor structured output."}}]\n');
+      res.write('data: }\n\n');
+      res.write(
+        `data: ${JSON.stringify({
+          choices: [{ delta: { content: 'ok' }, finish_reason: 'stop' }],
+        })}\n\n`,
+      );
+      res.end('data: [DONE]\n\n');
+    });
+
+    const deltas: Array<{ content?: string; reasoningContent?: string }> = [];
+    const client = createOpenAICompatibleClient(makeConfig({ baseUrl: getServerUrl(srv) }));
+    const response = await client.chat({
+      messages: [{ role: 'user', content: 'hi' }],
+      onDelta: (delta) => deltas.push(delta),
+    });
+
+    expect(response.reasoningContent).toContain('The user asks');
+    expect(response.reasoningContent).toContain('structured output.');
+    expect(response.content).toBe('ok');
+    expect(deltas.some((d) => (d.reasoningContent ?? '').includes('The user asks'))).toBe(true);
   });
 
   test('falls back to plain JSON parsing when server returns non-SSE response', async () => {

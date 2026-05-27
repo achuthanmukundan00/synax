@@ -372,32 +372,45 @@ async function readOpenAIStream(
     const parts = buffer.split(/\r?\n\r?\n/);
     buffer = parts.pop() ?? '';
     for (const part of parts) {
-      const payloads = part
+      // SSE events may include multi-line `data:` payloads that must be
+      // rejoined with '\n'. Keep payload whitespace intact (except one optional
+      // post-colon space) so streamed reasoning spacing/newlines survive.
+      const dataLines = part
         .split(/\r?\n/)
         .filter((line) => line.startsWith('data:'))
-        .map((line) => line.slice(5).trim());
-      for (const payload of payloads) {
-        if (!payload || payload === '[DONE]') continue;
-        hasSsePayloads = true;
-        const parsed = JSON.parse(payload) as StreamChunk;
-        if (parsed.model) model = parsed.model;
-        if (parsed.usage) usage = parsed.usage;
-        const choice = parsed.choices?.[0];
-        if (!choice) continue;
-        if (choice.finish_reason !== undefined) finishReason = choice.finish_reason;
-        const delta = choice.delta ?? {};
-        const contentDelta = delta.content ?? '';
-        const reasoningDelta = delta.reasoning_content ?? delta.reasoning ?? delta.reasoning_text ?? '';
-        if (reasoningDelta) {
-          reasoningContent += reasoningDelta;
-          onDelta({ reasoningContent: reasoningDelta });
-        }
-        if (contentDelta) {
-          content += contentDelta;
-          onDelta({ content: contentDelta });
-        }
-        collectToolCallDeltas(toolCalls, delta.tool_calls);
+        .map((line) => {
+          const raw = line.slice(5);
+          return raw.startsWith(' ') ? raw.slice(1) : raw;
+        });
+      if (dataLines.length === 0) continue;
+      const payload = dataLines.join('\n');
+      if (!payload || payload === '[DONE]') continue;
+      hasSsePayloads = true;
+
+      let parsed: StreamChunk;
+      try {
+        parsed = JSON.parse(payload) as StreamChunk;
+      } catch {
+        // Ignore malformed chunks and continue streaming.
+        continue;
       }
+      if (parsed.model) model = parsed.model;
+      if (parsed.usage) usage = parsed.usage;
+      const choice = parsed.choices?.[0];
+      if (!choice) continue;
+      if (choice.finish_reason !== undefined) finishReason = choice.finish_reason;
+      const delta = choice.delta ?? {};
+      const contentDelta = delta.content ?? '';
+      const reasoningDelta = delta.reasoning_content ?? delta.reasoning ?? delta.reasoning_text ?? '';
+      if (reasoningDelta) {
+        reasoningContent += reasoningDelta;
+        onDelta({ reasoningContent: reasoningDelta });
+      }
+      if (contentDelta) {
+        content += contentDelta;
+        onDelta({ content: contentDelta });
+      }
+      collectToolCallDeltas(toolCalls, delta.tool_calls);
     }
     if (done) break;
   }
