@@ -427,11 +427,12 @@ describe('retry-nudge fallback', () => {
     }
   });
 
-  it('parseOpenAIToolCallsResult returns failure for malformed native tool calls', () => {
+  it('parseOpenAIToolCallsResult skips malformed native tool calls gracefully', () => {
     const result = parseOpenAIToolCallsResult([{ function: { name: 'read', arguments: 'not-json' } }]);
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.reason).toBe('malformed-json');
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.source).toBe('none');
+      expect(result.calls).toHaveLength(0);
     }
   });
 });

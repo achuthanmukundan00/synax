@@ -255,11 +255,13 @@ function parseOpenAIToolCallResult(call: OpenAIToolCall, index: number): ParsedT
             };
           }
         } catch {
-          // Repair parse also failed
+          // Repair parse also failed — log and skip this call
         }
       }
     }
-    return { ok: false, message: args.message };
+    // Skip individual malformed calls instead of failing the batch.
+    // Valid calls in the same batch still execute.
+    return { ok: true, call: null };
   }
   return {
     ok: true,

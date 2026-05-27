@@ -305,7 +305,7 @@ describe('LLM client — basic chat', () => {
     expect(resp.toolCallFormat).toBe('openai');
   });
 
-  test('rejects malformed OpenAI-compatible tool call arguments', async () => {
+  test('skips malformed OpenAI-compatible tool call arguments gracefully', async () => {
     srv.close();
     srv = await createMockServer((_req, res) => {
       res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -333,9 +333,10 @@ describe('LLM client — basic chat', () => {
     });
     const client = createOpenAICompatibleClient(makeConfig({ baseUrl: getServerUrl(srv) }));
 
-    await expect(client.chat({ messages: [{ role: 'user', content: 'read a file' }] })).rejects.toThrow(
-      'model emitted malformed tool call output: OpenAI tool call arguments contained malformed JSON',
-    );
+    // Malformed calls are silently skipped — the response completes with content
+    const response = await client.chat({ messages: [{ role: 'user', content: 'read a file' }] });
+    expect(response.content).toBe('I should read the file.');
+    expect(response.toolCalls).toHaveLength(0);
   });
 
   test('auto-selects Qwen parser for Qwen3.6 models and parses XML-style tool calls', async () => {
