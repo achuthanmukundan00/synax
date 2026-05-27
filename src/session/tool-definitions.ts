@@ -385,7 +385,10 @@ export function systemPrompt(options: SystemPromptOptions): string {
   );
 
   if (hasMutation) {
-    lines.push('Keep working until the task is done, then stop and summarize.');
+    lines.push(
+      'Keep working until the task is done, then stop and summarize.',
+      'When completing a task that requires file changes, use write or edit tools to make the actual changes — do not just explain what you would do.',
+    );
   }
 
   lines.push(
