@@ -259,7 +259,7 @@ export interface AnthropicAdapterConfig {
 export function createAnthropicAdapter(config: AnthropicAdapterConfig) {
   const baseUrl = (config.baseUrl ?? 'https://api.anthropic.com').replace(/\/+$/, '');
   const endpoint = `${baseUrl}/v1/messages`;
-  const timeoutMs = config.timeoutMs ?? 120000;
+  const timeoutMs = config.timeoutMs ?? 3600000;
 
   return {
     async chat(opts: ChatOptions): Promise<ChatResponse> {

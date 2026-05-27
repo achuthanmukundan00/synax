@@ -210,7 +210,7 @@ export function normalizeProviderConfig(
   const kind = p.kind ?? presetDefaults.kind ?? 'openai-compatible';
   const baseUrl = p.base_url ?? p.baseUrl ?? presetDefaults.base_url ?? 'http://127.0.0.1:1234/v1';
   const model = p.model ?? presetDefaults.model ?? '';
-  const timeoutMs = p.timeout_ms ?? p.timeoutMs ?? (p.timeout_seconds ?? p.timeoutSeconds ?? 120) * 1000;
+  const timeoutMs = p.timeout_ms ?? p.timeoutMs ?? (p.timeout_seconds ?? p.timeoutSeconds ?? 3600) * 1000;
   const toolCallParser = p.tool_call_parser ?? p.toolCallParser;
   const maxOutputTokens = p.max_output_tokens ?? p.maxOutputTokens;
   return {

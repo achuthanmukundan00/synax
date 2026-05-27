@@ -146,7 +146,7 @@ function resolveProviderConfig(input: ProviderFactoryInput): ResolvedProviderFac
     model,
     apiKey,
     customHeaders: Object.keys(mergedHeaders).length > 0 ? mergedHeaders : undefined,
-    timeoutMs: input.timeoutMs ?? 120000,
+    timeoutMs: input.timeoutMs ?? 3600000,
     thinkingLevel: input.thinkingLevel,
     maxOutputTokens: input.maxOutputTokens,
   };

@@ -573,7 +573,7 @@ export function createOpenAICompatibleClient(
 ) {
   const ledger = opts?.ledger ?? null;
   const budgetPolicy = opts?.budgetPolicy ?? {};
-  const timeoutMs = cfg.timeoutMs ?? 120000;
+  const timeoutMs = cfg.timeoutMs ?? 3600000;
   const model = cfg.model ?? '';
   const baseUrl = (cfg.baseUrl ?? 'http://127.0.0.1:1234/v1').replace(/\/+$/, '');
   const endpoint = baseUrl + '/chat/completions';
