@@ -1,5 +1,5 @@
 /** Maximum events kept in the transcript ring buffer. */
-export const MAX_TRANSCRIPT_EVENTS = 500;
+export const MAX_TRANSCRIPT_EVENTS = 5000;
 
 /** Magic string IDs for DOM-like OpenTUI nodes. */
 export const ROOT_ID = 'synax-root';
@@ -28,14 +28,14 @@ export const ACTIVITY_TEXT_ID = 'synax-activity-text';
 export const AUTOCOMPLETE_MAX_ROWS = 10;
 
 /** Hunk/command output slice limits. */
-export const HUNK_PREVIEW_LINES = 12;
+export const HUNK_PREVIEW_LINES = 30;
 export const HUNK_SCROLLBOX_THRESHOLD = 50;
-export const STDOUT_PREVIEW_LINES = 50;
-export const STDOUT_FULL_LINES = 200;
-export const STDERR_PREVIEW_LINES = 20;
-export const STDERR_FULL_LINES = 200;
-export const TOOL_RESULT_OUTPUT_LINES = 80;
-export const TEXT_PREVIEW_LINES = 8;
+export const STDOUT_PREVIEW_LINES = 100;
+export const STDOUT_FULL_LINES = 500;
+export const STDERR_PREVIEW_LINES = 50;
+export const STDERR_FULL_LINES = 500;
+export const TOOL_RESULT_OUTPUT_LINES = 200;
+export const TEXT_PREVIEW_LINES = 24;
 export const OUTPUT_SHOW_ALL_THRESHOLD = 70;
 
 /** Right rail constraints. */

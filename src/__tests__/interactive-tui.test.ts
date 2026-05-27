@@ -640,13 +640,13 @@ describe('OpenTUI result card consolidation', () => {
 });
 
 describe('OpenTUI polish helpers', () => {
-  it('adds breathing room around event crown glyphs and labels', () => {
-    expect(formatEventCrown('assistant_text')).toBe('  →  Note  ');
-    expect(formatEventCrown('prompt')).toBe('  ◆  Prompt  ');
-    expect(formatEventCrown('tool_result')).toBe('  ◇  Result  ');
-    expect(formatEventCrown('result_error')).toBe('  ✕  Result  ');
-    expect(formatEventCrown('command')).toBe('  ⌘  Command  ');
-    expect(formatEventCrown('error')).toBe('  ✕  Error  ');
+  it('adds breathing room around event crown glyphs and bold labels', () => {
+    expect(formatEventCrown('assistant_text')).toBe('  →  [1mNote[0m  ');
+    expect(formatEventCrown('prompt')).toBe('  ◆  [1mPrompt[0m  ');
+    expect(formatEventCrown('tool_result')).toBe('  ◇  [1mResult[0m  ');
+    expect(formatEventCrown('result_error')).toBe('  ✕  [1mResult[0m  ');
+    expect(formatEventCrown('command')).toBe('  ⌘  [1mCommand[0m  ');
+    expect(formatEventCrown('error')).toBe('  ✕  [1mError[0m  ');
   });
 
   it('expands prompt height for multiline input without capping at 6', () => {

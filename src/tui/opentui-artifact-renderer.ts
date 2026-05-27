@@ -143,6 +143,7 @@ export function renderArtifactRoot(
   splash?: SplashOptions,
   modelId?: string,
   terminalHeight?: number,
+  infoLines?: string[] | null,
 ): OpenTuiNode {
   const pal = palette ?? getPalette();
   const modelPal = modelId ? getModelPalette(modelId) : getModelPalette('');
@@ -230,6 +231,7 @@ export function renderArtifactRoot(
       core.Text({ id: ACTIVITY_GLYPH_ID, content: '', width: 11 }),
       core.Text({ id: ACTIVITY_TEXT_ID, content: 'Ready.', fg: pal.textAccent }),
     ),
+    ...(infoLines && infoLines.length > 0 ? [renderSlashInfoPanel(core, infoLines, pal)] : []),
     ...(settingsLines && settingsLines.length > 0
       ? [renderSettingsOverlay(core, settingsLines, pal, settingsActiveLabel, terminalHeight)]
       : []),
@@ -298,6 +300,31 @@ function renderSettingsOverlay(
         width: '100%',
         height: 1,
         backgroundColor: palette.background,
+      }),
+    ),
+  );
+}
+
+/** Render slash-command info as a compact panel above the footer. */
+function renderSlashInfoPanel(core: OpenTuiCore, lines: string[], palette: TuiPalette): OpenTuiNode {
+  const maxLines = Math.min(lines.length, 14);
+  const displayed = lines.slice(0, maxLines);
+  return core.Box(
+    {
+      id: 'synax-slash-info',
+      width: '100%',
+      flexDirection: 'column',
+      border: ['top'],
+      borderColor: palette.border,
+      backgroundColor: palette.background,
+      paddingX: 1,
+      paddingY: 0,
+    },
+    ...displayed.map((line) =>
+      core.Text({
+        content: line || ' ',
+        fg: palette.textAccent,
+        wrapMode: 'word',
       }),
     ),
   );
@@ -743,7 +770,7 @@ function renderResultTable(core: OpenTuiCore, rows: string[], palette: TuiPalett
     const content = widths
       .map((width, column) => {
         const value = row[column] ?? '';
-        return visibleLength(value) > width ? `${value.slice(0, Math.max(0, width - 1))}…` : value.padEnd(width, ' ');
+        return visibleLength(value) > width ? value.slice(0, Math.max(0, width)) : value.padEnd(width, ' ');
       })
       .join('  ')
       .trimEnd();
@@ -911,7 +938,9 @@ function labelFor(eventClass: SemanticEventClass): string {
 }
 
 export function formatEventCrown(eventClass: SemanticEventClass): string {
-  return `  ${GLYPHS[eventClass]}  ${labelFor(eventClass)}  `;
+  const label = labelFor(eventClass);
+  // Bold the label portion for visual prominence
+  return `  ${GLYPHS[eventClass]}  \u001b[1m${label}\u001b[0m  `;
 }
 
 export function promptInputHeight(prompt: string, terminalWidth = 80): number {
@@ -966,7 +995,7 @@ function riskColor(risk: RiskLevel): string {
 }
 
 function clip(text: string, width: number): string {
-  return text.length <= width ? text : `${text.slice(0, Math.max(0, width - 1))}…`;
+  return text.length <= width ? text : text.slice(0, Math.max(0, width));
 }
 
 // ─── Diagnostic slash-command compact card rendering ────────────────────────
@@ -1312,5 +1341,5 @@ function normalizeThinkingText(text: string): string {
 function thinkingPreview(text: string): string {
   if (!text) return 'waiting for reasoning tokens';
   const maxLength = 120;
-  return text.length > maxLength ? `${text.slice(0, maxLength - 1).trimEnd()}…` : text;
+  return text.length > maxLength ? text.slice(0, maxLength).trimEnd() : text;
 }

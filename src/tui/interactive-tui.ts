@@ -163,6 +163,8 @@ export async function runInteractiveTui(
   let busy = false;
   let exiting = false;
   let statusOverride = options?.blockedMessage ? `! Blocked: ${options.blockedMessage}` : '';
+  /** Slash command info panel: displayed above the prompt bar until the user types. */
+  let slashInfoLines: string[] | null = null;
 
   // --- Theme ---
   const themeMode: 'dark' | 'light' = (await detectThemeMode(renderer as any)) ?? 'dark';
@@ -383,6 +385,12 @@ export async function runInteractiveTui(
           handleInputSubmit,
           (value) => {
             if (autocompleteDraft !== null) return;
+            // Clear slash info panel when user starts typing
+            if (slashInfoLines && value.trim()) {
+              slashInfoLines = null;
+              render('input', { immediate: true });
+              return;
+            }
             // Clear file/path autocomplete when the user types
             if (autocompleteIsFile) {
               autocompleteIsFile = false;
@@ -402,6 +410,7 @@ export async function runInteractiveTui(
           { frame: splashFrame(state.nowMs) },
           state.modelId,
           renderer.height,
+          slashInfoLines || undefined,
         ),
       );
       treeBuilt = true;
@@ -902,6 +911,13 @@ export async function runInteractiveTui(
           render();
           return;
         }
+        if (registryCommand?.opensResume) {
+          eventsVersion++;
+          events.push(tuiNote('slash', '[synax] Session resume is not yet wired in this build.'));
+          busy = false;
+          render();
+          return;
+        }
 
         const report = await session.handleSlashCommand(value);
         if (report.exit) {
@@ -910,15 +926,8 @@ export async function runInteractiveTui(
           return;
         }
         if (report.output.trim()) {
-          eventsVersion++;
-          const classified = slashOutputClass(report.output);
-          events.push({
-            id: `slash-${Date.now()}`,
-            class: classified.eventClass,
-            timestamp: Date.now(),
-            artifact: { type: 'text', title: classified.title, body: report.output },
-            metadata: {},
-          });
+          // Show output as a persistent info panel above the prompt
+          slashInfoLines = report.output.split('\n');
         }
         if (report.newSession) {
           events = [];
