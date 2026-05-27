@@ -2200,7 +2200,13 @@ function rootLayoutModeSignature(args: {
     args.footer.prompt.length === 0;
   const mode = compactStartup ? 'compact' : 'full';
   const inputHeight = args.footer.inputHeight ?? promptInputHeight(args.footer.prompt, args.terminalWidth);
-  return [mode, String(args.terminalWidth), String(args.terminalHeight), String(inputHeight)].join('\0');
+  return [
+    mode,
+    String(args.slashInfoActive),
+    String(args.terminalWidth),
+    String(args.terminalHeight),
+    String(inputHeight),
+  ].join('\0');
 }
 
 function elapsed(startedAtMs: number, nowMs: number): string {
