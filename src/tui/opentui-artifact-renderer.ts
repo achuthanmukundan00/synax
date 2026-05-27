@@ -939,7 +939,7 @@ function labelFor(eventClass: SemanticEventClass): string {
 export function formatEventCrown(eventClass: SemanticEventClass): string {
   const label = labelFor(eventClass);
   // Bold the label portion for visual prominence
-  return `  ${GLYPHS[eventClass]}  \u001b[1m${label}\u001b[0m  `;
+  return `  ${GLYPHS[eventClass]}  ${label}  `;
 }
 
 export function promptInputHeight(prompt: string, terminalWidth = 80): number {
