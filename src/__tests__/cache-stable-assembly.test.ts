@@ -63,10 +63,7 @@ describe('appendMutableRuntimeState', () => {
 
   it('filters out empty-content runtime messages', () => {
     const stable = [makeMsg('system', 'You are a bot')];
-    const result = appendMutableRuntimeState(
-      stable,
-      { role: 'system', content: '   ' },
-    );
+    const result = appendMutableRuntimeState(stable, { role: 'system', content: '   ' });
     expect(result).toBe(stable);
   });
 
@@ -143,8 +140,18 @@ describe('prompt-cache stability with orientation changes', () => {
     const messages: AgentMessage[] = [
       makeMsg('system', 'You are Synax, a coding agent.'),
       makeMsg('user', 'Fix the bug in src/app.ts'),
-      makeMsg('assistant', 'Let me read the file.', { tool_calls: [{ id: 't1', name: 'read', arguments: { path: 'src/app.ts' } }] }),
-      makeMsg('tool', JSON.stringify({ success: true, toolName: 'read', output: { path: 'src/app.ts', totalLines: 42, content: 'line1\nline2' } }), { tool_call_id: 't1' }),
+      makeMsg('assistant', 'Let me read the file.', {
+        tool_calls: [{ id: 't1', name: 'read', arguments: { path: 'src/app.ts' } }],
+      }),
+      makeMsg(
+        'tool',
+        JSON.stringify({
+          success: true,
+          toolName: 'read',
+          output: { path: 'src/app.ts', totalLines: 42, content: 'line1\nline2' },
+        }),
+        { tool_call_id: 't1' },
+      ),
     ];
 
     // Step 1 conversation: nothing inspected yet
@@ -211,10 +218,7 @@ describe('prompt-cache stability with memory index changes', () => {
   });
 
   it('null vs populated memory index share the same prefix', () => {
-    const messages: AgentMessage[] = [
-      makeMsg('system', 'You are Synax.'),
-      makeMsg('user', 'hello'),
-    ];
+    const messages: AgentMessage[] = [makeMsg('system', 'You are Synax.'), makeMsg('user', 'hello')];
 
     const conv = makeConversation(messages);
     const r1 = buildModelRequest(conv, defaultSettings, new Map(), 0, null);
@@ -230,10 +234,7 @@ describe('prompt-cache stability with memory index changes', () => {
 
 describe('read budget warning placement', () => {
   it('appends warning after runtime state, preserving prefix', () => {
-    const messages: AgentMessage[] = [
-      makeMsg('system', 'You are Synax.'),
-      makeMsg('user', 'read files'),
-    ];
+    const messages: AgentMessage[] = [makeMsg('system', 'You are Synax.'), makeMsg('user', 'read files')];
 
     const conv = makeConversation(messages);
     conv.inspectionLedger = createMockLedger(['a.ts']);

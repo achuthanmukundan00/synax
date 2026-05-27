@@ -336,10 +336,7 @@ export function systemPrompt(options: SystemPromptOptions): string {
   const hasMutation = options.hasMutationTools ?? true;
   const memoryWired = options.memoryWired ?? false;
 
-  const lines: string[] = [
-    'You are Synax, a disciplined local coding agent.',
-    `Tools: ${tools}.`,
-  ];
+  const lines: string[] = ['You are Synax, a disciplined local coding agent.', `Tools: ${tools}.`];
 
   if (options.tools.includes(TOOL_NAMES.bash)) {
     lines.push('Use bash for terminal commands, including git and verification.');
@@ -350,7 +347,9 @@ export function systemPrompt(options: SystemPromptOptions): string {
   }
 
   if (options.tools.includes(TOOL_NAMES.view_image)) {
-    lines.push('Use view_image to inspect image files (screenshots, photos, diagrams). Returns base64 data for vision-capable models.');
+    lines.push(
+      'Use view_image to inspect image files (screenshots, photos, diagrams). Returns base64 data for vision-capable models.',
+    );
   }
 
   if (options.tools.includes(TOOL_NAMES.write) && options.tools.includes(TOOL_NAMES.edit)) {
@@ -376,7 +375,9 @@ export function systemPrompt(options: SystemPromptOptions): string {
   }
 
   if (options.tools.includes(TOOL_NAMES.save_memory)) {
-    lines.push('Use save_memory to store notes, preferences, decisions, or findings. Content is searchable via search_memory across turns and sessions.');
+    lines.push(
+      'Use save_memory to store notes, preferences, decisions, or findings. Content is searchable via search_memory across turns and sessions.',
+    );
   }
 
   lines.push(

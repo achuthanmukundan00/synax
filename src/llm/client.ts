@@ -753,7 +753,13 @@ function normalizeMessagesForProvider(
   // ways, the conversation can end up with orphaned tool_calls. Strip them.
   for (let i = 0; i < normalized.length; i++) {
     const msg = normalized[i] as Record<string, unknown>;
-    if (msg.role !== 'assistant' || !msg.tool_calls || !Array.isArray(msg.tool_calls) || (msg.tool_calls as unknown[]).length === 0) continue;
+    if (
+      msg.role !== 'assistant' ||
+      !msg.tool_calls ||
+      !Array.isArray(msg.tool_calls) ||
+      (msg.tool_calls as unknown[]).length === 0
+    )
+      continue;
     const toolCalls = msg.tool_calls as Array<{ id: string }>;
     // Find all tool messages between this assistant and the next non-tool message
     const validIds = new Set<string>();
@@ -766,7 +772,7 @@ function normalizeMessagesForProvider(
       }
     }
     // Filter tool_calls to only those with matching tool results
-    const validCalls = toolCalls.filter(tc => validIds.has(tc.id));
+    const validCalls = toolCalls.filter((tc) => validIds.has(tc.id));
     if (validCalls.length < toolCalls.length) {
       if (validCalls.length === 0) {
         delete (msg as { tool_calls?: unknown }).tool_calls;

@@ -22,10 +22,7 @@ export interface SaveMemoryAction {
 
 // ─── Handler ─────────────────────────────────────────────────────────────────
 
-export const handleSaveMemory: ActionHandler = async (
-  action,
-  context,
-): Promise<AgentToolExecutionResult> => {
+export const handleSaveMemory: ActionHandler = async (action, context): Promise<AgentToolExecutionResult> => {
   const input = action as unknown as SaveMemoryAction;
   const memory = context.memory as HolographicMemory | undefined;
 
@@ -86,9 +83,6 @@ export const handleSaveMemory: ActionHandler = async (
       },
     };
   } catch (err) {
-    return toolFailure(
-      'save_memory',
-      `Failed to persist: ${err instanceof Error ? err.message : String(err)}`,
-    );
+    return toolFailure('save_memory', `Failed to persist: ${err instanceof Error ? err.message : String(err)}`);
   }
 };
