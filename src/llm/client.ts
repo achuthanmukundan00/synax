@@ -192,28 +192,37 @@ function parseSuccessResponse(bodyText: string, parserMode: ToolCallParserMode):
     for (const tc of choice.message.tool_calls as Array<{
       id?: unknown;
       type?: unknown;
-      function?: { name?: unknown; arguments?: string };
+      function?: { name?: unknown; arguments?: unknown };
     }>) {
-      const args = tc?.function?.arguments;
-      if (typeof args !== 'string') {
+      const rawArgs = tc?.function?.arguments;
+      let argsObj: Record<string, unknown> | null = null;
+      if (rawArgs && typeof rawArgs === 'object' && !Array.isArray(rawArgs)) {
+        // Already parsed as an object — no repair needed
+        argsObj = rawArgs as Record<string, unknown>;
+      } else if (typeof rawArgs === 'string') {
+        // Try JSON parse, then repair if that fails
+        try {
+          argsObj = JSON.parse(rawArgs) as Record<string, unknown>;
+        } catch {
+          const jsonResult = repairJson(rawArgs);
+          if (jsonResult) {
+            try {
+              argsObj = JSON.parse(jsonResult.repaired) as Record<string, unknown>;
+            } catch {
+              // Repair also failed
+            }
+          }
+        }
+      }
+      if (!argsObj) {
         allRepaired = false;
         break;
       }
-      const jsonResult = repairJson(args);
-      if (!jsonResult) {
-        allRepaired = false;
-        break;
-      }
-      try {
-        repaired.push({
-          id: String(tc.id ?? `call_${repaired.length}`),
-          name: String(tc.function?.name ?? ''),
-          arguments: JSON.parse(jsonResult.repaired) as Record<string, unknown>,
-        });
-      } catch {
-        allRepaired = false;
-        break;
-      }
+      repaired.push({
+        id: String(tc.id ?? `call_${repaired.length}`),
+        name: String(tc.function?.name ?? ''),
+        arguments: argsObj,
+      });
     }
     if (allRepaired && repaired.length > 0) {
       standardToolCallResult = { ok: true, source: 'openai', calls: repaired };
