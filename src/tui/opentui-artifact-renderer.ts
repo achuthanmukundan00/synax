@@ -1306,13 +1306,14 @@ function shimmerThinkingLine(text: string): string {
 }
 
 function normalizeThinkingText(text: string): string {
-  return stripToolCallMarkup(text)
-    .replace(/\s+([,.;:!?])/g, '$1')
-    .trim();
+  return stripToolCallMarkup(text).trim();
 }
 
 function thinkingPreview(text: string): string {
   if (!text) return 'waiting for reasoning tokens';
-  const maxLength = 120;
-  return text.length > maxLength ? `${text.slice(0, maxLength - 1).trimEnd()}…` : text;
+  // First line only for the collapsed preview — the expanded [Ctrl+O] view shows everything.
+  const firstLine = text.split('\n')[0] ?? '';
+  if (!firstLine.trim()) return 'waiting for reasoning tokens';
+  const maxLength = 200;
+  return firstLine.length > maxLength ? `${firstLine.slice(0, maxLength - 1).trimEnd()}…` : firstLine;
 }

@@ -10,22 +10,23 @@
 export function stripToolCallMarkup(text: string): string {
   return (
     text
-      // Complete <tool_call>...</tool_call> blocks (nested XML inside)
-      .replace(/<tool_call>[\s\S]*?<\/tool_call>/gi, '')
+      // Complete <tool_call>...</tool_call> blocks (nested XML inside).
+      // Replace with a space so text before/after the block doesn't concatenate.
+      .replace(/<tool_call>[\s\S]*?<\/tool_call>/gi, ' ')
       // Standalone/open/close <tool_call> tags (handles cross-chunk fragments)
-      .replace(/<\/?tool_call\b[^>]*>/gi, '')
+      .replace(/<\/?tool_call\b[^>]*>/gi, ' ')
       // <function=NAME>...</function> blocks
-      .replace(/<function=[^>]*>[\s\S]*?<\/function>/gi, '')
+      .replace(/<function=[^>]*>[\s\S]*?<\/function>/gi, ' ')
       // Bare <function=NAME> or </function> tags
-      .replace(/<\/?function\b[^>]*>/gi, '')
+      .replace(/<\/?function\b[^>]*>/gi, ' ')
       // <parameter=NAME>...</parameter> blocks
-      .replace(/<parameter=[^>]*>[\s\S]*?<\/parameter>/gi, '')
+      .replace(/<parameter=[^>]*>[\s\S]*?<\/parameter>/gi, ' ')
       // Bare <parameter=NAME> or </parameter> tags
-      .replace(/<\/?parameter\b[^>]*>/gi, '')
+      .replace(/<\/?parameter\b[^>]*>/gi, ' ')
       // Stray <think>, </think>, <thinking>, </thinking>
-      .replace(/<\/?think(?:ing)?\b[^>]*>/gi, '')
+      .replace(/<\/?think(?:ing)?\b[^>]*>/gi, ' ')
       // <invoke>, </invoke> tags
-      .replace(/<\/?invoke\b[^>]*>/gi, '')
+      .replace(/<\/?invoke\b[^>]*>/gi, ' ')
       // Malformed parameter block without closing >:
       // <parameter=path value </parameter  → strip value + tags
       .replace(/<parameter=[^>\s][^>]*?(?:<\/parameter|$)/gi, ' ')
@@ -37,7 +38,9 @@ export function stripToolCallMarkup(text: string): string {
       .replace(/=\w+=\w+\s+\S+?(?=\s|$|=\w+=)/gi, ' ')
       // Bare function=read, parameter=path leaked after tag stripping
       .replace(/\b(?:function|parameter)=\w+/gi, ' ')
-      // Collapse multiple whitespace runs
-      .replace(/\s+/g, ' ')
+      // Collapse multiple horizontal whitespace runs while preserving newlines.
+      // (Avoid collapsing \n so multi-paragraph thinking renders with line breaks.)
+      .replace(/[^\S\n]+/g, ' ')
+      .trim()
   );
 }

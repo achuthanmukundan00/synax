@@ -540,10 +540,11 @@ function extractJsonStringValue(text: string, key: string): string | undefined {
 
 function sanitizeAssistantText(text: string): string {
   return text
-    .replace(/<think>[\s\S]*?<\/think>/gi, '')
-    .replace(/<thinking>[\s\S]*?<\/thinking>/gi, '')
-    .replace(/<\/think(?:ing)?>/gi, '')
-    .replace(/<tool_call>[\s\S]*?<\/tool_call>/gi, '')
+    .replace(/<think>[\s\S]*?<\/think>/gi, ' ')
+    .replace(/<thinking>[\s\S]*?<\/thinking>/gi, ' ')
+    .replace(/<\/think(?:ing)?>/gi, ' ')
+    .replace(/<tool_call>[\s\S]*?<\/tool_call>/gi, ' ')
+    .replace(/\s+/g, ' ')
     .trim();
 }
 

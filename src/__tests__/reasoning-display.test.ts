@@ -27,11 +27,11 @@ describe('sanitizeThinkingContent', () => {
   });
 
   it('strips bare </think> tag', () => {
-    expect(sanitizeThinkingContent('First, let me check the code. </think>')).toBe('First, let me check the code. ');
+    expect(sanitizeThinkingContent('First, let me check the code. </think>')).toBe('First, let me check the code.');
   });
 
   it('strips bare <think> and </think> tags but preserves content between', () => {
-    expect(sanitizeThinkingContent('<think> reasoning </think> visible content')).toBe(' reasoning visible content');
+    expect(sanitizeThinkingContent('<think> reasoning </think> visible content')).toBe('reasoning visible content');
   });
 
   it('preserves natural reasoning text', () => {
@@ -51,15 +51,15 @@ describe('sanitizeThinkingContent', () => {
   });
 
   it('strips <invoke> tags but preserves content between', () => {
-    expect(sanitizeThinkingContent('<invoke> something </invoke> continue')).toBe(' something continue');
+    expect(sanitizeThinkingContent('<invoke> something </invoke> continue')).toBe('something continue');
   });
 
   it('strips bare <think> (truncated reasoning)', () => {
-    expect(sanitizeThinkingContent('Let me think about this <think>')).toBe('Let me think about this ');
+    expect(sanitizeThinkingContent('Let me think about this <think>')).toBe('Let me think about this');
   });
 
   it('collapses multiple whitespace', () => {
-    expect(sanitizeThinkingContent('  a   b   c  ')).toBe(' a b c ');
+    expect(sanitizeThinkingContent('  a   b   c  ')).toBe('a b c');
   });
 
   it('strips decoration-only tokens (◇) after sanitization', () => {
@@ -117,11 +117,11 @@ describe('sanitizeThinkingContent', () => {
   });
 
   it('handles </think> without closing >', () => {
-    expect(sanitizeThinkingContent('Let me consider the options </think')).toBe('Let me consider the options ');
+    expect(sanitizeThinkingContent('Let me consider the options </think')).toBe('Let me consider the options');
   });
 
   it('strips <think without > (truncated opening tag)', () => {
-    expect(sanitizeThinkingContent('<think truncated thought')).toBe(' truncated thought');
+    expect(sanitizeThinkingContent('<think truncated thought')).toBe('truncated thought');
   });
 
   it('handles </thinking without >', () => {
