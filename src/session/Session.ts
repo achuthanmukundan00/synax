@@ -1097,8 +1097,17 @@ export class Session {
             // returns a substantial text response without using any tools on the
             // first step, challenge it to actually do work rather than explaining.
             // A response > 200 chars is likely an explanation; short acks are fine.
-            // Dogfooding mode: disable auto-nudges and verification-contract
-            // enforcement here. Keep raw model behavior observable.
+            if (step === 1 && (mode === 'patch' || mode === 'verify') && response.content.trim().length > 200) {
+              const actionNudge =
+                'Use the available tools (read, write, edit, bash) to complete the task. ' +
+                'Do not explain — act. Start by reading relevant files and making changes.';
+              conversation.messages.push({ role: 'user', content: actionNudge });
+              this.logger?.info('Step-1 text-only completion, injecting action nudge', {
+                stepIndex: step,
+                mode,
+              });
+              continue;
+            }
 
             return {
               terminalState: 'completed',
