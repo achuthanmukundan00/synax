@@ -17,6 +17,7 @@ import {
 } from '../settings/settings-state';
 import { getCommand } from '../settings/slash-command-registry';
 import type { Readable, Writable } from 'node:stream';
+import { listSessionsSorted } from '../sessions/session-store';
 import {
   renderArtifactRoot,
   renderArtifactCard,
@@ -341,6 +342,7 @@ export async function runInteractiveTui(
       visibleEventCount: renderedEvents.length,
       footer,
       settingsActive: settingsState?.active === true,
+      slashInfoActive: (slashInfoLines?.length ?? 0) > 0,
       terminalWidth: renderer.width,
       terminalHeight: renderer.height,
     });
@@ -912,8 +914,20 @@ export async function runInteractiveTui(
           return;
         }
         if (registryCommand?.opensResume) {
-          eventsVersion++;
-          events.push(tuiNote('slash', '[synax] Session resume is not yet wired in this build.'));
+          const sessions = listSessionsSorted('updated');
+          if (sessions.length === 0) {
+            slashInfoLines = ['No saved sessions found.'];
+          } else {
+            const lines = [`Sessions (${sessions.length}):`, ''];
+            for (let i = 0; i < Math.min(sessions.length, 20); i++) {
+              const s = sessions[i];
+              const branch = s.branch ? ` [${s.branch}]` : '';
+              const title = s.title || s.summary || s.id.slice(0, 8);
+              const updated = new Date(s.updatedAt).toLocaleString();
+              lines.push(`  ${i}. ${title}${branch}  —  ${updated}`);
+            }
+            slashInfoLines = lines;
+          }
           busy = false;
           render();
           return;
@@ -2174,12 +2188,14 @@ function rootLayoutModeSignature(args: {
   visibleEventCount: number;
   footer: FooterState;
   settingsActive: boolean;
+  slashInfoActive: boolean;
   terminalWidth: number;
   terminalHeight: number;
 }): string {
   const compactStartup =
     args.visibleEventCount === 0 &&
     !args.settingsActive &&
+    !args.slashInfoActive &&
     args.footer.status === 'Ready.' &&
     args.footer.prompt.length === 0;
   const mode = compactStartup ? 'compact' : 'full';
