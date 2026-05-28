@@ -4,11 +4,13 @@ Synax provides a set of built-in tools for local model inference. External consu
 
 ## Built-in Tools
 
-- `read`: Read file contents
-- `bash`: Execute shell commands
-- `edit`: Replace text in a file
+- `read`: Read file contents, list directories, or text search
+- `bash`: Execute shell commands (disabled by default)
+- `edit`: Exact text replacement in a file
 - `write`: Create a new file
-- `ls`: List files in a directory
+- `search_memory`: Search conversation history via FTS5
+- `save_memory`: Save a fact to persistent memory
+- `view_image`: View image files (base64 for vision models)
 
 ## Custom Tool Registration (SDK)
 

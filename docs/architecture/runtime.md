@@ -164,6 +164,8 @@ graph LR
 | `write`         | `handleWrite`        | `src/actions/handlers/write-handler.ts`         |
 | `bash`          | `handleBash`         | `src/actions/handlers/bash-handler.ts`          |
 | `search_memory` | `handleSearchMemory` | `src/actions/handlers/search-memory-handler.ts` |
+| `save_memory`   | `handleSaveMemory`   | `src/actions/handlers/save-memory-handler.ts`   |
+| `view_image`    | `handleViewImage`    | `src/actions/handlers/view-image-handler.ts`    |
 
 **Relationship to `ToolRegistry`:** The executor tries its handler map first. Unknown tool names fall through to `ToolRegistry.execute()` for custom/extended tools.
 
@@ -634,7 +636,7 @@ Session supports runtime steering without aborting:
 
 ```
 src/
-├── actions/         ActionExecutor + handlers (read, edit, write, bash, search_memory)
+├── actions/         ActionExecutor + handlers (read, edit, write, bash, search_memory, save_memory, view_image)
 ├── agent/           Task policy, safety, renderers, context-budget, skills, verification
 ├── commands/        CLI commands (chat, ask, run, inspect, config, doctor)
 ├── compaction/      DeterministicCompactor (tier 1, zero-token)

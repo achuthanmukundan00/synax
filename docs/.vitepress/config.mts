@@ -37,6 +37,7 @@ export default defineConfig({
           { text: 'Development', link: '/guide/development' },
           { text: 'Architecture', link: '/guide/architecture' },
           { text: 'Extensions', link: '/guide/extensions' },
+          { text: 'SDK API', link: '/guide/sdk-api' },
           { text: 'Runtime Architecture', link: '/architecture/runtime' },
         ],
       },

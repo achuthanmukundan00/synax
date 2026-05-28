@@ -70,6 +70,7 @@ Dispatches tool calls to handlers. Current handlers:
 | `write`         | `handlers/write-handler.ts`         | Create new text files                           |
 | `bash`          | `handlers/bash-handler.ts`          | Execute shell commands (disabled by default)    |
 | `search_memory` | `handlers/search-memory-handler.ts` | Query HolographicMemory via FTS5                |
+| `save_memory`   | `handlers/save-memory-handler.ts`   | Save a fact to persistent FTS5 memory           |
 | `view_image`    | `handlers/view-image-handler.ts`    | View image files                                |
 
 Each handler validates input against policy, enforces path safety, and applies output caps.

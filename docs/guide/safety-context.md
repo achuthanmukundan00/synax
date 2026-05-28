@@ -99,6 +99,21 @@ Inside chat:
 /status     # Full status including files read, git state, checkpoint info
 ```
 
+### Context Strategy
+
+Control how aggressively Synax compacts conversation context via `[agent] context_strategy`:
+
+- `aggressive` — compact early, keep minimal tail
+- `moderate` — compact at ~60% threshold (default)
+- `light` — deterministic compaction only, skip summarization
+- `none` or `off` — disable all automatic compaction
+
+Override per-run:
+
+```sh
+synax run --task "..." --strategy aggressive
+```
+
 ## Context Budget
 
 The main budget controls are:

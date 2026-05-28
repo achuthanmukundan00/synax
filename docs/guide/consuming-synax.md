@@ -6,7 +6,7 @@ By installing Synax, you can instantiate an agent session, integrate it with cus
 
 ## Installation
 
-As of version 0.1.0-alpha, Synax is not yet published to a public registry. You have a few options for consuming it locally in other applications.
+As of version 0.3.0-alpha, Synax is not yet published to a public npm registry. You have a few options for consuming it locally in other applications.
 
 ### 1. Bun Link
 

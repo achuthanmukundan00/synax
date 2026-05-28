@@ -3,10 +3,10 @@
   "name": "synax",
   "compatibility_date": "2026-05-05",
   "observability": {
-    "enabled": true,
+    "enabled": true
   },
   "assets": {
-    "directory": "docs/.vitepress/dist",
+    "directory": "docs/.vitepress/dist"
   },
-  "compatibility_flags": ["nodejs_compat"],
+  "compatibility_flags": ["nodejs_compat"]
 }

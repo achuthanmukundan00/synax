@@ -21,6 +21,7 @@ The model-facing tool names are intentionally small:
 | `bash`          | Run terminal commands, including git and verification    |
 | `view_image`    | Read image file, return base64 for vision-model analysis |
 | `search_memory` | Search conversation history with FTS5 stemming           |
+| `save_memory`   | Save a fact to persistent FTS5 memory                   |
 
 Internally, read calls map to more specific tools such as `list_files`, `read_file_range`, and `search_text`.
 
@@ -51,7 +52,7 @@ Defaults:
 ```toml
 [agent]
 context_budget_tokens = 131072
-max_tool_calls = 192
+max_tool_calls = 96
 ```
 
 Synax keeps the model loop running until the model completes, the user stops it, or a guardrail such as context-window or tool-call limits blocks further progress.

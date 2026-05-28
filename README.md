@@ -264,12 +264,15 @@ synax inspect --ledger    # working context state from last session
 
 Synax sends a compact OpenAI-compatible tool surface to the model:
 
-| Tool    | Purpose                                         |
-| ------- | ----------------------------------------------- |
-| `read`  | List files, read bounded ranges, or search text |
-| `edit`  | Exact `replace_in_file` edits                   |
-| `write` | Create new repo-local text files                |
-| `bash`  | Run terminal commands, including git            |
+| Tool            | Purpose                                                    |
+| --------------- | ---------------------------------------------------------- |
+| `read`          | List files, read bounded ranges, or search text            |
+| `edit`          | Exact `replace_in_file` edits                              |
+| `write`         | Create new repo-local text files                           |
+| `bash`          | Run terminal commands, including git and verification      |
+| `search_memory` | Search conversation history with FTS5 stemming             |
+| `save_memory`   | Save a fact to persistent FTS5 memory                      |
+| `view_image`    | Read image file, return base64 for vision-model analysis   |
 
 The model loop stops when the model returns a final answer, hits the configured model-step limit, hits the configured tool-call limit, or encounters a tool/provider error.
 
@@ -290,6 +293,8 @@ The model loop stops when the model returns a final answer, hits the configured 
 - [Commands](docs/guide/commands.md) — CLI command reference
 - [Agent Loop & Tools](docs/guide/agent-loop.md) — tool surface and loop behavior
 - [Tool-Call Parsing](docs/guide/tool-call-parsing.md) — parser configuration and model support
+- [Safety & Context](docs/guide/safety-context.md) — context management, budget, file policy
+- [Sessions](docs/guide/sessions.md) — session persistence and resume
 - [MCP](docs/guide/mcp.md) — Model Context Protocol bridge
 - [Skills](docs/guide/skills.md) — SKILL.md format and discovery
 

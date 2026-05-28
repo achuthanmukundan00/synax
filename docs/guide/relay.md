@@ -18,11 +18,7 @@ Use `.synax.toml`:
 ```toml
 [agent]
 context_budget_tokens = 131072
-max_tool_calls = 192
-
-[subagents]
-enabled = false
-mode = "sequential"
+max_tool_calls = 96
 
 [verification]
 defaultCommand = "bun run typecheck"
@@ -36,7 +32,7 @@ api_key = "sk-no-key-required"
 timeout_seconds = 120
 
 [tools]
-exposed = ["read", "write", "edit", "bash"]
+exposed = ["read", "write", "edit", "bash", "search_memory", "view_image"]
 shell = "zsh"
 unsafe = false
 

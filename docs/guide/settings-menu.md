@@ -46,8 +46,8 @@ Lists all configured providers with:
 
 ### Skills
 
-Lists discovered skills from `~/.agents/skills/`. Skill entries in config
-use filesystem paths (e.g. `~/.agents/skills/coderabbit-review`):
+Lists auto-discovered skills from `~/.synax/skills/` and `.synax/skills/`, plus
+config-based skills from `.synax.toml` (e.g. `~/.agents/skills/coderabbit-review`):
 
 - ✓ — Enabled
 - ○ — Disabled

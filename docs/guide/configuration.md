@@ -137,13 +137,14 @@ When both formats exist, the multi-provider format takes precedence for provider
 
 ## Environment Variables
 
-| Variable                      | Purpose                 |
-| ----------------------------- | ----------------------- |
-| `SYNAX_CONTEXT_BUDGET_TOKENS` | Override context budget |
-| `SYNAX_MAX_TOOL_CALLS`        | Override max tool calls |
-| `DEEPSEEK_API_KEY`            | DeepSeek API key        |
-| `OPENAI_API_KEY`              | OpenAI API key          |
-| `ANTHROPIC_API_KEY`           | Anthropic API key       |
+| Variable                      | Purpose                                     |
+| ----------------------------- | ------------------------------------------- |
+| `SYNAX_CONTEXT_BUDGET_TOKENS` | Override context budget                     |
+| `SYNAX_MAX_TOOL_CALLS`        | Override max tool calls                     |
+| `SYNAX_LOG_LEVEL`             | Log level: trace, debug, info, warn, error  |
+| `DEEPSEEK_API_KEY`            | DeepSeek API key                            |
+| `OPENAI_API_KEY`              | OpenAI API key                              |
+| `ANTHROPIC_API_KEY`           | Anthropic API key                           |
 
 ## Validation
 
@@ -152,7 +153,7 @@ Invalid config is NOT silently ignored. Parse errors produce clear messages:
 ```
 [synax] Config error:
 providers.my-provider: base_url is required
-active.thinking: must be one of: off, low, medium, high, auto
+active.thinking: must be one of: off, low, medium, high, xhigh, auto
 ```
 
 ## Setting Config from the TUI
@@ -161,3 +162,20 @@ Press `/` in the TUI and type `settings` to open the settings menu.
 Use the Model tab to change provider, model, and thinking levels.
 Use the Providers tab to view configured providers.
 Changes persist to the local `.synax.toml` if one exists, otherwise to the global config.
+
+## Context Strategy
+
+Control how aggressively Synax compacts conversation context:
+
+```toml
+[agent]
+context_strategy = "moderate"
+```
+
+Supported strategies: `aggressive`, `moderate`, `light`, `none`, or `off`.
+
+Override per-run from the CLI:
+
+```sh
+synax run --task "..." --strategy aggressive
+```

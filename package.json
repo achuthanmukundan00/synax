@@ -48,7 +48,7 @@
     "README.md"
   ],
   "scripts": {
-    "preinstall": "bun -e \"const agent = (process.env.npm_config_user_agent || ''); if (!agent.startsWith('bun/')) { console.error('╔══════════════════════════════════════╗\\n║  This project requires bun.          ║\\n║  The TUI will not work with npm.     ║\\n║  Run: bun install                    ║\\n╚══════════════════════════════════════╝'); process.exit(1); }\"",
+    "preinstall": "bun -e \"const agent = (process.env.npm_config_user_agent || ''); if (!agent.startsWith('bun/') && !process.env.CI) { console.error('╔══════════════════════════════════════╗\\n║  This project requires bun.          ║\\n║  The TUI will not work with npm.     ║\\n║  Run: bun install                    ║\\n╚══════════════════════════════════════╝'); process.exit(1); }\"",
     "clean": "rm -rf dist",
     "build": "rm -rf dist && tsc -p tsconfig.build.json",
     "typecheck": "tsc --noEmit",

@@ -212,7 +212,8 @@ Unknown tool-call-parser "xyz". Available: qwen3_xml, hermes, llama3_json, ...
 This prevents silent misconfiguration — an explicit override is treated as intentional. To see all available parsers:
 
 ```bash
-synax inspect --parsers
+# Parser source files
+ls src/llm/parsers/
 ```
 
 If you want to disable content parsing without specifying a parser, use `tool_call_parser = "openai"` (passthrough mode).

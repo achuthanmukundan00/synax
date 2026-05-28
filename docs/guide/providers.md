@@ -92,7 +92,8 @@ context_window = 200000
 
 Anthropic uses the real Messages API (`POST /v1/messages`) with `x-api-key`
 auth, not the OpenAI-compatible format. System prompts map to the top-level
-`system` field. Tool use is not yet supported for Anthropic.
+`system` field. Tool use is supported for Anthropic via the Messages API
+native tool format.
 
 ### Custom OpenAI-compatible
 

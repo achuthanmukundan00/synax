@@ -34,7 +34,7 @@ bun run synax -- chat --message "Explain the test layout."
 Slash commands:
 
 | Command                        | Behavior                                              |
-| ------------------------------ | ----------------------------------------------------- | ----------------------------------- |
+| ------------------------------ | ----------------------------------------------------- |
 | `/help`                        | Show available chat commands                          |
 | `/settings`                    | Show provider, agent, tool, and verification settings |
 | `/settings set <path> <value>` | Change a supported setting for the current session    |
@@ -42,8 +42,9 @@ Slash commands:
 | `/budget`                      | Show context and loop limits                          |
 | `/test-provider`               | Probe provider models and chat endpoints              |
 | `/inspect`                     | Show project profile                                  |
-| `/verify [quick                | full]`                                                | Run configured verification command |
+| `/verify [quick \| full]`     | Run configured verification command                   |
 | `/diff`                        | Show bounded git status and diff                      |
+| `/undo-last-edit`              | Revert the last Synax-owned edit                      |
 | `/status`                      | Show git, budget, checkpoint, and read-state summary  |
 | `/clear`                       | Reset the chat conversation and inspection ledger     |
 | `/exit`, `/quit`               | Exit chat                                             |
@@ -108,11 +109,21 @@ Plan files are not implemented yet:
 bun run synax -- run --plan plan.md
 ```
 
-Verification profiles:
+Verification profiles and budget control:
 
 ```sh
 bun run synax -- run --task "Fix the failing auth test" --verification-profile quick
 bun run synax -- run --task "Fix the failing auth test" --verification-profile full
+bun run synax -- run --task "Fix the failing auth test" --budget 0.50
+bun run synax -- run --task "Fix the failing auth test" --strategy aggressive
+bun run synax -- run --task "Fix the failing auth test" --no-skills
+```
+
+Verification contract levels (gate model behavior):
+
+```sh
+bun run synax -- run --task "Fix the failing auth test" --verify none
+bun run synax -- run --task "Fix the failing auth test" --verify tests-passing
 ```
 
 Run control-surface TUI (stable frame, no log spam):
@@ -142,7 +153,7 @@ Current run-TUI limitations:
 
 ## `synax inspect`
 
-Inspects project metadata:
+Inspects project metadata, context state, skills, and run metrics:
 
 ```sh
 bun run synax -- inspect
@@ -154,6 +165,30 @@ bun run synax -- inspect --docs
 bun run synax -- inspect --doc specs/PRD.md
 bun run synax -- inspect --search-docs "relay"
 bun run synax -- inspect --docs-impact
+```
+
+Context ledger inspection:
+
+```sh
+bun run synax -- inspect --ledger       # Context state from last chat session
+bun run synax -- inspect --context      # Expanded context state (JSON)
+bun run synax -- inspect --budget       # Budget configuration
+```
+
+Skills inspection:
+
+```sh
+bun run synax -- inspect --skills       # List all discovered skills
+bun run synax -- inspect --skill <name> # Show instructions for a specific skill
+```
+
+Run metrics from the event store:
+
+```sh
+bun run synax -- inspect --metrics                 # Recent sessions table
+bun run synax -- inspect --metrics --json          # Machine-readable JSON
+bun run synax -- inspect --metrics --session <id>  # Timeline for a session
+bun run synax -- inspect --metrics --stats         # Aggregate stats (30 days)
 ```
 
 `--docs` lists the bounded local docs/spec files Synax recognizes. `--doc <path>` reads one recognized

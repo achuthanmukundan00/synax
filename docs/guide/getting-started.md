@@ -3,7 +3,6 @@
 ## Requirements
 
 - Bun 1.2 or newer
-- Bun
 - Git
 - Relay or another OpenAI-compatible local server
 
@@ -60,9 +59,7 @@ Built-in presets: `relay`, `deepseek`, `anthropic`, `openrouter`, `groq`, `mistr
 For local models, set `tool_call_parser` to match your model family so Synax can extract tool calls from raw output:
 
 ```toml
-[provider]
-provider = "relay"
-model = "Qwen3.6-35B-A3B"
+[providers.relay]
 tool_call_parser = "qwen3_xml"
 ```
 
@@ -88,6 +85,8 @@ Full doctor mode probes `/models` and sends a small `/chat/completions` request.
 
 ```sh
 bun run synax -- inspect
+bun run synax -- inspect --skills
+bun run synax -- inspect --metrics
 bun run synax -- ask --question "Summarize this repository in five bullets."
 bun run synax -- chat
 ```
@@ -101,13 +100,20 @@ synax> /budget
 synax> /test-provider
 synax> Explain how config loading works.
 synax> /verify
+synax> /undo-last-edit
 synax> /exit
 ```
 
 For one bounded edit-capable task:
 
 ```sh
-bun run synax -- run --task "Fix the failing test"
+bun run synax -- run --task "Fix the failing test" --yes
+```
+
+Disable auto-discovered skills for a session:
+
+```sh
+bun run synax -- run --task "Fix the failing test" --no-skills
 ```
 
 `synax run --plan plan.md` is accepted by the CLI, but the plan execution engine is still a placeholder.

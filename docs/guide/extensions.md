@@ -158,6 +158,7 @@ export function createDefaultHandlerMap(): HandlerMap {
   map.set('write', writeHandler);
   map.set('bash', bashHandler);
   map.set('search_memory', searchMemoryHandler);
+  map.set('save_memory', saveMemoryHandler);
   map.set('view_image', viewImageHandler);
   map.set('get_time', timeHandler); // new
   return map;
