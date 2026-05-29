@@ -69,3 +69,32 @@ export type {
   RuntimeConfig,
   RuntimeRunInput,
 } from './sdk/types';
+
+// ─── Super Edition — world/self/reflection cognitive layer ───
+
+export {
+  SuperWorld,
+  SuperSelfModel,
+  SuperRuntime,
+  SuperPulse,
+  SuperDreamCycle,
+  NoopSuperMemoryConsolidator,
+  defaultAutoCareerToolNames,
+} from './super';
+export type {
+  SuperWorldPaths,
+  SuperSelfModelOptions,
+  SuperRunKind,
+  SuperSelfModificationMode,
+  SuperActionPlan,
+  SuperRunRequest,
+  SuperRunResult,
+  SuperPatchSuggestion,
+  SynaxRuntimeLike,
+  SuperMemoryConsolidationInput,
+  SuperMemoryConsolidationResult,
+  SuperMemoryConsolidator,
+  AutoCareerContextProvider,
+  AutoCareerToolName,
+  AutoCareerToolRegistration,
+} from './super';

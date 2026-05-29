@@ -92,7 +92,7 @@ describe('shared bounded agent runner', () => {
     await runTurn({ repoRoot: TMP, task: 'hello', client });
 
     const system = client.requests[0].messages[0].content as string;
-    expect(system).toContain('You are Synax, a disciplined local coding agent.');
+    expect(system).toContain('You are Suitcase, an agent operating inside a bounded world');
     // All model-facing tools are present (order may vary; prompt is generated dynamically)
     for (const tool of ['read', 'write', 'edit', 'bash', 'save_memory', 'search_memory', 'view_image']) {
       expect(system).toContain(tool);

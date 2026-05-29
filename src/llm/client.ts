@@ -662,7 +662,6 @@ export function createOpenAICompatibleClient(
         }),
         ...(opts.temperature !== undefined ? { temperature: opts.temperature } : {}),
         stream: Boolean(opts.onDelta),
-        max_tokens: opts.maxTokens ?? 8192,
         max_completion_tokens: opts.maxTokens ?? 8192,
         ...(opts.tools && opts.tools.length > 0
           ? { tools: opts.tools.map(toOpenAIToolDefinition), tool_choice: 'auto' }

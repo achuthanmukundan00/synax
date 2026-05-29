@@ -338,7 +338,7 @@ describe('CLI', () => {
           tools: Array<{ function: { name: string } }>;
         };
         expect(parsed.messages[0].role).toBe('system');
-        expect(parsed.messages[0].content).toContain('You are Synax');
+        expect(parsed.messages[0].content).toContain('You are Suitcase');
         expect(parsed.tools.map((tool) => tool.function.name)).toEqual([
           'read',
           'write',
