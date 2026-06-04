@@ -188,6 +188,7 @@ export async function runInteractiveTui(
   const bracketedPasteParser = createInputParser();
   let rawPasteActive = false;
   let activeThinkingEventId: string | null = null;
+  let thinkingRawBody = '';
   let expandCollapseVersion = 0;
   let promptDirty = false;
   let layoutDirty = false;
@@ -1020,10 +1021,14 @@ export async function runInteractiveTui(
   };
 
   const upsertThinkingCard = (chunk: string): void => {
-    const text = chunk;
-    const sanitized = sanitizeThinkingContent(text);
-    if (!sanitized.trim()) return;
+    // Accumulate raw text to preserve original spacing between streaming chunks.
+    // Individual chunks may be split at token boundaries without spaces, so
+    // concatenating sanitized chunks would join words. Instead we accumulate
+    // the raw body and sanitize the whole thing each time.
     if (!activeThinkingEventId) {
+      const sanitized = sanitizeThinkingContent(chunk);
+      if (!sanitized.trim()) return;
+      thinkingRawBody = chunk;
       activeThinkingEventId = `thinking-${Date.now()}-${events.length}`;
       events.push({
         id: activeThinkingEventId,
@@ -1041,26 +1046,32 @@ export async function runInteractiveTui(
     const existing = index >= 0 ? events[index] : undefined;
     if (!existing || existing.artifact.type !== 'text') {
       activeThinkingEventId = null;
+      thinkingRawBody = '';
       upsertThinkingCard(chunk);
       return;
     }
+
+    // Concatenate the raw chunk onto the accumulated raw body, then
+    // sanitize the whole thing. This preserves spacing that the model
+    // included between tokens even when chunk boundaries split words.
+    thinkingRawBody += chunk;
+    const sanitized = sanitizeThinkingContent(thinkingRawBody).trim();
+    if (!sanitized) {
+      events = events.filter((e) => e.id !== activeThinkingEventId);
+      activeThinkingEventId = null;
+      thinkingRawBody = '';
+      eventsVersion++;
+      return;
+    }
+
     const next = {
       ...existing,
       timestamp: Date.now(),
       artifact: {
         ...existing.artifact,
-        body: `${existing.artifact.body}${sanitized}`,
+        body: sanitized,
       },
     };
-    // Re-sanitize the accumulated body to catch protocol tags that
-    // spanned multiple streaming chunks and are now complete.
-    next.artifact.body = sanitizeThinkingContent(next.artifact.body).trim();
-    if (!next.artifact.body) {
-      events = events.filter((e) => e.id !== activeThinkingEventId);
-      activeThinkingEventId = null;
-      eventsVersion++;
-      return;
-    }
     events = [...events.slice(0, index), next, ...events.slice(index + 1)];
     eventsVersion++;
   };
@@ -2206,12 +2217,7 @@ function rootLayoutModeSignature(args: {
     args.footer.status === 'Ready.' &&
     args.footer.prompt.length === 0;
   const mode = compactStartup ? 'compact' : 'full';
-  return [
-    mode,
-    String(args.slashInfoActive),
-    String(args.terminalWidth),
-    String(args.terminalHeight),
-  ].join('\0');
+  return [mode, String(args.slashInfoActive), String(args.terminalWidth), String(args.terminalHeight)].join('\0');
 }
 
 function elapsed(startedAtMs: number, nowMs: number): string {

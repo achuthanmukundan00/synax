@@ -944,7 +944,7 @@ export function formatEventCrown(eventClass: SemanticEventClass): string {
 }
 
 export function promptInputHeight(prompt: string, terminalWidth = 80): number {
-  const wrapColumns = Math.max(16, terminalWidth - 4);
+  const wrapColumns = Math.max(16, terminalWidth - 6);
   const explicitLines = stripAnsi(prompt).split('\n');
   const visualLines = explicitLines.reduce((count, line) => {
     const lineLength = Math.max(1, line.length);
