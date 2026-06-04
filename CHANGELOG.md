@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [0.3.0-alpha.2]
 
 ### Fixed
 
