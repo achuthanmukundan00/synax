@@ -253,6 +253,7 @@ export function renderArtifactRoot(
           width: '100%',
           height: inputFrameHeight,
           flexDirection: 'row',
+          overflow: 'hidden',
           backgroundColor: pal.surface,
           paddingX: 1,
           paddingY: 1,
