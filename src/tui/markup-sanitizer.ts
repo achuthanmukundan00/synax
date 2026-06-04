@@ -11,21 +11,22 @@ export function stripToolCallMarkup(text: string): string {
   return (
     text
       // Complete <tool_call>...</tool_call> blocks (nested XML inside)
-      .replace(/<tool_call>[\s\S]*?<\/tool_call>/gi, '')
+      // Replace with space to prevent word-joining across the removed block.
+      .replace(/<tool_call>[\s\S]*?<\/tool_call>/gi, ' ')
       // Standalone/open/close <tool_call> tags (handles cross-chunk fragments)
-      .replace(/<\/?tool_call\b[^>]*>/gi, '')
+      .replace(/<\/?tool_call\b[^>]*>/gi, ' ')
       // <function=NAME>...</function> blocks
-      .replace(/<function=[^>]*>[\s\S]*?<\/function>/gi, '')
+      .replace(/<function=[^>]*>[\s\S]*?<\/function>/gi, ' ')
       // Bare <function=NAME> or </function> tags
-      .replace(/<\/?function\b[^>]*>/gi, '')
+      .replace(/<\/?function\b[^>]*>/gi, ' ')
       // <parameter=NAME>...</parameter> blocks
-      .replace(/<parameter=[^>]*>[\s\S]*?<\/parameter>/gi, '')
+      .replace(/<parameter=[^>]*>[\s\S]*?<\/parameter>/gi, ' ')
       // Bare <parameter=NAME> or </parameter> tags
-      .replace(/<\/?parameter\b[^>]*>/gi, '')
+      .replace(/<\/?parameter\b[^>]*>/gi, ' ')
       // Stray <think>, </think>, <thinking>, </thinking>
-      .replace(/<\/?think(?:ing)?\b[^>]*>/gi, '')
+      .replace(/<\/?think(?:ing)?\b[^>]*>/gi, ' ')
       // <invoke>, </invoke> tags
-      .replace(/<\/?invoke\b[^>]*>/gi, '')
+      .replace(/<\/?invoke\b[^>]*>/gi, ' ')
       // Malformed parameter block without closing >:
       // <parameter=path value </parameter  → strip value + tags
       .replace(/<parameter=[^>\s][^>]*?(?:<\/parameter|$)/gi, ' ')

@@ -18,7 +18,7 @@ import type { AgentMessage, AgentConversation, AgentActivity } from './types';
 
 export function assistantVisibleContent(content: string): string {
   return sanitizeReasoning(content)
-    .content.replace(/<tool_call>[\s\S]*?<\/tool_call>/gi, '')
+    .content.replace(/<tool_call>[\s\S]*?<\/tool_call>/gi, ' ')
     .replace(/<\|tool_call\|>[\s\S]*/gi, '')
     .trim();
 }

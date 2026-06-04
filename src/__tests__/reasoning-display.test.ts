@@ -47,7 +47,7 @@ describe('sanitizeThinkingContent', () => {
   });
 
   it('strips <thinking> and </thinking> tags but preserves content between', () => {
-    expect(sanitizeThinkingContent('<thinking>deep thoughts</thinking> proceed')).toBe('deep thoughts proceed');
+    expect(sanitizeThinkingContent('<thinking>deep thoughts</thinking> proceed')).toBe(' deep thoughts proceed');
   });
 
   it('strips <invoke> tags but preserves content between', () => {
@@ -180,6 +180,16 @@ describe('sanitizeThinkingContent', () => {
   it('strips bare function=read leaked without angle brackets', () => {
     expect(sanitizeThinkingContent('function=read')).toBe('');
     expect(sanitizeThinkingContent('parameter=path')).toBe('');
+  });
+
+  // ─── Word-joining regression: tags flush against text ─────────────────
+
+  it('prevents word-joining when <think> tags are flush against text', () => {
+    expect(sanitizeThinkingContent('check<think>reasoning</think>the code')).toBe('check reasoning the code');
+  });
+
+  it('prevents word-joining when <thinking> tags are flush against text', () => {
+    expect(sanitizeThinkingContent('inspect<thinking>deep</thinking>dispatch')).toBe('inspect deep dispatch');
   });
 });
 

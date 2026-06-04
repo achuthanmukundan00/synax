@@ -31,16 +31,17 @@ export function sanitizeReasoning(content: string): SanitizeResult {
   let removedReasoning = false;
 
   // Pattern 1: <think>...</think> blocks (handle with attributes, multiline, case-insensitive)
+  // Replace with space to prevent word-joining across the removed block.
   const thinkRegex = /<think\b[^>]*>[\s\S]*?<\/think>/gi;
   if (thinkRegex.test(sanitized)) {
-    sanitized = sanitized.replace(thinkRegex, '');
+    sanitized = sanitized.replace(thinkRegex, ' ');
     removedReasoning = true;
   }
 
   // Pattern 2: <thinking>...</thinking> blocks
   const thinkingRegex = /<thinking\b[^>]*>[\s\S]*?<\/thinking>/gi;
   if (thinkingRegex.test(sanitized)) {
-    sanitized = sanitized.replace(thinkingRegex, '');
+    sanitized = sanitized.replace(thinkingRegex, ' ');
     removedReasoning = true;
   }
 
@@ -48,14 +49,14 @@ export function sanitizeReasoning(content: string): SanitizeResult {
   // These are fenced code blocks that contain reasoning or redundant output
   const fencedResponseRegex = /```\s*(?:response|assistant_text|thinking|reasoning)[\s\S]*?```/gi;
   if (fencedResponseRegex.test(sanitized)) {
-    sanitized = sanitized.replace(fencedResponseRegex, '');
+    sanitized = sanitized.replace(fencedResponseRegex, ' ');
     removedReasoning = true;
   }
 
   // Pattern 4: Self-closing <think/> or <thinking/> tags
   const selfClosingRegex = /<think(?:ing)?\s*\/>/gi;
   if (selfClosingRegex.test(sanitized)) {
-    sanitized = sanitized.replace(selfClosingRegex, '');
+    sanitized = sanitized.replace(selfClosingRegex, ' ');
     removedReasoning = true;
   }
 
@@ -75,7 +76,7 @@ export function sanitizeReasoning(content: string): SanitizeResult {
       // Try a more aggressive cleanup
       const thinkPattern = /<think(?:ing)?\b[^>]*>[\s\S]*?<\/think(?:ing)?>/gi;
       if (thinkPattern.test(sanitized)) {
-        sanitized = sanitized.replace(thinkPattern, '');
+        sanitized = sanitized.replace(thinkPattern, ' ');
         removedReasoning = true;
       }
     }
@@ -85,13 +86,16 @@ export function sanitizeReasoning(content: string): SanitizeResult {
   // Some local models emit only the visible answer plus a dangling </think>.
   const strayClosingRegex = /<\/think(?:ing)?>/gi;
   if (strayClosingRegex.test(sanitized)) {
-    sanitized = sanitized.replace(strayClosingRegex, '');
+    sanitized = sanitized.replace(strayClosingRegex, ' ');
     removedReasoning = true;
   }
 
-  // Pattern 7: Remove leading/trailing whitespace introduced by removals
-  // Also collapse consecutive blank lines
-  sanitized = sanitized.replace(/\n{3,}/g, '\n\n').trim();
+  // Pattern 7: Collapse horizontal whitespace introduced by removals,
+  // normalize excessive newlines, and trim.
+  sanitized = sanitized
+    .replace(/[ \t]+/g, ' ')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
 
   return { content: sanitized, removedReasoning };
 }
