@@ -365,10 +365,13 @@ export function configFromParsed(parsed: Record<string, unknown>): SynaxConfig {
   // Active config
   if (parsed.active && typeof parsed.active === 'object') {
     const active = parsed.active as ActiveConfig;
+    const rawThinking = String(active.thinking ?? '');
     config.active = {
       provider: typeof active.provider === 'string' ? canonicalProviderId(active.provider) : undefined,
       model: typeof active.model === 'string' ? active.model : undefined,
-      thinking: isThinkingLevel(String(active.thinking ?? '')) ? (active.thinking as ThinkingLevel) : undefined,
+      // Preserve the raw value so validateSynaxConfig can report invalid values.
+      // resolveActive will correct it later.
+      thinking: rawThinking ? (active.thinking as ThinkingLevel) : undefined,
     };
   }
 
@@ -721,6 +724,10 @@ function resolveActive(effective: EffectiveSynaxConfig): void {
     if (!activeModel.supportsThinking || activeModel.thinkingLevels.length === 0) {
       effective.active.thinking = 'off';
     } else if (effective.active.thinking && !activeModel.thinkingLevels.includes(effective.active.thinking)) {
+      effective.active.thinking = activeModel.defaultThinkingLevel ?? activeModel.thinkingLevels[0];
+    } else if (!effective.active.thinking) {
+      // thinking was unset or provided an invalid value — default to the model's
+      // default level or the first available level.
       effective.active.thinking = activeModel.defaultThinkingLevel ?? activeModel.thinkingLevels[0];
     }
   }
