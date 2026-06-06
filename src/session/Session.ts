@@ -1616,7 +1616,10 @@ export class Session {
         const handoffResult = await this._handoffManager.tryHandoff({
           parentSession: this,
           reason: 'context_exhaustion',
-          task: (this.conversation.messages.find((m) => m.role === 'user')?.content ? extractTextContent(this.conversation.messages.find((m) => m.role === 'user')!.content!) : undefined) ?? 'Complete the task',
+          task:
+            (this.conversation.messages.find((m) => m.role === 'user')?.content
+              ? extractTextContent(this.conversation.messages.find((m) => m.role === 'user')!.content!)
+              : undefined) ?? 'Complete the task',
           filesChanged: _changedFiles,
           filesRead: conversation.inspectionLedger.getInspectedRanges().map((r) => r.path),
           contextWindowUsed: estimateIncrementalTokens(conversation.messages, conversation.tokenLedger),

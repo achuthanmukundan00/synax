@@ -671,9 +671,7 @@ export function createOpenAICompatibleClient(
           }),
           ...(opts.temperature !== undefined ? { temperature: opts.temperature } : {}),
           stream: Boolean(opts.onDelta),
-          ...(useCompletion
-            ? { max_completion_tokens: maxTokensValue }
-            : { max_tokens: maxTokensValue }),
+          ...(useCompletion ? { max_completion_tokens: maxTokensValue } : { max_tokens: maxTokensValue }),
           ...(opts.tools && opts.tools.length > 0
             ? { tools: opts.tools.map(toOpenAIToolDefinition), tool_choice: 'auto' }
             : {}),
@@ -752,11 +750,7 @@ export function createOpenAICompatibleClient(
 
       // Auto-detect: if the provider rejected `max_tokens`, retry with
       // `max_completion_tokens` once and cache the choice per client instance.
-      if (
-        !useMaxCompletionTokens &&
-        result.status === 400 &&
-        result.bodyText.includes('max_completion_tokens')
-      ) {
+      if (!useMaxCompletionTokens && result.status === 400 && result.bodyText.includes('max_completion_tokens')) {
         useMaxCompletionTokens = true;
         body = buildBody(true);
         const retryResult = await dispatchOnce(body);

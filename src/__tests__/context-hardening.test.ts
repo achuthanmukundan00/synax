@@ -1002,7 +1002,9 @@ describe('working context injection', () => {
     const secondReq = client.requests[1];
     expect(secondReq).toBeDefined();
     const msgs = secondReq.messages as AgentMessage[];
-    const orientationMsg = msgs.find((m) => m.role === 'system' && (extractTextContent(m.content) ?? '').includes('WORKING CONTEXT'));
+    const orientationMsg = msgs.find(
+      (m) => m.role === 'system' && (extractTextContent(m.content) ?? '').includes('WORKING CONTEXT'),
+    );
     expect(orientationMsg).toBeDefined();
     const orientMsg = orientationMsg as NonNullable<typeof orientationMsg>;
     expect(orientMsg.content).toContain('a.txt');
@@ -1022,7 +1024,9 @@ describe('working context injection', () => {
 
     const firstReq = client.requests[0];
     const msgs = firstReq.messages as AgentMessage[];
-    const orientationMsg = msgs.find((m) => m.role === 'system' && (extractTextContent(m.content) ?? '').includes('WORKING CONTEXT'));
+    const orientationMsg = msgs.find(
+      (m) => m.role === 'system' && (extractTextContent(m.content) ?? '').includes('WORKING CONTEXT'),
+    );
     expect(orientationMsg).toBeUndefined();
   });
 
@@ -1048,7 +1052,9 @@ describe('working context injection', () => {
 
     const lastReq = client.requests[2];
     const msgs = lastReq.messages as AgentMessage[];
-    const orientationMsg = msgs.find((m) => m.role === 'system' && (extractTextContent(m.content) ?? '').includes('WORKING CONTEXT'));
+    const orientationMsg = msgs.find(
+      (m) => m.role === 'system' && (extractTextContent(m.content) ?? '').includes('WORKING CONTEXT'),
+    );
     expect(orientationMsg).toBeDefined();
     const orientMsg = orientationMsg as NonNullable<typeof orientationMsg>;
     expect(orientMsg.content).toContain('src/main.ts');
@@ -1390,7 +1396,9 @@ describe('model message assembly', () => {
 
     const lastReq = client.requests[client.requests.length - 1];
     const msgs = lastReq.messages as AgentMessage[];
-    const orientationMsg = msgs.find((m) => m.role === 'system' && (extractTextContent(m.content) ?? '').includes('WORKING CONTEXT'));
+    const orientationMsg = msgs.find(
+      (m) => m.role === 'system' && (extractTextContent(m.content) ?? '').includes('WORKING CONTEXT'),
+    );
     expect(orientationMsg).toBeDefined();
 
     const orientMsg = orientationMsg as NonNullable<typeof orientationMsg>;

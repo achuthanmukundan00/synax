@@ -26,8 +26,10 @@ export function loadBetterSqlite3(): typeof Database | null {
 
   // better-sqlite3 is a native C++ addon. Bun does not support native
   // addons, so return null early to let callers fall back gracefully.
-  if (typeof (globalThis as Record<string, unknown>).Bun !== 'undefined' ||
-      typeof (process.versions as Record<string, string>).bun !== 'undefined') {
+  if (
+    typeof (globalThis as Record<string, unknown>).Bun !== 'undefined' ||
+    typeof (process.versions as Record<string, string>).bun !== 'undefined'
+  ) {
     _Database = null;
     return null;
   }

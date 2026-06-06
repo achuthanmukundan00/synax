@@ -324,10 +324,7 @@ export function tryBuildImageViewMessage(toolResult: ToolResult): AgentMessage |
 
   return {
     role: 'user',
-    content: [
-      { type: 'text', text: `Image file: ${path} (${mimeType}, ${formatSize(output.sizeBytes)})` },
-      imageBlock,
-    ],
+    content: [{ type: 'text', text: `Image file: ${path} (${mimeType}, ${formatSize(output.sizeBytes)})` }, imageBlock],
   };
 }
 
