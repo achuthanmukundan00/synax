@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.3.0-alpha.4]
+
+### Added
+
+- **Vision model support: `view_image` injects image content blocks.**  
+  When `view_image` succeeds, the tool result is now exposed as a proper `image_url` content block in the conversation so vision-capable models (GPT-4V, Claude, etc.) can "see" the image. The image payload is stripped from token estimation to avoid 10–100× inflation vs real vision-tile costs.
+
+- **LLM client: auto-detect `max_tokens` vs `max_completion_tokens`.**  
+  The client now sends both `max_tokens` and `max_completion_tokens` by default and auto-detects which parameter is accepted on 400 errors, caching the correct choice per client instance. Fixes compatibility with newer OpenAI reasoning models (o1, o3, etc.) that reject `max_tokens`.
+
+- **Token estimation: strip base64 image payloads.**  
+  Context budget serialization now replaces large base64 image data with compact `[image:<bytes>]` placeholders before counting tokens, preventing catastrophic token inflation when images are present in conversation history.
+
+### Changed
+
+- **Tool definition path descriptions** updated to clarify that paths may be absolute or relative (not repo-relative only).
+- **`AgentMessage.content`** type widened from `string` to `ChatContent` to support multimodal content arrays.
+
 ## [0.3.0-alpha.3]
 
 ### Fixed
