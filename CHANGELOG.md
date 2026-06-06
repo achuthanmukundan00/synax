@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.3.0-alpha.3]
+
+### Fixed
+
+- **Config: fix invalid/undefined `thinking` values in `resolveActive` and `configFromParsed`.**  
+  Malformed or missing thinking settings in synax config files would cause crashes. Added safe fallbacks that default to off when the value is not a recognized string.
+
+- **Prompt box: fix rendering issues and thinking block formatting.**  
+  Multi-line prompt input now correctly handles the layout recalculation path without triggering full UI tree rebuilds, and thinking blocks render without visual glitches.
+
+- **Fix `thinking` default in config.**  
+  The `--thinking` CLI flag default is now properly wired through the config layer instead of being dropped.
+
 ## [0.3.0-alpha.2]
 
 ### Fixed
