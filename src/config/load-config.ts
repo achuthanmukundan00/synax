@@ -369,9 +369,7 @@ export function configFromParsed(parsed: Record<string, unknown>): SynaxConfig {
     config.active = {
       provider: typeof active.provider === 'string' ? canonicalProviderId(active.provider) : undefined,
       model: typeof active.model === 'string' ? active.model : undefined,
-      // Preserve the raw value so validateSynaxConfig can report invalid values.
-      // resolveActive will correct it later.
-      thinking: rawThinking ? (active.thinking as ThinkingLevel) : undefined,
+      thinking: isThinkingLevel(rawThinking) ? (rawThinking as ThinkingLevel) : undefined,
     };
   }
 
