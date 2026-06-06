@@ -70,28 +70,16 @@ export function runConfigCommand(program: Command): void {
  */
 function handleInit(baseDir: string, opts: ConfigCommandOptions): void {
   const configPath = join(baseDir, '.synax.toml');
-  const result = writeConfigFile(configPath, opts.force ? generateDefaultConfig() : undefined);
+  const result = writeConfigFile(configPath, generateDefaultConfig(), opts.force ?? false);
 
   if (!result.success) {
     if (result.error?.includes('already exists')) {
-      if (opts.force) {
-        // Overwrite with force
-        const overwriteResult = writeConfigFile(configPath, generateDefaultConfig());
-        if (overwriteResult.success) {
-          console.log(`Config file created at ${configPath}`);
-        } else {
-          console.error(`Failed to create config: ${overwriteResult.error}`);
-          process.exit(1);
-        }
-      } else {
-        console.error(`Config file already exists: ${configPath}`);
-        console.error('Use --force to overwrite.');
-        process.exit(1);
-      }
+      console.error(`Config file already exists: ${configPath}`);
+      console.error('Use --force to overwrite.');
     } else {
       console.error(`Failed to create config: ${result.error}`);
-      process.exit(1);
     }
+    process.exit(1);
   } else {
     console.log(`Config file created at ${configPath}`);
   }

@@ -22,7 +22,7 @@ function runSynax(args: string[], options: { cwd?: string; timeout?: number } = 
       const err = error as Error & { stdout?: string | Buffer; stderr?: string | Buffer; status?: number };
       const stdout = typeof err.stdout === 'string' ? err.stdout : err.stdout?.toString();
       const stderr = typeof err.stderr === 'string' ? err.stderr : err.stderr?.toString();
-      return stdout?.trimEnd() ?? stderr?.trimEnd() ?? error.message;
+      return stdout?.trimEnd() || stderr?.trimEnd() || error.message;
     }
     return String(error);
   }
@@ -545,12 +545,12 @@ describe('CLI', () => {
     });
 
     test('config get should retrieve a config value', () => {
-      const output = runSynax(['config', 'get', 'model']);
+      const output = runSynax(['config', 'get', '--key', 'model']);
       expect(output.length).toBeGreaterThan(0);
     });
 
     test('config get --key --json should output JSON', () => {
-      const output = runSynax(['config', 'get', 'model', '--json']);
+      const output = runSynax(['config', 'get', '--key', 'model', '--json']);
       expect(output.length).toBeGreaterThan(0);
     });
   });

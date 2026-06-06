@@ -386,8 +386,9 @@ export function generateDefaultConfig(): string {
 export function writeConfigFile(
   path: string,
   contents = generateDefaultConfig(),
+  overwrite = false,
 ): { success: boolean; error?: string } {
-  if (existsSync(path)) {
+  if (existsSync(path) && !overwrite) {
     return { success: false, error: `Config file already exists: ${path}` };
   }
 
