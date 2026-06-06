@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.0-alpha.5]
+
+### Fixed
+
+- **Missing `extractTextContent` import in test files.**  \
+  Three test suites (`context-hardening`, `deterministic-compaction`, `skills`) were missing the `extractTextContent` import from `../llm/types`, causing compilation failures. Added the import to all affected test files.
+
 ## [0.3.0-alpha.4]
 
 ### Added
