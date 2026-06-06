@@ -3,7 +3,7 @@
  * between the Session class and extracted helper modules.
  */
 
-import type { ChatOptions, ChatResponse } from '../llm/types';
+import type { ChatContent, ChatOptions, ChatResponse } from '../llm/types';
 import type { InspectionLedger } from '../tools';
 import type { ToolRegistry } from '../tools/types';
 import type { PatchPreview } from '../agent/patch';
@@ -30,7 +30,7 @@ export type AgentTerminalState = TerminalState;
 
 export interface AgentMessage {
   role: string;
-  content: string;
+  content: ChatContent;
   tool_call_id?: string;
   name?: string;
   tool_calls?: unknown;

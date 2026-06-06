@@ -571,10 +571,69 @@ export function truncateForTokenBudget(text: string, maxTokens: number): { text:
 // Serialization helpers
 // ---------------------------------------------------------------------------
 
+/**
+ * Size-bytes threshold for stripping base64 image data from token estimation.
+ * Images below this size still get counted as text; above it the base64 payload
+ * is replaced with a compact placeholder to avoid catastrophic token inflation.
+ */
+const IMAGE_BASE64_STRIP_THRESHOLD = 16 * 1024; // 16 KB
+
+/**
+ * Strip base64 image payloads from a content string so the character-based
+ * token estimator doesn't count them as text.  Vision models tokenize images
+ * on a per-tile basis (~85 tokens per 512px tile), not as raw base64, so
+ * keeping the payload in the serialised form can inflate estimates by 10-100×.
+ *
+ * Replaces every `data:image/<type>;base64,<payload>` URL with a compact
+ * `[image:<type>:<bytes>]` placeholder whose length reflects its approximate
+ * real vision-token cost rather than the raw base64 character count.
+ *
+ * Also handles the `"base64"` field inside JSON blobs (e.g. view_image tool
+ * results) when the payload is long enough.
+ */
+function stripImageBase64ForEstimation(content: unknown): unknown {
+  if (typeof content !== 'string') return content;
+  if (content.length < IMAGE_BASE64_STRIP_THRESHOLD) return content;
+
+  // ── Strip data URLs: data:image/<type>;base64,<payload> ──
+  const dataUrlRe = /data:image\/[a-z+]+;base64,([A-Za-z0-9+/=]+)/g;
+  let stripped = content;
+  stripped = stripped.replace(dataUrlRe, (_match, payload) => {
+    const byteLen = Math.ceil((payload as string).length * 0.75); // base64 → bytes
+    const placeholderLen = estimateImageTokenCost(byteLen);
+    return `[image:${byteLen} bytes, ~${placeholderLen} vision tokens]`;
+  });
+
+  // ── Also strip "base64":"<long>" inside JSON (view_image output) ──
+  // Only when the base64 value is long enough to be a real image payload.
+  stripped = stripped.replace(/"base64":"([A-Za-z0-9+/=]{1000,})"/g, (_match, payload) => {
+    const byteLen = Math.ceil((payload as string).length * 0.75);
+    const placeholderLen = estimateImageTokenCost(byteLen);
+    return `"base64":"[image:${byteLen} bytes, ~${placeholderLen} vision tokens]"`;
+  });
+
+  return stripped;
+}
+
+/**
+ * Rough estimate of how many vision tokens an image of `sizeBytes` would
+ * consume.  GPT-4V / Claude use tile-based encoding: ~85 tokens per 512×512
+ * tile (low-res) or ~170 tokens per 512×512 tile with detail crops (high).
+ * We use 85 tokens per 512×512 tile as a conservative default, then clamp
+ * to 20 — 2000 tokens for a single image.
+ */
+function estimateImageTokenCost(sizeBytes: number): number {
+  if (sizeBytes <= 0) return 85; // minimal
+  // Very rough: 512×512 png/jpeg tile ≈ 50-200 KB.  Use 100 KB as one-tile baseline.
+  const estimatedTiles = Math.max(1, Math.ceil(sizeBytes / (100 * 1024)));
+  return Math.min(2000, Math.max(20, estimatedTiles * 85));
+}
+
 function serializeMessage(message: AgentMessage): string {
+  const processedContent = stripImageBase64ForEstimation(message.content);
   return JSON.stringify({
     role: message.role,
-    content: message.content,
+    content: processedContent,
     tool_call_id: message.tool_call_id,
     name: message.name,
     tool_calls: message.tool_calls,

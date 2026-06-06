@@ -11,6 +11,7 @@ import type { ToolResult } from '../tools/types';
 import type { ContextBudgetSettings } from '../agent/context-budget';
 import { eventNow, type AgentEvent } from '../agent/events';
 import { sanitizeReasoning } from '../llm/repair/reasoning-sanitizer';
+import { buildImageContentBlock } from '../llm/image-utils';
 import { STATUS_ONLY_PATTERNS } from './tool-definitions';
 import type { AgentMessage, AgentConversation, AgentActivity } from './types';
 
@@ -299,4 +300,40 @@ export function emitAssistantDelta(
 
 export function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+// ─── Image view result → vision-model message ─────────────────────────────────
+
+/**
+ * When view_image succeeds, build a user message that exposes the image
+ * as an actual image_url content block so vision-capable models can "see" it.
+ *
+ * Returns null when the tool result is not a successful view_image call.
+ */
+export function tryBuildImageViewMessage(toolResult: ToolResult): AgentMessage | null {
+  if (toolResult.toolName !== 'view_image' || !toolResult.success) return null;
+
+  const output = toolResult.output as Record<string, unknown> | undefined;
+  if (!output || typeof output.dataUrl !== 'string') return null;
+
+  const path = typeof output.path === 'string' ? output.path : 'image';
+  const mimeType = typeof output.mimeType === 'string' ? output.mimeType : 'image/png';
+  const dataUrl = output.dataUrl;
+
+  const imageBlock = buildImageContentBlock(dataUrl);
+
+  return {
+    role: 'user',
+    content: [
+      { type: 'text', text: `Image file: ${path} (${mimeType}, ${formatSize(output.sizeBytes)})` },
+      imageBlock,
+    ],
+  };
+}
+
+function formatSize(bytes: unknown): string {
+  if (typeof bytes !== 'number' || bytes <= 0) return 'unknown size';
+  if (bytes < 1024) return `${bytes}B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)}KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)}MB`;
 }

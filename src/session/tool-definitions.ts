@@ -66,7 +66,7 @@ export function buildModelFacingTools(options: ModelToolSurfaceOptions = {}): To
         properties: {
           path: {
             type: 'string',
-            description: 'Optional repo-relative file or directory path.',
+            description: 'Optional file or directory path (absolute or relative).',
           },
           startLine: {
             type: 'number',
@@ -114,7 +114,7 @@ export function buildModelFacingTools(options: ModelToolSurfaceOptions = {}): To
         properties: {
           path: {
             type: 'string',
-            description: 'Repo-relative path for the new file.',
+            description: 'Path for the new file (absolute or relative).',
           },
           content: {
             type: 'string',
@@ -145,7 +145,7 @@ export function buildModelFacingTools(options: ModelToolSurfaceOptions = {}): To
         type: 'object',
         required: ['path', 'oldStr', 'newStr'],
         properties: {
-          path: { type: 'string', description: 'Repo-relative file path.' },
+          path: { type: 'string', description: 'File path for the target file (absolute or relative).' },
           oldStr: {
             type: 'string',
             description: 'Exact text copied from a prior file read.',
@@ -290,7 +290,7 @@ export function buildModelFacingTools(options: ModelToolSurfaceOptions = {}): To
       properties: {
         path: {
           type: 'string',
-          description: 'Repo-relative path to the image file.',
+          description: 'Path to the image file (absolute or relative).',
         },
       },
       additionalProperties: false,

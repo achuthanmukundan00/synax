@@ -643,6 +643,12 @@ export function createOpenAICompatibleClient(
     }
   }
 
+  // Track which max-tokens parameter to use.  Most providers accept
+  // `max_tokens`; newer OpenAI reasoning models (o1, o3, etc.) reject
+  // it and require `max_completion_tokens` instead.  We auto-detect the
+  // correct parameter on the first 400 response and cache the choice.
+  let useMaxCompletionTokens = false;
+
   return {
     /**
      * Send a chat request.
@@ -654,21 +660,39 @@ export function createOpenAICompatibleClient(
      */
     async chat(opts: ChatOptions): Promise<ChatResponse> {
       const thinkingEnabled = cfg.thinkingLevel && cfg.thinkingLevel !== 'off';
-      const body = {
-        model,
-        messages: normalizeMessagesForProvider(opts.messages, {
-          preserveReasoningContent: Boolean(isDeepSeek || thinkingEnabled),
-          requireReasoningContent: Boolean(thinkingEnabled),
-        }),
-        ...(opts.temperature !== undefined ? { temperature: opts.temperature } : {}),
-        stream: Boolean(opts.onDelta),
-        max_tokens: opts.maxTokens ?? 8192,
-        max_completion_tokens: opts.maxTokens ?? 8192,
-        ...(opts.tools && opts.tools.length > 0
-          ? { tools: opts.tools.map(toOpenAIToolDefinition), tool_choice: 'auto' }
-          : {}),
-        ...systemThinkingParams(cfg.thinkingLevel),
-      };
+      const maxTokensValue = opts.maxTokens ?? 8192;
+
+      function buildBody(useCompletion: boolean): Record<string, unknown> {
+        return {
+          model,
+          messages: normalizeMessagesForProvider(opts.messages, {
+            preserveReasoningContent: Boolean(isDeepSeek || thinkingEnabled),
+            requireReasoningContent: Boolean(thinkingEnabled),
+          }),
+          ...(opts.temperature !== undefined ? { temperature: opts.temperature } : {}),
+          stream: Boolean(opts.onDelta),
+          ...(useCompletion
+            ? { max_completion_tokens: maxTokensValue }
+            : { max_tokens: maxTokensValue }),
+          ...(opts.tools && opts.tools.length > 0
+            ? { tools: opts.tools.map(toOpenAIToolDefinition), tool_choice: 'auto' }
+            : {}),
+          ...systemThinkingParams(cfg.thinkingLevel),
+        };
+      }
+
+      let body = buildBody(useMaxCompletionTokens);
+
+      // ── Request dispatch ──────────────────────────────────────────
+      // Dispatches the current body via streaming or non-streaming path.
+      async function dispatchOnce(
+        reqBody: Record<string, unknown>,
+      ): Promise<{ status: number; bodyText: string; headers: Record<string, string> }> {
+        if (opts.onDelta) {
+          return dispatchStreamingRequest(endpoint, reqBody, headers, timeoutMs, opts.onDelta, opts.signal);
+        }
+        return dispatchRequest(endpoint, reqBody, headers, timeoutMs, opts.signal);
+      }
 
       // Vision capability check: warn when image content is sent to a
       // model that doesn't appear to support vision inputs.
@@ -687,9 +711,7 @@ export function createOpenAICompatibleClient(
         }
       }
 
-      const result = opts.onDelta
-        ? await dispatchStreamingRequest(endpoint, body, headers, timeoutMs, opts.onDelta, opts.signal)
-        : await dispatchRequest(endpoint, body, headers, timeoutMs, opts.signal);
+      const result = await dispatchOnce(body);
 
       if (result.status >= 200 && result.status < 300) {
         const response = parseSuccessResponse(result.bodyText, parserMode);
@@ -726,6 +748,27 @@ export function createOpenAICompatibleClient(
         }
 
         return response;
+      }
+
+      // Auto-detect: if the provider rejected `max_tokens`, retry with
+      // `max_completion_tokens` once and cache the choice per client instance.
+      if (
+        !useMaxCompletionTokens &&
+        result.status === 400 &&
+        result.bodyText.includes('max_completion_tokens')
+      ) {
+        useMaxCompletionTokens = true;
+        body = buildBody(true);
+        const retryResult = await dispatchOnce(body);
+        if (retryResult.status >= 200 && retryResult.status < 300) {
+          const response = parseSuccessResponse(retryResult.bodyText, parserMode);
+          if (ledger && response.usage) {
+            const used = (response.usage.promptTokens ?? 0) + (response.usage.completionTokens ?? 0);
+            ledger.recordTokenUsage(used);
+          }
+          return response;
+        }
+        throw parseErrorResponse(retryResult.status, retryResult.bodyText);
       }
 
       throw parseErrorResponse(result.status, result.bodyText);

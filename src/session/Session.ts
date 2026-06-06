@@ -85,6 +85,7 @@ import {
   errorMessage,
   assistantVisibleContent,
   isStatusOnlyOutput,
+  tryBuildImageViewMessage,
 } from './formatting';
 
 import { buildModelRequest, guardModelRequestMultiStage, classifyResultForRecovery } from './message-assembly';
@@ -1392,6 +1393,20 @@ export class Session {
         contentToolResults,
         options.contextBudget,
       );
+
+      // If view_image succeeded, inject a user message with the actual
+      // image_url content block so vision-capable models can "see" it.
+      const imageMsg = tryBuildImageViewMessage(result.toolResult);
+      if (imageMsg) {
+        options.conversation.messages.push(imageMsg);
+        this.memory?.store({
+          sessionId: this.sessionId,
+          turnId: options.turnIndex,
+          role: 'user',
+          toolName: 'view_image',
+          content: '(image content block)',
+        });
+      }
 
       // Memory: store tool result with persistent sessionId
       this.memory?.store({
