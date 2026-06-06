@@ -19,6 +19,7 @@ import {
   type CompactionRecord,
   type ContextBudgetSettings,
 } from '../agent/context-budget';
+import { extractTextContent } from '../llm/types';
 import type { AgentMessage, AgentConversation, AgentTurnResult } from './types';
 
 // ─── Constants ───────────────────────────────────────────────────────────────
@@ -44,7 +45,7 @@ export function appendMutableRuntimeState(
   stableMessages: AgentMessage[],
   ...runtimeBlocks: (AgentMessage | null)[]
 ): AgentMessage[] {
-  const runtime = runtimeBlocks.filter((m): m is AgentMessage => m !== null && (m.content?.trim().length ?? 0) > 0);
+  const runtime = runtimeBlocks.filter((m): m is AgentMessage => m !== null && (extractTextContent(m.content)?.trim().length ?? 0) > 0);
   if (runtime.length === 0) return stableMessages;
   return [...stableMessages, ...runtime];
 }

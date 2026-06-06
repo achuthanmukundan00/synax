@@ -32,6 +32,7 @@ import {
   type BudgetEstimate,
   type ContextBudgetSettings,
 } from '../agent/context-budget';
+import { extractTextContent } from '../llm/types';
 import { orchestrationPlanPrompt } from '../agent/prompts/orchestration-plan';
 import { parseOrchestrationPlan, type PlanNormalizationDefaults } from '../orchestration/plan-parser';
 import type { PlanParseResult } from './types';
@@ -1615,7 +1616,7 @@ export class Session {
         const handoffResult = await this._handoffManager.tryHandoff({
           parentSession: this,
           reason: 'context_exhaustion',
-          task: this.conversation.messages.find((m) => m.role === 'user')?.content ?? 'Complete the task',
+          task: (this.conversation.messages.find((m) => m.role === 'user')?.content ? extractTextContent(this.conversation.messages.find((m) => m.role === 'user')!.content!) : undefined) ?? 'Complete the task',
           filesChanged: _changedFiles,
           filesRead: conversation.inspectionLedger.getInspectedRanges().map((r) => r.path),
           contextWindowUsed: estimateIncrementalTokens(conversation.messages, conversation.tokenLedger),
@@ -1704,7 +1705,7 @@ export class Session {
       if (manifest.keyFindings.length === 0) {
         const lastUserMsg = [...conversation.messages]
           .reverse()
-          .find((m) => m.role === 'user' && !m.content.startsWith('Context was compacted'));
+          .find((m) => m.role === 'user' && !extractTextContent(m.content).startsWith('Context was compacted'));
         if (lastUserMsg && typeof lastUserMsg.content === 'string') {
           manifest.keyFindings.push(`Task: ${lastUserMsg.content.slice(0, 500)}`);
         }
@@ -1807,7 +1808,7 @@ function buildHandoffContext(messages: AgentMessage[], manifest: HandoffManifest
   const kept: AgentMessage[] = [];
   for (let i = messages.length - 1; i >= 0 && userCount < 2; i--) {
     const msg = messages[i];
-    if (msg.role === 'user' && !msg.content.startsWith('## Session Handoff')) {
+    if (msg.role === 'user' && !extractTextContent(msg.content).startsWith('## Session Handoff')) {
       userCount++;
     }
     kept.unshift(msg);

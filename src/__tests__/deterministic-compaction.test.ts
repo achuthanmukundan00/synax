@@ -2,6 +2,7 @@
  * Tests for DeterministicCompactor — zero-token structural compression.
  */
 
+import { extractTextContent } from '../llm/types';
 import { DeterministicCompactor, createCompactor } from '../compaction/DeterministicCompactor';
 import type { AgentMessage } from '../session/Session';
 
@@ -106,7 +107,7 @@ describe('DeterministicCompactor', () => {
       const result = compactor.compact(input);
 
       // Should have at most 2 consecutive blank lines
-      const blankCount = (result.messages[0].content ?? '').match(/^\s*$/gm)?.length ?? 0;
+      const blankCount = (extractTextContent(result.messages[0].content) ?? '').match(/^\s*$/gm)?.length ?? 0;
       // After collapse, the maximum consecutive is 2, and since we have 2 gaps:
       // gap1: 4 blanks → max 2; gap2: 2 blanks → 2. Total: 4 blanks max
       expect(blankCount).toBeLessThanOrEqual(4);

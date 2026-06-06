@@ -2,6 +2,7 @@ import { type AgentMessage } from '../session/Session';
 import { type InspectionLedger } from '../tools/ledger';
 import { DeterministicCompactor } from '../compaction/DeterministicCompactor';
 import type { TokenCounter } from '../metrics/TokenCounter';
+import { extractTextContent } from '../llm/types';
 
 export interface ContextBudgetSettings {
   contextWindowTokens: number;
@@ -643,7 +644,7 @@ function serializeMessage(message: AgentMessage): string {
 
 function contributorLabel(message: AgentMessage): string {
   if (message.role !== 'tool') return message.role;
-  const parsed = tryParseJson(message.content);
+  const parsed = tryParseJson(extractTextContent(message.content));
   if (!parsed || typeof parsed !== 'object') return 'tool result';
   const toolName = (parsed as { toolName?: unknown }).toolName;
   const output = (parsed as { output?: unknown }).output;
@@ -869,11 +870,11 @@ function extractStructuredSections(messages: AgentMessage[]): StructuredSections
 
   for (const message of messages) {
     if (message.role === 'user' && !task) {
-      task = clipped(message.content.trim(), MAX_STRUCTURED_SECTION_CHARS);
+      task = clipped(extractTextContent(message.content).trim(), MAX_STRUCTURED_SECTION_CHARS);
     }
 
     if (message.role === 'tool') {
-      const parsed = tryParseJson(message.content);
+      const parsed = tryParseJson(extractTextContent(message.content));
       if (parsed && typeof parsed === 'object') {
         const output = (parsed as { output?: unknown }).output;
         if (output && typeof output === 'object') {
@@ -890,8 +891,8 @@ function extractStructuredSections(messages: AgentMessage[]): StructuredSections
       }
     }
 
-    if (message.role === 'assistant' && !hasToolCalls(message) && message.content.trim()) {
-      const trimmed = message.content.replace(/\s+/g, ' ').trim();
+    if (message.role === 'assistant' && !hasToolCalls(message) && extractTextContent(message.content).trim()) {
+      const trimmed = extractTextContent(message.content).replace(/\s+/g, ' ').trim();
       if (trimmed.length > 10) {
         stateItems.push(clipped(trimmed, 160));
       }
@@ -899,7 +900,7 @@ function extractStructuredSections(messages: AgentMessage[]): StructuredSections
   }
 
   if (!task && messages.length > 0) {
-    const first = messages[0].content.trim();
+    const first = extractTextContent(messages[0].content).trim();
     task = clipped(first, MAX_STRUCTURED_SECTION_CHARS);
   }
 
@@ -1122,7 +1123,7 @@ function findToolTurnIndices(messages: AgentMessage[]): number[] {
  * Extract a repo-relative file path from a tool result message for compaction tracking.
  */
 function extractFilePathFromToolMessage(msg: AgentMessage): string | undefined {
-  const parsed = tryParseJson(msg.content);
+  const parsed = tryParseJson(extractTextContent(msg.content));
   if (!parsed || typeof parsed !== 'object') return undefined;
 
   const toolResult = parsed as { toolName?: string; output?: unknown };
@@ -1147,7 +1148,7 @@ function compactToolResultMessage(
   ledger?: InspectionLedger,
   readCounts?: Map<string, number>,
 ): AgentMessage | null {
-  const parsed = tryParseJson(msg.content);
+  const parsed = tryParseJson(extractTextContent(msg.content));
   if (!parsed || typeof parsed !== 'object') return null;
 
   // Guard: skip already-compacted results so we don't re-compact a summary

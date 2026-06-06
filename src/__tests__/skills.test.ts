@@ -5,6 +5,7 @@ import { mkdirSync, writeFileSync, rmSync } from 'fs';
 import { join } from 'path';
 import { homedir, tmpdir } from 'os';
 
+import { extractTextContent } from '../llm/types';
 import {
   resolveSkillPath,
   loadSkillContent,
@@ -217,7 +218,7 @@ describe('skill injection into agent context', () => {
     expect(conv.messages[0].content).toContain('Synax');
 
     // Skill message should be a system message
-    const skillMsg = conv.messages.find((m) => m.content.includes('BEGIN SKILL:'));
+    const skillMsg = conv.messages.find((m) => (extractTextContent(m.content) ?? '').includes('BEGIN SKILL:'));
     expect(skillMsg).toBeDefined();
     const msg = skillMsg as NonNullable<typeof skillMsg>;
     expect(msg.role).toBe('system');

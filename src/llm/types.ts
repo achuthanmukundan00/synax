@@ -20,6 +20,19 @@ export interface ImageContentPart {
 /** Content for a chat message: plain text or an array of content parts. */
 export type ChatContent = string | Array<TextContentPart | ImageContentPart>;
 
+/**
+ * Extract deterministic text content from a ChatContent value.
+ * Returns the string directly for plain-text content, or joins text parts
+ * from a multimodal array. Image parts are skipped.
+ */
+export function extractTextContent(content: ChatContent): string {
+  if (typeof content === 'string') return content;
+  return content
+    .filter((part): part is TextContentPart => part.type === 'text')
+    .map((part) => part.text)
+    .join('\n');
+}
+
 export interface ChatMessage {
   role: 'system' | 'user' | 'assistant';
   content: ChatContent;

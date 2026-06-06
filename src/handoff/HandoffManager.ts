@@ -18,6 +18,7 @@ import type { Logger } from '../logging/index';
 import type { RunMode } from '../agent/task-policy';
 import type { ContextBudgetSettings } from '../agent/context-budget';
 import { eventNow } from '../agent/events';
+import { extractTextContent } from '../llm/types';
 
 import type { HandoffManifest, HandoffReason, HandoffResult, HandoffManagerOptions } from './types';
 import { createInspectionLedger } from '../tools';
@@ -385,7 +386,7 @@ export class HandoffManager {
       contextWindowUsed: params.contextWindowUsed,
       conversationMessages: params.parentSession.conversation.messages.map((m) => ({
         role: m.role,
-        content: m.content,
+        content: extractTextContent(m.content),
       })),
     });
 

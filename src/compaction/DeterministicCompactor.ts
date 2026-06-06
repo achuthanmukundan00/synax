@@ -14,6 +14,7 @@
  */
 
 import type { AgentMessage } from '../session/Session';
+import { extractTextContent } from '../llm/types';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -219,7 +220,7 @@ function estimateTokens(text: string): number {
 }
 
 function estimateMessageTokens(msg: AgentMessage): number {
-  const content = msg.content || '';
+  const content = extractTextContent(msg.content) || '';
   const reasoning = (msg as unknown as Record<string, unknown>).reasoning_content as string | undefined;
   let total = estimateTokens(content);
   if (reasoning) total += estimateTokens(reasoning);
@@ -269,7 +270,7 @@ export class DeterministicCompactor {
     for (const msg of messages) {
       if (!msg.content) continue;
 
-      let text = msg.content;
+      let text = extractTextContent(msg.content);
       let msgChanged = false;
 
       for (const technique of this.techniques) {
