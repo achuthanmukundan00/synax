@@ -26,6 +26,15 @@ import {
   renderSplashLogo,
 } from '../tui/opentui-artifact-renderer';
 import { detectColorFgBgTheme, getPalette } from '../tui/theme';
+import {
+  getWordAtCursor,
+  isPathToken,
+  isAtMention,
+  detectCompletionContext,
+  getPathCompletions,
+  collectModelNames,
+  getCompletions,
+} from '../tui/autocomplete';
 import type { EffectiveSynaxConfig } from '../config/schema';
 
 type FakeOpenTuiNode = {
@@ -297,9 +306,7 @@ describe('OpenTUI startup layout', () => {
     expect(overlay?.props.height).toBe(40);
     expect(overlay?.props.zIndex).toBe(100);
     expect(backingRows).toHaveLength(37);
-    expect(
-      backingRows.every((node) => node.type === 'Box' && node.props.width === '100%' && node.props.backgroundColor),
-    ).toBe(true);
+    expect(backingRows.every((node) => node.type === 'Box' && node.props.width === '100%')).toBe(true);
   });
 
   it('moves the prompt dock to the bottom as soon as the first run starts', () => {
@@ -549,6 +556,30 @@ describe('tui input parser', () => {
       { type: 'text', value: 'r' },
       { type: 'submit' },
     ]);
+  });
+
+  it('parses application keypad arrow keys (tmux extended-keys)', () => {
+    expect(parseInputChunk('\x1bOA')).toEqual([{ type: 'arrow_up' }]);
+    expect(parseInputChunk('\x1bOB')).toEqual([{ type: 'arrow_down' }]);
+    expect(parseInputChunk('\x1bOC')).toEqual([{ type: 'arrow_right' }]);
+    expect(parseInputChunk('\x1bOD')).toEqual([{ type: 'arrow_left' }]);
+  });
+
+  it('parses kitty CSI u arrow keys (tmux extended-keys)', () => {
+    expect(parseInputChunk('\x1b[57352u')).toEqual([{ type: 'arrow_up' }]);
+    expect(parseInputChunk('\x1b[57353u')).toEqual([{ type: 'arrow_down' }]);
+    expect(parseInputChunk('\x1b[57354u')).toEqual([{ type: 'arrow_right' }]);
+    expect(parseInputChunk('\x1b[57355u')).toEqual([{ type: 'arrow_left' }]);
+  });
+
+  it('parses CSI u Tab sequences (tmux extended-keys)', () => {
+    expect(parseInputChunk('\x1b[9u')).toEqual([{ type: 'tab' }]);
+    expect(parseInputChunk('\x1b[9;2u')).toEqual([{ type: 'shift_tab' }]);
+  });
+
+  it('parses standard Tab and Shift+Tab', () => {
+    expect(parseInputChunk('\t')).toEqual([{ type: 'tab' }]);
+    expect(parseInputChunk('\x1b[Z')).toEqual([{ type: 'shift_tab' }]);
   });
 });
 
@@ -1537,5 +1568,197 @@ describe('event sink stale card filter', () => {
     );
     expect(runningB).toHaveLength(1);
     expect(runningB[0].artifact.type === 'text' ? runningB[0].artifact.title : '').toBe('agent-b');
+  });
+});
+
+describe('autocomplete context detection', () => {
+  it('detects slash command context', () => {
+    expect(detectCompletionContext('/set', 4).kind).toBe('slash_command');
+    expect(detectCompletionContext('/settings', 9).kind).toBe('slash_command');
+    expect(detectCompletionContext('/', 1).kind).toBe('slash_command');
+  });
+
+  it('detects model name context after /model', () => {
+    expect(detectCompletionContext('/model qw', 9).kind).toBe('model_name');
+    expect(detectCompletionContext('/models qwe', 11).kind).toBe('model_name');
+  });
+
+  it('detects path token context', () => {
+    expect(detectCompletionContext('./src', 5).kind).toBe('path');
+    expect(detectCompletionContext('/usr/bin', 8).kind).toBe('path');
+    expect(detectCompletionContext('../lib', 6).kind).toBe('path');
+  });
+
+  it('detects @-mention context', () => {
+    expect(detectCompletionContext('@read', 5).kind).toBe('at_mention');
+    expect(detectCompletionContext('@src/index', 10).kind).toBe('at_mention');
+  });
+
+  it('returns none for plain text', () => {
+    expect(detectCompletionContext('hello', 5).kind).toBe('none');
+    expect(detectCompletionContext('', 0).kind).toBe('none');
+  });
+
+  it('detects model name after /model even when token does not start with /', () => {
+    // Input: "/model qwen" with cursor at position 10 (on "qwen")
+    // The token "qwen" doesn't start with /, but the preceding word is "/model"
+    const ctx = detectCompletionContext('/model qwen', 10);
+    expect(ctx.kind).toBe('model_name');
+    if (ctx.kind === 'model_name') {
+      expect(ctx.prefix).toBe('qwen');
+    }
+  });
+});
+
+describe('autocomplete word boundary', () => {
+  it('finds word at cursor', () => {
+    expect(getWordAtCursor('hello world', 0)).toEqual({ start: 0, end: 5 });
+    expect(getWordAtCursor('hello world', 4)).toEqual({ start: 0, end: 5 });
+    expect(getWordAtCursor('hello world', 6)).toEqual({ start: 6, end: 11 });
+    expect(getWordAtCursor('hello world', 11)).toEqual({ start: 6, end: 11 });
+  });
+
+  it('handles cursor at end of word', () => {
+    expect(getWordAtCursor('/model qwen', 11)).toEqual({ start: 7, end: 11 });
+  });
+});
+
+describe('autocomplete token helpers', () => {
+  it('identifies path tokens', () => {
+    expect(isPathToken('/usr/bin')).toBe(true);
+    expect(isPathToken('./src')).toBe(true);
+    expect(isPathToken('../lib')).toBe(true);
+    expect(isPathToken('~/docs')).toBe(true);
+    expect(isPathToken('plain')).toBe(false);
+    expect(isPathToken('@file')).toBe(false);
+  });
+
+  it('identifies @-mention tokens', () => {
+    expect(isAtMention('@file')).toBe(true);
+    expect(isAtMention('@src/index')).toBe(true);
+    expect(isAtMention('@a')).toBe(true);
+    expect(isAtMention('@')).toBe(false);
+    expect(isAtMention('plain')).toBe(false);
+    expect(isAtMention('@file path')).toBe(false);
+  });
+});
+
+describe('autocomplete getPathCompletions', () => {
+  const cwd = process.cwd();
+
+  it('returns completions for relative paths', () => {
+    const result = getPathCompletions('./src/', 5, cwd);
+    expect(result).not.toBeNull();
+    if (result) {
+      expect(result.items.length).toBeGreaterThan(0);
+      expect(result.from).toBeLessThanOrEqual(result.to);
+      // All items should start with './src/'
+      for (const item of result.items) {
+        expect(item).toContain('./src/');
+      }
+    }
+  });
+
+  it('returns null for non-path tokens', () => {
+    expect(getPathCompletions('hello', 5, cwd)).toBeNull();
+    expect(getPathCompletions('', 0, cwd)).toBeNull();
+  });
+
+  it('returns null for non-existent directories', () => {
+    expect(getPathCompletions('/nonexistent/path/', 18, cwd)).toBeNull();
+  });
+});
+
+describe('autocomplete collectModelNames', () => {
+  it('returns empty array for undefined config', () => {
+    expect(collectModelNames(undefined)).toEqual([]);
+  });
+
+  it('collects model IDs from config providers', () => {
+    const config: EffectiveSynaxConfig = {
+      active: { provider: 'relay', model: 'qwen-local', thinking: 'off' },
+      providers: {
+        relay: {
+          id: 'relay',
+          name: 'Relay',
+          compatibility: 'openai-compatible' as const,
+          enabled: true,
+          baseUrl: 'http://localhost:8080',
+          apiKey: 'sk-test',
+          headers: {},
+          models: [
+            { id: 'qwen-local', supportsThinking: false, thinkingLevels: [] },
+            { id: 'deepseek-coder', supportsThinking: false, thinkingLevels: [] },
+            { id: 'llama3', supportsThinking: false, thinkingLevels: [] },
+          ],
+        },
+      },
+      skills: { enabled: [], disabled: [] },
+      mcp: { servers: {} },
+      source: null,
+      errors: [],
+    };
+    const names = collectModelNames(config);
+    expect(names).toContain('qwen-local');
+    expect(names).toContain('deepseek-coder');
+    expect(names).toContain('llama3');
+  });
+
+  it('deduplicates model IDs across providers', () => {
+    const config: EffectiveSynaxConfig = {
+      active: { provider: 'relay', model: 'qwen', thinking: 'off' },
+      providers: {
+        relay: {
+          id: 'relay',
+          name: 'Relay',
+          compatibility: 'openai-compatible' as const,
+          enabled: true,
+          baseUrl: 'http://localhost:8080',
+          apiKey: 'sk-test',
+          headers: {},
+          models: [{ id: 'qwen', supportsThinking: false, thinkingLevels: [] }],
+        },
+        openai: {
+          id: 'openai',
+          name: 'OpenAI',
+          compatibility: 'openai-compatible' as const,
+          enabled: true,
+          baseUrl: 'https://api.openai.com',
+          apiKey: 'sk-other',
+          headers: {},
+          models: [{ id: 'qwen', supportsThinking: false, thinkingLevels: [] }],
+        },
+      },
+      skills: { enabled: [], disabled: [] },
+      mcp: { servers: {} },
+      source: null,
+      errors: [],
+    };
+    const names = collectModelNames(config);
+    expect(names).toEqual(['qwen']);
+  });
+});
+
+describe('autocomplete getCompletions dispatch', () => {
+  const cwd = process.cwd();
+  const repoRoot = process.cwd();
+
+  it('returns slash command completions for /-prefixed input', () => {
+    const result = getCompletions('/set', 4, cwd, repoRoot);
+    expect(result).not.toBeNull();
+    if (result) {
+      expect(result.items.length).toBeGreaterThan(0);
+      expect(result.items.some((item: string) => item.startsWith('/settings'))).toBe(true);
+    }
+  });
+
+  it('returns path completions for path-like tokens', () => {
+    const result = getCompletions('./src/', 5, cwd, repoRoot);
+    expect(result).not.toBeNull();
+  });
+
+  it('returns null for plain non-path text', () => {
+    const result = getCompletions('hello world', 5, cwd, repoRoot);
+    expect(result).toBeNull();
   });
 });

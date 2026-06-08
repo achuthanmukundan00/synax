@@ -10,7 +10,12 @@ import { createSafetyCheckpoint, detectDirtyTree, writeRunLog } from './safety';
 import { normalizeRunMode, type RunMode } from './task-policy';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
-import { VERIFICATION_CONTRACTS, type VerificationContract } from '../session/verification-contracts';
+import {
+  VERIFICATION_CONTRACTS,
+  type VerificationContract,
+  evaluateVerificationContract,
+  resolveVerificationContract,
+} from '../session/verification-contracts';
 import { upsertSessionMeta, findSessionMeta } from '../sessions/session-store';
 import { OrchestrationManager } from '../orchestration/OrchestrationManager';
 import { HandoffManager } from '../handoff/HandoffManager';
@@ -596,7 +601,26 @@ export async function runAgentTask(options: RunTaskOptions): Promise<RunTaskRepo
   }
   let repairedTurn = turn;
   const maxRepairAttempts = options.repairAttempts ?? 1;
-  if (verification.state === 'failed' && maxRepairAttempts > 0) {
+
+  // Determine if we need repair. Two cases:
+  // 1. Verification command ran and failed (verification.state === 'failed')
+  // 2. Contract not satisfied — model completed without write/edit (verification skipped)
+  const effectiveContract = options.verify
+    ? (resolveVerifyOverride(options.verify) ?? resolveVerificationContract(mode))
+    : resolveVerificationContract(mode);
+  const contractEval = evaluateVerificationContract({
+    contract: effectiveContract,
+    evidence: {
+      changedFiles: turn.changedFiles,
+      verificationRan: verification.state !== 'skipped',
+      verificationExitCode: verification.exitCode,
+    },
+  });
+  const contractFailed =
+    turn.terminalState === 'completed' && effectiveContract.level !== 'none' && !contractEval.passed;
+
+  const needsRepair = verification.state === 'failed' || contractFailed;
+  if (needsRepair && maxRepairAttempts > 0) {
     for (let attempt = 1; attempt <= maxRepairAttempts; attempt += 1) {
       const repairCheckId = `repair-verification-${attempt}`;
       wrappedOnEvent({
@@ -630,9 +654,11 @@ export async function runAgentTask(options: RunTaskOptions): Promise<RunTaskRepo
         approvePatch: () => (options.yes ? 'accept' : 'reject'),
         ensureCheckpoint: async () => checkpoint ?? (checkpoint = await createSafetyCheckpoint(options.repoRoot)),
       });
-      const repair = await repairSession.startTurnWithRecovery(
-        `Verification failed. Fix the changed files and make verification pass. Failure output:\n${verification.stderr.slice(0, 1000)}`,
-      );
+      const repairTask =
+        verification.state === 'failed'
+          ? `Verification failed. Fix the changed files and make verification pass. Failure output:\n${verification.stderr.slice(0, 1000)}`
+          : `The verification contract '${effectiveContract.level}' was not satisfied: ${contractEval.message}. Task: ${options.task}. Use write/edit/bash to make the required changes and satisfy the contract.`;
+      const repair = await repairSession.startTurnWithRecovery(repairTask);
       repairedTurn = repair;
       if (repair.changedFiles.length > 0) {
         const rStarted = Date.now();
@@ -673,12 +699,26 @@ export async function runAgentTask(options: RunTaskOptions): Promise<RunTaskRepo
           });
         }
       }
-      if (verification.state === 'passed') break;
+      // Break if the contract is now satisfied (or verification passed).
+      const postRepairContract = evaluateVerificationContract({
+        contract: effectiveContract,
+        evidence: {
+          changedFiles: [...turn.changedFiles, ...repair.changedFiles],
+          verificationRan: verification.state !== 'skipped',
+          verificationExitCode: verification.exitCode,
+        },
+      });
+      if (verification.state === 'passed' || postRepairContract.passed) break;
     }
   }
   let terminalState = turn.terminalState;
   if (repairedTurn.terminalState === 'completed' && verification.state === 'failed') {
     terminalState = 'failed_verification';
+  }
+  // If a contract-triggered repair was attempted but failed, ensure we don't
+  // silently accept the original completion.
+  if (contractFailed && repairedTurn !== turn && repairedTurn.terminalState !== 'completed') {
+    terminalState = repairedTurn.terminalState === 'blocked' ? 'failed_verification' : repairedTurn.terminalState;
   }
   const finalAnswer = repairedTurn === turn ? turn.finalAnswer : repairedTurn.finalAnswer || turn.finalAnswer;
   const filesRead = unique(turn.conversation.inspectionLedger.getInspectedRanges().map((range) => range.path));
@@ -688,6 +728,49 @@ export async function runAgentTask(options: RunTaskOptions): Promise<RunTaskRepo
       ? await changedFilesBetween(options.repoRoot, beforeHead, afterHead)
       : [];
   const filesChanged = unique([...turn.changedFiles, ...repairedTurn.changedFiles, ...changedByCommit]);
+
+  // ── Contract evaluation: always verify the turn satisfies the contract ──
+  // Guards against false completion when the model claims success without
+  // changing files (or without running verification when contract demands it).
+  // Must always verify when task expects output. If no write/edit attempted,
+  // fail explicitly with proper verification lifecycle events.
+  if (terminalState === 'completed' || terminalState === 'failed_verification') {
+    const effectiveContract = options.verify
+      ? (resolveVerifyOverride(options.verify) ?? resolveVerificationContract(mode))
+      : resolveVerificationContract(mode);
+    const contractCheck = evaluateVerificationContract({
+      contract: effectiveContract,
+      evidence: {
+        changedFiles: filesChanged,
+        verificationRan: verification.state !== 'skipped',
+        verificationExitCode: verification.exitCode,
+      },
+    });
+    if (!contractCheck.passed) {
+      // Emit explicit verification lifecycle events so the contract failure
+      // is visible, not silently skipped.
+      const contractCheckId = 'contract-check';
+      if (terminalState === 'completed') {
+        // Verification was silently skipped — emit what a normal flow would.
+        wrappedOnEvent({
+          type: 'verification_planned',
+          timestamp: eventNow(),
+          checkId: contractCheckId,
+          checkLabel: effectiveContract.label,
+          summary: contractCheck.message,
+        });
+      }
+      wrappedOnEvent({
+        type: 'verification_failed',
+        timestamp: eventNow(),
+        checkId: contractCheckId,
+        checkLabel: effectiveContract.label,
+        summary: contractCheck.message,
+        severity: 'S2',
+      });
+      terminalState = 'failed_verification';
+    }
+  }
   const finalDirtyTree = await detectDirtyTree(options.repoRoot);
   // Emit final consolidated answer as a single assistant_message per turn.
   // (Not a duplicate of per-turn assistant_message events emitted by Session execution.)

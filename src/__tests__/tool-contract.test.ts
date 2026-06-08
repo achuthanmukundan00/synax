@@ -89,12 +89,12 @@ describe('coding mode mutation tools', () => {
     expect(names).toContain('view_image');
   });
 
-  it('docs mode includes mutation tools', () => {
+  it('docs mode excludes mutation tools (docs is read-only)', () => {
     const tools = buildModelFacingTools({ mode: 'docs', bashEnabled: true });
     const names = tools.map((t) => t.name);
 
-    expect(names).toContain('write');
-    expect(names).toContain('edit');
+    expect(names).not.toContain('write');
+    expect(names).not.toContain('edit');
     expect(names).toContain('save_memory');
   });
 
@@ -103,11 +103,11 @@ describe('coding mode mutation tools', () => {
     expect(tools).toContain('save_memory');
   });
 
-  it('getAllowedModelTools includes mutation tools in all modes', () => {
+  it('getAllowedModelTools excludes write/edit in read-only mode', () => {
     const tools = getAllowedModelTools('read-only', true);
     expect(tools).toContain('save_memory');
-    expect(tools).toContain('write');
-    expect(tools).toContain('edit');
+    expect(tools).not.toContain('write');
+    expect(tools).not.toContain('edit');
   });
 });
 

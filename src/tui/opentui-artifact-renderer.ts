@@ -248,7 +248,6 @@ export function renderArtifactRoot(
           stickyScroll: true,
           stickyStart: 'bottom',
           padding: 1,
-          scrollY: true,
         },
         ...mainChildren,
       ),
@@ -322,7 +321,6 @@ function renderSettingsOverlay(
       left: 0,
       zIndex: 100,
       flexDirection: 'column',
-      backgroundColor: palette.background,
     },
     ...lines.map((line, index) =>
       core.Text({
@@ -336,7 +334,6 @@ function renderSettingsOverlay(
         id: `synax-settings-backdrop-${index}`,
         width: '100%',
         height: 1,
-        backgroundColor: palette.background,
       }),
     ),
   );
@@ -474,6 +471,11 @@ export function renderArtifactCard(
 
   if (event.class === 'thinking') {
     return renderThinkingCard(core, event, expanded, onToggleExpand, palette);
+  }
+
+  // Checkpoint — full-width visible divider
+  if (event.class === 'checkpoint') {
+    return renderCheckpointDivider(core, event, palette);
   }
 
   const pal = palette ?? getPalette();
@@ -836,7 +838,6 @@ function renderAutocompleteOverlay(
       flexDirection: 'column',
       border: ['top'],
       borderColor: palette.brand,
-      backgroundColor: palette.background,
       paddingX: 2,
       paddingY: 0,
     },
@@ -1070,11 +1071,8 @@ function renderCompactBand(
     });
   }
   if (payload.type === 'checkpoint') {
-    return core.Text({
-      ...FULL_WIDTH_TEXT,
-      content: `${glyph} ${payload.title}   ${payload.hash ?? ''}`,
-      fg: color,
-    });
+    // Checkpoints are rendered as full-width dividers via renderCheckpointDivider
+    return core.Text({ ...FULL_WIDTH_TEXT, content: '', fg: palette.textMuted });
   }
   if (payload.type === 'status') {
     return core.Text({
@@ -1282,4 +1280,43 @@ function thinkingPreview(text: string): string {
   if (!text) return 'waiting for reasoning tokens';
   const maxLength = 120;
   return text.length > maxLength ? text.slice(0, maxLength).trimEnd() : text;
+}
+
+// ─── Checkpoint divider ────────────────────────────────────────────────────
+
+/** Render a checkpoint as a full-width visible separator. */
+function renderCheckpointDivider(core: OpenTuiCore, event: SemanticEvent, palette?: TuiPalette): OpenTuiNode {
+  const pal = palette ?? getPalette();
+  const color = eventColor('checkpoint', pal);
+  const payload = event.artifact;
+  const hash = payload.type === 'checkpoint' ? (payload.hash ?? '') : '';
+  const validHash = hash && hash !== 'unknown';
+  const shortHash = validHash ? hash.slice(0, 7) : '';
+  const label = shortHash ? `Checkpoint ${shortHash}` : 'Checkpoint';
+  const glyph = GLYPHS.checkpoint;
+  return core.Box(
+    {
+      id: event.id,
+      width: '100%',
+      flexDirection: 'row',
+      marginBottom: 1,
+    },
+    core.Box({ width: 1, backgroundColor: color, marginRight: 1 }),
+    core.Box(
+      {
+        ...CARD_BODY_LAYOUT,
+        flexDirection: 'row',
+        paddingX: 0,
+        paddingY: 0,
+      },
+      core.Text({
+        content: `${glyph} ${label} `,
+        fg: color,
+      }),
+      core.Text({
+        content: '─'.repeat(60),
+        fg: pal.textAccent,
+      }),
+    ),
+  );
 }

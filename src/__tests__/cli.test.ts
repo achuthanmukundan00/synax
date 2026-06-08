@@ -341,12 +341,10 @@ describe('CLI', () => {
         expect(parsed.messages[0].content).toContain('You are Synax');
         expect(parsed.tools.map((tool) => tool.function.name)).toEqual([
           'read',
-          'write',
-          'edit',
-          'bash',
           'save_memory',
           'search_memory',
           'view_image',
+          'context_range_paste',
         ]);
         expect(parsed.messages[0].content).not.toContain('sk-context-secret');
       } finally {
@@ -418,7 +416,7 @@ describe('CLI', () => {
           ].join('\n'),
           'utf-8',
         );
-        const result = await runSynaxDetailed(['run', '--task', 'test task'], { cwd });
+        const result = await runSynaxDetailed(['run', '--task', 'test task', '--verify', 'none'], { cwd });
         expect(result.status).toBe(0);
         expect(result.stdout).toContain('run complete');
         expect(result.stdout).toContain('[summary] Status: completed');
@@ -434,6 +432,7 @@ describe('CLI', () => {
           'save_memory',
           'search_memory',
           'view_image',
+          'context_range_paste',
         ]);
       } finally {
         await closeServer(srv);

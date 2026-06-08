@@ -135,7 +135,23 @@ export function parseModelOutput(content: string, parserId: string, reasoningCon
   }
 
   // Extract assistant-visible text (content without tool-call blocks)
-  const assistantText = parserResult.content || cleanedContent;
+  let assistantText = parserResult.content || cleanedContent;
+
+  // Bug #114: When DeepSeek returns empty content but rich reasoning_content,
+  // fall back to reasoning as the assistant-visible answer. Strip thinking/tool-call
+  // tags from reasoning to produce clean prose.
+  if (!assistantText && reasoning) {
+    const sanitizedReasoning = sanitizeReasoning(reasoning);
+    // Also strip tool-call markup that may have leaked into reasoning_content
+    const visible = sanitizedReasoning
+      .replace(/<tool_call>[\s\S]*?<\/tool_call>/gi, ' ')
+      .replace(/<\|tool_call\|>[\s\S]*/gi, '')
+      .trim();
+    if (visible) {
+      assistantText = visible;
+      warnings.push({ message: 'Used reasoningContent as fallback for empty content (bug #114)', source: 'reasoning' });
+    }
+  }
 
   return {
     assistantText,

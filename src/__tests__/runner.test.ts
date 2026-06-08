@@ -65,6 +65,7 @@ describe('shared bounded agent runner', () => {
       'save_memory',
       'search_memory',
       'view_image',
+      'context_range_paste',
     ]);
   });
 
@@ -104,12 +105,12 @@ describe('shared bounded agent runner', () => {
   it('includes all tools regardless of mode', async () => {
     const tools = Session.buildModelTools({ mode: 'read-only', bashEnabled: true }).map((tool) => tool.name);
     expect(tools).toContain('read');
-    expect(tools).toContain('bash');
     expect(tools).toContain('search_memory');
     expect(tools).toContain('view_image');
-    expect(tools).toContain('write');
-    expect(tools).toContain('edit');
     expect(tools).toContain('save_memory');
+    expect(tools).not.toContain('write');
+    expect(tools).not.toContain('edit');
+    expect(tools).not.toContain('bash');
 
     const verifyTools = Session.buildModelTools({ mode: 'verify', bashEnabled: true }).map((tool) => tool.name);
     expect(verifyTools).toContain('write');
@@ -150,6 +151,7 @@ describe('shared bounded agent runner', () => {
       'save_memory',
       'search_memory',
       'view_image',
+      'context_range_paste',
     ]);
   });
 

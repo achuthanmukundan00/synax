@@ -1,15 +1,17 @@
 import { createInspectionLedger, InspectionLedger } from './ledger';
 import { createInspectionTools } from './tools';
 import { ToolDefinition, ToolRegistry, ToolResult } from './types';
+import { GeneratedContentStore } from './generated-content';
 
 export interface ToolRegistryOptions {
   repoRoot: string;
   ledger?: InspectionLedger;
+  generatedContent?: GeneratedContentStore;
 }
 
 export function createToolRegistry(options: ToolRegistryOptions): ToolRegistry {
   const ledger = options.ledger ?? createInspectionLedger();
-  const context = { repoRoot: options.repoRoot, ledger };
+  const context = { repoRoot: options.repoRoot, ledger, generatedContent: options.generatedContent };
   const tools = createInspectionTools();
   const byName = new Map<string, ToolDefinition>(tools.map((tool) => [tool.name, tool]));
 

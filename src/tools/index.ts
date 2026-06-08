@@ -12,7 +12,9 @@ export type {
   InstructionSourceEntry,
   ModelCallEntry,
 } from './context-ledger';
+export { createGeneratedContentStore } from './generated-content';
+export type { GeneratedContentStore, GeneratedContentEntry, PastedRange } from './generated-content';
 export { createToolRegistry } from './registry';
 export type { ToolRegistryOptions } from './registry';
-export type { LedgerBehavior, ToolDefinition, ToolRegistry, ToolResult, ToolSafetyPolicy } from './types';
+export type { LedgerBehavior, ToolDefinition, ToolRegistry, ToolResult, ToolSafetyPolicy, ToolContext } from './types';
 export type { AgentContext } from './types';

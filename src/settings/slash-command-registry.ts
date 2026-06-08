@@ -128,6 +128,12 @@ export function registerBuiltinCommands(): void {
       opensResume: true,
     },
     {
+      name: 'restore-checkpoint',
+      description: 'Restore to a checkpoint by hash (e.g. /restore-checkpoint abc1234)',
+      category: 'session',
+      handler: () => ({ handled: true, output: '[synax] restore-checkpoint — use /restore-checkpoint <hash>' }),
+    },
+    {
       name: 'status',
       description: 'Show runtime status',
       category: 'runtime',

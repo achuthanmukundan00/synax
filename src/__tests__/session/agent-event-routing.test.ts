@@ -3,8 +3,7 @@
  *
  * Covers:
  * - Every AgentEvent type literal is registered in AGENT_EVENT_TYPES
- * - finalAnswerFromResponse no longer falls back to reasoningContent
- *   (empty visible content now returns '' instead of protocol residue)
+ * - finalAnswerFromResponse falls back to reasoningContent when content is empty
  */
 import { AGENT_EVENT_TYPES, finalAnswerFromResponse } from '../../session/Session';
 import type { ChatResponse } from '../../llm/types';
@@ -72,7 +71,7 @@ describe('AGENT_EVENT_TYPES', () => {
   });
 });
 
-// ─── finalAnswerFromResponse no longer falls back to reasoningContent ─────────
+// ─── finalAnswerFromResponse falls back to reasoningContent when content empty ─
 
 function makeResponse(overrides: Partial<ChatResponse>): ChatResponse {
   return {
@@ -99,30 +98,31 @@ describe('finalAnswerFromResponse', () => {
     expect(finalAnswerFromResponse(response)).toBe('');
   });
 
-  it('returns empty string when visible content is empty even with reasoningContent present', () => {
+  it('falls back to reasoningContent when visible content is empty', () => {
     const response = makeResponse({
       content: '',
-      reasoningContent: '=read=path src/session/Session.ts',
+      reasoningContent: 'The refactor is complete. All tests pass.',
     });
-    // reasoningContent should NOT leak into finalAnswer
-    expect(finalAnswerFromResponse(response)).toBe('');
+    // reasoningContent is used as fallback when content is empty/status-only
+    expect(finalAnswerFromResponse(response)).toBe('The refactor is complete. All tests pass.');
   });
 
-  it('returns empty string when visible content is only protocol markup', () => {
+  it('falls back to reasoningContent when content is only protocol markup', () => {
     const response = makeResponse({
       content: '<tool_call><function=read><parameter=path>x</parameter></function></tool_call>',
-      reasoningContent: 'Let me think about this.',
+      reasoningContent: 'Let me think about this. The bug is in the parser.',
     });
     // assistantVisibleContent strips protocol markup, leaving empty
-    expect(finalAnswerFromResponse(response)).toBe('');
+    // reasoningContent is used as fallback
+    expect(finalAnswerFromResponse(response)).toBe('Let me think about this. The bug is in the parser.');
   });
 
-  it('returns empty string when visible content is only markdown tag', () => {
+  it('falls back to reasoningContent when content sanitizes away', () => {
     const response = makeResponse({
       content: '</think>',
-      reasoningContent: 'I should read the file first.',
+      reasoningContent: 'I should read the file first. The analysis shows no issues.',
     });
-    expect(finalAnswerFromResponse(response)).toBe('');
+    expect(finalAnswerFromResponse(response)).toBe('I should read the file first. The analysis shows no issues.');
   });
 
   it('strips tool call markup from content', () => {
@@ -131,5 +131,47 @@ describe('finalAnswerFromResponse', () => {
       reasoningContent: 'Thinking step by step...',
     });
     expect(finalAnswerFromResponse(response)).toBe('Summary: done.');
+  });
+
+  it('returns empty when both content and reasoningContent are status-only', () => {
+    const response = makeResponse({
+      content: 'completed',
+      reasoningContent: '',
+    });
+    expect(finalAnswerFromResponse(response)).toBe('');
+  });
+
+  it('returns empty when reasoningContent is also status-only', () => {
+    const response = makeResponse({
+      content: '',
+      reasoningContent: 'done',
+    });
+    expect(finalAnswerFromResponse(response)).toBe('');
+  });
+
+  it('DeepSeek: falls back to reasoningContent when content is empty (bug #114)', () => {
+    // DeepSeek thinking models may return rich reasoning_content with empty content field.
+    // The reasoning content should be used as the final answer in this case.
+    const response = makeResponse({
+      content: '',
+      reasoningContent:
+        'The bug is in src/llm/client.ts at the parseSuccessResponse function. ' +
+        'When DeepSeek returns reasoning_content but empty content, finalAnswer falls back ' +
+        'to an opaque terminal state string instead of using the reasoning text.',
+    });
+    expect(finalAnswerFromResponse(response)).toBe(
+      'The bug is in src/llm/client.ts at the parseSuccessResponse function. ' +
+        'When DeepSeek returns reasoning_content but empty content, finalAnswer falls back ' +
+        'to an opaque terminal state string instead of using the reasoning text.',
+    );
+  });
+
+  it('DeepSeek: sanitizes reasoningContent before using as fallback', () => {
+    // Reasoning content may contain <think> tags that should be stripped.
+    const response = makeResponse({
+      content: '',
+      reasoningContent: '<think>Let me analyze this.</think>\nThe fix should be in finalAnswerFromResponse.',
+    });
+    expect(finalAnswerFromResponse(response)).toBe('The fix should be in finalAnswerFromResponse.');
   });
 });

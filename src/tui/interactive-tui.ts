@@ -19,6 +19,12 @@ import { getCommand } from '../settings/slash-command-registry';
 import type { Readable, Writable } from 'node:stream';
 import { listSessionsSorted } from '../sessions/session-store';
 import {
+  createResumePickerState,
+  resumePickerReducer,
+  renderResumePicker,
+  type ResumePickerState,
+} from '../sessions/resume-renderer';
+import {
   renderArtifactRoot,
   renderArtifactCard,
   promptInputHeight,
@@ -193,6 +199,7 @@ export async function runInteractiveTui(
   let promptDirty = false;
   let layoutDirty = false;
   let settingsState = options?.settingsConfig ? createSettingsState(options.settingsConfig) : undefined;
+  let resumePickerState: ResumePickerState | null = null;
   let busyAnimationFrame = 0;
   let modelPalette: ModelPalette = getModelPalette(options?.modelLabel ?? '');
 
@@ -368,9 +375,16 @@ export async function runInteractiveTui(
         }
       : undefined;
     autocompleteVisibleRows = nextAutocompleteVisibleRows;
-    const settingsLines = settingsState?.active
-      ? renderSettings(settingsState, renderer.width, renderer.height).map(stripAnsi)
-      : undefined;
+    const overlayLines = resumePickerState?.active
+      ? renderResumePicker(resumePickerState, renderer.width, renderer.height)
+      : settingsState?.active
+        ? renderSettings(settingsState, renderer.width, renderer.height).map(stripAnsi)
+        : undefined;
+    const overlayActiveLabel = resumePickerState?.active
+      ? 'Resume'
+      : settingsState?.active
+        ? tabLabel(settingsState.tab)
+        : undefined;
     if (!treeBuilt) {
       removeRenderedRoot();
       renderer.root.add(
@@ -389,8 +403,8 @@ export async function runInteractiveTui(
           },
           currentPalette,
           acState,
-          settingsLines,
-          settingsState?.active ? tabLabel(settingsState.tab) : undefined,
+          overlayLines,
+          overlayActiveLabel,
           handleInputSubmit,
           (value) => {
             if (autocompleteDraft !== null) return;
@@ -926,15 +940,7 @@ export async function runInteractiveTui(
           if (sessions.length === 0) {
             slashInfoLines = ['No saved sessions found.'];
           } else {
-            const lines = [`Sessions (${sessions.length}):`, ''];
-            for (let i = 0; i < Math.min(sessions.length, 20); i++) {
-              const s = sessions[i];
-              const branch = s.branch ? ` [${s.branch}]` : '';
-              const title = s.title || s.summary || s.id.slice(0, 8);
-              const updated = new Date(s.updatedAt).toLocaleString();
-              lines.push(`  ${i}. ${title}${branch}  —  ${updated}`);
-            }
-            slashInfoLines = lines;
+            resumePickerState = resumePickerReducer(createResumePickerState(sessions), { type: 'open' });
           }
           busy = false;
           render();
@@ -1336,7 +1342,7 @@ export async function runInteractiveTui(
 
     const cursorPos = getInputCursorPosition(inputNode);
 
-    const result = getCompletions(value, cursorPos, cwd, repoRoot);
+    const result = getCompletions(value, cursorPos, cwd, repoRoot, options?.settingsConfig);
     if (result && result.items.length > 0) {
       autocompleteItems = result.items;
       autocompleteIndex = 0;
@@ -1351,6 +1357,20 @@ export async function runInteractiveTui(
         autocompleteIsFile = false;
       }
       render();
+      return;
+    }
+
+    // Fallback: try slash command autocomplete for /-prefixed input
+    if (value.startsWith('/')) {
+      const slashItems = slashAutocompleteItems(value);
+      if (slashItems.length > 0) {
+        autocompleteItems = slashItems;
+        autocompleteIndex = 0;
+        autocompleteVisible = true;
+        autocompleteIsFile = false;
+        autocompleteDraft = value;
+        render();
+      }
     }
   }
 
@@ -1447,7 +1467,7 @@ export async function runInteractiveTui(
       }
       return true;
     }
-    if (sequence === '\t') {
+    if (sequence === '\t' || sequence === '\x1b[9u') {
       handleTab();
       return true;
     }
@@ -1602,6 +1622,41 @@ export async function runInteractiveTui(
     }
 
     if (handleSettingsKey(key)) {
+      return;
+    }
+
+    // --- Resume picker navigation ---
+    if (resumePickerState?.active) {
+      if (key.name === 'escape') {
+        resumePickerState = null;
+        render('input', { immediate: true });
+        return;
+      }
+      if (key.name === 'up' || key.name === 'arrow_up') {
+        resumePickerState = resumePickerReducer(resumePickerState, { type: 'move_up' });
+        render('input', { immediate: true });
+        return;
+      }
+      if (key.name === 'down' || key.name === 'arrow_down') {
+        resumePickerState = resumePickerReducer(resumePickerState, { type: 'move_down' });
+        render('input', { immediate: true });
+        return;
+      }
+      if (key.name === 'return' || key.name === 'enter') {
+        const selected = resumePickerState.filtered[resumePickerState.selectedRow];
+        if (selected) {
+          slashInfoLines = [`To resume: restart Synax with --resume ${selected.id}`];
+        }
+        resumePickerState = null;
+        render('input', { immediate: true });
+        return;
+      }
+      if (key.name === 'tab') {
+        resumePickerState = resumePickerReducer(resumePickerState, { type: 'toggle_sort' });
+        render('input', { immediate: true });
+        return;
+      }
+      // Ignore other keys while picker is active
       return;
     }
 

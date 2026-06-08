@@ -88,6 +88,7 @@ import {
   isStatusOnlyOutput,
   tryBuildImageViewMessage,
 } from './formatting';
+import { sanitizeReasoning } from '../llm/repair/reasoning-sanitizer';
 
 import { buildModelRequest, guardModelRequestMultiStage, classifyResultForRecovery } from './message-assembly';
 
@@ -101,8 +102,15 @@ const MAX_CONSECUTIVE_RECOVERABLE_TOOL_ERRORS = 3;
 export function finalAnswerFromResponse(response: ChatResponse): string {
   const visible = assistantVisibleContent(response.content) || '';
   // Reject status-only placeholder outputs (e.g. "completed", empty string)
-  if (isStatusOnlyOutput(visible)) return '';
-  return visible;
+  if (!isStatusOnlyOutput(visible)) return visible;
+
+  // Fall back to reasoningContent when content is empty or status-only (#114)
+  if (response.reasoningContent) {
+    const sanitized = sanitizeReasoning(response.reasoningContent).content.trim();
+    if (sanitized && !isStatusOnlyOutput(sanitized)) return sanitized;
+  }
+
+  return '';
 }
 
 // ─── Agent event type guard ──────────────────────────────────────────────────

@@ -90,7 +90,7 @@ function parseSingleInputEvent(
     setIndex(index + mouse.length - 1);
     return;
   }
-  // Arrow keys
+  // Arrow keys (xterm CSI)
   if (chunk.startsWith('\x1b[A', index)) {
     events.push({ type: 'arrow_up' });
     setIndex(index + 2);
@@ -109,6 +109,48 @@ function parseSingleInputEvent(
   if (chunk.startsWith('\x1b[D', index)) {
     events.push({ type: 'arrow_left' });
     setIndex(index + 2);
+    return;
+  }
+  // Arrow keys (application keypad mode — DECCKM, common in tmux)
+  if (chunk.startsWith('\x1bOA', index)) {
+    events.push({ type: 'arrow_up' });
+    setIndex(index + 2);
+    return;
+  }
+  if (chunk.startsWith('\x1bOB', index)) {
+    events.push({ type: 'arrow_down' });
+    setIndex(index + 2);
+    return;
+  }
+  if (chunk.startsWith('\x1bOC', index)) {
+    events.push({ type: 'arrow_right' });
+    setIndex(index + 2);
+    return;
+  }
+  if (chunk.startsWith('\x1bOD', index)) {
+    events.push({ type: 'arrow_left' });
+    setIndex(index + 2);
+    return;
+  }
+  // Arrow keys (CSI u / kitty keyboard protocol — tmux extended-keys)
+  if (chunk.startsWith('\x1b[57352u', index)) {
+    events.push({ type: 'arrow_up' });
+    setIndex(index + 7);
+    return;
+  }
+  if (chunk.startsWith('\x1b[57353u', index)) {
+    events.push({ type: 'arrow_down' });
+    setIndex(index + 7);
+    return;
+  }
+  if (chunk.startsWith('\x1b[57354u', index)) {
+    events.push({ type: 'arrow_right' });
+    setIndex(index + 7);
+    return;
+  }
+  if (chunk.startsWith('\x1b[57355u', index)) {
+    events.push({ type: 'arrow_left' });
+    setIndex(index + 7);
     return;
   }
   // Home / End (xterm-style)
@@ -164,6 +206,16 @@ function parseSingleInputEvent(
   if (chunk.startsWith('\x1b[Z', index)) {
     events.push({ type: 'shift_tab' });
     setIndex(index + 3);
+    return;
+  }
+  if (chunk.startsWith('\x1b[9;2u', index)) {
+    events.push({ type: 'shift_tab' });
+    setIndex(index + 6);
+    return;
+  }
+  if (chunk.startsWith('\x1b[9u', index)) {
+    events.push({ type: 'tab' });
+    setIndex(index + 4);
     return;
   }
   if (chunk.startsWith('\t', index)) {

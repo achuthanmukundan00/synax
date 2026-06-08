@@ -5,6 +5,7 @@ import { isAbsolute, normalize, resolve } from 'path';
 import { promisify } from 'util';
 
 import { ToolContext, ToolDefinition, ToolResult } from './types';
+import { GeneratedContentStore } from './generated-content';
 
 const execFileAsync = promisify(execFile);
 
@@ -59,7 +60,7 @@ interface ReadTarget {
 type ReadTargetResult = ({ ok: true } & ReadTarget) | { ok: false; reason: string };
 
 export function createInspectionTools(): ToolDefinition[] {
-  return [listFilesTool, readFileRangeTool, searchTextTool, showGitStatusTool, showGitDiffTool];
+  return [listFilesTool, readFileRangeTool, searchTextTool, showGitStatusTool, showGitDiffTool, contextRangePasteTool];
 }
 
 const readOnlySafety = {
@@ -241,6 +242,83 @@ const showGitStatusTool: ToolDefinition<Record<string, never>> = {
     } catch (error) {
       return failure('show_git_status', errorMessage(error));
     }
+  },
+};
+
+interface ContextRangePasteInput {
+  contentId?: string;
+  startLine?: number;
+  endLine?: number;
+}
+
+const contextRangePasteTool: ToolDefinition<ContextRangePasteInput> = {
+  name: 'context_range_paste',
+  description:
+    'Reference previously-generated content (command output, file payload) by line range. ' +
+    'Use this instead of regenerating large outputs to save context budget.',
+  inputSchema: {
+    type: 'object',
+    required: ['contentId', 'startLine', 'endLine'],
+    properties: {
+      contentId: {
+        type: 'string',
+        description: 'Identifier for the previously-generated content block to reference.',
+      },
+      startLine: {
+        type: 'number',
+        description: '1-based first line to retrieve.',
+      },
+      endLine: {
+        type: 'number',
+        description: '1-based final line to retrieve.',
+      },
+    },
+  },
+  safetyPolicy: readOnlySafety,
+  ledgerBehavior: 'records-pasted-range',
+  async execute(input: ContextRangePasteInput, context: ToolContext): Promise<ToolResult> {
+    if (!input.contentId) {
+      return failure('context_range_paste', 'contentId is required');
+    }
+
+    const store: GeneratedContentStore | undefined = context.generatedContent;
+    if (!store) {
+      return failure('context_range_paste', 'generated-content store is not available');
+    }
+
+    const startLine = boundedPositiveInteger(input.startLine, 1, Number.MAX_SAFE_INTEGER);
+    const endLine = boundedPositiveInteger(input.endLine, startLine, Number.MAX_SAFE_INTEGER);
+
+    const range = store.getRange(input.contentId, startLine, endLine);
+    if (!range) {
+      return failure('context_range_paste', `unknown content id: ${input.contentId}`);
+    }
+
+    if (range.startBeyondEnd) {
+      return success('context_range_paste', {
+        contentId: range.contentId,
+        startLine,
+        endLine,
+        totalLines: range.totalLines,
+        lines: [],
+        startBeyondEnd: true,
+        note: `startLine (${startLine}) exceeds stored content length (${range.totalLines} lines)`,
+      });
+    }
+
+    // Record the pasted range in the inspection ledger so the model knows it has seen this content
+    for (const line of range.lines) {
+      context.ledger.recordFileRead(`generated:${range.contentId}`, line.lineNumber, line.lineNumber, line.text);
+    }
+
+    return success('context_range_paste', {
+      contentId: range.contentId,
+      startLine,
+      endLine: startLine + range.lines.length - 1,
+      totalLines: range.totalLines,
+      lines: range.lines,
+      truncated: range.truncated,
+    });
   },
 };
 

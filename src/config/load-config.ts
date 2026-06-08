@@ -284,6 +284,8 @@ function parseModelConfig(raw: Record<string, unknown>): ModelConfig | null {
     : undefined;
   const contextWindow = parseContextWindow(raw);
 
+  const maxOutputTokens = parsePositiveInteger(raw.max_output_tokens ?? raw.maxOutputTokens);
+
   return {
     id: raw.id as string,
     displayName: (raw.display_name ?? raw.displayName) as string | undefined,
@@ -296,6 +298,8 @@ function parseModelConfig(raw: Record<string, unknown>): ModelConfig | null {
     thinking_levels: thinkingLevels,
     defaultThinkingLevel: (raw.default_thinking ?? raw.defaultThinking) as ThinkingLevel | undefined,
     default_thinking: (raw.default_thinking ?? raw.defaultThinking) as ThinkingLevel | undefined,
+    maxOutputTokens,
+    max_output_tokens: maxOutputTokens,
   };
 }
 
@@ -474,6 +478,13 @@ export function validateSynaxConfig(config: SynaxConfig): string[] {
         }
         if (model.thinking_levels && !model.thinking_levels.every(isThinkingLevel)) {
           errors.push(`providers.${id}.models.${model.id}: invalid thinking level`);
+        }
+        for (const tk of ['maxOutputTokens', 'max_output_tokens'] as const) {
+          const val = model[tk];
+          if (val !== undefined && (typeof val !== 'number' || !Number.isInteger(val) || val <= 0)) {
+            errors.push(`providers.${id}.models.${model.id}: max_output_tokens must be a positive integer`);
+            break;
+          }
         }
       }
     }
@@ -673,6 +684,7 @@ function mergeModels(existing: ResolvedModelConfig[], incoming: ModelConfig[]): 
       supportsThinking: m.supportsThinking ?? m.supports_thinking ?? prev?.supportsThinking ?? false,
       thinkingLevels: m.thinkingLevels ?? m.thinking_levels ?? prev?.thinkingLevels ?? [],
       defaultThinkingLevel: m.defaultThinkingLevel ?? m.default_thinking ?? prev?.defaultThinkingLevel,
+      maxOutputTokens: m.maxOutputTokens ?? m.max_output_tokens ?? prev?.maxOutputTokens,
     });
   }
 
@@ -804,6 +816,9 @@ export function serializeEffectiveConfig(config: EffectiveSynaxConfig): string {
       }
       if (model.defaultThinkingLevel) {
         lines.push(`default_thinking = "${model.defaultThinkingLevel}"`);
+      }
+      if (model.maxOutputTokens) {
+        lines.push(`max_output_tokens = ${model.maxOutputTokens}`);
       }
     }
 

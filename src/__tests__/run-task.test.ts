@@ -282,4 +282,92 @@ describe('runAgentTask patch approval', () => {
     expect(eventTypes).toContain('verification_skipped');
     expect(report.verification.state).toBe('skipped');
   });
+
+  it('fails with failed_verification when model completes without changing files in patch mode', async () => {
+    // Model responds with content only, no tool calls — claims completion without
+    // ever attempting a write/edit. The files_changed contract must catch this.
+    responses = [{ content: 'Everything looks fine, no changes needed.' }];
+
+    const report = await runAgentTask({
+      repoRoot: TMP,
+      task: 'fix the bug',
+      recordRunArtifacts: false,
+    });
+
+    expect(report.terminalState).toBe('failed_verification');
+    expect(report.filesChanged).toEqual([]);
+    expect(report.verification.state).toBe('skipped');
+  });
+
+  it('emits verification_failed event when contract is not satisfied (no files changed)', async () => {
+    // Model completes without changing files. The contract check must emit
+    // explicit verification_failed event rather than silently skipping.
+    responses = [{ content: 'All done, nothing to fix.' }];
+
+    const events: AgentEvent[] = [];
+    const report = await runAgentTask({
+      repoRoot: TMP,
+      task: 'fix the bug',
+      recordRunArtifacts: false,
+      onEvent: (event) => events.push(event),
+    });
+
+    expect(report.terminalState).toBe('failed_verification');
+
+    // Must emit verification_failed for the contract failure
+    const failedEvents = events.filter((e) => e.type === 'verification_failed');
+    expect(failedEvents.length).toBeGreaterThanOrEqual(1);
+
+    // The failure should reference the contract label
+    const failure = failedEvents[0] as any;
+    expect(failure.checkLabel).toBeTruthy();
+    expect(failure.severity).toBe('S2');
+  });
+
+  it('triggers repair loop when contract is not satisfied (no files changed in patch mode)', async () => {
+    // Model completes without changing files. The contract failure should
+    // trigger at least one repair attempt to let the model fix it.
+    // Use repairAttempts: 2 to verify the repair loop runs.
+    writeFileSync(
+      join(TMP, '.synax.toml'),
+      [
+        '[provider]',
+        'kind = "openai-compatible"',
+        'base_url = "http://localhost/v1"',
+        'model = "fake"',
+        '',
+        '[verification]',
+        'default_command = "echo ok"',
+      ].join('\n'),
+      'utf-8',
+    );
+    mkdirSync(join(TMP, 'src'), { recursive: true });
+
+    // First turn: model claims completion without changing files (contract fails)
+    // Repair turn: model still doesn't change files (just reads)
+    // Both turns consume responses from the queue
+    responses = [
+      { content: 'Everything is fine, no changes needed.' },
+      // Repair turn — model doesn't change files either
+      { toolCalls: [{ id: 'call_1', name: 'read', arguments: { path: 'src/app.ts' } }] },
+      { content: 'Confirmed, no changes needed.' },
+    ];
+
+    const events: AgentEvent[] = [];
+    const report = await runAgentTask({
+      repoRoot: TMP,
+      task: 'fix the bug',
+      repairAttempts: 2,
+      recordRunArtifacts: false,
+      onEvent: (event) => events.push(event),
+    });
+
+    // Contract was never satisfied — should fail
+    expect(report.terminalState).toBe('failed_verification');
+
+    // Should emit repair-related verification events
+    const eventTypes = events.map((e) => e.type);
+    expect(eventTypes).toContain('verification_planned');
+    expect(eventTypes).toContain('verification_failed');
+  });
 });

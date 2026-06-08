@@ -1,5 +1,6 @@
 import { InspectionLedger } from './ledger';
 import { ContextLedger } from './context-ledger';
+import { GeneratedContentStore } from './generated-content';
 
 export type LedgerBehavior =
   | 'none'
@@ -7,7 +8,8 @@ export type LedgerBehavior =
   | 'records-file-range'
   | 'records-search-results'
   | 'records-git-status'
-  | 'records-git-diff';
+  | 'records-git-diff'
+  | 'records-pasted-range';
 
 export interface ToolSafetyPolicy {
   readOnly: boolean;
@@ -18,6 +20,7 @@ export interface ToolSafetyPolicy {
 export interface ToolContext {
   repoRoot: string;
   ledger: InspectionLedger;
+  generatedContent?: GeneratedContentStore;
 }
 
 export interface AgentContext {

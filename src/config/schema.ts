@@ -24,6 +24,9 @@ export interface ModelConfig {
   thinking_levels?: ThinkingLevel[];
   defaultThinkingLevel?: ThinkingLevel;
   default_thinking?: ThinkingLevel;
+  /** Per-model max output tokens. When unset the client default (8192) is used. */
+  maxOutputTokens?: number;
+  max_output_tokens?: number;
 }
 
 export interface ProviderConfig {
@@ -110,6 +113,8 @@ export interface ResolvedModelConfig {
   supportsThinking: boolean;
   thinkingLevels: ThinkingLevel[];
   defaultThinkingLevel?: ThinkingLevel;
+  /** Per-model max output tokens. When unset the client default (8192) is used. */
+  maxOutputTokens?: number;
 }
 
 export interface ResolvedProviderConfig {

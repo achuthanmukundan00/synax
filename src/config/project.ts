@@ -721,6 +721,7 @@ function projectProviderFromEffectiveProvider(provider: ResolvedProviderConfig, 
   const apiKey = provider.apiKey === '••••' ? undefined : provider.apiKey;
   const kind: ProviderKind =
     provider.compatibility === 'anthropic-compatible' ? 'anthropic-messages' : 'openai-compatible';
+  const activeModel = provider.models.find((m) => m.id === model);
   return {
     preset: provider.id,
     kind,
@@ -733,6 +734,7 @@ function projectProviderFromEffectiveProvider(provider: ResolvedProviderConfig, 
     apiKey,
     custom_headers: provider.headers,
     customHeaders: provider.headers,
+    maxOutputTokens: activeModel?.maxOutputTokens,
   };
 }
 

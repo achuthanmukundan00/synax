@@ -182,4 +182,50 @@ describe('parseModelOutput — typed parsing pipeline', () => {
     expect(output.toolCalls.length).toBeGreaterThanOrEqual(0);
     // The parser may or may not strip the think tags — the key is that it doesn't crash
   });
+
+  // ─── Bug #114: reasoningContent fallback for empty content ─────────
+
+  it('falls back to reasoningContent when content is empty (bug #114)', () => {
+    // DeepSeek thinking models may return rich reasoning_content with
+    // an empty content field. parseModelOutput should use reasoningContent
+    // as assistantText in this case.
+    const output = parseModelOutput(
+      '',
+      'generic',
+      'The bug is in src/llm/client.ts at the parseSuccessResponse function. ' +
+        'When DeepSeek returns reasoning_content but empty content, finalAnswer falls back ' +
+        'to an opaque terminal state string instead of using the reasoning text.',
+    );
+
+    expect(output.toolCalls).toHaveLength(0);
+    expect(output.assistantText).toContain('The bug is in src/llm/client.ts');
+    expect(output.reasoning).toContain('src/llm/client.ts');
+    expect(output.warnings.some((w) => w.message.includes('reasoningContent as fallback'))).toBe(true);
+  });
+
+  it('strips thinking tags from reasoningContent before using as assistantText', () => {
+    // Reasoning content may contain <think> tags that should be stripped
+    // before surfacing as the visible answer.
+    const output = parseModelOutput(
+      '',
+      'generic',
+      '<think>Let me analyze this.</think>\nThe fix should be in parseModelOutput.',
+    );
+
+    expect(output.assistantText).toBe('The fix should be in parseModelOutput.');
+    expect(output.assistantText).not.toContain('<think>');
+    expect(output.warnings.some((w) => w.source === 'reasoning')).toBe(true);
+  });
+
+  it('does not override assistantText with reasoningContent when content has visible text', () => {
+    const output = parseModelOutput(
+      'The refactor is complete. All tests pass.',
+      'generic',
+      'I should check if the tests pass first.',
+    );
+
+    // assistantText comes from content, not from reasoningContent
+    expect(output.assistantText).toContain('The refactor is complete');
+    expect(output.reasoning).toBe('I should check if the tests pass first.');
+  });
 });

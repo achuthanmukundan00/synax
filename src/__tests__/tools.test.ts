@@ -61,6 +61,7 @@ describe('tool registry and inspection tools', () => {
       'search_text',
       'show_git_status',
       'show_git_diff',
+      'context_range_paste',
     ]);
     expect(registry.get('read_file_range')?.safetyPolicy.readOnly).toBe(true);
     expect(registry.get('read_file_range')?.ledgerBehavior).toBe('records-file-range');

@@ -14,9 +14,17 @@ export interface UnsupportedTaskGuardResult {
   suggestedFirstStep: string;
 }
 
-export function getAllowedModelTools(_mode: RunMode, bashEnabled: boolean): string[] {
-  const base = bashEnabled ? ['read', 'bash', 'search_memory', 'view_image'] : ['read', 'search_memory', 'view_image'];
-  return [...base, 'write', 'edit', 'save_memory'];
+export function getAllowedModelTools(mode: RunMode, bashEnabled: boolean): string[] {
+  // Always-available read-only tools
+  const base = ['read', 'save_memory', 'search_memory', 'view_image'];
+
+  // Mutation tools only in patch mode
+  if (mode === 'patch' || mode === 'verify') {
+    if (bashEnabled) base.push('bash');
+    base.push('write', 'edit');
+  }
+
+  return base;
 }
 
 export function normalizeRunMode(mode: string | undefined): RunMode {
