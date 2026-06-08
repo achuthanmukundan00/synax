@@ -577,7 +577,15 @@ function renderPayloadRows(
 
   // Render compact band for everything else.
   if (!useFullCard) {
-    return [renderCompactBand(core, payload, eventClass, pal, onToggle, expanded)];
+    const nodes = [renderCompactBand(core, payload, eventClass, pal, onToggle, expanded)];
+    // Shell commands carry stdout / stderr in the payload — surface it below the band.
+    if (eventClass === 'command' && payload.type === 'command') {
+      const output = [payload.stdout?.trimEnd(), payload.stderr?.trimEnd()].filter(Boolean).join('\n');
+      if (output) {
+        nodes.push(core.Text({ ...FULL_WIDTH_TEXT, content: output, fg: pal.text }));
+      }
+    }
+    return nodes;
   }
 
   if (payload.type === 'approval') {
