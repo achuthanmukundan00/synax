@@ -640,13 +640,13 @@ describe('OpenTUI result card consolidation', () => {
 });
 
 describe('OpenTUI polish helpers', () => {
-  it('adds breathing room around event crown glyphs and labels', () => {
-    expect(formatEventCrown('assistant_text')).toBe('  →  Note  ');
-    expect(formatEventCrown('prompt')).toBe('  ◆  Prompt  ');
-    expect(formatEventCrown('tool_result')).toBe('  ◇  Result  ');
-    expect(formatEventCrown('result_error')).toBe('  ✕  Result  ');
-    expect(formatEventCrown('command')).toBe('  ⌘  Command  ');
-    expect(formatEventCrown('error')).toBe('  ✕  Error  ');
+  it('renders event crown glyphs and labels as a plain header (no border padding)', () => {
+    expect(formatEventCrown('assistant_text')).toBe('→  Note');
+    expect(formatEventCrown('prompt')).toBe('◆  Prompt');
+    expect(formatEventCrown('tool_result')).toBe('◇  Result');
+    expect(formatEventCrown('result_error')).toBe('✕  Result');
+    expect(formatEventCrown('command')).toBe('⌘  Command');
+    expect(formatEventCrown('error')).toBe('✕  Error');
   });
 
   it('expands prompt height for multiline input without capping at 6', () => {
@@ -1347,9 +1347,13 @@ describe('subagent result card visual semantics', () => {
     // The completed agent_status card uses pal.info (#8be9fd cyan) not pal.success (#00ff87 green)
     const colorBar = card.children[0] as FakeOpenTuiNode;
     expect(colorBar.props.backgroundColor).toBe('#8be9fd');
-    // Card title shows the subagent name, not generic "Result"
-    const borderedCard = card.children[1] as FakeOpenTuiNode;
-    expect(borderedCard.props.title).toContain('step-1 returned');
+    // Card crown header shows the subagent name, not generic "Result"
+    const cardBody = card.children[1] as FakeOpenTuiNode;
+    const crown = cardBody.children[0] as FakeOpenTuiNode;
+    expect(String(crown.props.content)).toContain('step-1 returned');
+    // Full cards are shaded (background surface), not bordered with box-drawing glyphs
+    expect(cardBody.props.border).toBeUndefined();
+    expect(cardBody.props.backgroundColor).toBeDefined();
   });
 
   it('final all-success result card remains success/green', () => {

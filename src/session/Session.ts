@@ -91,6 +91,8 @@ import {
 
 import { buildModelRequest, guardModelRequestMultiStage, classifyResultForRecovery } from './message-assembly';
 
+import { checkCompletionAgainstContract } from './verification-contracts';
+
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const DEFAULT_MAX_TOOL_CALLS = Number.MAX_SAFE_INTEGER;
@@ -783,6 +785,8 @@ export class Session {
     }
 
     let turnResult: AgentTurnResult | undefined;
+    let consecutiveContractNudges = 0;
+    const MAX_CONSECUTIVE_CONTRACT_NUDGES = 5;
     try {
       turnResult = await (async (): Promise<AgentTurnResult> => {
         for (let step = 1; step <= this.maxModelSteps; step += 1) {
@@ -1095,24 +1099,46 @@ export class Session {
               this.tracer.endSpan(toolParseSpan);
             }
 
-            // ── Step-1 no-tool challenge: in patch/verify mode, if the model
-            // returns a substantial text response without using any tools on the
-            // first step, challenge it to actually do work rather than explaining.
-            // A response > 200 chars is likely an explanation; short acks are fine.
-            if (
-              (mode === 'patch' || mode === 'verify') &&
-              response.content.trim().length > 200 &&
-              changedFiles.length === 0
-            ) {
-              const actionNudge =
-                'Use the available tools (read, write, edit, bash) to complete the task. ' +
-                'Do not explain — act. Start by reading relevant files and making changes.';
-              conversation.messages.push({ role: 'user', content: actionNudge });
-              this.logger?.info('Text-only completion with no file changes, injecting action nudge', {
-                stepIndex: step,
-                mode,
-              });
-              continue;
+            // ── Verification contract check: before claiming completion,
+            // verify the contract is satisfied (only when explicitly configured).
+            if (this._verificationContract !== null) {
+              const contract = this._verificationContract;
+              const nudge = checkCompletionAgainstContract(
+                contract,
+                {
+                  changedFiles,
+                  verificationRan: false,
+                  responseContent: response.content,
+                },
+                'completed',
+              );
+              if (nudge) {
+                consecutiveContractNudges += 1;
+                if (consecutiveContractNudges > MAX_CONSECUTIVE_CONTRACT_NUDGES) {
+                  this.logger?.warn('Verification contract nudge limit exceeded, accepting completion', {
+                    stepIndex: step,
+                    mode,
+                    contractLevel: contract.level,
+                  });
+                  return {
+                    terminalState: 'completed',
+                    finalAnswer: finalAnswerFromResponse(response),
+                    reasoningContent: response.reasoningContent,
+                    steps: step,
+                    toolCalls,
+                    changedFiles,
+                    conversation,
+                  };
+                }
+                conversation.messages.push({ role: 'user', content: nudge });
+                this.logger?.info('Verification contract not satisfied, injecting nudge', {
+                  stepIndex: step,
+                  mode,
+                  contractLevel: contract.level,
+                  changedFiles: changedFiles.length,
+                });
+                continue;
+              }
             }
 
             return {
@@ -1160,6 +1186,9 @@ export class Session {
           const contentToolResults = toolResult.contentToolResults;
 
           flushContentToolResults(conversation, response, contentToolResults);
+
+          // ── Tool calls were made → reset the contract nudge counter
+          consecutiveContractNudges = 0;
 
           // ── Steering: inject queued message after tool call results ──
           const steeringInject = this.onSteeringCheck?.();

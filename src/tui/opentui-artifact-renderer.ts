@@ -36,6 +36,43 @@ const FULL_WIDTH_TEXT = {
   wrapMode: 'word',
 } as const;
 
+/**
+ * Build a shaded card body: an accent-bar + a background-shaded column with an
+ * optional plain-text crown header. Uses no box-drawing glyphs so terminal copy
+ * yields clean text (better cross-platform compatibility, lower token bloat).
+ */
+function shadedCard(
+  core: OpenTuiCore,
+  id: string,
+  color: string,
+  pal: TuiPalette,
+  crown: string | null,
+  children: OpenTuiNode[],
+  marginBottom = 1,
+): OpenTuiNode {
+  const header = crown ? [core.Text({ ...FULL_WIDTH_TEXT, content: crown, fg: color })] : [];
+  return core.Box(
+    {
+      id,
+      width: '100%',
+      flexDirection: 'row',
+      marginBottom,
+    },
+    core.Box({ width: 1, backgroundColor: color, marginRight: 1 }),
+    core.Box(
+      {
+        ...CARD_BODY_LAYOUT,
+        flexDirection: 'column',
+        backgroundColor: pal.surface,
+        paddingX: 1,
+        paddingY: 0,
+      },
+      ...header,
+      ...children,
+    ),
+  );
+}
+
 export interface CheckpointRailEntry {
   title: string;
   hash?: string;
@@ -474,28 +511,7 @@ export function renderArtifactCard(
     );
   }
 
-  return core.Box(
-    {
-      id: event.id,
-      width: '100%',
-      flexDirection: 'row',
-      marginBottom: 1,
-    },
-    core.Box({ width: 1, backgroundColor: color, marginRight: 1 }),
-    core.Box(
-      {
-        ...CARD_BODY_LAYOUT,
-        flexDirection: 'column',
-        border: true,
-        borderStyle: 'single',
-        borderColor: color,
-        title: formatEventCrown(event.class),
-        paddingX: 1,
-        paddingY: 0,
-      },
-      ...children,
-    ),
-  );
+  return shadedCard(core, event.id, color, pal, formatEventCrown(event.class), children);
 }
 
 function eventColor(eventClass: SemanticEventClass, palette: TuiPalette): string {
@@ -511,28 +527,10 @@ function renderPersistentStatusCard(core: OpenTuiCore, event: SemanticEvent, pal
 
   const color = statusCardColor(label, pal);
 
-  return core.Box(
-    {
-      id: event.id,
-      width: '100%',
-      flexDirection: 'row',
-      marginBottom: 1,
-    },
-    core.Box({ width: 1, backgroundColor: color, marginRight: 1 }),
-    core.Box(
-      {
-        ...CARD_BODY_LAYOUT,
-        flexDirection: 'column',
-        border: true,
-        borderStyle: 'single',
-        borderColor: color,
-        paddingX: 1,
-        paddingY: 0,
-      },
-      core.Text({ ...FULL_WIDTH_TEXT, content: label, fg: color }),
-      ...(detail ? [core.Text({ ...FULL_WIDTH_TEXT, content: detail, fg: pal.textAccent })] : []),
-    ),
-  );
+  return shadedCard(core, event.id, color, pal, null, [
+    core.Text({ ...FULL_WIDTH_TEXT, content: label, fg: color }),
+    ...(detail ? [core.Text({ ...FULL_WIDTH_TEXT, content: detail, fg: pal.textAccent })] : []),
+  ]);
 }
 
 function statusCardColor(label: string, palette: TuiPalette): string {
@@ -939,8 +937,7 @@ function labelFor(eventClass: SemanticEventClass): string {
 
 export function formatEventCrown(eventClass: SemanticEventClass): string {
   const label = labelFor(eventClass);
-  // Bold the label portion for visual prominence
-  return `  ${GLYPHS[eventClass]}  ${label}  `;
+  return `${GLYPHS[eventClass]}  ${label}`;
 }
 
 export function promptInputHeight(prompt: string, terminalWidth = 80): number {
@@ -1204,28 +1201,9 @@ function renderAgentStatusCard(core: OpenTuiCore, event: SemanticEvent, palette?
   // Failed: full error card
   if (body.startsWith('Failed:')) {
     const color = pal.error;
-    return core.Box(
-      {
-        id: event.id,
-        width: '100%',
-        flexDirection: 'row',
-        marginBottom: 1,
-      },
-      core.Box({ width: 1, backgroundColor: color, marginRight: 1 }),
-      core.Box(
-        {
-          ...CARD_BODY_LAYOUT,
-          flexDirection: 'column',
-          border: true,
-          borderStyle: 'single',
-          borderColor: color,
-          title: `  ×  ${name}  `,
-          paddingX: 1,
-          paddingY: 0,
-        },
-        core.Text({ ...FULL_WIDTH_TEXT, content: body, fg: color }),
-      ),
-    );
+    return shadedCard(core, event.id, color, pal, `×  ${name}`, [
+      core.Text({ ...FULL_WIDTH_TEXT, content: body, fg: color }),
+    ]);
   }
 
   // Completed: full bordered result card — use info/cyan for intermediate child results
@@ -1236,35 +1214,16 @@ function renderAgentStatusCard(core: OpenTuiCore, event: SemanticEvent, palette?
   if (toolCalls > 0) statsParts.push(`Calls ${toolCalls}`);
   if (filesCount > 0) statsParts.push(`Files touched: ${filesCount}`);
 
-  return core.Box(
-    {
-      id: event.id,
-      width: '100%',
-      flexDirection: 'row',
-      marginBottom: 1,
-    },
-    core.Box({ width: 1, backgroundColor: color, marginRight: 1 }),
-    core.Box(
-      {
-        ...CARD_BODY_LAYOUT,
-        flexDirection: 'column',
-        border: true,
-        borderStyle: 'single',
-        borderColor: color,
-        title: `  ✓  ${name}  `,
-        paddingX: 1,
-        paddingY: 0,
-      },
-      core.Text({
-        ...FULL_WIDTH_TEXT,
-        content: statsParts.length > 0 ? statsParts.join(' · ') : '',
-        fg: pal.textAccent,
-      }),
-      ...(body.trim()
-        ? renderResultMarkdown(core, body, pal)
-        : [core.Text({ ...FULL_WIDTH_TEXT, content: '(no output)', fg: pal.textMuted })]),
-    ),
-  );
+  return shadedCard(core, event.id, color, pal, `✓  ${name}`, [
+    core.Text({
+      ...FULL_WIDTH_TEXT,
+      content: statsParts.length > 0 ? statsParts.join(' · ') : '',
+      fg: pal.textAccent,
+    }),
+    ...(body.trim()
+      ? renderResultMarkdown(core, body, pal)
+      : [core.Text({ ...FULL_WIDTH_TEXT, content: '(no output)', fg: pal.textMuted })]),
+  ]);
 }
 
 function renderThinkingCard(
@@ -1286,46 +1245,27 @@ function renderThinkingCard(
   const shown = expanded ? bodyLines : [preview];
   const eventId = event.id;
 
-  return core.Box(
-    {
-      id: event.id,
-      width: '100%',
-      flexDirection: 'row',
-      marginBottom: 1,
-    },
-    core.Box({ width: 1, backgroundColor: color, marginRight: 1 }),
-    core.Box(
-      {
-        ...CARD_BODY_LAYOUT,
-        flexDirection: 'column',
-        border: true,
-        borderStyle: 'single',
-        borderColor: color,
-        title: `  ◌  ${title}  `,
-        paddingX: 1,
-        paddingY: 0,
+  return shadedCard(core, event.id, color, pal, `◌  ${title}`, [
+    core.Text({
+      ...FULL_WIDTH_TEXT,
+      content: active && !expanded ? shimmerThinkingLine(preview) : (shown[0] ?? preview),
+      fg: pal.textMuted,
+      onMouseDown: (mouseEvent: { stopPropagation?: () => void; preventDefault?: () => void }) => {
+        mouseEvent.stopPropagation?.();
+        mouseEvent.preventDefault?.();
+        onToggleExpand?.(eventId);
       },
-      core.Text({
-        ...FULL_WIDTH_TEXT,
-        content: active && !expanded ? shimmerThinkingLine(preview) : (shown[0] ?? preview),
-        fg: pal.textMuted,
-        onMouseDown: (mouseEvent: { stopPropagation?: () => void; preventDefault?: () => void }) => {
-          mouseEvent.stopPropagation?.();
-          mouseEvent.preventDefault?.();
-          onToggleExpand?.(eventId);
-        },
-      }),
-      ...(expanded
-        ? shown.slice(1).map((line) =>
-            core.Text({
-              ...FULL_WIDTH_TEXT,
-              content: line,
-              fg: pal.textMuted,
-            }),
-          )
-        : [core.Text({ ...FULL_WIDTH_TEXT, content: '[Ctrl+O expand]', fg: pal.textAccent })]),
-    ),
-  );
+    }),
+    ...(expanded
+      ? shown.slice(1).map((line) =>
+          core.Text({
+            ...FULL_WIDTH_TEXT,
+            content: line,
+            fg: pal.textMuted,
+          }),
+        )
+      : [core.Text({ ...FULL_WIDTH_TEXT, content: '[Ctrl+O expand]', fg: pal.textAccent })]),
+  ]);
 }
 
 function shimmerThinkingLine(text: string): string {
