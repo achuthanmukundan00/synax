@@ -45,18 +45,18 @@ base_url = "https://api.deepseek.com/v1"
 api_key_env = "DEEPSEEK_API_KEY"
 
 [[providers.deepseek.models]]
-id = "deepseek-chat"
-display_name = "DeepSeek Chat (V3)"
-context_window = 1000000
-supports_thinking = false
-
-[[providers.deepseek.models]]
-id = "deepseek-reasoner"
-display_name = "DeepSeek Reasoner (R1)"
+id = "deepseek-v4-pro"
+display_name = "DeepSeek V4 Pro"
 context_window = 1000000
 supports_thinking = true
-thinking_levels = ["off", "low", "medium", "high"]
-default_thinking = "medium"
+thinking_levels = ["off", "high", "xhigh"]
+default_thinking = "high"
+
+[[providers.deepseek.models]]
+id = "deepseek-v4-flash"
+display_name = "DeepSeek V4 Flash"
+context_window = 1000000
+supports_thinking = false
 
 # --- OpenAI ---
 [providers.openai]

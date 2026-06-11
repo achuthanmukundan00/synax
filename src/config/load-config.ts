@@ -58,21 +58,6 @@ const DEFAULT_MODELS: Record<string, ResolvedModelConfig[]> = {
       supportsThinking: false,
       thinkingLevels: [],
     },
-    {
-      id: 'deepseek-chat',
-      displayName: 'DeepSeek Chat (V3) — deprecated',
-      contextWindow: 1_000_000,
-      supportsThinking: false,
-      thinkingLevels: [],
-    },
-    {
-      id: 'deepseek-reasoner',
-      displayName: 'DeepSeek Reasoner (R1) — deprecated',
-      contextWindow: 1_000_000,
-      supportsThinking: true,
-      thinkingLevels: ['off', 'high', 'xhigh'],
-      defaultThinkingLevel: 'high',
-    },
   ],
   openai: [
     {
@@ -584,9 +569,18 @@ function mergeConfigs(
     }
 
     // Legacy single provider support: if no multi-provider config, use legacy.
+    //
+    // IMPORTANT: do NOT overwrite the active provider when the legacy block
+    // has no meaningful model AND no explicit preset — that's the auto-generated
+    // scaffold (generateDefaultConfig emits model = "" and no preset), not a
+    // deliberate override. Overwriting would clobber a [active] selection from
+    // the global multi-provider config and cause resolveActive to fall back to
+    // the first queryable default (relay), producing a confusing "model selected
+    // but network error" dead-end on startup.
     if (layer.config.provider && !layer.config.providers) {
       const legacy = layer.config.provider;
-      const providerId = canonicalProviderId((legacy.preset as string) || (legacy.id as string) || 'custom');
+      const preset = (legacy.preset as string) || (legacy.id as string);
+      const providerId = canonicalProviderId(preset || 'custom');
       const model = (legacy.model as string) || '';
       const baseUrl = (legacy.base_url as string) || (legacy.baseUrl as string) || '';
       const existing = result.providers[providerId];
@@ -602,11 +596,18 @@ function mergeConfigs(
         models: model ? [{ id: model }] : [],
       };
       result.providers[providerId] = resolveProvider(providerId, legacyProvider, existing);
-      result.active = {
-        ...result.active,
-        provider: providerId,
-        ...(model ? { model } : {}),
-      };
+
+      // Only override active when the legacy block carries intent: either a
+      // non-empty model or an explicit preset.  An anonymous block with
+      // model = "" is just the auto-generated placeholder.
+      const hasMeaningfulLegacyProvider = model !== '' || (preset && typeof preset === 'string');
+      if (hasMeaningfulLegacyProvider) {
+        result.active = {
+          ...result.active,
+          provider: providerId,
+          ...(model ? { model } : {}),
+        };
+      }
     }
 
     // Merge skills

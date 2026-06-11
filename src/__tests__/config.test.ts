@@ -14,6 +14,7 @@ import {
   generateDefaultConfig,
   writeConfigFile,
   normalizeProviderConfig,
+  toProviderFactoryInput,
   applyEffectiveSynaxConfigToProjectConfig,
 } from '../config/project';
 
@@ -260,6 +261,89 @@ describe('loadProjectConfig', () => {
     expect(result.config.provider?.model).toBe('test-model');
     // Ensure we didn't fallback to preset defaults (which would be http://127.0.0.1:1234/v1)
     expect(result.config.provider?.baseUrl).not.toBe('http://127.0.0.1:1234/v1');
+  });
+
+  it('active multi-provider provider wins over empty legacy scaffold [provider] block', () => {
+    // Scenario: global config has [active] provider=deepseek model=deepseek-v4-pro.
+    // Local .synax.toml has only the scaffold [provider] block with model=""
+    // and base_url="http://127.0.0.1:1234/v1" (auto-generated placeholder).
+    // The multi-provider active selection must win.
+
+    // 1. Write global config with the active multi-provider selection
+    const globalConfigDir = join(process.env.HOME!, '.config', 'synax');
+    mkdirSync(globalConfigDir, { recursive: true });
+    writeFileSync(
+      join(globalConfigDir, 'config.toml'),
+      [
+        '[active]',
+        'provider = "deepseek"',
+        'model = "deepseek-v4-pro"',
+        'thinking = "auto"',
+        '',
+        '[providers.deepseek]',
+        'enabled = true',
+        'name = "DeepSeek"',
+        'compatibility = "openai-compatible"',
+        'base_url = "https://api.deepseek.com/v1"',
+        'api_key_env = "DEEPSEEK_API_KEY"',
+        '',
+        '[[providers.deepseek.models]]',
+        'id = "deepseek-v4-pro"',
+        'context_window = 1000000',
+        'supports_thinking = true',
+      ].join('\n'),
+      'utf-8',
+    );
+
+    // 2. Write local scaffold .synax.toml (the auto-generated default)
+    writeFileSync(join(TMP, '.synax.toml'), generateDefaultConfig(), 'utf-8');
+
+    // 3. Load
+    const loaded = loadProjectConfig(TMP);
+    const fi = toProviderFactoryInput(loaded.config);
+
+    expect(loaded.errors).toEqual([]);
+    expect(fi.provider).toBe('deepseek');
+    expect(fi.model).toBe('deepseek-v4-pro');
+    expect(fi.baseUrl).toBe('https://api.deepseek.com/v1');
+  });
+
+  it('legacy [provider] block with explicit preset overrides the active multi-provider selection', () => {
+    // When a local legacy [provider] block names a different preset, that is
+    // an intentional project-level override and should win.
+    const globalConfigDir = join(process.env.HOME!, '.config', 'synax');
+    mkdirSync(globalConfigDir, { recursive: true });
+    writeFileSync(
+      join(globalConfigDir, 'config.toml'),
+      [
+        '[active]',
+        'provider = "deepseek"',
+        'model = "deepseek-v4-pro"',
+        '',
+        '[providers.deepseek]',
+        'enabled = true',
+        'name = "DeepSeek"',
+        'compatibility = "openai-compatible"',
+        'base_url = "https://api.deepseek.com/v1"',
+        'api_key_env = "DEEPSEEK_API_KEY"',
+      ].join('\n'),
+      'utf-8',
+    );
+
+    writeFileSync(
+      join(TMP, '.synax.toml'),
+      ['[provider]', 'preset = "openrouter"', 'model = "openai/gpt-4o"', 'api_key = "sk-override"'].join('\n'),
+      'utf-8',
+    );
+
+    const loaded = loadProjectConfig(TMP);
+    const fi = toProviderFactoryInput(loaded.config);
+
+    expect(loaded.errors).toEqual([]);
+    // The local legacy block explicitly chose openrouter — it wins.
+    expect(fi.provider).toBe('openrouter');
+    expect(fi.model).toBe('openai/gpt-4o');
+    expect(fi.apiKey).toBe('sk-override');
   });
 });
 

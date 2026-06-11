@@ -131,8 +131,8 @@ export function toProviderFactoryInput(config: ProjectConfig): ProviderFactoryIn
   const p = config.provider ?? {};
   const preset = p.preset;
   const kind = p.kind;
-  const baseUrl = p.base_url ?? p.baseUrl;
-  const model = p.model ?? config.model;
+  const baseUrl = p.baseUrl ?? p.base_url;
+  const model = p.model || config.model || undefined;
   const apiKeyEnv = p.api_key_env ?? p.apiKeyEnv;
   const apiKey = p.api_key ?? p.apiKey;
 
@@ -304,8 +304,9 @@ const DEFAULTS: ProjectConfig = {
   contextWindowTokens: 131072,
   reservedOutputTokens: 8192,
   keepRecentTokens: 20000,
-  maxSingleReadResultTokens: 12000,
-  maxTotalReadResultTokensPerTurn: 40000,
+  // maxSingleReadResultTokens / maxTotalReadResultTokensPerTurn intentionally
+  // unset: resolveContextBudgetSettings derives them from the context window
+  // (floors 12000 / 40000) so large-window models get proportional read budget.
   maxToolCalls: 192,
   subagents: { enabled: false, mode: 'sequential' },
   verification: { defaultCommand: undefined },
@@ -632,7 +633,10 @@ function configFromParsedToml(parsed: Record<string, unknown>): ProjectConfig {
   if (parsed.activeProfile !== undefined) config.activeProfile = parsed.activeProfile as string;
   const agent = parsed.agent && typeof parsed.agent === 'object' ? (parsed.agent as AgentBudgetConfig) : undefined;
   if (parsed.provider && typeof parsed.provider === 'object') {
-    config.provider = parsed.provider as ProviderConfig;
+    // Strip empty-string values: the auto-generated scaffold emits
+    // model = "" to mean "unset", and empty strings are not nullish
+    // so they defeat every downstream ?? fallback chain.
+    config.provider = stripEmptyStrings(parsed.provider as Record<string, unknown>) as ProviderConfig;
   }
   if (parsed.model !== undefined) config.model = parsed.model as string;
   if (parsed.baseUrl !== undefined) config.baseUrl = parsed.baseUrl as string;
@@ -815,17 +819,41 @@ export function loadProjectConfig(baseDir?: string): LoadProjectConfigResult {
   if (hasExtendedSettings) {
     // When using new multi-provider format, provider is already resolved by loadSynaxConfig.
     // Apply only user-level overrides and env overrides, but don't rebuild from preset defaults.
+    const resolvedBaseUrl =
+      config.provider?.baseUrl ??
+      config.provider?.base_url ??
+      userConfig.provider?.baseUrl ??
+      userConfig.provider?.base_url ??
+      config.baseUrl ??
+      userConfig.baseUrl;
+    // Use || (not ??) for model: the scaffold emits model = "" and empty
+    // strings are not nullish, so they defeat every ?? fallback chain.
+    const resolvedModel =
+      config.provider?.model || userConfig.provider?.model || config.model || userConfig.model || undefined;
+    const resolvedApiKeyEnv =
+      config.provider?.apiKeyEnv ??
+      config.provider?.api_key_env ??
+      userConfig.provider?.apiKeyEnv ??
+      userConfig.provider?.api_key_env;
+    const resolvedApiKey =
+      config.provider?.apiKey ??
+      config.provider?.api_key ??
+      userConfig.provider?.apiKey ??
+      userConfig.provider?.api_key;
     provider = {
       ...config.provider,
       ...userConfig.provider,
-      model: config.provider?.model ?? userConfig.provider?.model ?? config.model ?? userConfig.model,
-      baseUrl:
-        config.provider?.baseUrl ??
-        config.provider?.base_url ??
-        userConfig.provider?.baseUrl ??
-        userConfig.provider?.base_url ??
-        config.baseUrl ??
-        userConfig.baseUrl,
+      model: resolvedModel,
+      baseUrl: resolvedBaseUrl,
+      // Sync snake_case aliases: after the spread above, legacy snake_case
+      // keys from a local [provider] block may be stale (e.g. the scaffold's
+      // base_url = "http://127.0.0.1:1234/v1").  toProviderFactoryInput reads
+      // snake_case first, so we must keep both forms consistent.
+      base_url: resolvedBaseUrl,
+      apiKeyEnv: resolvedApiKeyEnv,
+      api_key_env: resolvedApiKeyEnv,
+      apiKey: resolvedApiKey,
+      api_key: resolvedApiKey,
     };
   } else {
     // Legacy path: build provider from preset defaults.
@@ -892,6 +920,15 @@ function hasContextWindowConfig(config: ProjectConfig): boolean {
     config.agent?.contextWindowTokens !== undefined ||
     config.agent?.context_window_tokens !== undefined
   );
+}
+
+function stripEmptyStrings(obj: Record<string, unknown>): Record<string, unknown> {
+  const result: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(obj)) {
+    if (value === '' || value === undefined || value === null) continue;
+    result[key] = value;
+  }
+  return result;
 }
 
 function hasExtendedSettingsKeys(parsed: Record<string, unknown>): boolean {

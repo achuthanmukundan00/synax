@@ -490,7 +490,7 @@ describe('CostTracker and provider pricing', () => {
   });
 
   test('resolvePricing matches exact model name', () => {
-    const pricing = resolvePricing('deepseek/deepseek-chat');
+    const pricing = resolvePricing('deepseek/deepseek-v4-pro');
     expect(pricing.inputPer1M).toBe(0.14);
     expect(pricing.outputPer1M).toBe(0.28);
   });
@@ -502,7 +502,7 @@ describe('CostTracker and provider pricing', () => {
 
   test('isLocalModel returns false for paid API models', () => {
     expect(isLocalModel('openai/gpt-4o')).toBe(false);
-    expect(isLocalModel('deepseek/deepseek-chat')).toBe(false);
+    expect(isLocalModel('deepseek/deepseek-v4-pro')).toBe(false);
   });
 
   test('CostTracker estimates turn cost proportionally', () => {
