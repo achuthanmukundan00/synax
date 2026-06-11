@@ -160,8 +160,8 @@ const EXPLICIT_DELEGATION_PATTERNS: Array<{ regex: RegExp; mode: 'parallel' | 's
   // Explicit parallel subagents
   { regex: /\bparallel\s+sub-?agents?\b/i, mode: 'parallel' },
   { regex: /\bsequential\s+sub-?agents?\b/i, mode: 'sequential' },
-  // "use agents", "use subagents", "use sub-agents"
-  { regex: /\buse\s+(sub-?)?agents?\b/i, mode: 'auto' },
+  // "use agents", "use subagents", "use sub-agents" — but NOT "use the agents.md"
+  { regex: /\buse\s+(sub-?)?agents?\b(?!\.md)\b/i, mode: 'auto' },
   // Alternative delegation phrasing
   { regex: /\b(?:delegate|fan\s*out|spawn\s+agents?|dispatch\s+agents?)\b/i, mode: 'auto' },
   // "parallel agents"
@@ -220,12 +220,17 @@ export function detectRepoReconIntent(prompt: string): boolean {
   // Heuristic: "read all the code, I want to ask you questions about it"
   // Requires all three signals to avoid false positives like
   // "read the code for the bug" (read + code, but no questions intent).
+  // Also requires the absence of mutation intent (fix, change, edit, etc.)
+  // so that tasks like "Read the code in src/parser.ts, understand the bug,
+  // and fix it" are NOT hijacked into repo-recon.
   const lower = prompt.toLowerCase();
   const hasReadIntent = /\bread\b/.test(lower);
   const hasRepoRef = /\b(repo|code|codebase|files|source)\b/.test(lower);
   const hasQuestionsIntent = /\b(questions?|ask|understand|learn|know)\b/.test(lower);
+  const hasMutationIntent =
+    /\b(fix|change|modif|add|edit|write|implement|update|refactor|resolve|patch|correct|repair)\b/.test(lower);
 
-  if (hasReadIntent && hasRepoRef && hasQuestionsIntent) return true;
+  if (hasReadIntent && hasRepoRef && hasQuestionsIntent && !hasMutationIntent) return true;
 
   return false;
 }

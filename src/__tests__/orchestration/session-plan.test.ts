@@ -21,7 +21,7 @@ describe('Session orchestration planning', () => {
     expect(
       session.shouldOrchestrate({
         estimatedTokens: 3000,
-        strategy: 'orchestrated' as any,
+        strategy: 'orchestrate' as any,
         safetyMargin: 1000,
         utilization: 0.9,
         contextWindowTokens: 4000,

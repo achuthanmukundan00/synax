@@ -168,6 +168,20 @@ describe('runAgentTask patch approval', () => {
 
   it('bridges sub-agent results into parent conversation context via orchestration', async () => {
     const events: AgentEvent[] = [];
+    // Enable sub-agents in project config (default is disabled)
+    writeFileSync(
+      join(TMP, '.synax.toml'),
+      [
+        '[provider]',
+        'kind = "openai-compatible"',
+        'base_url = "http://localhost/v1"',
+        'model = "fake"',
+        '',
+        '[subagents]',
+        'enabled = true',
+      ].join('\n'),
+      'utf-8',
+    );
     // LLM planner returns a valid decomposition plan → orchestration executes
     responses = [
       {

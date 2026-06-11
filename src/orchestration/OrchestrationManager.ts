@@ -95,8 +95,19 @@ export class OrchestrationManager {
       };
     }
 
-    // Determine execution mode — respect forced mode when user specifies trigger phrases
-    const mode = options?.forcedMode ?? determineExecutionMode(plan.strategy, subTasks);
+    // Determine execution mode — respect forced mode when user specifies
+    // trigger phrases, EXCEPT when sub-task file scopes overlap. Parallel
+    // children share the same working tree with no isolation; concurrent
+    // mutations to overlapping scopes corrupt each other's edits. Safety
+    // beats the user's mode preference, so overlapping scopes downgrade
+    // forced-parallel to sequential.
+    let mode = options?.forcedMode ?? determineExecutionMode(plan.strategy, subTasks);
+    const mutatingTasks = subTasks.filter((t) => t.verification.level !== 'none');
+    if (mode === 'parallel' && mutatingTasks.length > 0 && hasOverlappingFileScopes(subTasks)) {
+      // Read-only plans (all contracts 'none', e.g. repo recon) keep their
+      // parallelism — concurrent reads are safe.
+      mode = 'sequential';
+    }
 
     let result: OrchestrationResult;
     try {
@@ -428,6 +439,38 @@ export class OrchestrationManager {
  * - orchestrate → parallel if any sub-task is marked parallelizable and all scopes are disjoint
  * - inline → sequential (single-task edge case, shouldn't reach here)
  */
+/**
+ * Check whether any two sub-tasks have overlapping file scopes.
+ *
+ * Scopes are treated as path prefixes: 'src/' overlaps 'src/llm/utils.ts'.
+ * Empty scopes ("any relevant files") overlap everything, since the child
+ * is unconstrained. Comma-separated scope strings are split and compared
+ * individually.
+ */
+export function hasOverlappingFileScopes(subTasks: SubTask[]): boolean {
+  const normalize = (scope: string): string[] =>
+    scope
+      .split(',')
+      .map((s) => s.trim().replace(/^\.\//, '').replace(/\/+$/, ''))
+      .filter(Boolean);
+
+  const scopeSets = subTasks.map((t) => t.fileScope.flatMap(normalize));
+
+  // A task with no concrete scope can touch anything — overlaps all others.
+  if (subTasks.length > 1 && scopeSets.some((set) => set.length === 0)) return true;
+
+  for (let i = 0; i < scopeSets.length; i += 1) {
+    for (let j = i + 1; j < scopeSets.length; j += 1) {
+      for (const a of scopeSets[i]) {
+        for (const b of scopeSets[j]) {
+          if (a === b || a.startsWith(`${b}/`) || b.startsWith(`${a}/`)) return true;
+        }
+      }
+    }
+  }
+  return false;
+}
+
 function determineExecutionMode(strategy: BudgetStrategy, subTasks: SubTask[]): 'sequential' | 'parallel' {
   if (strategy === 'decompose') return 'sequential';
 

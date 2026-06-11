@@ -7,7 +7,7 @@ import type { Logger } from '../logging/Logger';
 import { runVerification, type VerificationResult } from './verification';
 import { eventNow, type AgentEvent } from './events';
 import { createSafetyCheckpoint, detectDirtyTree, writeRunLog } from './safety';
-import { normalizeRunMode, type RunMode } from './task-policy';
+import { normalizeRunMode, isInformationalTask, type RunMode } from './task-policy';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 import {
@@ -329,8 +329,20 @@ export async function runAgentTask(options: RunTaskOptions): Promise<RunTaskRepo
     promptLength: options.task.length,
   });
 
-  // Classify dispatch intent
-  const dispatchIntent = classifyDispatchIntent(options.task);
+  // Classify dispatch intent.
+  // Sub-agent orchestration is opt-in via config.subagents.enabled, with one
+  // exception: an explicit in-task delegation request ("use parallel
+  // sub-agents …") overrides the config default — the user literally asked.
+  // When disabled and not explicitly requested, skip the entire planner
+  // pipeline (no fast-path dispatch, no LLM planning calls, no repo metadata
+  // collection) and run the task inline. This keeps the common single-agent
+  // path fast and cheap.
+  const subagentsEnabled = projectConfig.config.subagents?.enabled === true;
+  const classifiedIntent = classifyDispatchIntent(options.task);
+  const dispatchIntent: DispatchIntent =
+    subagentsEnabled || classifiedIntent.kind === 'explicit_delegation'
+      ? classifiedIntent
+      : { kind: 'requires_llm_planning', cleanTask: options.task };
   const classifiedTimer = markIntentClassified(plannerTimer);
   const intentElapsed = Math.round(classifiedTimer.intentClassifiedMs! - classifiedTimer.startedMs);
 
@@ -408,7 +420,7 @@ export async function runAgentTask(options: RunTaskOptions): Promise<RunTaskRepo
     plannerState = markTasksGenerated(plannerState);
 
     // ═══ LLM planning fallback ════════════════════════════════════════════
-  } else {
+  } else if (subagentsEnabled) {
     // Auto-detect strategy via budget estimation
     const estimate = await session.estimateTaskBudget(options.task);
     strategyLabel = estimate.strategy;
@@ -428,6 +440,18 @@ export async function runAgentTask(options: RunTaskOptions): Promise<RunTaskRepo
       planResult = await session.planOrchestratedTurn(options.task, undefined);
       plannerState = markTasksGenerated(plannerState);
     }
+  } else {
+    // Sub-agents disabled: inline execution, no planning overhead.
+    plannerState = markStrategySelected(plannerState);
+    wrappedOnEvent({
+      type: 'planner_strategy_selected',
+      timestamp: eventNow(),
+      strategy: 'inline',
+      agentCount: 0,
+      usedLlmPlanning: false,
+      usedFastPath: true,
+      elapsedMs: Math.round(performance.now() - classifiedTimer.startedMs),
+    });
   }
 
   // ═══ Execute orchestration plan ═══════════════════════════════════════
@@ -564,7 +588,7 @@ export async function runAgentTask(options: RunTaskOptions): Promise<RunTaskRepo
     verification = await runVerification({
       repoRoot: options.repoRoot,
       command: verificationCommand,
-      timeoutMs: options.verificationProfile === 'full' ? 120000 : 30000,
+      timeoutMs: options.verificationProfile === 'full' ? 120000 : 60000,
       maxOutputChars: options.verificationProfile === 'full' ? 12000 : 4000,
     });
     const vDuration = Date.now() - vStarted;
@@ -605,9 +629,17 @@ export async function runAgentTask(options: RunTaskOptions): Promise<RunTaskRepo
   // Determine if we need repair. Two cases:
   // 1. Verification command ran and failed (verification.state === 'failed')
   // 2. Contract not satisfied — model completed without write/edit (verification skipped)
+  //
+  // Contract derivation: an explicit --verify flag always wins. Otherwise the
+  // contract comes from the run mode, EXCEPT for informational tasks in patch
+  // mode ("explain X", "why does Y fail?") — forcing files_changed there
+  // pushes the model into spurious edits, so those degrade to 'none'.
+  const informational = mode === 'patch' && turn.changedFiles.length === 0 && isInformationalTask(options.task);
   const effectiveContract = options.verify
     ? (resolveVerifyOverride(options.verify) ?? resolveVerificationContract(mode))
-    : resolveVerificationContract(mode);
+    : informational
+      ? { level: 'none' as const, label: 'No verification required (informational task)' }
+      : resolveVerificationContract(mode);
   const contractEval = evaluateVerificationContract({
     contract: effectiveContract,
     evidence: {
@@ -672,7 +704,7 @@ export async function runAgentTask(options: RunTaskOptions): Promise<RunTaskRepo
         verification = await runVerification({
           repoRoot: options.repoRoot,
           command: verificationCommand,
-          timeoutMs: options.verificationProfile === 'full' ? 120000 : 30000,
+          timeoutMs: options.verificationProfile === 'full' ? 120000 : 60000,
           maxOutputChars: options.verificationProfile === 'full' ? 12000 : 4000,
         });
         const rDuration = Date.now() - rStarted;
@@ -735,9 +767,8 @@ export async function runAgentTask(options: RunTaskOptions): Promise<RunTaskRepo
   // Must always verify when task expects output. If no write/edit attempted,
   // fail explicitly with proper verification lifecycle events.
   if (terminalState === 'completed' || terminalState === 'failed_verification') {
-    const effectiveContract = options.verify
-      ? (resolveVerifyOverride(options.verify) ?? resolveVerificationContract(mode))
-      : resolveVerificationContract(mode);
+    // Reuse the contract derived above (includes the informational-task
+    // exception) — re-deriving from mode alone would re-fail relaxed tasks.
     const contractCheck = evaluateVerificationContract({
       contract: effectiveContract,
       evidence: {
@@ -945,7 +976,7 @@ function buildReconOrchestrationPlan(tasks: RepoReconTask[], _repoRoot: string, 
     fileScope: [t.scope],
     dependencies: [],
     estimatedBudget: 8000,
-    verification: { level: 'files_changed', label: 'Verify files changed' },
+    verification: { level: 'none', label: 'Read-only recon task' },
   }));
 
   return {
