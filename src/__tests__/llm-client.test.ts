@@ -131,9 +131,9 @@ describe('LLM client — basic chat', () => {
     });
     const client = createOpenAICompatibleClient(makeConfig({ baseUrl: getServerUrl(srv) }));
     const resp = await client.chat({ messages: [{ role: 'user', content: 'hi' }] });
-    // Content retains thinking tags so Qwen models get their reasoning echoed back.
-    // The transcript display layer now surfaces thinking text for observability.
-    expect(resp.content).toBe('<think>secret</think>Hello');
+    // Thinking tags are stripped from stored content to avoid wasting context
+    // on multi-step turns. Reasoning is preserved in reasoning_content separately.
+    expect(resp.content).toBe('Hello');
   });
 
   test('streams reasoning and content deltas while returning the final response', async () => {

@@ -152,6 +152,32 @@ function parseErrorResponse(status: number, bodyText: string): LlmError {
 }
 
 // ---------------------------------------------------------------------------
+// Utility: strip thinking tags from content
+// ---------------------------------------------------------------------------
+
+/**
+ * Remove <think>/<thinking> XML tags from assistant text, capturing the
+ * extracted reasoning so it can be preserved in reasoningContent.
+ * Echoing thinking tags back into conversation history wastes context and
+ * degrades multi-step behavior (Qwen's own guidance recommends stripping),
+ * but the reasoning itself must not be lost — it powers the bug-#114
+ * fallback (think-only responses) and the transcript thinking display.
+ */
+function extractThinkingTags(content: string): { content: string; thinking: string } {
+  const captured: string[] = [];
+  const collect = (_match: string, inner: string): string => {
+    if (inner.trim()) captured.push(inner.trim());
+    return '';
+  };
+  const stripped = content
+    .replace(/<think\b[^>]*>([\s\S]*?)<\/think>/gi, collect)
+    .replace(/<thinking\b[^>]*>([\s\S]*?)<\/thinking>/gi, collect)
+    .replace(/<\/think(?:ing)?>/gi, '')
+    .trim();
+  return { content: stripped, thinking: captured.join('\n\n') };
+}
+
+// ---------------------------------------------------------------------------
 // Success response parsing
 // ---------------------------------------------------------------------------
 
@@ -174,11 +200,14 @@ function parseSuccessResponse(bodyText: string, parserMode: ToolCallParserMode):
 
   const choice = json.choices?.[0];
   const rawContent = choice?.message?.content ?? '';
-  // Preserve raw content: thinking tags (<think>/<thinking>) are kept in the
-  // stored content so Qwen-style reasoning is echoed back to the model.
-  // Tool-call parsers sanitize internally; the transcript display layer surfaces tags.
-  const content = rawContent;
-  const reasoningContent = firstReasoningContent(choice?.message);
+  // Strip thinking tags (<think>/<thinking>) from stored content to avoid
+  // echoing previous reasoning back to the model (wastes context, degrades
+  // behavior over multi-step turns). Inline thinking is captured and
+  // preserved as reasoningContent when the API provided no reasoning field,
+  // so think-only responses still surface their reasoning (bug #114).
+  const extracted = extractThinkingTags(rawContent);
+  const content = extracted.content;
+  const reasoningContent = firstReasoningContent(choice?.message) ?? (extracted.thinking || undefined);
   const finishReason = choice?.finish_reason ?? null;
 
   // Step 1: Parse native OpenAI tool_calls from the API response.
@@ -481,6 +510,23 @@ async function readOpenAIStream(
       if (choice?.message) {
         content = choice.message.content ?? '';
         reasoningContent = choice.message.reasoning_content ?? '';
+        // Copy native tool_calls from non-streaming response fallback
+        if (Array.isArray(choice.message.tool_calls)) {
+          for (const tc of choice.message.tool_calls as Array<{
+            id?: unknown;
+            function?: { name?: unknown; arguments?: unknown };
+          }>) {
+            const index = typeof (tc as any)?.index === 'number' ? (tc as any).index : toolCalls.size;
+            toolCalls.set(index, {
+              id: typeof tc.id === 'string' ? tc.id : undefined,
+              name: typeof tc.function?.name === 'string' ? tc.function.name : undefined,
+              arguments:
+                typeof tc.function?.arguments === 'string'
+                  ? tc.function.arguments
+                  : JSON.stringify(tc.function?.arguments ?? {}),
+            });
+          }
+        }
       }
       if (choice?.finish_reason) finishReason = choice.finish_reason;
     } catch {
@@ -539,7 +585,30 @@ function collectToolCallDeltas(
 ): void {
   if (!Array.isArray(deltas)) return;
   for (const delta of deltas) {
-    const index = typeof delta.index === 'number' ? delta.index : toolCalls.size;
+    // Resolve the target entry for this delta:
+    //  1. delta.index when provided (OpenAI spec).
+    //  2. Match by id when the provider repeats ids instead of indexes.
+    //  3. A *new* id (or a name with no prior entry) starts a new call.
+    //  4. Otherwise this is an argument continuation fragment for the most
+    //     recently updated call — NOT a new entry. Using toolCalls.size as a
+    //     blind fallback fragments arguments across separate entries.
+    let index: number;
+    if (typeof delta.index === 'number') {
+      index = delta.index;
+    } else if (delta.id) {
+      const existing = [...toolCalls.entries()].find(([, c]) => c.id === delta.id);
+      index = existing ? existing[0] : toolCalls.size;
+    } else if (delta.function?.name && toolCalls.size > 0) {
+      // A fresh name without index/id signals a new call only if the previous
+      // call already has a name (some providers resend the name per chunk).
+      const last = [...toolCalls.entries()].at(-1);
+      index = last && last[1].name && last[1].name !== delta.function.name ? toolCalls.size : (last?.[0] ?? 0);
+    } else if (toolCalls.size > 0) {
+      // Continuation fragment — append to the most recent entry.
+      index = [...toolCalls.keys()].at(-1)!;
+    } else {
+      index = 0;
+    }
     const current = toolCalls.get(index) ?? { arguments: '' };
     toolCalls.set(index, {
       id: delta.id ?? current.id,
@@ -663,14 +732,16 @@ export function createOpenAICompatibleClient(
       const maxTokensValue = opts.maxTokens ?? 8192;
 
       function buildBody(useCompletion: boolean): Record<string, unknown> {
+        const streaming = Boolean(opts.onDelta);
         return {
           model,
           messages: normalizeMessagesForProvider(opts.messages, {
             preserveReasoningContent: Boolean(isDeepSeek || thinkingEnabled),
             requireReasoningContent: Boolean(thinkingEnabled),
           }),
-          ...(opts.temperature !== undefined ? { temperature: opts.temperature } : {}),
-          stream: Boolean(opts.onDelta),
+          temperature: opts.temperature ?? 0.2,
+          stream: streaming,
+          ...(streaming ? { stream_options: { include_usage: true } } : {}),
           ...(useCompletion ? { max_completion_tokens: maxTokensValue } : { max_tokens: maxTokensValue }),
           ...(opts.tools && opts.tools.length > 0
             ? { tools: opts.tools.map(toOpenAIToolDefinition), tool_choice: 'auto' }
@@ -815,11 +886,30 @@ function normalizeMessagesForProvider(
   const hasReasoningHistory = messages.some(
     (message) => message.role === 'assistant' && typeof message.reasoning_content === 'string',
   );
-  const normalized = messages.map((message) => {
+  // Index of the last leading system message (system prompt + skill messages).
+  // System messages appearing AFTER conversation has started (orientation,
+  // memory index, compaction notes appended at the tail for cache stability)
+  // are converted to user role — many local chat templates (ChatML variants)
+  // mishandle mid-conversation system messages (dropped, or worse, treated
+  // as a new conversation start).
+  let leadingSystemEnd = 0;
+  while (leadingSystemEnd < messages.length && messages[leadingSystemEnd].role === 'system') {
+    leadingSystemEnd += 1;
+  }
+
+  const normalized = messages.map((message, messageIndex) => {
     const n = { ...message };
     // Strip internal compaction markers before sending to the provider.
     delete (n as Record<string, unknown>)._tool_call_ids;
     delete (n as Record<string, unknown>)._tool_result_ids;
+
+    // Convert mid-conversation system messages to user role with a clear
+    // delimiter so the model treats them as runtime context, not as a
+    // conversation reset.
+    if (n.role === 'system' && messageIndex >= leadingSystemEnd && typeof n.content === 'string') {
+      n.role = 'user';
+      n.content = `[system context]\n${n.content}`;
+    }
 
     // Ensure tool messages have the required tool_call_id
     if (n.role === 'tool' && !('tool_call_id' in n)) {
