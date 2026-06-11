@@ -59,6 +59,17 @@ interface ReadTarget {
 
 type ReadTargetResult = ({ ok: true } & ReadTarget) | { ok: false; reason: string };
 
+/**
+ * Check whether an absolute path falls within an allowed root.
+ * Returns true if the path starts with root + separator or equals root exactly.
+ */
+function isWithinRoot(absolutePath: string, root: string): boolean {
+  const normalizedRoot = normalize(root).replace(/\\/g, '/').replace(/\/+$/, '');
+  const normalizedPath = absolutePath.replace(/\\/g, '/');
+  if (normalizedPath === normalizedRoot) return true;
+  return normalizedPath.startsWith(normalizedRoot + '/');
+}
+
 export function createInspectionTools(): ToolDefinition[] {
   return [listFilesTool, readFileRangeTool, searchTextTool, showGitStatusTool, showGitDiffTool, contextRangePasteTool];
 }
@@ -438,6 +449,17 @@ function expandHome(filePath: string): string {
   return filePath;
 }
 
+/**
+ * Resolve a model-supplied path to a read target, enforcing boundary checks.
+ *
+ * Absolute paths must fall within the repository root or the current user's home
+ * directory. Paths pointing outside those boundaries are rejected to prevent
+ * models from probing hallucinated usernames (e.g. /home/alice/secret.txt) or
+ * system paths from training data.
+ *
+ * Relative paths and ~/$HOME expansions are resolved relative to repoRoot and
+ * homedir() respectively and naturally stay within boundaries.
+ */
 function resolveReadTarget(repoRoot: string, inputPath: string): ReadTargetResult {
   const expanded = expandHome(inputPath);
   const trimmed = expanded.trim();
@@ -446,10 +468,27 @@ function resolveReadTarget(repoRoot: string, inputPath: string): ReadTargetResul
   }
 
   const normalized = normalize(trimmed).replace(/\\/g, '/');
+  const absolutePath = isAbsolute(trimmed) ? resolve(trimmed) : resolve(repoRoot, trimmed);
+
+  // Validate absolute paths are within allowed roots
+  if (isAbsolute(trimmed)) {
+    const repoNormalized = normalize(repoRoot).replace(/\\/g, '/').replace(/\/+$/, '');
+    const homeNormalized = normalize(homedir()).replace(/\\/g, '/').replace(/\/+$/, '');
+
+    if (!isWithinRoot(absolutePath, repoNormalized) && !isWithinRoot(absolutePath, homeNormalized)) {
+      return {
+        ok: false,
+        reason:
+          'path is outside the repository root and your home directory. ' +
+          'Use a path within the current project or ~/ instead.',
+      };
+    }
+  }
+
   return {
     ok: true,
     path: normalized === '.' ? '' : normalized,
-    absolutePath: isAbsolute(trimmed) ? resolve(trimmed) : resolve(repoRoot, trimmed),
+    absolutePath,
   };
 }
 

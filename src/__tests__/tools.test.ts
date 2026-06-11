@@ -1,5 +1,6 @@
 import { execSync } from 'child_process';
 import { existsSync, mkdirSync, rmSync, writeFileSync } from 'fs';
+import { homedir } from 'os';
 import { join } from 'path';
 
 import { createInspectionLedger, createToolRegistry } from '../tools';
@@ -295,25 +296,80 @@ describe('tool registry and inspection tools', () => {
     });
   });
 
-  it('allows absolute and parent-relative list_files paths', async () => {
+  it('rejects absolute paths outside repo root and home directory', async () => {
+    const registry = createToolRegistry({ repoRoot: TMP });
+
+    // Absolute path outside both repo root and home directory
+    await expect(
+      registry.execute('read_file_range', { path: '/home/nonexistent-user/secret.txt' }),
+    ).resolves.toMatchObject({
+      success: false,
+      error: expect.stringContaining('outside the repository root'),
+    });
+
+    await expect(registry.execute('list_files', { path: '/etc/passwd', maxFiles: 50 })).resolves.toMatchObject({
+      success: false,
+      error: expect.stringContaining('outside the repository root'),
+    });
+
+    await expect(registry.execute('search_text', { query: 'needle', path: '/tmp' })).resolves.toMatchObject({
+      success: false,
+      error: expect.stringContaining('outside the repository root'),
+    });
+  });
+
+  it('allows absolute paths within repo root', async () => {
+    writeFileSync(join(TMP, 'root.txt'), 'root\n', 'utf-8');
+    const registry = createToolRegistry({ repoRoot: TMP });
+
+    const result = await registry.execute('read_file_range', { path: join(TMP, 'root.txt') });
+    expect(result.success).toBe(true);
+    expect(result.output).toMatchObject({ path: join(TMP, 'root.txt') });
+  });
+
+  it('allows ~ and $HOME paths', async () => {
+    const homeFile = join(homedir(), '.synax-test-boundary.txt');
+    writeFileSync(homeFile, 'home content\n', 'utf-8');
+    const registry = createToolRegistry({ repoRoot: TMP });
+
+    try {
+      const tildeResult = await registry.execute('read_file_range', {
+        path: '~/.synax-test-boundary.txt',
+      });
+      expect(tildeResult.success).toBe(true);
+      expect(tildeResult.output).toMatchObject({ path: homeFile });
+
+      const dollarResult = await registry.execute('read_file_range', {
+        path: '$HOME/.synax-test-boundary.txt',
+      });
+      expect(dollarResult.success).toBe(true);
+
+      // Absolute path within home directory should work
+      const absResult = await registry.execute('read_file_range', { path: homeFile });
+      expect(absResult.success).toBe(true);
+    } finally {
+      rmSync(homeFile, { force: true });
+    }
+  });
+
+  it('allows relative and parent-relative paths within repo boundary', async () => {
     const outside = join(TMP, '..', 'synax-tool-outside');
     rmSync(outside, { recursive: true, force: true });
     mkdirSync(outside, { recursive: true });
     writeFileSync(join(outside, 'outside.txt'), 'outside\n', 'utf-8');
     const registry = createToolRegistry({ repoRoot: TMP });
 
-    await expect(registry.execute('list_files', { path: outside, maxFiles: 50 })).resolves.toMatchObject({
-      success: true,
-      output: { files: [`${outside}/outside.txt`], truncated: false },
-    });
-    await expect(
-      registry.execute('list_files', { path: '../synax-tool-outside', maxFiles: 50 }),
-    ).resolves.toMatchObject({
-      success: true,
-      output: { files: ['../synax-tool-outside/outside.txt'], truncated: false },
-    });
-
-    rmSync(outside, { recursive: true, force: true });
+    try {
+      // Relative .. paths still work (resolved relative to repoRoot)
+      await expect(
+        registry.execute('list_files', { path: '../synax-tool-outside', maxFiles: 50 }),
+      ).resolves.toMatchObject({
+        success: true,
+        output: { files: ['../synax-tool-outside/outside.txt'], truncated: false },
+      });
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+    }
   });
 
   it('returns bounded read-only git status and diff results visible to the ledger', async () => {

@@ -66,7 +66,8 @@ export function buildModelFacingTools(options: ModelToolSurfaceOptions = {}): To
         properties: {
           path: {
             type: 'string',
-            description: 'Optional file or directory path (absolute or relative).',
+            description:
+              'Optional file or directory path within the repository or ~/. Prefer ~/ instead of /home/user — absolute paths outside the project or your home directory are rejected.',
           },
           startLine: {
             type: 'number',
@@ -114,7 +115,8 @@ export function buildModelFacingTools(options: ModelToolSurfaceOptions = {}): To
         properties: {
           path: {
             type: 'string',
-            description: 'Path for the new file (absolute or relative).',
+            description:
+              'Path for the new file within the repository or ~/. Prefer ~/ instead of /home/user — absolute paths outside the project or your home directory are rejected.',
           },
           content: {
             type: 'string',
@@ -145,7 +147,11 @@ export function buildModelFacingTools(options: ModelToolSurfaceOptions = {}): To
         type: 'object',
         required: ['path', 'oldStr', 'newStr'],
         properties: {
-          path: { type: 'string', description: 'File path for the target file (absolute or relative).' },
+          path: {
+            type: 'string',
+            description:
+              'File path for the target file within the repository or ~/. Prefer ~/ instead of /home/user — absolute paths outside the project or your home directory are rejected.',
+          },
           oldStr: {
             type: 'string',
             description: 'Exact text copied from a prior file read.',
@@ -290,7 +296,7 @@ export function buildModelFacingTools(options: ModelToolSurfaceOptions = {}): To
       properties: {
         path: {
           type: 'string',
-          description: 'Path to the image file (absolute or relative).',
+          description: 'Path to the image file within the repository or ~/. Prefer ~/ instead of /home/user.',
         },
       },
       additionalProperties: false,

@@ -16,7 +16,27 @@ export function normalizeRepoPath(repoRoot: string, inputPath: string): PathPoli
   const normalized = normalize(expandHome(inputPath)).replace(/\\/g, '/');
   const absolutePath = isAbsolute(inputPath) ? resolve(normalized) : resolve(repoRoot, normalized);
 
+  // Validate absolute paths are within allowed roots
+  if (isAbsolute(inputPath)) {
+    const repoNormalized = normalize(repoRoot).replace(/\\/g, '/').replace(/\/+$/, '');
+    const homeNormalized = normalize(homedir()).replace(/\\/g, '/').replace(/\/+$/, '');
+
+    if (!isWithinRoot(absolutePath, repoNormalized) && !isWithinRoot(absolutePath, homeNormalized)) {
+      return {
+        ok: false,
+        reason:
+          'path is outside the repository root and your home directory. ' +
+          'Use a path within the current project or ~/ instead.',
+      };
+    }
+  }
+
   return { ok: true, path: normalized === '.' ? '' : normalized, absolutePath };
+}
+
+function isWithinRoot(absolutePath: string, root: string): boolean {
+  if (absolutePath === root) return true;
+  return absolutePath.startsWith(root + '/');
 }
 
 /**
