@@ -796,13 +796,16 @@ export function loadProjectConfig(baseDir?: string): LoadProjectConfigResult {
   if (hasExtendedSettings) {
     const effectiveSettings = loadSynaxConfig(baseDir);
     const effectiveProjectConfig = applyEffectiveSynaxConfigToProjectConfig({}, effectiveSettings);
+    // When multi-provider settings are active, the project .synax.toml's
+    // [provider] section is legacy and should not override the resolved
+    // multi-provider config (which includes baseUrl, apiKey, etc.).
+    // Only let the project config override non-provider fields.
+    const projectRest = { ...config };
+    delete projectRest.provider;
     config = {
       ...effectiveProjectConfig,
-      ...config,
-      provider: {
-        ...effectiveProjectConfig.provider,
-        ...config.provider,
-      },
+      ...projectRest,
+      provider: effectiveProjectConfig.provider,
     };
   }
 
