@@ -37,8 +37,8 @@ export class NodeExecutionEnv implements ExecutionEnv {
     try {
       const { stdout, stderr } = await execFileAsync('/bin/bash', ['-lc', command], {
         cwd,
-        maxBuffer: opts?.maxBuffer ?? 256 * 1024,
-        timeout: opts?.timeout ?? 30_000,
+        maxBuffer: opts?.maxBuffer ?? 2 * 1024 * 1024,
+        timeout: opts?.timeout ?? 120_000,
       });
       return {
         stdout: String(stdout ?? ''),

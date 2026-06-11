@@ -26,6 +26,7 @@ function fakeClient(
     reasoningContent?: string;
     toolCallFormat?: 'openai' | 'content_xml' | 'none';
     toolCalls?: ChatResponse['toolCalls'];
+    finishReason?: string;
   }>,
 ): AgentClient & { requests: ChatOptions[] } {
   const requests: ChatOptions[] = [];
@@ -37,7 +38,7 @@ function fakeClient(
       return {
         content: next.content ?? '',
         model: 'fake',
-        finishReason: 'stop',
+        finishReason: next.finishReason ?? 'stop',
         reasoningContent: next.reasoningContent,
         toolCallFormat: next.toolCallFormat,
         toolCalls: next.toolCalls ?? [],
@@ -740,16 +741,64 @@ describe('shared bounded agent runner', () => {
     expect(result.finalAnswer).not.toContain('</think>');
   });
 
-  it('fails closed on ambiguous mixed output with tool calls and final text', async () => {
+  it('strips unsafe prose and continues with tool execution on mixed output', async () => {
     const client = fakeClient([
       { content: 'The answer is that everything looks good.', toolCalls: [{ id: '1', name: 'read', arguments: {} }] },
     ]);
     const result = await runTurn({ repoRoot: TMP, task: 'read', client });
-    expect(result).toMatchObject({
-      terminalState: 'model_error',
-      error: 'model emitted ambiguous mixed output (tool calls plus final text)',
-    });
+    // Mixed output is now stripped and tool calls execute (not a fatal error).
+    // The turn completes since there are no more model steps.
+    expect(result.terminalState).toBe('completed');
+    expect(result.toolCalls.length).toBeGreaterThan(0);
+    // The stripped assistant message must REPLACE the original (no duplicate
+    // assistant messages with the same tool_calls — strict providers reject).
+    const assistantWithToolCalls = (
+      client.requests[1].messages as Array<{ role: string; tool_calls?: unknown[] }>
+    ).filter((m) => m.role === 'assistant' && Array.isArray(m.tool_calls) && m.tool_calls.length > 0);
+    expect(assistantWithToolCalls).toHaveLength(1);
+  });
+
+  it('does not execute tool calls from a truncated response (finish_reason=length)', async () => {
+    writeFileSync(join(TMP, 'README.md'), '# Synax\n', 'utf-8');
+    const client = fakeClient([
+      {
+        content: 'partial output',
+        finishReason: 'length',
+        toolCalls: [{ id: '1', name: 'write', arguments: { path: 'new.txt', content: 'trunca' } }],
+      },
+      { content: 'recovered and finished' },
+    ]);
+
+    const result = await runTurn({ repoRoot: TMP, task: 'create a file', client });
+
+    // Truncated tool call must NOT execute — the file must not exist.
+    expect(existsSync(join(TMP, 'new.txt'))).toBe(false);
+    expect(result.terminalState).toBe('completed');
     expect(result.toolCalls).toHaveLength(0);
+    // A continuation nudge is injected for the next step.
+    const nudge = (client.requests[1].messages as Array<{ role: string; content: string }>).find(
+      (m) => m.role === 'user' && typeof m.content === 'string' && m.content.includes('cut off'),
+    );
+    expect(nudge).toBeDefined();
+    // The stored assistant message must not carry orphaned tool_calls.
+    const orphaned = (client.requests[1].messages as Array<{ role: string; tool_calls?: unknown[] }>).filter(
+      (m) => m.role === 'assistant' && Array.isArray(m.tool_calls) && m.tool_calls.length > 0,
+    );
+    expect(orphaned).toHaveLength(0);
+  });
+
+  it('fails closed after repeated consecutive truncations', async () => {
+    const truncated = {
+      content: 'partial',
+      finishReason: 'length',
+      toolCalls: [{ id: '1', name: 'read', arguments: {} }] as ChatResponse['toolCalls'],
+    };
+    const client = fakeClient([truncated, { ...truncated }, { ...truncated }, { ...truncated }]);
+
+    const result = await runTurn({ repoRoot: TMP, task: 'do something big', client });
+
+    expect(result.terminalState).toBe('model_error');
+    expect(result.error).toContain('truncated');
   });
 
   it('accepts a short safe preamble before tool calls', async () => {
@@ -845,7 +894,8 @@ describe('shared bounded agent runner', () => {
     expect(result.toolCalls).toEqual([{ name: 'bash', success: true, error: undefined }]);
   });
 
-  it('still fails closed on substantive mixed output before tool calls', async () => {
+  it('strips substantive mixed output and continues tool execution', async () => {
+    writeFileSync(join(TMP, 'README.md'), '# Test\n', 'utf-8');
     const client = fakeClient([
       {
         content: 'The answer is that the repo is safe.',
@@ -859,14 +909,13 @@ describe('shared bounded agent runner', () => {
       client,
     });
 
-    expect(result).toMatchObject({
-      terminalState: 'model_error',
-      error: 'model emitted ambiguous mixed output (tool calls plus final text)',
-    });
-    expect(result.toolCalls).toHaveLength(0);
+    // Mixed output is now stripped; tool calls execute and turn completes.
+    expect(result.terminalState).toBe('completed');
+    expect(result.toolCalls.length).toBeGreaterThan(0);
   });
 
-  it('fails closed on mixed prose plus content-parsed tool calls', async () => {
+  it('strips content-parsed tool call prose and continues', async () => {
+    writeFileSync(join(TMP, 'README.md'), '# Test\n', 'utf-8');
     const client = fakeClient([
       {
         content: 'The answer is complete.\n<tool_call>{"name":"read","arguments":{"path":"README.md"}}</tool_call>',
@@ -881,14 +930,12 @@ describe('shared bounded agent runner', () => {
       client,
     });
 
-    expect(result).toMatchObject({
-      terminalState: 'model_error',
-      error: 'model emitted ambiguous mixed output (tool calls plus final text)',
-    });
-    expect(result.toolCalls).toHaveLength(0);
+    // Mixed output is now stripped; tool calls execute.
+    expect(result.terminalState).toBe('completed');
+    expect(result.toolCalls.length).toBeGreaterThan(0);
   });
 
-  it('continues past maxSteps until the model completes', async () => {
+  it('respects maxSteps enforcement', async () => {
     const client = fakeClient([
       { toolCalls: [{ id: '1', name: 'read', arguments: {} }] },
       { content: 'done after inspection' },
@@ -896,11 +943,8 @@ describe('shared bounded agent runner', () => {
 
     const result = await runTurn({ repoRoot: TMP, task: 'loop', client, maxSteps: 1 });
 
-    expect(result).toMatchObject({
-      terminalState: 'completed',
-      finalAnswer: 'done after inspection',
-      steps: 2,
-    });
+    // maxModelSteps is now enforced. With maxSteps=1, the loop stops after the first step.
+    expect(result.terminalState).toBe('budget_exhausted');
   });
 
   it('blocks provider calls when request is over context budget and compaction cannot save it', async () => {
@@ -1111,7 +1155,7 @@ describe('shared bounded agent runner', () => {
     expect(result.toolCalls.every((call) => call.success === true)).toBe(true);
   });
 
-  it('passes through large read outputs untruncated (dogfooding mode)', async () => {
+  it('truncates oversized read outputs to the per-read token budget', async () => {
     writeFileSync(join(TMP, 'big.txt'), `${'line\n'.repeat(8000)}`, 'utf-8');
     const client = fakeClient([
       { toolCalls: [{ id: '1', name: 'read', arguments: { path: 'big.txt' } }] },
@@ -1126,15 +1170,16 @@ describe('shared bounded agent runner', () => {
     });
 
     expect(result.terminalState).toBe('completed');
-    // Dogfooding mode: full read output is passed through without truncation
+    // Per-read budget enforced: output truncated with continuation guidance
     const toolMessage = (client.requests[1].messages as Array<{ role: string; content: string }>).find(
       (message) => message.role === 'tool',
     );
     expect(toolMessage?.content).toContain('line');
-    expect(toolMessage?.content).not.toContain('"truncated":true');
+    expect(toolMessage?.content).toContain('"truncated":true');
+    expect(toolMessage?.content).toContain('Re-read with startLine=');
   });
 
-  it('passes through all read results regardless of per-turn token budget (dogfooding mode)', async () => {
+  it('blocks further reads once the per-turn read token budget is exhausted', async () => {
     writeFileSync(join(TMP, 'a.txt'), `${'a\n'.repeat(5000)}`, 'utf-8');
     writeFileSync(join(TMP, 'b.txt'), `${'b\n'.repeat(5000)}`, 'utf-8');
     const client = fakeClient([
@@ -1154,12 +1199,12 @@ describe('shared bounded agent runner', () => {
     });
 
     expect(result.terminalState).toBe('completed');
-    // Dogfooding mode: second read is not omitted, full content passed through
+    // Per-turn cap enforced: second read is refused with actionable guidance,
+    // classified as a recoverable policy error so the turn continues.
     const secondToolMessage = (
       client.requests[2].messages as Array<{ role: string; tool_call_id?: string; content: string }>
     ).find((message) => message.role === 'tool' && message.tool_call_id === '2');
-    expect(secondToolMessage?.content).toContain('b');
-    expect(secondToolMessage?.content).not.toContain('turn token budget exceeded');
+    expect(secondToolMessage?.content).toContain('total read limit reached');
   });
 
   it('allows exact replacement edits even when prior read was truncated', async () => {
@@ -1181,7 +1226,7 @@ describe('shared bounded agent runner', () => {
     expect(readFileSync(join(TMP, 'a.txt'), 'utf-8').startsWith('changed\n')).toBe(true);
   });
 
-  it('completes all tool calls without maxToolCalls enforcement (dogfooding mode)', async () => {
+  it('enforces maxToolCalls limit', async () => {
     const client = fakeClient([
       { toolCalls: [{ id: '1', name: 'read', arguments: {} }] },
       { toolCalls: [{ id: '2', name: 'read', arguments: {} }] },
@@ -1189,10 +1234,9 @@ describe('shared bounded agent runner', () => {
 
     const result = await runTurn({ repoRoot: TMP, task: 'loop', client, maxSteps: 4, maxToolCalls: 1 });
 
-    // Dogfooding mode: maxToolCalls is ignored. Both tool calls execute.
-    expect(result.terminalState).toBe('completed');
-    expect(result.toolCalls).toHaveLength(2);
-    expect(result.toolCalls.every((tc) => tc.success)).toBe(true);
+    // maxToolCalls is now enforced. Only 1 tool call executes before stopping.
+    expect(result.terminalState).toBe('budget_exhausted');
+    expect(result.toolCalls).toHaveLength(1);
   });
 
   it('stops repeated identical bash commands before exhausting model steps', async () => {
@@ -1350,7 +1394,7 @@ describe('shared bounded agent runner', () => {
       { content: 'done after retry' },
     ]);
 
-    const result = await runTurn({ repoRoot: TMP, task: 'loop', client, maxSteps: 2 });
+    const result = await runTurn({ repoRoot: TMP, task: 'loop', client, maxSteps: 3 });
 
     expect(result).toMatchObject({
       terminalState: 'completed',
@@ -1430,7 +1474,7 @@ describe('shared bounded agent runner', () => {
       type: 'patch_preview',
       toolCallId: 'call_2',
       path: 'a.txt',
-      diff: '--- a.txt\n+++ a.txt\n-hello\n+hi',
+      diff: '--- a.txt\n+++ a.txt\n@@ -1,1 +1,1 @@\n-hello\n+hi',
     });
   });
 

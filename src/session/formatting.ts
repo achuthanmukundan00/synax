@@ -252,6 +252,19 @@ export function isRecoverableToolError(call: ParsedToolCall, result: { success: 
   return isEnoentError(result.error) || isReadPolicyLimitError(result.error);
 }
 
+/**
+ * Policy refusals are intentional, bounded denials (e.g., the per-turn read
+ * budget). They are recoverable but must NOT count toward the consecutive
+ * recoverable-error kill switch: a single batch of parallel reads issued
+ * after the cap would otherwise terminate the whole turn and discard the
+ * model's work. Refused reads are cheap (output omitted) and the turn is
+ * still bounded by maxToolCalls.
+ */
+export function isPolicyRefusal(call: ParsedToolCall, result: { success: boolean; error?: string }): boolean {
+  if (result.success) return false;
+  return call.name === 'read' && isReadPolicyLimitError(result.error);
+}
+
 export function isEnoentError(error: string | undefined): boolean {
   return error !== undefined && /\bENOENT\b/.test(error);
 }

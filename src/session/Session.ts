@@ -82,6 +82,7 @@ import {
   formatModelResponseActivity,
   isSafeToolPreamble,
   isRecoverableToolError,
+  isPolicyRefusal,
   emitAssistantDelta,
   errorMessage,
   assistantVisibleContent,
@@ -96,8 +97,9 @@ import { checkCompletionAgainstContract } from './verification-contracts';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
-const DEFAULT_MAX_TOOL_CALLS = Number.MAX_SAFE_INTEGER;
+const DEFAULT_MAX_TOOL_CALLS = 192;
 const MAX_CONSECUTIVE_RECOVERABLE_TOOL_ERRORS = 3;
+const MAX_CONSECUTIVE_TRUNCATIONS = 3;
 
 export function finalAnswerFromResponse(response: ChatResponse): string {
   const visible = assistantVisibleContent(response.content) || '';
@@ -229,6 +231,7 @@ export class Session {
     mode?: RunMode;
     maxToolCalls?: number;
     maxModelSteps?: number;
+    maxSteps?: number;
     bashEnabled?: boolean;
     skillMessages?: string[];
     conversation?: AgentConversation;
@@ -255,7 +258,7 @@ export class Session {
     this.client = options.client;
     this.mode = options.mode ?? 'patch';
     this.maxToolCalls = options.maxToolCalls ?? DEFAULT_MAX_TOOL_CALLS;
-    this.maxModelSteps = options.maxModelSteps ?? Number.MAX_SAFE_INTEGER;
+    this.maxModelSteps = options.maxModelSteps ?? options.maxSteps ?? 64;
     this.bashEnabled = options.bashEnabled ?? true;
     this.env = options.env ?? new NodeExecutionEnv();
     this.sessionId = options.sessionId ?? generatePersistentSessionId();
@@ -565,7 +568,7 @@ export class Session {
    * Determines if a task requires orchestration based on budget estimation.
    */
   shouldOrchestrate(estimate: BudgetEstimate): boolean {
-    return (estimate.strategy as string) === 'orchestrated';
+    return estimate.strategy === 'orchestrate';
   }
 
   /**
@@ -578,10 +581,7 @@ export class Session {
     // Create prompt for decomposition
     const prompt = orchestrationPlanPrompt
       .replace('{{task}}', task)
-      .replace(
-        '{{repoShape}}',
-        `Files: ${repoMetadata.fileCount}, Total KB: Math.ceil(${(repoMetadata as any).totalSizeBytes || (repoMetadata as any).totalSizeKb || 0} / 1024)`,
-      );
+      .replace('{{repoShape}}', `Files: ${repoMetadata.fileCount}, Total KB: ${Math.ceil(repoMetadata.totalKB)}`);
 
     // Create system message
     const messages = [{ role: 'system', content: prompt }];
@@ -686,7 +686,9 @@ export class Session {
 
       if (!recoveryResult?.recovered) break;
 
-      result = await this.startTurn(task);
+      // Resume from existing conversation — do NOT push the task again.
+      // The recovery manager already injected a nudge into the conversation.
+      result = await this.startTurn(task, { skipTaskPush: true });
       recoveryAttempt++;
     }
 
@@ -699,7 +701,7 @@ export class Session {
    * Execute one agent turn: take a task, run the model ↔ tool loop until
    * completion, error, budget exhaustion, or handoff.
    */
-  async startTurn(task: string): Promise<AgentTurnResult> {
+  async startTurn(task: string, opts?: { skipTaskPush?: boolean }): Promise<AgentTurnResult> {
     const conversation = this.conversation;
     const registry = this.registry;
     const mode = this.mode;
@@ -759,7 +761,9 @@ export class Session {
     }
 
     const tools = this.getModelTools();
-    conversation.messages.push({ role: 'user', content: task });
+    if (!opts?.skipTaskPush) {
+      conversation.messages.push({ role: 'user', content: task });
+    }
 
     // ── Spans & lifecycle ──────────────────────────────────────────────
     const turnSpan = this.tracer?.startSpan({ kind: 'turn', metadata: { task: task.slice(0, 120) } });
@@ -794,6 +798,7 @@ export class Session {
 
     let turnResult: AgentTurnResult | undefined;
     let consecutiveContractNudges = 0;
+    let consecutiveTruncations = 0;
     const MAX_CONSECUTIVE_CONTRACT_NUDGES = 5;
     try {
       turnResult = await (async (): Promise<AgentTurnResult> => {
@@ -834,9 +839,17 @@ export class Session {
             modelSpan =
               this.tracer && turnSpan ? this.tracer.startChildSpan(turnSpan, 'model_call', { step }) : undefined;
 
-            // Preflight budget guard
+            // Preflight budget guard — use assembled model request (includes
+            // orientation, memory index, etc.) for accurate estimation.
             const effectiveInputLimit = contextBudget.contextWindowTokens - contextBudget.reservedOutputTokens;
-            const estimatedInputTokens = estimateRequestTokens(conversation.messages);
+            const preflightAssembled = buildModelRequest(
+              conversation,
+              contextBudget,
+              identicalReadCounts,
+              totalReadCalls,
+              memoryIndex,
+            );
+            const estimatedInputTokens = estimateRequestTokens(preflightAssembled);
             // Keep the token ledger in sync with raw conversation messages
             resetTokenLedger(conversation.tokenLedger);
             estimateIncrementalTokens(conversation.messages, conversation.tokenLedger);
@@ -867,6 +880,9 @@ export class Session {
                   turnSpan,
                 );
                 if (handoffResult) return handoffResult;
+                // null from tryHandoffRecovery means compaction succeeded — re-check
+                const reEstimated = estimateRequestTokens(conversation.messages);
+                if (reEstimated <= effectiveInputLimit) continue;
 
                 // No handoff possible — fail closed
                 return {
@@ -921,6 +937,9 @@ export class Session {
                   turnSpan,
                 );
                 if (handoffResult) return handoffResult;
+                // null means compaction succeeded — re-check budget
+                const reEstimated2 = estimateRequestTokens(conversation.messages);
+                if (reEstimated2 <= effectiveInputLimit) continue;
 
                 return {
                   terminalState: 'budget_exhausted',
@@ -1076,19 +1095,27 @@ export class Session {
           const visibleContentBeforeToolCalls = assistantVisibleContent(response.content);
           if (response.toolCalls.length > 0 && visibleContentBeforeToolCalls.length > 0) {
             if (!isSafeToolPreamble(visibleContentBeforeToolCalls)) {
-              return {
-                terminalState: 'model_error',
-                finalAnswer: finalAnswerFromResponse(response),
-                reasoningContent: response.reasoningContent,
-                steps: step,
-                toolCalls,
-                changedFiles,
-                conversation,
-                error: 'model emitted ambiguous mixed output (tool calls plus final text)',
-              };
-            }
-
-            if (toolCallFormat(response) === 'openai') {
+              // Local models often mix prose and tool calls. Strip the unsafe prose
+              // and proceed with tool execution rather than aborting the turn.
+              this.logger?.warn('Model emitted mixed output (prose + tool calls) — stripping prose', {
+                stepIndex: step,
+                proseLength: visibleContentBeforeToolCalls.length,
+                toolCallCount: response.toolCalls.length,
+              });
+              // REPLACE the just-pushed assistant message (do not push a second
+              // one — duplicated tool_calls break strict providers). For
+              // content_xml, keep only the tool-call blocks so the model still
+              // sees its own call next to the tool_response; for openai format
+              // the structured tool_calls field carries the call.
+              const xmlBlocks =
+                toolCallFormat(response) === 'content_xml'
+                  ? (response.content.match(/<tool_call>[\s\S]*?<\/tool_call>/gi)?.join('\n') ?? '')
+                  : '';
+              conversation.messages[conversation.messages.length - 1] = assistantMessage({
+                ...response,
+                content: xmlBlocks,
+              });
+            } else if (toolCallFormat(response) === 'openai') {
               conversation.messages[conversation.messages.length - 1] = assistantMessage({ ...response, content: '' });
             }
           }
@@ -1098,8 +1125,50 @@ export class Session {
           // completion. The model may have been mid-thought or mid-tool-call.
           // Check BEFORE tool-call processing so truncated tool calls are not
           // executed with incomplete arguments.
-          // Dogfooding mode: don't inject continuation nudges. Let the model
-          // steer recovery organically; observability events remain active.
+          if (response.finishReason === 'length') {
+            consecutiveTruncations += 1;
+            this.logger?.warn('Model output truncated by token limit (finish_reason=length)', {
+              stepIndex: step,
+              toolCallCount: response.toolCalls.length,
+              contentLength: response.content.length,
+              consecutiveTruncations,
+            });
+            // Emit observability event for monitoring truncated responses
+            this.eventBus.emit({
+              type: 'command_output',
+              timestamp: eventNow(),
+              command: 'truncation',
+              content: `[synax] ⚠️ model output truncated at step ${step} — injecting continuation nudge (${consecutiveTruncations}/${MAX_CONSECUTIVE_TRUNCATIONS})`,
+            });
+            // Replace the stored assistant message: drop the incomplete tool
+            // calls and tool-call markup so strict providers never see an
+            // orphaned tool_call (no matching tool result will ever follow).
+            conversation.messages[conversation.messages.length - 1] = {
+              role: 'assistant',
+              content: assistantVisibleContent(response.content),
+            };
+            if (consecutiveTruncations >= MAX_CONSECUTIVE_TRUNCATIONS) {
+              return {
+                terminalState: 'model_error',
+                finalAnswer: finalAnswerFromResponse(response),
+                reasoningContent: response.reasoningContent,
+                steps: step,
+                toolCalls,
+                changedFiles,
+                conversation,
+                error: `model output truncated ${consecutiveTruncations} times in a row (finish_reason=length); increase provider maxOutputTokens or narrow the task`,
+              };
+            }
+            // Inject a continuation nudge so the model can continue from where it was cut off.
+            // Do NOT execute any tool calls from this response — their arguments may be truncated.
+            conversation.messages.push({
+              role: 'user',
+              content:
+                '[synax] Your previous response was cut off by the output token limit. Continue from where you stopped, in smaller pieces. If you were emitting a tool call, re-emit it with complete arguments; for large file writes, split the work into multiple smaller edit/write calls.',
+            });
+            continue;
+          }
+          consecutiveTruncations = 0;
 
           // ── No tool calls → completion ──────────────────────────────
           if (response.toolCalls.length === 0) {
@@ -1312,8 +1381,32 @@ export class Session {
           ? this.tracer.startChildSpan(options.turnSpan, 'tool_execution', { toolName: call.name })
           : undefined;
 
-      // Dogfooding mode: do not hard-stop on tool-call count. Observability
-      // is preserved via event stream and progress counters.
+      // Hard-stop on tool-call count to prevent runaway loops.
+      if (options.toolCalls.length >= options.maxToolCalls) {
+        this.logger?.warn('Max tool calls reached', {
+          max: options.maxToolCalls,
+          stepIndex: options.step,
+        });
+        return {
+          terminalResult: {
+            terminalState: 'budget_exhausted',
+            finalAnswer: '',
+            reasoningContent: options.response.reasoningContent,
+            steps: options.step,
+            toolCalls: options.toolCalls,
+            changedFiles: options.changedFiles,
+            conversation: options.conversation,
+            error: `max tool calls exceeded: ${options.maxToolCalls}`,
+          },
+          toolCalls: options.toolCalls,
+          changedFiles: options.changedFiles,
+          consecutiveRecoverableToolErrors: options.consecutiveRecoverableToolErrors,
+          totalReadCalls: options.totalReadCalls,
+          totalReadResultTokens: options.totalReadResultTokens,
+          contentToolResults,
+          conversation: options.conversation,
+        };
+      }
 
       this.onActivity?.({
         kind: 'tool',
@@ -1330,7 +1423,7 @@ export class Session {
         stepIndex: options.step,
         toolCallId: call.id,
         toolName: call.name,
-        summary: JSON.stringify(call.arguments).slice(0, 180),
+        summary: JSON.stringify(call.arguments),
         detail: JSON.stringify(call.arguments, null, 2),
       });
 
@@ -1408,7 +1501,19 @@ export class Session {
 
       if (call.name === 'read') {
         options.totalReadCalls += 1;
-        options.totalReadResultTokens += estimateReadResultTokens(result.toolResult);
+        // Cache hits re-surface content already paid for this turn — do not
+        // double-charge the per-turn read budget for them.
+        if (!result.fromCache) {
+          options.totalReadResultTokens += estimateReadResultTokens(result.toolResult);
+        }
+      }
+      // Invalidate read cache on any successful mutation so subsequent
+      // reads return fresh content (prevents stale-read→edit mismatch loops).
+      // edit/write definitely changed a file; bash may have changed anything.
+      // Clearing the whole cache is the safest default — re-reads are cheap
+      // relative to a stale-read edit loop.
+      if (result.success && (call.name === 'edit' || call.name === 'write' || call.name === 'bash')) {
+        options.readCache.clear();
       }
       options.toolCalls.push({
         name: call.name,
@@ -1555,6 +1660,18 @@ export class Session {
       // ── Error recovery classification ────────────────────────
       if (result.success) {
         options.consecutiveRecoverableToolErrors = 0;
+      } else if (isPolicyRefusal(call, result)) {
+        // Intentional, bounded policy denial (e.g., per-turn read cap).
+        // Recoverable, but does NOT count toward the consecutive-error kill
+        // switch: a batch of parallel reads issued after the cap would
+        // otherwise terminate the turn and discard all completed analysis.
+        // Runaway loops remain bounded by maxToolCalls and the read-loop
+        // detector.
+        this.onActivity?.({
+          kind: 'tool',
+          message: `policy refusal (not counted toward error limit): ${call.name} ${describeToolCall(call.name, call.arguments as Record<string, unknown>)} — ${result.error ?? 'unknown'}`,
+        });
+        continue;
       } else if (isRecoverableToolError(call, result)) {
         options.consecutiveRecoverableToolErrors += 1;
         this.onActivity?.({
