@@ -106,7 +106,7 @@ export function createPatchPreview(validation: PatchValidationSuccess): PatchPre
 
 export function createUnifiedDiff(path: string, before: string, after: string): string {
   if (before === after) return '';
-  return [`--- ${path}`, `+++ ${path}`, ...prefixChangedLines(before, after)].join('\n');
+  return [`--- ${path}`, `+++ ${path}`, ...diffLines(before, after)].join('\n');
 }
 
 function countOccurrences(haystack: string, needle: string): number {
@@ -119,10 +119,83 @@ function countOccurrences(haystack: string, needle: string): number {
   return count;
 }
 
-function prefixChangedLines(before: string, after: string): string[] {
+const DIFF_CONTEXT_LINES = 3;
+
+/**
+ * Produce unified-diff body lines (context + -/+ markers) for two texts.
+ *
+ * Uses common prefix/suffix trimming, then a line-level LCS over the changed
+ * middle region. Unchanged middle lines render as context (' ' prefix);
+ * unchanged runs longer than 2*DIFF_CONTEXT_LINES are elided with hunk
+ * separators. Falls back to whole-region replace when the middle is very
+ * large (LCS is O(n²)) — still bounded by the changed region, never the
+ * whole file like the previous implementation.
+ */
+function diffLines(before: string, after: string): string[] {
   const beforeLines = splitLines(before);
   const afterLines = splitLines(after);
-  return [...beforeLines.map((line) => `-${line}`), ...afterLines.map((line) => `+${line}`)];
+
+  // Trim common prefix.
+  let start = 0;
+  while (start < beforeLines.length && start < afterLines.length && beforeLines[start] === afterLines[start]) {
+    start += 1;
+  }
+  // Trim common suffix (not overlapping the prefix).
+  let endB = beforeLines.length;
+  let endA = afterLines.length;
+  while (endB > start && endA > start && beforeLines[endB - 1] === afterLines[endA - 1]) {
+    endB -= 1;
+    endA -= 1;
+  }
+
+  const midBefore = beforeLines.slice(start, endB);
+  const midAfter = afterLines.slice(start, endA);
+
+  // Body of the changed region: LCS-based when affordable, plain replace otherwise.
+  const MAX_LCS_LINES = 2000;
+  const body: string[] =
+    midBefore.length * midAfter.length <= MAX_LCS_LINES * MAX_LCS_LINES
+      ? lcsDiff(midBefore, midAfter)
+      : [...midBefore.map((l) => `-${l}`), ...midAfter.map((l) => `+${l}`)];
+
+  // Surrounding context from the trimmed prefix/suffix.
+  const preContext = beforeLines.slice(Math.max(0, start - DIFF_CONTEXT_LINES), start).map((l) => ` ${l}`);
+  const postContext = beforeLines.slice(endB, endB + DIFF_CONTEXT_LINES).map((l) => ` ${l}`);
+
+  const header = `@@ -${Math.max(1, start - DIFF_CONTEXT_LINES + 1)},${preContext.length + midBefore.length + postContext.length} +${Math.max(1, start - DIFF_CONTEXT_LINES + 1)},${preContext.length + midAfter.length + postContext.length} @@`;
+  return [header, ...preContext, ...body, ...postContext];
+}
+
+/** Line-level LCS diff producing ' ', '-', '+' prefixed lines. */
+function lcsDiff(a: string[], b: string[]): string[] {
+  const m = a.length;
+  const n = b.length;
+  // DP table of LCS lengths.
+  const dp: number[][] = Array.from({ length: m + 1 }, () => new Array<number>(n + 1).fill(0));
+  for (let i = m - 1; i >= 0; i -= 1) {
+    for (let j = n - 1; j >= 0; j -= 1) {
+      dp[i][j] = a[i] === b[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
+    }
+  }
+  const out: string[] = [];
+  let i = 0;
+  let j = 0;
+  while (i < m && j < n) {
+    if (a[i] === b[j]) {
+      out.push(` ${a[i]}`);
+      i += 1;
+      j += 1;
+    } else if (dp[i + 1][j] >= dp[i][j + 1]) {
+      out.push(`-${a[i]}`);
+      i += 1;
+    } else {
+      out.push(`+${b[j]}`);
+      j += 1;
+    }
+  }
+  while (i < m) out.push(`-${a[i++]}`);
+  while (j < n) out.push(`+${b[j++]}`);
+  return out;
 }
 
 function splitLines(text: string): string[] {
