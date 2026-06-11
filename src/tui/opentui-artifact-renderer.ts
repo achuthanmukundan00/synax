@@ -184,11 +184,9 @@ export function renderArtifactRoot(
 ): OpenTuiNode {
   const pal = palette ?? getPalette();
   const modelPal = modelId ? getModelPalette(modelId) : getModelPalette('');
+  const overlayActive = Boolean(settingsLines && settingsLines.length > 0);
   const compactStartup =
-    events.length === 0 &&
-    (!settingsLines || settingsLines.length === 0) &&
-    footer.status === 'Ready.' &&
-    footer.prompt.length === 0;
+    events.length === 0 && !overlayActive && footer.status === 'Ready.' && footer.prompt.length === 0;
   const mainChildren =
     events.length > 0
       ? events.map((event) => renderArtifactCard(core, event, expanded?.[event.id] ?? false, onToggleExpand, pal))
@@ -199,32 +197,34 @@ export function renderArtifactRoot(
   const activityHeight = 1;
   const emptyStateHeight = compactEmptyStateHeight(rail);
   const rootHeight = compactStartup ? emptyStateHeight + activityHeight + footerHeight : (terminalHeight ?? '100%');
-  const input = core.h(core.TextareaRenderable, {
-    id: 'synax-input',
-    initialValue: footer.prompt,
-    placeholder: footer.placeholder,
-    width: '100%',
-    height: inputHeight,
-    minHeight: 1,
-    maxHeight: 12,
-    wrapMode: 'word',
-    backgroundColor: pal.surface,
-    textColor: pal.text,
-    focusedBackgroundColor: pal.surface,
-    focusedTextColor: pal.text,
-    placeholderColor: pal.textAccent,
-    cursorStyle: { style: 'line', blinking: true },
-    keyBindings: [
-      { name: 'return', shift: true, action: 'newline' },
-      { name: 'linefeed', shift: true, action: 'newline' },
-    ],
-    onContentChange: function () {
-      onPromptChange?.(readPromptValue(this), this);
-    },
-    onSubmit: function () {
-      onSubmit?.(readPromptValue(this));
-    },
-  });
+  const input = overlayActive
+    ? core.Box({ id: 'synax-input-placeholder', width: '100%', height: inputHeight, backgroundColor: pal.surface })
+    : core.h(core.TextareaRenderable, {
+        id: 'synax-input',
+        initialValue: footer.prompt,
+        placeholder: footer.placeholder,
+        width: '100%',
+        height: inputHeight,
+        minHeight: 1,
+        maxHeight: 12,
+        wrapMode: 'word',
+        backgroundColor: pal.surface,
+        textColor: pal.text,
+        focusedBackgroundColor: pal.surface,
+        focusedTextColor: pal.text,
+        placeholderColor: pal.textAccent,
+        cursorStyle: { style: 'block', blinking: false },
+        keyBindings: [
+          { name: 'return', shift: true, action: 'newline' },
+          { name: 'linefeed', shift: true, action: 'newline' },
+        ],
+        onContentChange: function () {
+          onPromptChange?.(readPromptValue(this), this);
+        },
+        onSubmit: function () {
+          onSubmit?.(readPromptValue(this));
+        },
+      });
 
   return core.Box(
     {
@@ -321,19 +321,32 @@ function renderSettingsOverlay(
       left: 0,
       zIndex: 100,
       flexDirection: 'column',
+      backgroundColor: palette.background,
     },
     ...lines.map((line, index) =>
-      core.Text({
-        id: `synax-settings-line-${index}`,
-        content: index === 1 && activeLabel ? styledActiveSettingsLine(core, line, activeLabel, palette) : line,
-        ...(index === 1 && activeLabel ? {} : { fg: palette.text }),
-      }),
+      core.Box(
+        {
+          id: `synax-settings-row-${index}`,
+          width: '100%',
+          height: 1,
+          backgroundColor: palette.background,
+        },
+        core.Text({
+          id: `synax-settings-line-${index}`,
+          ...FULL_WIDTH_TEXT,
+          wrapMode: 'none',
+          content:
+            index === 1 && activeLabel ? styledActiveSettingsLine(core, line, activeLabel, palette) : stripAnsi(line),
+          ...(index === 1 && activeLabel ? {} : { fg: palette.text }),
+        }),
+      ),
     ),
     ...Array.from({ length: backingLineCount }, (_, index) =>
       core.Box({
         id: `synax-settings-backdrop-${index}`,
         width: '100%',
         height: 1,
+        backgroundColor: palette.background,
       }),
     ),
   );
@@ -826,12 +839,29 @@ function renderAutocompleteOverlay(
     const absoluteIndex = windowStart + i;
     const isSelected = absoluteIndex === selectedIndex;
     rows.push(
-      core.Text({
-        id: `synax-ac-row-${i}`,
-        content: item ? (isSelected ? `→ ${item}` : `  ${item}`) : '',
-        fg: isSelected ? palette.brand : palette.textAccent,
-        visible: i < items.length,
-      }),
+      core.Box(
+        {
+          id: `synax-ac-row-${i}`,
+          width: '100%',
+          height: 1,
+          flexDirection: 'row',
+          backgroundColor: palette.surface,
+          visible: i < items.length,
+        },
+        core.Text({
+          id: `synax-ac-marker-${i}`,
+          content: item && isSelected ? '→ ' : '  ',
+          fg: isSelected ? palette.brand : palette.textMuted,
+          width: 2,
+        }),
+        core.Text({
+          id: `synax-ac-label-${i}`,
+          ...FULL_WIDTH_TEXT,
+          wrapMode: 'none',
+          content: item,
+          fg: isSelected ? palette.text : palette.textMuted,
+        }),
+      ),
     );
   }
   return core.Box(
@@ -848,6 +878,7 @@ function renderAutocompleteOverlay(
       borderColor: palette.brand,
       paddingX: 2,
       paddingY: 0,
+      backgroundColor: palette.surface,
     },
     ...rows,
   );
@@ -875,18 +906,14 @@ function renderEmptyState(
   const activeModel = modelId ?? rail.model ?? '';
   const visualProfile = resolveCoreVisualProfile(activeModel);
   const inner = width - 2;
-  const railPrefix = ' │ ';
-  const railInner = inner - 3;
-  const model = rail.model ? clip(rail.model, Math.max(8, railInner - 12)) : 'local';
-  const workspace = rail.cwd ? clip(rail.cwd, Math.max(8, railInner - 12)) : '~';
-  const branch = rail.branch ? clip(rail.branch, railInner - 12) : '-';
-  const context = rail.contextLabel
-    ? clip(rail.contextLabel, railInner - 12)
-    : `${rail.filesTouched.length} files loaded`;
-  const stateLine = clip(footer.status.replace(/\.$/, '').toLowerCase() || 'ready', railInner - 12);
+  const model = rail.model ? clip(rail.model, Math.max(8, inner - 14)) : 'local';
+  const workspace = rail.cwd ? clip(rail.cwd, Math.max(8, inner - 14)) : '~';
+  const branch = rail.branch ? clip(rail.branch, inner - 16) : '-';
+  const context = rail.contextLabel ? clip(rail.contextLabel, inner - 14) : `${rail.filesTouched.length} files loaded`;
+  const stateLine = clip(footer.status.replace(/\.$/, '').toLowerCase() || 'ready', inner - 14);
   const coreLines = renderAiCore('idle', (splash?.frame ?? 0) / 8, visualProfile).map(stripAnsi);
   const hr = '─'.repeat(Math.max(20, inner - 6));
-  const tableLabelWidth = 10;
+  const labelWidth = 12;
 
   return core.Box(
     {
@@ -903,25 +930,31 @@ function renderEmptyState(
       core.Text({ content: centerText(line, inner), fg: modelPal?.primary ?? pal.textAccent }),
     ),
     core.Text({ content: '' }),
-    // Metadata table with left rail
+    // Clean metadata section — labeled key:value pairs without confusing rail prefix
     core.Text({
-      content: `${railPrefix}${'model'.padEnd(tableLabelWidth)}${model}`,
+      content: centerText('─ session ─', inner),
       fg: pal.textMuted,
     }),
+    core.Text({ content: '' }),
     core.Text({
-      content: `${railPrefix}${'workspace'.padEnd(tableLabelWidth)}${workspace}`,
-      fg: pal.textMuted,
+      content: `  ${'model'.padEnd(labelWidth)}  ${model}`,
+      fg: pal.text,
     }),
     core.Text({
-      content: `${railPrefix}${'branch'.padEnd(tableLabelWidth)}${branch}`,
-      fg: pal.textMuted,
+      content: `  ${'workspace'.padEnd(labelWidth)}  ${workspace}`,
+      fg: pal.text,
     }),
     core.Text({
-      content: `${railPrefix}${'context'.padEnd(tableLabelWidth)}${context}`,
-      fg: pal.textMuted,
+      content: `  ${'branch'.padEnd(labelWidth)}  ${branch}`,
+      fg: pal.text,
     }),
     core.Text({
-      content: `${railPrefix}${'state'.padEnd(tableLabelWidth)}${stateLine}`,
+      content: `  ${'context'.padEnd(labelWidth)}  ${context}`,
+      fg: pal.textMuted,
+    }),
+    core.Text({ content: '' }),
+    core.Text({
+      content: `  ${'status'.padEnd(labelWidth)}  ${stateLine}`,
       fg: pal.textAccent,
     }),
   );

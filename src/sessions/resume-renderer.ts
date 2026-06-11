@@ -90,6 +90,7 @@ function filterSessions(sessions: SessionMetadata[], query: string, sortBy: Resu
         s.title?.toLowerCase().includes(lower) ||
         s.summary?.toLowerCase().includes(lower) ||
         s.branch?.toLowerCase().includes(lower) ||
+        s.activeProvider?.toLowerCase().includes(lower) ||
         s.activeModel?.toLowerCase().includes(lower) ||
         s.id.toLowerCase().includes(lower),
     );
@@ -109,8 +110,8 @@ export function renderResumePicker(state: ResumePickerState, width: number, heig
   if (!state.active) return [];
 
   const innerW = Math.max(50, Math.min(width - 4, 100));
-  const innerH = Math.max(10, Math.min(height - 4, 30));
-  const visibleRows = Math.max(1, innerH - 6); // header + sort + search + footer
+  const maxVisibleRows = Math.max(4, Math.min(14, height - 10));
+  const visibleRows = state.filtered.length === 0 ? 4 : Math.min(maxVisibleRows, Math.max(4, state.filtered.length));
   const scrollOffset = Math.max(0, state.selectedRow - Math.floor(visibleRows / 2));
   const visibleSlice = state.filtered.slice(scrollOffset, scrollOffset + visibleRows);
 
@@ -120,24 +121,22 @@ export function renderResumePicker(state: ResumePickerState, width: number, heig
   const sortLabel = `Sort: ${state.sortBy === 'updated' ? 'Updated' : 'Created'}`;
   const headerLabel = 'Resume Previous Session';
   const headerPad = Math.max(0, innerW - headerLabel.length - sortLabel.length - 2);
-  lines.push(dim(`┌${'─'.repeat(innerW)}┐`));
-  lines.push(`${dim('│')} ${bold(headerLabel)}${' '.repeat(headerPad)}${dim(sortLabel)} ${dim('│')}`);
+  lines.push(borderLine(innerW));
+  lines.push(frameLine(` ${headerLabel}${' '.repeat(headerPad)}${sortLabel} `, innerW));
 
   // Search
   const searchLabel = state.searchQuery ? `Type to search: ${state.searchQuery}_` : 'Type to search';
-  lines.push(
-    `${dim('│')} ${dim(searchLabel)}${' '.repeat(Math.max(0, innerW - stripAnsi(searchLabel).length - 2))} ${dim('│')}`,
-  );
-  lines.push(`${dim('│')}${dim('─'.repeat(innerW))}${dim('│')}`);
+  lines.push(frameLine(` ${searchLabel} `, innerW));
+  lines.push(borderLine(innerW));
 
   // Column headers
-  const colHeader = '  Created        Updated        Branch      Conversation';
-  lines.push(`${dim('│')}${dim(colHeader)}${' '.repeat(Math.max(0, innerW - stripAnsi(colHeader).length))}${dim('│')}`);
+  const colHeader = '  Created        Updated        Msgs Status     Branch      Model       Conversation';
+  lines.push(frameLine(colHeader, innerW));
 
   // Sessions
   if (state.filtered.length === 0) {
-    lines.push(`${dim('│')}${' '.repeat(innerW)}${dim('│')}`);
-    lines.push(`${dim('│')}  ${dim('No sessions found')}${' '.repeat(innerW - 18)}${dim('│')}`);
+    lines.push(frameLine('', innerW));
+    lines.push(frameLine('  No sessions found', innerW));
   } else {
     for (let i = 0; i < visibleRows; i += 1) {
       const rowIdx = scrollOffset + i;
@@ -145,39 +144,31 @@ export function renderResumePicker(state: ResumePickerState, width: number, heig
       const isSelected = rowIdx === state.selectedRow;
 
       if (!session) {
-        lines.push(`${dim('│')}${' '.repeat(innerW)}${dim('│')}`);
+        lines.push(frameLine('', innerW));
         continue;
       }
 
-      const prefix = isSelected ? '→ ' : '  ';
+      const prefix = isSelected ? '> ' : '  ';
       const created = formatRelative(session.createdAt);
       const updated = formatRelative(session.updatedAt);
-      const branch = session.branch || '—';
+      const branch = session.branch || '-';
+      const status = session.status || 'active';
+      const messageCount = String(session.messageCount ?? 0);
+      const model = session.activeModel || '-';
       const title = session.title || session.summary || session.id;
 
-      const rowContent = `${prefix}${created.padEnd(14)} ${updated.padEnd(14)} ${branch.slice(0, 10).padEnd(10)} ${title}`;
+      const rowContent = `${prefix}${created.padEnd(14)} ${updated.padEnd(14)} ${messageCount.padStart(4)} ${status
+        .slice(0, 10)
+        .padEnd(10)} ${branch.slice(0, 10).padEnd(10)} ${model.slice(0, 11).padEnd(11)} ${title}`;
 
-      if (isSelected) {
-        lines.push(
-          `${dim('│')}${dim(rowContent.slice(0, innerW))}${' '.repeat(Math.max(0, innerW - stripAnsi(rowContent).length))}${dim('│')}`,
-        );
-      } else {
-        lines.push(
-          `${dim('│')}${dim(rowContent.slice(0, innerW))}${' '.repeat(Math.max(0, innerW - stripAnsi(rowContent).length))}${dim('│')}`,
-        );
-      }
+      lines.push(frameLine(rowContent, innerW));
     }
   }
 
-  // Fill remaining rows
-  for (let i = visibleSlice.length; i < visibleRows; i += 1) {
-    lines.push(`${dim('│')}${' '.repeat(innerW)}${dim('│')}`);
-  }
-
   // Footer
-  const footer = ' enter to resume    esc to start new    ctrl+d to quit    tab to toggle sort    ↑/↓ to browse ';
-  const footerPad = Math.max(0, innerW - stripAnsi(footer).length);
-  lines.push(dim(`└${footer}${'─'.repeat(footerPad)}┘`));
+  const footer = ' enter to resume    esc close    ctrl+d quit    tab sort    up/down browse ';
+  const footerText = clipToWidth(footer, innerW);
+  lines.push(`+${footerText}${'-'.repeat(Math.max(0, innerW - footerText.length))}+`);
 
   return lines;
 }
@@ -203,15 +194,17 @@ function formatRelative(isoDate: string): string {
   }
 }
 
-function bold(text: string): string {
-  return `\u001b[1;37m${text}\u001b[0m`;
+function borderLine(width: number): string {
+  return `+${'-'.repeat(width)}+`;
 }
 
-function dim(text: string): string {
-  return `\u001b[90m${text}\u001b[0m`;
+function frameLine(content: string, width: number): string {
+  const clipped = clipToWidth(content, width);
+  return `|${clipped}${' '.repeat(Math.max(0, width - clipped.length))}|`;
 }
 
-function stripAnsi(text: string): string {
-  // eslint-disable-next-line no-control-regex
-  return text.replace(/\u001b\[[0-9;]*m/g, '');
+function clipToWidth(text: string, width: number): string {
+  if (text.length <= width) return text;
+  if (width <= 1) return text.slice(0, width);
+  return `${text.slice(0, width - 2)}..`;
 }

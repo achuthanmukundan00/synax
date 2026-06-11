@@ -40,18 +40,18 @@ From the TUI, press `/` and type `resume`:
 /resume  Resume previous session
 ```
 
-This opens the session picker:
+This opens the session picker. Empty sessions with no restorable conversation messages are hidden:
 
 ```
 Resume Previous Session                         Sort: Updated
 Type to search
 
-  Created        Updated        Branch      Conversation
-→ 15 min ago     12 min ago     dev/tui     Fix Synax TUI input corruption bugs...
-  31 min ago     28 min ago     dev/tui     Please look at specs/synax-ai-core...
-  2 hours ago    2 hours ago    main        Implement provider settings runtime...
+  Created        Updated        Msgs Status     Branch      Model       Conversation
+> 15 min ago     12 min ago        4 active     dev/tui     qwen-local  Fix Synax TUI input corruption bugs...
+  31 min ago     28 min ago        2 completed  dev/tui     qwen-local  Please look at specs/synax-ai-core...
+  2 hours ago    2 hours ago       6 failed     main        llama.cpp   Implement provider settings runtime...
 
-enter to resume    esc to start new    ctrl+d to quit    tab to toggle sort    ↑/↓ to browse
+enter to resume    esc close    ctrl+d quit    tab sort    up/down browse
 ```
 
 ## Picker Controls
@@ -60,7 +60,7 @@ enter to resume    esc to start new    ctrl+d to quit    tab to toggle sort    �
 | ------ | ----------------------------- |
 | ↑ / ↓  | Browse sessions               |
 | Enter  | Resume selected session       |
-| Escape | Close picker, start new       |
+| Escape | Close picker                  |
 | Ctrl+D | Quit Synax                    |
 | Tab    | Toggle sort (updated/created) |
 | Type   | Filter sessions by text       |
@@ -70,23 +70,24 @@ enter to resume    esc to start new    ctrl+d to quit    tab to toggle sort    �
 When you resume a session:
 
 1. The conversation context is restored
-2. Provider/model settings are restored if still available
-3. If the provider/model is missing, Synax shows a configuration blocked state
-4. The previous session status is preserved:
-   - **Ready** → ready for a new message
-   - **Failed/Blocked** → shows the last blocker, ready to continue
+2. The current runtime provider/model remains active
+3. User and assistant messages are restored behind the stable system/skill prefix
+4. Tool calls, tool results, and state snapshots remain in the JSONL log but are not replayed into model-visible context
+5. The resumed session is marked active and ready for the next message
 
 ## Session Lifecycle
 
 - Sessions are created automatically when you start typing in the TUI
 - Events are appended in real-time as the agent works
 - The index is updated on every event
+- Sessions with no messages are kept in storage but omitted from `/resume`
 - Old sessions (>200) are pruned automatically
 
 ## Performance
 
 - The resume picker reads only the metadata index (~KB), not full transcripts
-- Event logs are read on-demand during resume
+- Only the selected session's event log is read on-demand during resume
+- Resume keeps volatile UI notices out of model-visible context to preserve prompt-cache-friendly prefixes
 - Session storage is append-only JSONL for reliability
 - Maximum 200 sessions retained
 

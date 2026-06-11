@@ -21,6 +21,7 @@ import {
 } from '../settings/settings-state';
 import { buildConfigUpdate } from '../config/load-config';
 import type { EffectiveSynaxConfig } from '../config/schema';
+import { createResumePickerState, renderResumePicker, resumePickerReducer } from '../sessions/resume-renderer';
 
 function makeTestConfig(overrides: Partial<EffectiveSynaxConfig> = {}): EffectiveSynaxConfig {
   return {
@@ -483,6 +484,120 @@ describe('session-store', () => {
     expect(
       filtered.every((s) => s.branch?.toLowerCase().includes('foo') || s.title?.toLowerCase().includes('foo')),
     ).toBe(true);
+  });
+
+  it('renders resume picker metadata without ANSI control sequences', () => {
+    const state = resumePickerReducer(
+      createResumePickerState([
+        {
+          id: '20250101000000000-test',
+          createdAt: new Date(Date.now() - 120_000).toISOString(),
+          updatedAt: new Date(Date.now() - 60_000).toISOString(),
+          workspacePath: '/tmp/test',
+          branch: 'feature/resume',
+          title: 'Fix slash commands',
+          activeProvider: 'relay',
+          activeModel: 'qwen-local',
+          messageCount: 7,
+          eventCount: 12,
+          status: 'completed',
+        },
+      ]),
+      { type: 'open' },
+    );
+
+    const output = renderResumePicker(state, 120, 32).join('\n');
+
+    expect(output).toContain('Msgs');
+    expect(output).toContain('Status');
+    expect(output).toContain('Model');
+    expect(output).toContain('completed');
+    expect(output).toContain('qwen-local');
+    expect(output).toContain('Fix slash commands');
+    expect(output.includes('\u001b[')).toBe(false);
+  });
+
+  it('renders resume picker rows at a stable width', () => {
+    const state = resumePickerReducer(
+      createResumePickerState([
+        {
+          id: '20250101000000000-test',
+          createdAt: new Date(Date.now() - 120_000).toISOString(),
+          updatedAt: new Date(Date.now() - 60_000).toISOString(),
+          workspacePath: '/tmp/test',
+          branch: 'feature/resume',
+          title: 'A very long resume picker title that should be clipped instead of breaking frame width',
+          activeProvider: 'relay',
+          activeModel: 'qwen-local-with-a-long-name',
+          messageCount: 7,
+          eventCount: 12,
+          status: 'completed',
+        },
+      ]),
+      { type: 'open' },
+    );
+
+    const lines = renderResumePicker(state, 80, 24);
+    const widths = new Set(lines.map((line) => line.length));
+
+    expect(widths.size).toBe(1);
+  });
+
+  it('keeps the resume picker compact for a small result set', () => {
+    const state = resumePickerReducer(
+      createResumePickerState([
+        {
+          id: '20250101000000000-test',
+          createdAt: new Date(Date.now() - 120_000).toISOString(),
+          updatedAt: new Date(Date.now() - 60_000).toISOString(),
+          workspacePath: '/tmp/test',
+          branch: 'main',
+          title: 'Small list',
+          activeModel: 'qwen-local',
+          messageCount: 1,
+          eventCount: 3,
+          status: 'completed',
+        },
+      ]),
+      { type: 'open' },
+    );
+
+    expect(renderResumePicker(state, 120, 48).length).toBeLessThanOrEqual(11);
+  });
+
+  it('moves the visible resume picker selection when navigating', () => {
+    let state = resumePickerReducer(
+      createResumePickerState([
+        {
+          id: '20250101000000000-first',
+          createdAt: new Date(Date.now() - 120_000).toISOString(),
+          updatedAt: new Date(Date.now() - 60_000).toISOString(),
+          workspacePath: '/tmp/test',
+          title: 'First session',
+          messageCount: 1,
+          eventCount: 3,
+          status: 'completed',
+        },
+        {
+          id: '20250101000000000-second',
+          createdAt: new Date(Date.now() - 180_000).toISOString(),
+          updatedAt: new Date(Date.now() - 90_000).toISOString(),
+          workspacePath: '/tmp/test',
+          title: 'Second session',
+          messageCount: 2,
+          eventCount: 4,
+          status: 'completed',
+        },
+      ]),
+      { type: 'open' },
+    );
+
+    state = resumePickerReducer(state, { type: 'move_down' });
+    const output = renderResumePicker(state, 120, 24).join('\n');
+
+    expect(output).toContain('  First session');
+    expect(output).toContain('> ');
+    expect(output).toMatch(/>\s+\d+ min ago\s+\d+ min ago\s+2 completed\s+-\s+-\s+Second session/);
   });
 
   it('reads and streams session events', () => {

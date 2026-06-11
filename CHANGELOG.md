@@ -1,10 +1,22 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+
+- **TUI: resume/settings modal rendering.** Modal overlays now render through full-width OpenTUI rows with explicit backgrounds instead of translucent text dumps, preventing the resume picker/settings screen from bleeding through and corrupting the drawing.
+- **TUI: resume picker navigation.** The resume picker accepts common arrow/enter/tab/escape key variants, prevents picker keys from leaking into the prompt textarea, and restores the selected session in-process instead of showing a bogus `--resume` restart command.
+- **TUI: resume picker rows.** Resume rows are ASCII-only, fixed-width, and free of embedded ANSI escape codes so OpenTUI can measure and repaint them reliably.
+- **TUI: resume picker session list.** Empty placeholder sessions are hidden from `/resume`, and small result sets render in a compact picker instead of a mostly blank full-screen frame.
+- **TUI: overlay cursor focus.** Settings and resume overlays no longer mount or focus the prompt textarea, preventing the prompt cursor from showing through menus.
+- **TUI: slash autocomplete overlay.** Slash command autocomplete now renders on an opaque surface and limits purple branding to the outline and selected marker instead of coloring command text.
+- **TUI: resume picker shortcuts.** Resume picker navigation now invalidates and repaints the OpenTUI overlay on every move/search/sort action, and raw arrow/tab/enter/escape input is routed to the picker before autocomplete/history handlers.
+
 ## [0.3.0-alpha.5]
 
 ### Fixed
 
-- **Missing `extractTextContent` import in test files.**  \
+- **Missing `extractTextContent` import in test files.** \
   Three test suites (`context-hardening`, `deterministic-compaction`, `skills`) were missing the `extractTextContent` import from `../llm/types`, causing compilation failures. Added the import to all affected test files.
 
 ## [0.3.0-alpha.4]

@@ -299,14 +299,67 @@ describe('OpenTUI startup layout', () => {
       40,
     ) as unknown as FakeOpenTuiNode;
     const overlay = findNodeById(root, 'synax-settings');
+    const overlayRows = collectNodes(root).filter((node) =>
+      String(node.props.id ?? '').startsWith('synax-settings-row-'),
+    );
     const backingRows = collectNodes(root).filter((node) =>
       String(node.props.id ?? '').startsWith('synax-settings-backdrop-'),
     );
 
     expect(overlay?.props.height).toBe(40);
     expect(overlay?.props.zIndex).toBe(100);
+    expect(overlay?.props.backgroundColor).toBe(getPalette().background);
+    expect(overlayRows).toHaveLength(3);
+    expect(
+      overlayRows.every((node) => node.type === 'Box' && node.props.backgroundColor === getPalette().background),
+    ).toBe(true);
     expect(backingRows).toHaveLength(37);
     expect(backingRows.every((node) => node.type === 'Box' && node.props.width === '100%')).toBe(true);
+    expect(findNodeById(root, 'synax-input')).toBeUndefined();
+    expect(findNodeById(root, 'synax-input-placeholder')?.type).toBe('Box');
+  });
+
+  it('renders slash autocomplete as an opaque panel with only the selected marker branded', () => {
+    const core = createFakeOpenTuiCore();
+    const palette = getPalette();
+    const root = renderArtifactRoot(
+      core,
+      [],
+      {
+        model: 'qwen3-local',
+        filesTouched: [],
+        uptimeLabel: '0:00',
+      },
+      {
+        status: 'Ready.',
+        prompt: '/',
+        placeholder: 'Ask Synax...',
+        hints: 'Enter send',
+      },
+      100,
+      undefined,
+      undefined,
+      palette,
+      {
+        visible: true,
+        items: ['/settings', '/resume'],
+        selectedIndex: 0,
+      },
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      40,
+    ) as unknown as FakeOpenTuiNode;
+
+    expect(findNodeById(root, 'synax-autocomplete')?.props.backgroundColor).toBe(palette.surface);
+    expect(findNodeById(root, 'synax-ac-row-0')?.props.backgroundColor).toBe(palette.surface);
+    expect(findNodeById(root, 'synax-ac-marker-0')?.props.fg).toBe(palette.brand);
+    expect(findNodeById(root, 'synax-ac-label-0')?.props.fg).toBe(palette.text);
+    expect(findNodeById(root, 'synax-ac-label-0')?.props.fg).not.toBe(palette.brand);
+    expect(findNodeById(root, 'synax-ac-label-1')?.props.fg).toBe(palette.textMuted);
   });
 
   it('moves the prompt dock to the bottom as soon as the first run starts', () => {
