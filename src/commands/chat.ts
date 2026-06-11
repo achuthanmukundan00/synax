@@ -23,6 +23,7 @@ import { createLLMClient, describeLLMProvider } from '../llm/provider-factory';
 import {
   Session,
   type AgentConversation,
+  type AgentMessage,
   type AgentTerminalState,
   type AgentBudgetSnapshot,
   type AgentActivity,
@@ -35,6 +36,7 @@ import { join } from 'path';
 import { writeFileSync, mkdirSync } from 'fs';
 import type { NormalizedProviderConfig, ProviderMetadata } from '../llm/types';
 import { readLatestCheckpoint, undoLastEdit } from '../agent/safety';
+import { createInspectionLedger } from '../tools';
 import { runInteractiveTui } from '../tui/interactive-tui';
 import { runAgentTask, type RunTaskReport } from '../agent/run-task';
 import { isSecretTrigger } from '../backrooms/trigger';
@@ -67,6 +69,8 @@ export interface ChatSession {
   resetConversation?: () => void;
   /** Finalize the current session (mark as completed/cancelled) and start a new one. */
   startNewSession?: () => void;
+  /** Restore a persisted session into the live conversation. */
+  resumeSession?: (sessionId: string) => ResumeSessionReport;
   /** Append a session event for persistence. */
   appendSessionEvent?: (event: SessionEvent) => void;
   /** Abort the currently running turn. Safe to call when no turn is active. */
@@ -91,6 +95,15 @@ export interface ChatTurnReport {
   workingTreeClean?: boolean;
   steps: number;
   toolCalls?: number;
+  error?: string;
+}
+
+export interface ResumeSessionReport {
+  ok: boolean;
+  sessionId: string;
+  eventsRead: number;
+  restoredMessages: number;
+  title?: string;
   error?: string;
 }
 
@@ -126,6 +139,26 @@ export interface ShellCommandReport {
   stdout: string;
   stderr: string;
   durationMs: number;
+}
+
+export function buildConversationMessagesFromSessionEvents(
+  events: SessionEvent[],
+  skillMessages?: string[],
+): { messages: AgentMessage[]; restoredCount: number } {
+  const restored = Session.createConversation({ skillMessages });
+  let restoredCount = 0;
+
+  for (const event of events) {
+    if (event.type !== 'user_message' && event.type !== 'assistant_message') continue;
+    if (typeof event.content !== 'string' || event.content.trim().length === 0) continue;
+    restored.messages.push({
+      role: event.type === 'user_message' ? 'user' : 'assistant',
+      content: event.content,
+    });
+    restoredCount++;
+  }
+
+  return { messages: restored.messages, restoredCount };
 }
 
 export type InlineInputSegment = InlineTextSegment | InlinePasteAttachment;
@@ -241,6 +274,7 @@ export function createChatSession(options: {
       id: sessionId,
       workspacePath: options.repoRoot,
       title: 'New session',
+      activeProvider: sessionProviderLabel(configRef.current),
       activeModel: configRef.current.provider?.model ?? undefined,
     });
   } catch {
@@ -313,6 +347,7 @@ export function createChatSession(options: {
         id: newId,
         workspacePath: options.repoRoot,
         title: 'New session',
+        activeProvider: sessionProviderLabel(configRef.current),
         activeModel: configRef.current.provider?.model ?? undefined,
       });
     } catch {
@@ -335,6 +370,56 @@ export function createChatSession(options: {
     resetTokenLedger(conversation.tokenLedger);
   };
 
+  const replaceConversationMessages = (messages: AgentMessage[]): void => {
+    conversation.messages.splice(0, conversation.messages.length, ...messages);
+    conversation.inspectionLedger = createInspectionLedger();
+    conversation.latestCompaction = null;
+    conversation.assemblyStats = null;
+    resetTokenLedger(conversation.tokenLedger);
+  };
+
+  const resumeSessionById = (targetSessionId: string): ResumeSessionReport => {
+    const meta = findSessionMeta(targetSessionId);
+    if (!meta) {
+      return {
+        ok: false,
+        sessionId: targetSessionId,
+        eventsRead: 0,
+        restoredMessages: 0,
+        error: 'session metadata not found',
+      };
+    }
+
+    const events = readSessionEvents(targetSessionId);
+    const restored = buildConversationMessagesFromSessionEvents(events, components.skillMessages);
+    if (restored.restoredCount === 0) {
+      return {
+        ok: false,
+        sessionId: targetSessionId,
+        eventsRead: events.length,
+        restoredMessages: 0,
+        title: meta.title,
+        error: 'session has no restorable user or assistant messages',
+      };
+    }
+
+    if (sessionIdRef.current !== targetSessionId) {
+      finalizeCurrentSession('cancelled');
+    }
+    (components as { sessionId: string }).sessionId = targetSessionId;
+    sessionIdRef.current = targetSessionId;
+    replaceConversationMessages(restored.messages);
+    upsertSessionMeta({ ...meta, status: 'active', updatedAt: new Date().toISOString() });
+
+    return {
+      ok: true,
+      sessionId: targetSessionId,
+      eventsRead: events.length,
+      restoredMessages: restored.restoredCount,
+      title: meta.title,
+    };
+  };
+
   /** Abort controller for the currently running turn. */
   let currentAbortController: AbortController | null = null;
   /** Steering message pending injection after next tool call result. */
@@ -342,7 +427,9 @@ export function createChatSession(options: {
 
   return {
     conversation,
-    sessionId,
+    get sessionId() {
+      return sessionIdRef.current;
+    },
     abortCurrentTurn: () => {
       currentAbortController?.abort();
     },
@@ -367,6 +454,7 @@ export function createChatSession(options: {
     startNewSession: () => {
       doResetConversation();
     },
+    resumeSession: resumeSessionById,
     appendSessionEvent: appendSessionEventFn,
     async handleUserMessage(message: string): Promise<ChatTurnReport> {
       const userMessageAt = new Date().toISOString();
@@ -1968,6 +2056,10 @@ function unique(values: string[]): string[] {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function sessionProviderLabel(config: ProjectConfig): string | undefined {
+  return config.provider?.preset ?? config.provider?.kind;
 }
 
 function formatBudgetSnapshot(snapshot: AgentBudgetSnapshot): string {

@@ -257,6 +257,7 @@ export function filterSessions(query: string, sessions: SessionMetadata[]): Sess
       s.title?.toLowerCase().includes(lower) ||
       s.summary?.toLowerCase().includes(lower) ||
       s.branch?.toLowerCase().includes(lower) ||
+      s.activeProvider?.toLowerCase().includes(lower) ||
       s.activeModel?.toLowerCase().includes(lower) ||
       s.id.toLowerCase().includes(lower),
   );

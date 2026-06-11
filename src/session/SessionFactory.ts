@@ -211,6 +211,7 @@ export function createAgentSession(options: CreateAgentSessionOptions): AgentSes
         id: components.sessionId,
         workspacePath: options.repoRoot,
         title: options.title ?? 'New session',
+        activeProvider: options.config.provider?.preset ?? options.config.provider?.kind,
         activeModel: options.config.provider?.model ?? undefined,
       });
     } catch {
