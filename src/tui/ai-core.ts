@@ -106,7 +106,7 @@ export function renderAiCore(
 ): string[] {
   return renderDottedCore({
     mode,
-    frame: Math.floor(t * 8),
+    frame: t * 8, // float frame for sub-frame precision — avoids jitter
     width: CORE_WIDTH,
     height: CORE_HEIGHT,
     unicode: true,
@@ -129,7 +129,7 @@ export function renderDottedCore(opts: {
   const visualProfile = opts.profile ?? resolveCoreVisualProfile('');
   const state: FieldState = {
     mode: normalized,
-    frame: Math.floor(opts.frame * visualProfile.motion.breathRate),
+    frame: opts.frame * visualProfile.motion.breathRate, // float for smooth sub-frame animation
     profile: applyVisualProfile(profileForMode(normalized), visualProfile),
     visualProfile,
     palette: paletteForVisualProfile(paletteForMode(normalized, opts.frame), normalized, visualProfile),
@@ -176,8 +176,9 @@ function renderFieldCell(state: FieldState, x: number, y: number, width: number,
     (containment < 0.09 ? containmentDensity(state.visualProfile) : 0) +
     Math.max(0, flow) * 0.12;
   const chamber = innerChamberGlyph(state, x, y, width, height);
+  const toolScan = isToolScanCell(state, x, y, frame, containment, ny);
 
-  if (!chamber && grain > density && containment > 0.045 && central < 0.62) return ' ';
+  if (!chamber && !toolScan && grain > density && containment > 0.045 && central < 0.62) return ' ';
 
   const glyphs = glyphSet(state.unicode, state.visualProfile);
   let ch = glyphs.small;
@@ -189,12 +190,12 @@ function renderFieldCell(state: FieldState, x: number, y: number, width: number,
     color = central > 0.48 ? state.palette[2] : state.palette[1];
   }
 
-  if (chamber) {
-    ch = chamber;
-    color = state.palette[1];
-  } else if (state.mode === 'tool_execution' && isToolScanCell(state, x, y, frame, containment, ny)) {
+  if (toolScan) {
     ch = glyphs.compressed;
     color = state.palette[2];
+  } else if (chamber) {
+    ch = chamber;
+    color = state.palette[1];
   } else if (state.mode === 'verifying' && Math.abs(harmonic) > 0.88) {
     ch = glyphs.sync;
     color = state.palette[2];
@@ -509,7 +510,7 @@ function isToolScanCell(
   if (state.visualProfile.motion.scanStyle === 'split') {
     return containment < 0.08 && positiveModulo(x - y + frame, 5) === 0;
   }
-  return containment < 0.075 && positiveModulo(x + frame, 4) === 0;
+  return containment < 0.075 && positiveModulo(x + frame, 4) < 1;
 }
 
 function profileForMode(mode: NormalizedCoreMode): CoreProfile {
