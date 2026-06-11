@@ -112,7 +112,7 @@ The human-facing docs in `README.md` and `docs/guide/*.md` are the source of tru
 
 - Commands include `chat`, `ask`, `run`, `inspect`, `config`, and `doctor`.
 - `synax run --plan plan.md` is documented as a placeholder, not implemented behavior.
-- Bash is disabled by default.
+- Bash is enabled by default when the config allows it.
 - Synax loads built-in defaults, optional global config at `~/.config/synax/config.toml`, and nearest project `.synax.toml`.
 - Relay/local OpenAI-compatible endpoints are the preferred inference path.
 

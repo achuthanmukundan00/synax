@@ -123,9 +123,24 @@ The main budget controls are:
 | `agent.context_budget_tokens`                 | `131072` | Overall context target for local high-context models  |
 | `agent.reserved_output_tokens`                | `8192`   | Output tokens reserved before each model call         |
 | `agent.keep_recent_tokens`                    | `20000`  | Verbatim tail preserved when compacting old history   |
-| `agent.max_single_read_result_tokens`         | `12000`  | Per-read result cap before tool output enters history |
-| `agent.max_total_read_result_tokens_per_turn` | `40000`  | Per-turn aggregate cap for read result payloads       |
+| `agent.max_single_read_result_tokens`         | scaled   | Per-read result cap before tool output enters history |
+| `agent.max_total_read_result_tokens_per_turn` | scaled   | Per-turn aggregate cap for read result payloads       |
 | `agent.max_tool_calls`                        | `96`     | Maximum tool calls per task                           |
+
+When the read caps are not set explicitly, they scale with the effective input
+window (context window minus reserved output tokens):
+
+- single read cap: 10% of the effective window, floor `12000`
+- per-turn read cap: 35% of the effective window, floor `40000`
+
+For a 131072-token local model this yields the floors (`12288` / `43008`); for a
+1M-context model the per-turn read budget grows to roughly `347000` tokens so
+long-horizon exploration is not cut off prematurely. Re-reading a range that was
+already read this turn is always served from the read cache and does not consume
+budget. When the per-turn cap is reached, further new reads are refused with a
+recoverable policy error that does not terminate the turn; the agent is steered
+toward acting on what it has (edit/write/bash) or recalling earlier reads via
+`search_memory`. Set either key explicitly to disable scaling for that cap.
 
 Useful profiles:
 

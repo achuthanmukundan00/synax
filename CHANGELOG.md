@@ -2,21 +2,75 @@
 
 ## [Unreleased]
 
+### Breaking
+
+- **Read results are now budgeted and truncated.** Previously "dogfooding mode" passed through all read output untruncated. Read results are now subject to a per-read token cap (with continuation guidance via `startLine`) and a per-turn cumulative cap, after which further reads are refused with a recoverable policy error. This keeps context from being swamped by large reads.
+- **`maxToolCalls` and `maxModelSteps` are now enforced.** Previously both were set to `Number.MAX_SAFE_INTEGER` (effectively unlimited). Defaults are now `maxToolCalls=192`, `maxModelSteps=64`. Runaway loops now hit a hard stop with `budget_exhausted`.
+- **Bash is now enabled by default.** Previously disabled-by-default. The docs and `[tools.bash]` behavior are updated accordingly. Disable via `[tools.bash] enabled = false`.
+
+### Added
+
+- **Mixed output handling (prose + tool calls).** Local models that mix prose and tool calls in one response are no longer treated as fatal errors. Unsafe prose is stripped and tool calls execute normally. The stored assistant message is replaced (not duplicated) to avoid breaking strict providers.
+- **Truncation guard (`finish_reason=length`).** When a model response is cut off by the output token limit, tool calls from that response are NOT executed (arguments may be truncated). A continuation nudge is injected so the model can recover. Three consecutive truncations abort the turn as `model_error`.
+- **Better argument name aliasing for local models.** `edit`/`replace_in_file` now accept `file`, `filePath`, `old_str`, `oldText`, `old_text`, `search`, `original`, `new_str`, `newText`, `new_text`, `replacement`, `replace`. `write`/`create_file` accept `file`, `filePath`, `text`, `contents`, `body`. This lets local models that use Python-style names self-correct without failing.
+- **Actionable argument errors.** When a known tool receives wrong argument names, the error message lists the expected names so the model can self-correct on the next step.
+- **True unified diffs in patch previews.** `createUnifiedDiff` now produces proper LCS-based line-level diffs with context lines (`@@ -a,b +c,d @@` headers), common prefix/suffix trimming, and elision of long unchanged runs. Falls back to whole-region replace for very large inputs. Previously all lines were dumped with `-`/`+` prefixes.
+- **Sub-agent orchestration is opt-in.** Sub-agents are disabled by default (`config.subagents.enabled`). When disabled, the entire planner pipeline is skipped and tasks run inline — keeping the common single-agent path fast and cheap. Explicit in-task delegation requests ("use parallel sub-agents…") override the default.
+- **Overlapping file-scope safety for parallel orchestration.** Forced-parallel mode is downgraded to sequential when sub-task file scopes overlap, preventing concurrent mutations from corrupting each other. Read-only plans (e.g. repo recon) keep their parallelism.
+- **Informational task detection.** Tasks like "explain X" or "why does Y fail?" are detected as informational, relaxing the `files_changed` verification contract so the model isn't pushed into making spurious edits just to satisfy the contract.
+- **Read cache invalidation on mutation.** After any successful `edit`, `write`, or `bash` call, the read cache is cleared so subsequent reads return fresh content — preventing stale-read→edit mismatch loops.
+- **Repo overhead budget cap.** Repo overhead in budget estimation is capped at 40% of the effective context window, preventing large repos from over-triggering orchestration for small tasks.
+- **System message role fix for local chat templates.** Mid-conversation system messages (orientation, memory index, compaction notes) are converted to `user` role with a `[system context]` prefix, preventing ChatML variants from dropping them or resetting the conversation.
+- **TUI: tool result truncation with expand/collapse.** Long tool results (60+ lines) are truncated with an expand indicator (`▸ N more lines (Enter to expand)`). Pressing `Enter` on an empty prompt expands the most recent truncated card; `Ctrl+E` toggles all expandable cards; `e` (empty prompt) toggles the latest card.
+- **TUI: Ctrl+C "press again to quit" hint.** First Ctrl+C shows the hint in the status bar; it clears after a timeout if no second Ctrl+C arrives.
+- **TUI: autocomplete solid background.** The slash-autocomplete dropdown now has a solid surface background so the transcript doesn't bleed through.
+- **TUI: settings overlay uses app background.** Settings screen rows use the app background color (not surface) so the overlay blends with the rest of the TUI instead of painting the terminal a solid grey block.
+- **TUI: renderer theme alignment.** The renderer's clear color is aligned with the resolved palette, preventing a hardcoded dark background from clashing with light terminal themes (e.g. Ghostty light mode).
+- **TUI: animation timer tracking.** Animation timers are tracked and cancelled on shutdown / re-render to prevent timer leaks.
+- **TUI: `Ctrl+E` expand all.** Toggles all expandable tool result cards at once.
+- **TUI: thinking cards always show full text.** Thinking blocks no longer collapse/expand — they're always fully visible and naturally scrollable.
+- **TUI: resume picker restores sessions in-process.** Selecting `/resume` now loads only the chosen session's JSONL transcript, rebuilds model-visible user/assistant context behind the stable system/skill prefix for prompt-cache friendliness, and leaves the picker list backed by lightweight session-index metadata.
+- **TUI: resume picker metadata.** The picker now renders message count, status, and model from the session index, and session search includes provider names.
+
+### Changed
+
+- **Thinking tags (`<think>`/`<thinking>`) are stripped from stored content.** Echoing thinking tags back into conversation history wastes context and degrades multi-step behavior (Qwen's own guidance recommends stripping). Reasoning is preserved in `reasoningContent` separately, which also powers the think-only fallback (bug #114).
+- **`temperature` defaults to 0.2.** Previously `temperature` was only sent when explicitly configured. Now defaults to 0.2 for all requests.
+- **`stream_options.include_usage` enabled.** Streaming requests now request usage data from providers that support it.
+- **Non-streaming tool call fallback.** When a stream degrades to a non-streaming response, native `tool_calls` from the response are captured.
+- **Better tool call delta indexing.** Delta fragments are indexed by `delta.index`, matched by `delta.id` (for providers that repeat ids), or appended to the most recent entry — fixing fragmented arguments across separate tool call entries.
+- **Bash execution environment increased.** `maxBuffer` raised to 2MB (was 256KB), `timeout` raised to 120s (was 30s) — letting longer builds and tests complete.
+- **Verification timeout increased.** Non-full verification profiles now get 60s timeout (was 30s).
+- **Recon sub-tasks are read-only.** Repo recon sub-tasks now use `verification: { level: 'none' }` instead of `files_changed`.
+- **"use agents" regex excludes "use the agents.md".** The `AGENTS.md` file reference no longer triggers sub-agent delegation.
+- **Repo recon intent excludes mutation tasks.** Tasks containing mutation verbs (fix, change, edit, write, etc.) are no longer hijacked into repo recon mode.
+- **Preflight budget guard uses assembled request.** Token estimation before model calls now uses the fully assembled request (with orientation, memory index) instead of raw conversation messages, producing accurate budget checks.
+- **TUI: sticky scroll behavior.** The ScrollBox's built-in `_hasManualScroll` handles pause/recovery without disabling `stickyScroll` entirely — scrolling back to the bottom auto-resumes following.
+- **TUI: thinking state reset.** Thinking state clears on `task_started` and `user_message` events, preventing thinking blocks from appending across turns.
+- **TUI: autocomplete draft cleared on non-slash input.** Prevents deadlocked input submission after backspacing past `/`.
+- **TUI: settings text input accepts all printable characters.** Model names, URLs, and API keys with `:`, `_`, `-`, uppercase, etc. now work correctly in the settings panel.
+- **CI/CD: deploy to Cloudflare Pages.** Docs deployment in GitHub Actions now uses `cloudflare/wrangler-action` instead of GitHub Pages.
+- **Remember: system prompt instructs model to verify changes, plan before acting, and read files before editing.** Three new directives added to the system prompt.
+
 ### Fixed
 
-- **TUI: resume/settings modal rendering.** Modal overlays now render through full-width OpenTUI rows with explicit backgrounds instead of translucent text dumps, preventing the resume picker/settings screen from bleeding through and corrupting the drawing.
-- **TUI: resume picker navigation.** The resume picker accepts common arrow/enter/tab/escape key variants, prevents picker keys from leaking into the prompt textarea, and restores the selected session in-process instead of showing a bogus `--resume` restart command.
-- **TUI: resume picker rows.** Resume rows are ASCII-only, fixed-width, and free of embedded ANSI escape codes so OpenTUI can measure and repaint them reliably.
-- **TUI: resume picker session list.** Empty placeholder sessions are hidden from `/resume`, and small result sets render in a compact picker instead of a mostly blank full-screen frame.
-- **TUI: overlay cursor focus.** Settings and resume overlays no longer mount or focus the prompt textarea, preventing the prompt cursor from showing through menus.
-- **TUI: slash autocomplete overlay.** Slash command autocomplete now renders on an opaque surface and limits purple branding to the outline and selected marker instead of coloring command text.
-- **TUI: resume picker shortcuts.** Resume picker navigation now invalidates and repaints the OpenTUI overlay on every move/search/sort action, and raw arrow/tab/enter/escape input is routed to the picker before autocomplete/history handlers.
+- **Read cache nudges no longer mutate cached objects.** Shallow copies prevent "already read" guidance from sticking to future cache hits.
+- **Orchestration: `shouldOrchestrate` compares to `'orchestrate'` (not `'orchestrated'`).** Fixed a mismatch that caused orchestration to never be triggered by budget estimation.
+- **Orchestration: `totalKB` used directly instead of formatting `Math.ceil(...)` as a string.** The plan prompt now contains a numeric value.
+- **Recovery: `skipTaskPush` prevents duplicate user messages.** Recovery re-entry no longer pushes the task again — the recovery manager already injected a nudge.
+- **TUI: `footerLayoutHeight` accounts for slash info lines.** Slash-command info panels no longer overlap with the input.
+- **TUI: theme detection falls through on null.** When the terminal doesn't answer the OSC theme query, falls through to `COLORFGBG` instead of treating null as a concrete answer.
+- **TUI: `rootLayoutModeSignature` drops `prompt.length` from compact detection.** Having text in the prompt no longer forces a full UI tree rebuild — only event count, settings, and slash info matter.
+- **TUI: slash completion acceptance.** Slash-command completions are tagged separately from file/model completions, so pressing Enter on `/resume` or another slash command dispatches it instead of merely inserting text into the prompt.
+- **TUI: resume picker search input.** Typing while the resume picker is open filters sessions, and backspace edits the picker search query.
+- **TUI: resume picker rendering and navigation.** The picker now renders plain fixed-width rows without embedded ANSI escape codes, uses ASCII frame markers, accepts common arrow/enter/tab/escape key variants, and prevents picker keys from leaking into the prompt textarea.
+- **TUI: unsupported `/mouse` removed from slash autocomplete.** The menu no longer advertises a command without a real dispatcher.
 
 ## [0.3.0-alpha.5]
 
 ### Fixed
 
-- **Missing `extractTextContent` import in test files.** \
+- **Missing `extractTextContent` import in test files.**  \
   Three test suites (`context-hardening`, `deterministic-compaction`, `skills`) were missing the `extractTextContent` import from `../llm/types`, causing compilation failures. Added the import to all affected test files.
 
 ## [0.3.0-alpha.4]

@@ -15,7 +15,7 @@ Sessions are stored under `~/.local/share/synax/sessions/`:
         20260507120000123-abc4.jsonl   # Append-only event log
 ```
 
-The index contains metadata (title, branch, timestamps) for fast listing.
+The index contains metadata (title, branch, provider/model, message and event counts, status, timestamps) for fast listing.
 Full event logs are stored as JSONL and read only during resume.
 
 ## What's Stored

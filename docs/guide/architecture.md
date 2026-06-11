@@ -68,7 +68,7 @@ Dispatches tool calls to handlers. Current handlers:
 | `read`          | `handlers/read-handler.ts`          | Read files, list directories, search text       |
 | `edit`          | `handlers/edit-handler.ts`          | Exact `replace_in_file` edits with safety gates |
 | `write`         | `handlers/write-handler.ts`         | Create new text files                           |
-| `bash`          | `handlers/bash-handler.ts`          | Execute shell commands (disabled by default)    |
+| `bash`          | `handlers/bash-handler.ts`          | Execute shell commands (enabled by default; disable via `[tools.bash] enabled = false`)    |
 | `search_memory` | `handlers/search-memory-handler.ts` | Query HolographicMemory via FTS5                |
 | `save_memory`   | `handlers/save-memory-handler.ts`   | Save a fact to persistent FTS5 memory           |
 | `view_image`    | `handlers/view-image-handler.ts`    | View image files                                |
