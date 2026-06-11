@@ -323,7 +323,7 @@ describe('Provider factory — model validation', () => {
     process.env.DEEPSEEK_API_KEY = 'sk-test';
     try {
       const { metadata } = createLLMClient(makeInput({ provider: 'deepseek', baseUrl: undefined, model: undefined }));
-      expect(metadata.modelId).toBe('deepseek-chat');
+      expect(metadata.modelId).toBe('deepseek-v4-pro');
     } finally {
       process.env.DEEPSEEK_API_KEY = originalKey;
     }

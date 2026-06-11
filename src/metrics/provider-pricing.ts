@@ -26,7 +26,10 @@ const PRICING: Record<string, ProviderPricing> = {
   'anthropic/frontier-3-5-haiku': { inputPer1M: 0.8, outputPer1M: 4.0 },
   'anthropic/frontier-3-opus': { inputPer1M: 15.0, outputPer1M: 75.0 },
 
-  // DeepSeek
+  // DeepSeek V4 (current)
+  'deepseek/deepseek-v4-pro': { inputPer1M: 0.27, outputPer1M: 1.1 },
+  'deepseek/deepseek-v4-flash': { inputPer1M: 0.14, outputPer1M: 0.28 },
+  // DeepSeek legacy (deprecated)
   'deepseek/deepseek-chat': { inputPer1M: 0.14, outputPer1M: 0.28 },
   'deepseek/deepseek-reasoner': { inputPer1M: 0.55, outputPer1M: 2.19 },
 

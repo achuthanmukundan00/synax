@@ -35,7 +35,7 @@ describe('Provider presets registry', () => {
       expect(p.apiKeyEnv).toBe('DEEPSEEK_API_KEY');
       expect(p.apiKeyRequired).toBe(true);
       expect(p.cloud).toBe(true);
-      expect(p.defaultModel).toBe('deepseek-chat');
+      expect(p.defaultModel).toBe('deepseek-v4-pro');
       expect(p.contextWindow).toBe(1_000_000);
     });
 
