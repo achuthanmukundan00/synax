@@ -28,8 +28,9 @@ export const ACTIVITY_TEXT_ID = 'synax-activity-text';
 export const AUTOCOMPLETE_MAX_ROWS = 10;
 
 /** Hunk/command output slice limits. */
-export const HUNK_PREVIEW_LINES = 30;
-export const HUNK_SCROLLBOX_THRESHOLD = 50;
+export const HUNK_PREVIEW_LINES = 10000;
+export const HUNK_SCROLLBOX_THRESHOLD = 10000;
+export const TOOL_PREVIEW_LINES = 10000;
 export const STDOUT_PREVIEW_LINES = 100;
 export const STDOUT_FULL_LINES = 500;
 export const STDERR_PREVIEW_LINES = 50;

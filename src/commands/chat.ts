@@ -17,7 +17,7 @@ import { loadSynaxConfig } from '../config/load-config';
 import type { EffectiveSynaxConfig } from '../config/schema';
 import { loadSkills, type SkillDiagnostic } from '../agent/skills';
 import { discoverSkills, buildSkillMessages } from '../skills/SkillLoader';
-import { resetTokenLedger } from '../agent/context-budget';
+import { resetTokenLedger, resolveContextBudgetSettings } from '../agent/context-budget';
 import pkg from '../../package.json';
 import { createLLMClient, describeLLMProvider } from '../llm/provider-factory';
 import {
@@ -148,15 +148,119 @@ export function buildConversationMessagesFromSessionEvents(
   const restored = Session.createConversation({ skillMessages });
   let restoredCount = 0;
 
-  for (const event of events) {
-    if (event.type !== 'user_message' && event.type !== 'assistant_message') continue;
-    if (typeof event.content !== 'string' || event.content.trim().length === 0) continue;
-    restored.messages.push({
-      role: event.type === 'user_message' ? 'user' : 'assistant',
-      content: event.content,
-    });
-    restoredCount++;
+  // Buffer for tool calls we haven't matched to results yet.
+  // Each entry: { toolCallId, name, argsJson }.
+  interface PendingToolCall {
+    toolCallId: string;
+    name: string;
+    argsJson: string;
   }
+  const pendingToolCalls: PendingToolCall[] = [];
+  // Tool results ready to be flushed (matched by toolCallId).
+  const completedToolResults: Array<{
+    toolCallId: string;
+    name: string;
+    argsJson: string;
+    content: string;
+  }> = [];
+
+  const flushToolTurn = (): void => {
+    if (completedToolResults.length === 0) return;
+
+    // Emit an assistant message carrying the completed tool calls.
+    const allCalls = completedToolResults.map((tr) => ({
+      id: tr.toolCallId,
+      type: 'function' as const,
+      function: { name: tr.name, arguments: tr.argsJson },
+    }));
+    restored.messages.push({
+      role: 'assistant',
+      content: '',
+      tool_calls: allCalls,
+    });
+
+    // Emit tool result messages.
+    for (const tr of completedToolResults) {
+      restored.messages.push({
+        role: 'tool',
+        tool_call_id: tr.toolCallId,
+        name: tr.name,
+        content: tr.content,
+      });
+      restoredCount++;
+    }
+
+    completedToolResults.length = 0;
+  };
+
+  for (const event of events) {
+    if (event.type === 'user_message') {
+      flushToolTurn();
+      if (typeof event.content === 'string' && event.content.trim().length > 0) {
+        restored.messages.push({ role: 'user', content: event.content });
+        restoredCount++;
+      }
+      continue;
+    }
+
+    if (event.type === 'assistant_message') {
+      // Tool calls preceding this message have already been flushed
+      // by their matching tool_results. Just emit the text response.
+      if (typeof event.content === 'string' && event.content.trim().length > 0) {
+        restored.messages.push({ role: 'assistant', content: event.content });
+        restoredCount++;
+      }
+      continue;
+    }
+
+    if (event.type === 'tool_call') {
+      const args = event.args as Record<string, unknown> | undefined;
+      const toolCallId = (args?.toolCallId as string) || `call_${pendingToolCalls.length}`;
+      const argsJson = typeof args?.summary === 'string' ? args.summary : JSON.stringify(args ?? {});
+      pendingToolCalls.push({ toolCallId, name: event.name ?? 'unknown', argsJson });
+      continue;
+    }
+
+    if (event.type === 'tool_result') {
+      const result = event.result as Record<string, unknown> | undefined;
+      const resultId = (result?.toolCallId as string) || '';
+
+      // Match to a pending tool call.
+      const matchIdx = pendingToolCalls.findIndex((tc) => tc.toolCallId === resultId);
+      if (matchIdx >= 0) {
+        const matched = pendingToolCalls[matchIdx];
+        pendingToolCalls.splice(matchIdx, 1);
+        completedToolResults.push({
+          toolCallId: resultId,
+          name: matched.name,
+          argsJson: matched.argsJson,
+          content: JSON.stringify({
+            success: result?.status === 'ok',
+            toolName: matched.name,
+            output: result?.detail
+              ? (() => {
+                  try {
+                    return JSON.parse(result.detail as string);
+                  } catch {
+                    return result.detail;
+                  }
+                })()
+              : null,
+            error: result?.status === 'error' ? (result?.summary as string) : undefined,
+          }),
+        });
+      }
+
+      // When all pending tool_calls have results, flush this turn.
+      if (pendingToolCalls.length === 0) {
+        flushToolTurn();
+      }
+      continue;
+    }
+  }
+
+  // Flush any remaining tool calls at end of events.
+  flushToolTurn();
 
   return { messages: restored.messages, restoredCount };
 }
@@ -391,8 +495,8 @@ export function createChatSession(options: {
     }
 
     const events = readSessionEvents(targetSessionId);
-    const restored = buildConversationMessagesFromSessionEvents(events, components.skillMessages);
-    if (restored.restoredCount === 0) {
+    const restoredMessages = buildConversationMessagesFromSessionEvents(events, components.skillMessages);
+    if (restoredMessages.restoredCount === 0) {
       return {
         ok: false,
         sessionId: targetSessionId,
@@ -408,14 +512,28 @@ export function createChatSession(options: {
     }
     (components as { sessionId: string }).sessionId = targetSessionId;
     sessionIdRef.current = targetSessionId;
-    replaceConversationMessages(restored.messages);
+    replaceConversationMessages(restoredMessages.messages);
+
+    // Inject a resume context note so the model knows this is a restored
+    // session and files may have changed since the original work.
+    const createdAt = meta.createdAt ? new Date(meta.createdAt).toLocaleString() : 'unknown date';
+    conversation.messages.push({
+      role: 'user',
+      content: [
+        `[Resumed session: ${meta.title || meta.id}]`,
+        `Original date: ${createdAt}`,
+        `Restored ${restoredMessages.restoredCount} messages from ${events.length} events.`,
+        `The conversation above is from a previous session. Files and git state may have changed.`,
+        `Use git status and reads to verify current state before making changes.`,
+      ].join('\n'),
+    });
     upsertSessionMeta({ ...meta, status: 'active', updatedAt: new Date().toISOString() });
 
     return {
       ok: true,
       sessionId: targetSessionId,
       eventsRead: events.length,
-      restoredMessages: restored.restoredCount,
+      restoredMessages: restoredMessages.restoredCount,
       title: meta.title,
     };
   };
@@ -1594,6 +1712,14 @@ async function handleSlashCommand(
     };
   }
   if (command === '/budget') {
+    const budgetSettings = resolveContextBudgetSettings({
+      contextBudgetTokens: context.config.contextBudgetTokens,
+      contextWindowTokens: context.config.contextWindowTokens,
+      reservedOutputTokens: context.config.reservedOutputTokens,
+      keepRecentTokens: context.config.keepRecentTokens,
+      maxSingleReadResultTokens: context.config.maxSingleReadResultTokens,
+      maxTotalReadResultTokensPerTurn: context.config.maxTotalReadResultTokensPerTurn,
+    });
     const liveEstimate = context.conversation.tokenLedger.lastKnownTokenCount;
     const liveLimit = (context.config.contextBudgetTokens ?? 131072) - (context.config.reservedOutputTokens ?? 8192);
     const usedPercent = liveLimit > 0 ? Math.round((liveEstimate / liveLimit) * 100) : 0;
@@ -1616,8 +1742,8 @@ async function handleSlashCommand(
         `Reserved output:  ${context.config.reservedOutputTokens ?? 8192}`,
         'Model steps:      unlimited',
         `Max tool calls:   ${context.config.maxToolCalls ?? 192}`,
-        `Max single read:  ${context.config.maxSingleReadResultTokens ?? 12000}`,
-        `Max total reads:  ${context.config.maxTotalReadResultTokensPerTurn ?? 40000}`,
+        `Max single read:  ${budgetSettings.maxSingleReadResultTokens}`,
+        `Max total reads:  ${budgetSettings.maxTotalReadResultTokensPerTurn}`,
         `Keep recent:      ${context.config.keepRecentTokens ?? 20000}`,
         '',
         liveLine,

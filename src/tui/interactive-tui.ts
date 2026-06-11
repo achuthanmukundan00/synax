@@ -7,6 +7,7 @@ import {
 import { isSecretTrigger } from '../backrooms/trigger';
 import type { ChatSession } from '../commands/chat';
 import type { EffectiveSynaxConfig } from '../config/schema';
+import { persistConfig } from '../config/load-config';
 import { renderSettings } from '../settings/settings-renderer';
 import {
   createSettingsState,
@@ -60,6 +61,7 @@ import {
 import { gitCreateCheckpoint, gitListCheckpoints, gitRestoreCheckpoint, type CheckpointInfo } from './git-helpers';
 import {
   AUTOCOMPLETE_MAX_ROWS,
+  CTRL_C_QUIT_TIMEOUT_MS,
   MAX_TRANSCRIPT_EVENTS,
   TRANSIENT_EVENT_TYPES,
   SCROLL_STEP_ROWS,
@@ -67,6 +69,7 @@ import {
   ACTIVITY_LINE_ID,
   ACTIVITY_GLYPH_ID,
   ACTIVITY_TEXT_ID,
+  TOOL_PREVIEW_LINES,
 } from './tui-constants';
 import { padAnsi, visibleLength } from './text-utils';
 import { getModelPalette, type ModelPalette } from './model-palette';
@@ -176,6 +179,16 @@ export async function runInteractiveTui(
   // --- Theme ---
   const themeMode: 'dark' | 'light' = (await detectThemeMode(renderer as any)) ?? 'dark';
   const currentPalette: TuiPalette = getPalette(options?.blockedMessage ? 'default' : themeMode);
+  // Align the renderer clear color with the resolved palette. The renderer
+  // was created before theme detection, so a hardcoded dark background would
+  // otherwise clash with light terminal themes (e.g. Ghostty light mode).
+  try {
+    (renderer as unknown as { setBackgroundColor?: (color: string) => void }).setBackgroundColor?.(
+      currentPalette.background,
+    );
+  } catch {
+    // best-effort: keep the creation-time background
+  }
 
   // --- Keyboard shortcut state ---
   let ctrlCPressedAt: number | null = null;
@@ -250,6 +263,7 @@ export async function runInteractiveTui(
   };
   applyOptionsToState();
   let treeBuilt = false;
+  let animationTimer: ReturnType<typeof setTimeout> | null = null;
   let eventsVersion = 0;
   let lastRenderedEventsVersion = -1;
   let lastRenderedSplashFrame = -1;
@@ -296,8 +310,14 @@ export async function runInteractiveTui(
 
     // Keep autocomplete in sync with every prompt edit, including backspace.
     const inputForAutocomplete = renderer.root.findDescendantById('synax-input');
-    const currentInputValue =
-      autocompleteDraft ?? (promptDirty || !inputForAutocomplete ? prompt : readPromptValue(inputForAutocomplete));
+    const widgetValue = inputForAutocomplete ? readPromptValue(inputForAutocomplete) : '';
+    const rawCurrentValue = promptDirty || !inputForAutocomplete ? prompt : widgetValue;
+    // Resolve stale autocompleteDraft: if the real input doesn't start with '/', clear the draft.
+    // Otherwise autocorrect from history or backspacing past '/' can deadlock input submission.
+    if (autocompleteDraft !== null && rawCurrentValue && !rawCurrentValue.startsWith('/')) {
+      autocompleteDraft = null;
+    }
+    const currentInputValue = autocompleteDraft ?? rawCurrentValue;
     if (currentInputValue.startsWith('/') && !busy) {
       autocompleteIsFile = false;
       autocompleteDraft = currentInputValue;
@@ -380,7 +400,6 @@ export async function runInteractiveTui(
       : settingsState?.active
         ? renderSettings(settingsState, renderer.width, renderer.height).map(stripAnsi)
         : undefined;
-    const overlayActive = Boolean(overlayLines && overlayLines.length > 0);
     const overlayActiveLabel = resumePickerState?.active
       ? 'Resume'
       : settingsState?.active
@@ -408,6 +427,10 @@ export async function runInteractiveTui(
           overlayActiveLabel,
           handleInputSubmit,
           (value) => {
+            // Clear slash-autocomplete state when user types non-slash content
+            if (autocompleteDraft !== null && !value.startsWith('/')) {
+              autocompleteDraft = null;
+            }
             if (autocompleteDraft !== null) return;
             // Clear slash info panel when user starts typing
             if (slashInfoLines && value.trim()) {
@@ -450,7 +473,6 @@ export async function runInteractiveTui(
       // Focus and position the input after rebuilds. OpenTUI applies initialValue
       // without guaranteeing the cursor is at the end of that value.
       queueMicrotask(() => {
-        if (overlayActive) return;
         const input = renderer.root.findDescendantById('synax-input');
         input?.focus();
         placePromptCursorAtEnd(input, prompt);
@@ -458,6 +480,7 @@ export async function runInteractiveTui(
     } else {
       setNodeContent('synax-hints', footer.hints);
       if (footer.location) setNodeContent('synax-location', footer.location);
+      setNodeContent('synax-context-bar', footer.contextInfo ?? '');
       const input = findNode('synax-input');
       if (input) {
         if (promptDirty) {
@@ -479,7 +502,7 @@ export async function runInteractiveTui(
       }
       const footerNode = findNode('synax-footer');
       if (footerNode && 'height' in (footerNode as any)) {
-        const newFooterHeight = footerLayoutHeight(footer);
+        const newFooterHeight = footerLayoutHeight(footer, slashInfoLines?.length ?? 0);
         const autocompleteNode = findNode('synax-autocomplete');
         if (autocompleteNode && 'bottom' in (autocompleteNode as any)) {
           (autocompleteNode as any).bottom = newFooterHeight;
@@ -507,8 +530,14 @@ export async function runInteractiveTui(
 
     // Keep the spinner animation alive during active execution.
     // Re-render at ~3 fps when the run is active but no new events arrive.
+    // Track the timer so repeated doRender calls don't stack timers and so
+    // shutdown can cancel a pending animation tick.
     if (busy || (state.terminal === 'running' && state.phase !== 'idle' && state.phase !== 'completed')) {
-      setTimeout(() => render('animation', { immediate: true }), 333);
+      if (animationTimer) clearTimeout(animationTimer);
+      animationTimer = setTimeout(() => {
+        animationTimer = null;
+        render('animation', { immediate: true });
+      }, 333);
     }
 
     function removeNode(parent: unknown, id: string): void {
@@ -593,22 +622,14 @@ export async function runInteractiveTui(
       const windowStart = autocompleteWindowStart(autocompleteIndex, autocompleteItems.length, autocompleteVisibleRows);
       for (let i = 0; i < AUTOCOMPLETE_MAX_ROWS; i++) {
         const row = findNode(`synax-ac-row-${i}`);
-        const marker = findNode(`synax-ac-marker-${i}`);
-        const label = findNode(`synax-ac-label-${i}`);
         if (!row) continue;
         const absoluteIndex = windowStart + i;
         const item = autocompleteItems[absoluteIndex] ?? '';
         const rowVisible = autocompleteVisible && i < autocompleteVisibleRows && item !== '';
         (row as any).visible = rowVisible;
         const isSelected = rowVisible && absoluteIndex === autocompleteIndex;
-        if (marker) {
-          (marker as any).content = rowVisible && isSelected ? '→ ' : '  ';
-          (marker as any).fg = isSelected ? currentPalette.brand : currentPalette.textMuted;
-        }
-        if (label) {
-          (label as any).content = rowVisible ? item : '';
-          (label as any).fg = isSelected ? currentPalette.text : currentPalette.textMuted;
-        }
+        (row as any).content = rowVisible ? (isSelected ? `→ ${item}` : `  ${item}`) : '';
+        (row as any).fg = isSelected ? currentPalette.brand : currentPalette.textAccent;
       }
     }
   };
@@ -776,52 +797,17 @@ export async function runInteractiveTui(
 
   const closeSettings = (): void => {
     if (!settingsState) return;
-    settingsState = settingsReducer(settingsState, { type: 'close' });
-    treeBuilt = false;
-    render('input', { immediate: true });
-  };
-
-  const applyResumePickerAction = (
-    action: { type: 'move_up' } | { type: 'move_down' } | { type: 'toggle_sort' } | { type: 'search'; query: string },
-  ): void => {
-    if (!resumePickerState?.active) return;
-    resumePickerState = resumePickerReducer(resumePickerState, action);
-    treeBuilt = false;
-    render('input', { immediate: true });
-  };
-
-  const closeResumePicker = (): void => {
-    if (!resumePickerState?.active) return;
-    resumePickerState = null;
-    treeBuilt = false;
-    render('input', { immediate: true });
-  };
-
-  const selectResumePickerSession = (): void => {
-    if (!resumePickerState?.active) return;
-    const selected = resumePickerState.filtered[resumePickerState.selectedRow];
-    if (selected) {
-      const report = session.resumeSession?.(selected.id);
-      if (report?.ok) {
-        events = [];
-        eventsVersion = 0;
-        state = createInitialRunStateSnapshot(Date.now());
-        options?.resetLastModelOutput?.();
-        slashInfoLines = [
-          `Resumed ${selected.title || selected.id}`,
-          `${report.restoredMessages} message${report.restoredMessages === 1 ? '' : 's'} restored from ${report.eventsRead} event${report.eventsRead === 1 ? '' : 's'}.`,
-        ];
-      } else {
-        slashInfoLines = [`Resume failed: ${report?.error ?? 'session could not be restored'}`];
-      }
+    if (settingsState.dirty) {
+      persistConfig(settingsState.config, repoRoot);
     }
-    resumePickerState = null;
+    settingsState = settingsReducer(settingsState, { type: 'close' });
     treeBuilt = false;
     render('input', { immediate: true });
   };
 
   const handleSettingsKey = (key: {
     name?: string;
+    sequence?: string;
     shift?: boolean;
     ctrl?: boolean;
     preventDefault?: () => void;
@@ -829,7 +815,11 @@ export async function runInteractiveTui(
     if (!settingsState?.active || key.ctrl) return false;
     const textInput = settingsState.textInput;
     if (key.name === 'escape') {
-      applySettingsAction({ type: textInput ? 'text_cancel' : 'close' });
+      if (textInput) {
+        applySettingsAction({ type: 'text_cancel' });
+      } else {
+        closeSettings();
+      }
       key.preventDefault?.();
       return true;
     }
@@ -868,10 +858,15 @@ export async function runInteractiveTui(
       key.preventDefault?.();
       return true;
     }
-    if (textInput && key.name && key.name.length === 1 && !key.shift) {
-      applySettingsAction({ type: 'text_input', char: key.name });
-      key.preventDefault?.();
-      return true;
+    if (textInput) {
+      // Accept any printable character, including shifted/uppercase ones
+      // (model names, URLs, and API keys need ':', '_', '-', uppercase, etc).
+      const char = printableKeyValue(key as { name?: string; sequence?: string; shift?: boolean });
+      if (char) {
+        applySettingsAction({ type: 'text_input', char });
+        key.preventDefault?.();
+        return true;
+      }
     }
     key.preventDefault?.();
     return true;
@@ -985,9 +980,9 @@ export async function runInteractiveTui(
           return;
         }
         if (registryCommand?.opensResume) {
-          const sessions = restorableSessionsForCurrentWorkspace(listSessionsSorted('updated'), repoRoot);
+          const sessions = sessionsForCurrentWorkspace(listSessionsSorted('updated'), repoRoot);
           if (sessions.length === 0) {
-            slashInfoLines = ['No restorable sessions found. Send a message first, then /resume can restore it later.'];
+            slashInfoLines = ['No saved sessions found.'];
           } else {
             resumePickerState = resumePickerReducer(createResumePickerState(sessions), { type: 'open' });
           }
@@ -1150,8 +1145,8 @@ export async function runInteractiveTui(
     if (exiting) return;
     if (event.type === 'task_started' || event.type === 'user_message') {
       hasAssistantResultThisTurn = false;
-      // Reset thinking state so new prompts start a fresh Thinking card
-      // instead of consolidating into the previous turn's card.
+      // Reset thinking state for the new turn — a new prompt starts a fresh
+      // thinking block rather than appending to the previous turn's.
       activeThinkingEventId = null;
       thinkingRawBody = '';
     }
@@ -1315,8 +1310,16 @@ export async function runInteractiveTui(
     autocompleteDraft = null;
     autocompleteIsFile = false;
     promptDirty = true;
-    statusOverride = '';
+    statusOverride = 'Press Ctrl+C again to quit';
     render();
+    // Clear the hint if no second Ctrl+C arrives within the quit window.
+    setTimeout(() => {
+      if (exiting || renderer.isDestroyed) return;
+      if (statusOverride === 'Press Ctrl+C again to quit') {
+        statusOverride = '';
+        render();
+      }
+    }, CTRL_C_QUIT_TIMEOUT_MS);
   }
 
   /** Ctrl+D: exit */
@@ -1401,7 +1404,7 @@ export async function runInteractiveTui(
       autocompleteItems = result.items;
       autocompleteIndex = 0;
       autocompleteVisible = true;
-      autocompleteIsFile = true;
+      autocompleteIsFile = result.kind !== 'slash_command';
       autocompleteDraft = null;
 
       // If only one match, complete immediately
@@ -1493,7 +1496,7 @@ export async function runInteractiveTui(
   }
 
   function handleRawSlashAutocompleteInput(sequence: string): boolean {
-    if (busy || settingsState?.active || resumePickerState?.active) return false;
+    if (busy || settingsState?.active) return false;
     if (autocompleteDraft === null && (sequence !== '/' || promptValueFromInput().length > 0)) return false;
 
     if (isRawUpSequence(sequence)) {
@@ -1544,49 +1547,6 @@ export async function runInteractiveTui(
       return true;
     }
     return false;
-  }
-
-  function handleRawResumePickerInput(sequence: string): boolean {
-    if (!resumePickerState?.active) return false;
-    const parsed = parseInputChunk(sequence);
-
-    if (parsed.length === 0) return true;
-
-    for (const event of parsed) {
-      if (event.type === 'arrow_up') {
-        applyResumePickerAction({ type: 'move_up' });
-        continue;
-      }
-      if (event.type === 'arrow_down') {
-        applyResumePickerAction({ type: 'move_down' });
-        continue;
-      }
-      if (event.type === 'submit') {
-        selectResumePickerSession();
-        continue;
-      }
-      if (event.type === 'escape') {
-        closeResumePicker();
-        continue;
-      }
-      if (event.type === 'tab' || event.type === 'shift_tab') {
-        applyResumePickerAction({ type: 'toggle_sort' });
-        continue;
-      }
-      if (event.type === 'backspace') {
-        applyResumePickerAction({ type: 'search', query: resumePickerState.searchQuery.slice(0, -1) });
-        continue;
-      }
-      if (event.type === 'exit') {
-        handleCtrlD();
-        continue;
-      }
-      if (event.type === 'text' && event.value) {
-        applyResumePickerAction({ type: 'search', query: `${resumePickerState.searchQuery}${event.value}` });
-      }
-    }
-
-    return true;
   }
 
   function handleRawHistoryScrollInput(sequence: string): boolean {
@@ -1679,7 +1639,6 @@ export async function runInteractiveTui(
   renderer.prependInputHandler(handleRawBracketedPasteInput);
   renderer.prependInputHandler(handleRawSlashAutocompleteInput);
   renderer.prependInputHandler(handleRawHistoryScrollInput);
-  renderer.prependInputHandler(handleRawResumePickerInput);
 
   renderer.keyInput.on('keypress', (key) => {
     // --- Ctrl+C: double-press ---
@@ -1726,39 +1685,70 @@ export async function runInteractiveTui(
     // --- Resume picker navigation ---
     if (resumePickerState?.active) {
       if (isEscapeKey(key.name)) {
-        closeResumePicker();
+        resumePickerState = null;
+        treeBuilt = false;
         key.preventDefault?.();
+        render('input', { immediate: true });
         return;
       }
       if (isUpKey(key.name)) {
-        applyResumePickerAction({ type: 'move_up' });
+        resumePickerState = resumePickerReducer(resumePickerState, { type: 'move_up' });
         key.preventDefault?.();
+        render('input', { immediate: true });
         return;
       }
       if (isDownKey(key.name)) {
-        applyResumePickerAction({ type: 'move_down' });
+        resumePickerState = resumePickerReducer(resumePickerState, { type: 'move_down' });
         key.preventDefault?.();
+        render('input', { immediate: true });
         return;
       }
       if (isEnterKey(key.name)) {
-        selectResumePickerSession();
+        const selected = resumePickerState.filtered[resumePickerState.selectedRow];
+        if (selected) {
+          const report = session.resumeSession?.(selected.id);
+          if (report?.ok) {
+            events = [];
+            eventsVersion = 0;
+            state = createInitialRunStateSnapshot(Date.now());
+            options?.resetLastModelOutput?.();
+            slashInfoLines = [
+              `Resumed ${selected.title || selected.id}`,
+              `${report.restoredMessages} message${report.restoredMessages === 1 ? '' : 's'} restored from ${report.eventsRead} event${report.eventsRead === 1 ? '' : 's'}.`,
+            ];
+          } else {
+            slashInfoLines = [`Resume failed: ${report?.error ?? 'session could not be restored'}`];
+          }
+        }
+        resumePickerState = null;
+        treeBuilt = false;
         key.preventDefault?.();
+        render('input', { immediate: true });
         return;
       }
       if (isTabKey(key.name)) {
-        applyResumePickerAction({ type: 'toggle_sort' });
+        resumePickerState = resumePickerReducer(resumePickerState, { type: 'toggle_sort' });
         key.preventDefault?.();
+        render('input', { immediate: true });
         return;
       }
       if (key.name === 'backspace' || key.name === 'delete') {
-        applyResumePickerAction({ type: 'search', query: resumePickerState.searchQuery.slice(0, -1) });
+        resumePickerState = resumePickerReducer(resumePickerState, {
+          type: 'search',
+          query: resumePickerState.searchQuery.slice(0, -1),
+        });
         key.preventDefault?.();
+        render('input', { immediate: true });
         return;
       }
       const searchChar = printableKeyValue(key);
       if (searchChar) {
-        applyResumePickerAction({ type: 'search', query: `${resumePickerState.searchQuery}${searchChar}` });
+        resumePickerState = resumePickerReducer(resumePickerState, {
+          type: 'search',
+          query: `${resumePickerState.searchQuery}${searchChar}`,
+        });
         key.preventDefault?.();
+        render('input', { immediate: true });
         return;
       }
       // Ignore other keys while picker is active
@@ -1777,15 +1767,59 @@ export async function runInteractiveTui(
       return;
     }
 
-    if (key.name === 'e' && !key.ctrl && !key.shift && !busy) {
+    // --- e (empty prompt only): expand/collapse the latest expandable card.
+    // Gated on an empty prompt so typing words containing "e" never toggles cards.
+    if (key.name === 'e' && !key.ctrl && !key.shift && !key.meta && !busy && promptValueFromInput() === '') {
       const id = latestExpandableEventId(visibleEvents(events, state));
       if (id) {
         expandedState[id] = !expandedState[id];
         tuiStats.recordExpandToggle();
         expandCollapseVersion++;
+        key.preventDefault?.();
         render();
         return;
       }
+    }
+
+    // --- Enter (empty prompt only): expand/collapse truncated card.
+    // When the prompt has text, Enter must always submit — never toggle cards.
+    if (
+      isEnterKey(key.name) &&
+      !busy &&
+      !autocompleteVisible &&
+      !pasteActive &&
+      !key.shift &&
+      !key.ctrl &&
+      promptValueFromInput().trim() === ''
+    ) {
+      const id = latestExpandableEventId(visibleEvents(events, state));
+      if (id) {
+        expandedState[id] = !expandedState[id];
+        tuiStats.recordExpandToggle();
+        expandCollapseVersion++;
+        key.preventDefault?.();
+        render();
+        return;
+      }
+    }
+
+    // --- Ctrl+E: toggle all expandable cards ---
+    if (key.ctrl && key.name === 'e' && !busy) {
+      const visible = visibleEvents(events, state);
+      const expandable = visible.filter(
+        (e) =>
+          e.class === 'tool_result' &&
+          e.artifact.type === 'text' &&
+          e.artifact.body.split('\n').length > TOOL_PREVIEW_LINES,
+      );
+      const allExpanded = expandable.every((e) => expandedState[e.id]);
+      for (const e of expandable) {
+        expandedState[e.id] = !allExpanded;
+      }
+      tuiStats.recordExpandToggle();
+      expandCollapseVersion++;
+      render();
+      return;
     }
 
     // --- Autocomplete navigation ---
@@ -1985,6 +2019,7 @@ export async function runInteractiveTui(
   });
 
   renderScheduler.dispose();
+  if (animationTimer) clearTimeout(animationTimer);
   if (resizeDebounce) clearTimeout(resizeDebounce);
   stdout.write(DISABLE_BRACKETED_PASTE);
   session.setEventSink?.(null);
@@ -2163,6 +2198,40 @@ function toolNameFromStatus(statusNote?: string): string {
   return (statusNote ?? '').replace(/^tool:\s*/i, '').trim();
 }
 
+/**
+ * Build the context usage + cost line shown below the prompt input.
+ * Returns undefined when no data is available (before the first model call).
+ */
+function buildContextInfo(state: RunStateSnapshot, barWidth: number): string | undefined {
+  const used = state.contextUsedTokens;
+  const total = state.contextWindowTokens;
+  if (used === undefined || total === undefined || total <= 0) return undefined;
+
+  const pct = Math.min(100, Math.round((used / total) * 100));
+  const filled = Math.round((pct / 100) * barWidth);
+  const empty = barWidth - filled;
+  const bar = `▐${'█'.repeat(filled)}${'░'.repeat(empty)}▌`;
+
+  const usedFmt = used.toLocaleString();
+  const totalFmt = total.toLocaleString();
+  const countPart = `${usedFmt}/${totalFmt} (${pct}%)`;
+
+  const cost = buildCostSuffix(state);
+  return cost ? `${bar} ${countPart}  ·  ${cost}` : `${bar} ${countPart}`;
+}
+
+/** Build a compact cost suffix from session pricing data. */
+function buildCostSuffix(state: RunStateSnapshot): string | undefined {
+  const spend = state.sessionSpendLabel;
+  if (spend === undefined || spend === '$0.00') return undefined;
+  const inPrice = state.inputPricePer1MTokens;
+  const outPrice = state.outputPricePer1MTokens;
+  if (inPrice !== undefined && outPrice !== undefined) {
+    return `${spend}  ·  $${inPrice.toFixed(0)}/M in  $${outPrice.toFixed(0)}/M out`;
+  }
+  return `${spend} this session`;
+}
+
 function footerState({
   state,
   prompt,
@@ -2188,8 +2257,13 @@ function footerState({
 }): FooterState {
   void busyAnimationFrame;
   const inputHeight = promptInputHeight(prompt, terminalWidth);
-  const hints = 'Enter · submit   /help · commands   Ctrl+D · quit';
+  const hints = '';
   void options;
+
+  // Build context usage + cost line shown below the prompt input.
+  const contextBarWidth = Math.min(24, Math.max(8, (terminalWidth ?? 80) - 52));
+  const contextInfo = buildContextInfo(state, contextBarWidth);
+
   if (statusOverride) {
     return {
       status: statusOverride,
@@ -2197,6 +2271,7 @@ function footerState({
       placeholder: 'Ask Synax...',
       hints,
       inputHeight,
+      contextInfo,
     };
   }
   if (state.phase === 'blocked') {
@@ -2206,6 +2281,7 @@ function footerState({
       placeholder: 'Type a message to continue...',
       hints,
       inputHeight,
+      contextInfo,
     };
   }
   if (state.phase === 'tool_execution') {
@@ -2216,6 +2292,7 @@ function footerState({
       placeholder: 'Steer Synax after the next tool result...',
       hints,
       inputHeight,
+      contextInfo,
     };
   }
   if (busy || state.phase === 'thinking') {
@@ -2224,8 +2301,9 @@ function footerState({
       status: `Thinking · ${activitySummary(state)}${steerHint}`,
       prompt,
       placeholder: 'Synax is working… input paused',
-      hints: '[Ctrl+D] quit',
+      hints: '',
       inputHeight,
+      contextInfo,
     };
   }
   if (state.phase === 'error') {
@@ -2235,6 +2313,7 @@ function footerState({
       placeholder: 'Ask Synax how to recover...',
       hints,
       inputHeight,
+      contextInfo,
     };
   }
   if (state.phase === 'completed') {
@@ -2244,6 +2323,7 @@ function footerState({
       placeholder: 'Continue...',
       hints,
       inputHeight,
+      contextInfo,
     };
   }
   if (state.phase === 'budget_exhausted') {
@@ -2253,6 +2333,7 @@ function footerState({
       placeholder: 'Respond or adjust settings...',
       hints,
       inputHeight,
+      contextInfo,
     };
   }
   return {
@@ -2261,6 +2342,7 @@ function footerState({
     placeholder: 'Ask Synax to inspect, edit, test, or commit...',
     hints,
     inputHeight,
+    contextInfo,
   };
 }
 
@@ -2302,15 +2384,6 @@ function isTabKey(name: string | undefined): boolean {
 
 function isEscapeKey(name: string | undefined): boolean {
   return name === 'escape' || name === 'esc';
-}
-
-function restorableSessionsForCurrentWorkspace<
-  T extends { workspacePath?: string; repoRoot?: string; messageCount?: number },
->(sessions: T[], repoRoot: string): T[] {
-  return sessions.filter((session) => {
-    const workspace = session.workspacePath ?? session.repoRoot;
-    return (!workspace || workspace === repoRoot) && (session.messageCount ?? 0) > 0;
-  });
 }
 
 function isRawUpSequence(sequence: string): boolean {
@@ -2371,8 +2444,20 @@ function printableKeyValue(key: { name?: string; sequence?: string; shift?: bool
   return key.shift ? key.name.toUpperCase() : key.name;
 }
 
+function sessionsForCurrentWorkspace<T extends { workspacePath?: string; repoRoot?: string }>(
+  sessions: T[],
+  repoRoot: string,
+): T[] {
+  return sessions.filter((session) => {
+    const workspace = session.workspacePath ?? session.repoRoot;
+    return !workspace || workspace === repoRoot;
+  });
+}
+
 function stableFooterSignature(footer: FooterState): string {
-  return footer.location ? 'location' : 'no-location';
+  const locationKey = footer.location ? 'location' : 'no-loc';
+  const ctxKey = footer.contextInfo ? 'ctx' : 'noctx';
+  return `${locationKey}:${ctxKey}`;
 }
 
 function rootLayoutModeSignature(args: {
@@ -2384,11 +2469,7 @@ function rootLayoutModeSignature(args: {
   terminalHeight: number;
 }): string {
   const compactStartup =
-    args.visibleEventCount === 0 &&
-    !args.settingsActive &&
-    !args.slashInfoActive &&
-    args.footer.status === 'Ready.' &&
-    args.footer.prompt.length === 0;
+    args.visibleEventCount === 0 && !args.settingsActive && !args.slashInfoActive && args.footer.status === 'Ready.';
   const mode = compactStartup ? 'compact' : 'full';
   return [mode, String(args.slashInfoActive), String(args.terminalWidth), String(args.terminalHeight)].join('\0');
 }

@@ -179,6 +179,11 @@ export function runInspectCommand(program: Command): void {
         const loaded = loadProjectConfig(targetPath);
         const settings = resolveContextBudgetSettings({
           contextBudgetTokens: loaded.config.contextBudgetTokens,
+          contextWindowTokens: loaded.config.contextWindowTokens,
+          reservedOutputTokens: loaded.config.reservedOutputTokens,
+          keepRecentTokens: loaded.config.keepRecentTokens,
+          maxSingleReadResultTokens: loaded.config.maxSingleReadResultTokens,
+          maxTotalReadResultTokensPerTurn: loaded.config.maxTotalReadResultTokensPerTurn,
         });
         const effectiveInputLimit = settings.contextWindowTokens - settings.reservedOutputTokens;
 

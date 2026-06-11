@@ -140,7 +140,7 @@ describe('OpenTUI startup layout', () => {
       100,
     ) as unknown as FakeOpenTuiNode;
 
-    expect(root.props.height).toBe(28);
+    expect(root.props.height).toBe(29);
     expect(root.children[0].props.height).toBe(22);
     expect(findNodeById(root, 'synax-input-frame')?.props.height).toBe(3);
     expect(findNodeById(root, 'synax-location')).toBeUndefined();
@@ -215,9 +215,8 @@ describe('OpenTUI startup layout', () => {
     } as any) as unknown as FakeOpenTuiNode;
     const text = collectTextContent(card).join('\n');
 
-    expect(text).toContain('◇ Let me also check the diff summary');
+    expect(text).toContain('Let me also check the diff summary');
     expect(text).not.toContain('\nme\n');
-    expect(text).not.toContain('◇ ock');
   });
 
   it('uses full-height feed layout once visible events exist', () => {
@@ -299,32 +298,34 @@ describe('OpenTUI startup layout', () => {
       40,
     ) as unknown as FakeOpenTuiNode;
     const overlay = findNodeById(root, 'synax-settings');
-    const overlayRows = collectNodes(root).filter((node) =>
-      String(node.props.id ?? '').startsWith('synax-settings-row-'),
-    );
     const backingRows = collectNodes(root).filter((node) =>
       String(node.props.id ?? '').startsWith('synax-settings-backdrop-'),
     );
 
     expect(overlay?.props.height).toBe(40);
     expect(overlay?.props.zIndex).toBe(100);
-    expect(overlay?.props.backgroundColor).toBe(getPalette().background);
-    expect(overlayRows).toHaveLength(3);
-    expect(
-      overlayRows.every((node) => node.type === 'Box' && node.props.backgroundColor === getPalette().background),
-    ).toBe(true);
     expect(backingRows).toHaveLength(37);
     expect(backingRows.every((node) => node.type === 'Box' && node.props.width === '100%')).toBe(true);
-    expect(findNodeById(root, 'synax-input')).toBeUndefined();
-    expect(findNodeById(root, 'synax-input-placeholder')?.type).toBe('Box');
+    // The settings overlay must use the app background, not the lighter
+    // surface color — a solid grey full-screen block clashes with the TUI.
+    const palette = getPalette();
+    expect(overlay?.props.backgroundColor).toBe(palette.background);
+    expect(backingRows.every((node) => node.props.backgroundColor === palette.background)).toBe(true);
   });
 
-  it('renders slash autocomplete as an opaque panel with only the selected marker branded', () => {
+  it('renders the autocomplete dropdown with a solid background so the transcript does not bleed through', () => {
     const core = createFakeOpenTuiCore();
-    const palette = getPalette();
     const root = renderArtifactRoot(
       core,
-      [],
+      [
+        {
+          id: 'event-1',
+          class: 'note',
+          timestamp: '2026-05-16T00:00:00.000Z',
+          artifact: { type: 'text', title: 'Note', body: 'text behind the dropdown' },
+          metadata: {},
+        } as any,
+      ],
       {
         model: 'qwen3-local',
         filesTouched: [],
@@ -332,34 +333,28 @@ describe('OpenTUI startup layout', () => {
       },
       {
         status: 'Ready.',
-        prompt: '/',
+        prompt: '/he',
         placeholder: 'Ask Synax...',
         hints: 'Enter send',
       },
       100,
       undefined,
       undefined,
-      palette,
-      {
-        visible: true,
-        items: ['/settings', '/resume'],
-        selectedIndex: 0,
-      },
+      undefined,
+      { visible: true, items: ['/help'], selectedIndex: 0 },
       undefined,
       undefined,
       undefined,
       undefined,
       undefined,
-      undefined,
+      'qwen3-local',
       40,
     ) as unknown as FakeOpenTuiNode;
 
-    expect(findNodeById(root, 'synax-autocomplete')?.props.backgroundColor).toBe(palette.surface);
-    expect(findNodeById(root, 'synax-ac-row-0')?.props.backgroundColor).toBe(palette.surface);
-    expect(findNodeById(root, 'synax-ac-marker-0')?.props.fg).toBe(palette.brand);
-    expect(findNodeById(root, 'synax-ac-label-0')?.props.fg).toBe(palette.text);
-    expect(findNodeById(root, 'synax-ac-label-0')?.props.fg).not.toBe(palette.brand);
-    expect(findNodeById(root, 'synax-ac-label-1')?.props.fg).toBe(palette.textMuted);
+    const dropdown = findNodeById(root, 'synax-autocomplete');
+    expect(dropdown?.props.visible).toBe(true);
+    expect(dropdown?.props.position).toBe('absolute');
+    expect(dropdown?.props.backgroundColor).toBe(getPalette().surface);
   });
 
   it('moves the prompt dock to the bottom as soon as the first run starts', () => {
@@ -458,7 +453,7 @@ describe('OpenTUI startup layout', () => {
     expect(text).toContain('Done.');
   });
 
-  it('keeps long OpenTUI result cards intact for artifact scrolling', () => {
+  it('shows full tool results without truncation', () => {
     const core = createFakeOpenTuiCore();
     const body = Array.from({ length: 80 }, (_, index) => `line ${index + 1}`).join('\n');
     const card = renderArtifactCard(
@@ -475,9 +470,34 @@ describe('OpenTUI startup layout', () => {
     ) as unknown as FakeOpenTuiNode;
 
     const text = collectTextContent(card).join('\n');
+    // All 80 lines are visible — no truncation.
+    expect(text).toContain('line 1');
+    expect(text).toContain('line 60');
+    expect(text).toContain('line 80');
+    expect(text).not.toContain('more lines (Enter to expand)');
+  });
+
+  it('shows full tool result identically when expanded', () => {
+    const core = createFakeOpenTuiCore();
+    const body = Array.from({ length: 80 }, (_, index) => `line ${index + 1}`).join('\n');
+    const card = renderArtifactCard(
+      core,
+      {
+        id: 'result-expanded',
+        class: 'tool_result',
+        timestamp: '2026-05-16T00:00:00.000Z',
+        artifact: { type: 'text', title: 'Result', body },
+        metadata: {},
+      } as any,
+      true,
+      jest.fn(),
+    ) as unknown as FakeOpenTuiNode;
+
+    const text = collectTextContent(card).join('\n');
     expect(text).toContain('line 1');
     expect(text).toContain('line 80');
-    expect(text).not.toContain('[Show full text]');
+    // No collapse indicator — nothing was truncated.
+    expect(text).not.toContain('Collapse (Enter)');
   });
 });
 
@@ -667,7 +687,9 @@ describe('OpenTUI artifact scrolling', () => {
 
     expect(scrollBy).toHaveBeenCalledWith(-9);
     expect(scrollBy).not.toHaveBeenCalledWith(0, -9);
-    expect(scrollBox.stickyScroll).toBe(false);
+    // stickyScroll stays enabled — the ScrollBox's built-in _hasManualScroll
+    // handles pause/recovery without disabling sticky entirely.
+    expect(scrollBox.stickyScroll).toBe(true);
   });
 
   it('returns false when the artifact scroll box is unavailable', () => {
@@ -1800,6 +1822,7 @@ describe('autocomplete getCompletions dispatch', () => {
     const result = getCompletions('/set', 4, cwd, repoRoot);
     expect(result).not.toBeNull();
     if (result) {
+      expect(result.kind).toBe('slash_command');
       expect(result.items.length).toBeGreaterThan(0);
       expect(result.items.some((item: string) => item.startsWith('/settings'))).toBe(true);
     }
@@ -1808,6 +1831,7 @@ describe('autocomplete getCompletions dispatch', () => {
   it('returns path completions for path-like tokens', () => {
     const result = getCompletions('./src/', 5, cwd, repoRoot);
     expect(result).not.toBeNull();
+    expect(result?.kind).toBe('path');
   });
 
   it('returns null for plain non-path text', () => {

@@ -252,15 +252,23 @@ export function applyEventToRunState(state: RunStateSnapshot, event: AgentEvent,
       return withTimeline(next, 'thinking', `Working · step ${event.stepIndex ?? next.timeline.length + 1}`, 'S0');
     }
     case 'context_budget_updated': {
-      const prevInputTokens = next.sessionInputTokens ?? 0;
-      const newInputTokens = prevInputTokens + (event.estimatedInputTokens - (next.contextUsedTokens ?? 0));
       next = {
         ...next,
         contextUsedTokens: event.estimatedInputTokens,
         contextWindowTokens: event.contextWindowTokens,
-        sessionInputTokens: Math.max(0, newInputTokens),
       };
-      // Update cost estimate from accumulated tokens
+      return next;
+    }
+    case 'token_usage': {
+      // Actual counted tokens from the tokenCounter — authoritative for cost.
+      // Accumulate per-turn actuals rather than estimated deltas.
+      const prevIn = next.sessionInputTokens ?? 0;
+      const prevOut = next.sessionOutputTokens ?? 0;
+      next = {
+        ...next,
+        sessionInputTokens: prevIn + (event.inputTokens ?? 0),
+        sessionOutputTokens: prevOut + (event.outputTokens ?? 0),
+      };
       next = updateSessionCost(next);
       return next;
     }

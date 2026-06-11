@@ -345,6 +345,7 @@ import {
   upsertSessionMeta,
   type SessionEvent,
 } from '../sessions/session-store';
+import { createResumePickerState, renderResumePicker, resumePickerReducer } from '../sessions/resume-renderer';
 
 const TMP_SESSIONS = join(tmpdir(), 'synax-session-tests-' + Date.now());
 
@@ -471,12 +472,12 @@ describe('session-store', () => {
     }
   });
 
-  it('filters sessions by branch/search text', () => {
+  it('filters sessions by branch/provider/search text', () => {
     const id1 = generateSessionId();
     const id2 = generateSessionId();
 
-    createSession({ id: id1, branch: 'feature/foo', title: 'Foo work' });
-    createSession({ id: id2, branch: 'main', title: 'Bar work' });
+    createSession({ id: id1, branch: 'feature/foo', title: 'Foo work', activeProvider: 'relay' });
+    createSession({ id: id2, branch: 'main', title: 'Bar work', activeProvider: 'custom-local' });
 
     const sessions = listSessionsSorted();
     const filtered = filterSessions('foo', sessions);
@@ -484,6 +485,9 @@ describe('session-store', () => {
     expect(
       filtered.every((s) => s.branch?.toLowerCase().includes('foo') || s.title?.toLowerCase().includes('foo')),
     ).toBe(true);
+
+    const providerFiltered = filterSessions('custom-local', sessions);
+    expect(providerFiltered.some((s) => s.id === id2)).toBe(true);
   });
 
   it('renders resume picker metadata without ANSI control sequences', () => {
@@ -611,6 +615,61 @@ describe('session-store', () => {
     expect(events).toHaveLength(2);
     expect(events[0].type).toBe('user_message');
     expect(events[1].type).toBe('assistant_message');
+  });
+
+  it('renders resume picker metadata stats from the session index', () => {
+    const state = resumePickerReducer(
+      createResumePickerState([
+        {
+          id: '20250101000000000-test',
+          createdAt: new Date(Date.now() - 120_000).toISOString(),
+          updatedAt: new Date(Date.now() - 60_000).toISOString(),
+          workspacePath: '/tmp/test',
+          branch: 'feature/resume',
+          title: 'Fix slash commands',
+          activeModel: 'qwen-local',
+          messageCount: 7,
+          eventCount: 12,
+          status: 'completed',
+        },
+      ]),
+      { type: 'open' },
+    );
+
+    const output = renderResumePicker(state, 120, 32).join('\n');
+
+    expect(output).toContain('Msgs');
+    expect(output).toContain('Status');
+    expect(output).toContain('Model');
+    expect(output).toContain('completed');
+    expect(output).toContain('qwen-local');
+    expect(output).toContain('Fix slash commands');
+    expect(output.includes('\u001b[')).toBe(false);
+  });
+
+  it('renders resume picker rows at a stable width', () => {
+    const state = resumePickerReducer(
+      createResumePickerState([
+        {
+          id: '20250101000000000-test',
+          createdAt: new Date(Date.now() - 120_000).toISOString(),
+          updatedAt: new Date(Date.now() - 60_000).toISOString(),
+          workspacePath: '/tmp/test',
+          branch: 'feature/resume',
+          title: 'A very long resume picker title that should be clipped instead of breaking frame width',
+          activeModel: 'qwen-local-with-a-long-name',
+          messageCount: 7,
+          eventCount: 12,
+          status: 'completed',
+        },
+      ]),
+      { type: 'open' },
+    );
+
+    const lines = renderResumePicker(state, 80, 24);
+    const widths = new Set(lines.map((line) => line.length));
+
+    expect(widths.size).toBe(1);
   });
 
   it('handles missing session event file gracefully', () => {

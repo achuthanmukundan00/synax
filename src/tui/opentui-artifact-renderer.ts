@@ -3,6 +3,9 @@ import { getPalette } from './theme';
 import type { ArtifactPayload, RiskLevel, SemanticEvent, SemanticEventClass } from './semantic-events';
 import { tuiStats } from './telemetry';
 import { renderAiCore } from './ai-core';
+import pkg from '../../package.json';
+
+const VERSION = pkg.version;
 import { resolveCoreVisualProfile } from './core-visual-profile';
 import { visibleLength } from './text-utils';
 import type { ModelPalette } from './model-palette';
@@ -10,7 +13,7 @@ import { getModelPalette } from './model-palette';
 import { stripToolCallMarkup } from './markup-sanitizer';
 import {
   HUNK_PREVIEW_LINES,
-  TEXT_PREVIEW_LINES,
+  TOOL_PREVIEW_LINES,
   PERSISTENT_STATUS_CARD_ID,
   ACTIVITY_LINE_ID,
   ACTIVITY_GLYPH_ID,
@@ -99,6 +102,8 @@ export interface FooterState {
   hints: string;
   location?: string;
   inputHeight?: number;
+  /** Context usage bar shown below the prompt input. */
+  contextInfo?: string;
 }
 
 export interface AutocompleteState {
@@ -115,10 +120,14 @@ export interface SplashOptions {
   color?: boolean;
 }
 
-export function footerLayoutHeight(footer: FooterState): number {
+export function footerLayoutHeight(footer: FooterState, infoLineCount = 0): number {
   const inputHeight = footer.inputHeight ?? promptInputHeight(footer.prompt);
   const inputFrameHeight = inputHeight + 2;
-  return inputFrameHeight + 2;
+  // Slash-info panel renders inside the footer above the input: its lines
+  // (capped at 14) plus a bottom border row.
+  const infoPanelHeight = infoLineCount > 0 ? Math.min(infoLineCount, 14) + 1 : 0;
+  // Context bar node always exists (may be empty); accounts for 1 row.
+  return inputFrameHeight + 2 + infoPanelHeight + 1;
 }
 
 const COLORS: Record<SemanticEventClass, string> = {
@@ -184,47 +193,53 @@ export function renderArtifactRoot(
 ): OpenTuiNode {
   const pal = palette ?? getPalette();
   const modelPal = modelId ? getModelPalette(modelId) : getModelPalette('');
-  const overlayActive = Boolean(settingsLines && settingsLines.length > 0);
   const compactStartup =
-    events.length === 0 && !overlayActive && footer.status === 'Ready.' && footer.prompt.length === 0;
+    events.length === 0 && (!settingsLines || settingsLines.length === 0) && footer.status === 'Ready.';
+
+  // Keep the session start info as the first transcript card so you can
+  // scroll up and see what model, workspace, and Synax version you started
+  // with — even after the splash screen disappears.
+  const sessionHeaderCard = events.length > 0 ? [renderSessionHeaderCard(core, rail, modelId, modelPal, pal)] : [];
+
   const mainChildren =
     events.length > 0
-      ? events.map((event) => renderArtifactCard(core, event, expanded?.[event.id] ?? false, onToggleExpand, pal))
+      ? [
+          ...sessionHeaderCard,
+          ...events.map((event) => renderArtifactCard(core, event, expanded?.[event.id] ?? false, onToggleExpand, pal)),
+        ]
       : [renderEmptyState(core, rail, terminalWidth, footer, pal, splash, modelPal, modelId)];
   const inputHeight = footer.inputHeight ?? promptInputHeight(footer.prompt);
   const inputFrameHeight = inputHeight + 2;
-  const footerHeight = footerLayoutHeight(footer);
+  const footerHeight = footerLayoutHeight(footer, infoLines?.length ?? 0);
   const activityHeight = 1;
   const emptyStateHeight = compactEmptyStateHeight(rail);
   const rootHeight = compactStartup ? emptyStateHeight + activityHeight + footerHeight : (terminalHeight ?? '100%');
-  const input = overlayActive
-    ? core.Box({ id: 'synax-input-placeholder', width: '100%', height: inputHeight, backgroundColor: pal.surface })
-    : core.h(core.TextareaRenderable, {
-        id: 'synax-input',
-        initialValue: footer.prompt,
-        placeholder: footer.placeholder,
-        width: '100%',
-        height: inputHeight,
-        minHeight: 1,
-        maxHeight: 12,
-        wrapMode: 'word',
-        backgroundColor: pal.surface,
-        textColor: pal.text,
-        focusedBackgroundColor: pal.surface,
-        focusedTextColor: pal.text,
-        placeholderColor: pal.textAccent,
-        cursorStyle: { style: 'block', blinking: false },
-        keyBindings: [
-          { name: 'return', shift: true, action: 'newline' },
-          { name: 'linefeed', shift: true, action: 'newline' },
-        ],
-        onContentChange: function () {
-          onPromptChange?.(readPromptValue(this), this);
-        },
-        onSubmit: function () {
-          onSubmit?.(readPromptValue(this));
-        },
-      });
+  const input = core.h(core.TextareaRenderable, {
+    id: 'synax-input',
+    initialValue: footer.prompt,
+    placeholder: footer.placeholder,
+    width: '100%',
+    height: inputHeight,
+    minHeight: 1,
+    maxHeight: 12,
+    wrapMode: 'word',
+    backgroundColor: pal.surface,
+    textColor: pal.text,
+    focusedBackgroundColor: pal.surface,
+    focusedTextColor: pal.text,
+    placeholderColor: pal.textAccent,
+    cursorStyle: { style: 'line', blinking: true },
+    keyBindings: [
+      { name: 'return', shift: true, action: 'newline' },
+      { name: 'linefeed', shift: true, action: 'newline' },
+    ],
+    onContentChange: function () {
+      onPromptChange?.(readPromptValue(this), this);
+    },
+    onSubmit: function () {
+      onSubmit?.(readPromptValue(this));
+    },
+  });
 
   return core.Box(
     {
@@ -298,6 +313,7 @@ export function renderArtifactRoot(
         core.Box({ flexGrow: 1 }, input),
       ),
       core.Text({ id: 'synax-hints', content: footer.hints, fg: pal.textAccent }),
+      core.Text({ id: 'synax-context-bar', content: footer.contextInfo ?? '', fg: pal.textMuted }),
     ),
   );
 }
@@ -311,6 +327,9 @@ function renderSettingsOverlay(
 ): OpenTuiNode {
   const overlayHeight = terminalHeight ?? '100%';
   const backingLineCount = typeof terminalHeight === 'number' ? Math.max(0, terminalHeight - lines.length) : 0;
+  // The full-screen backing uses the app background (not the surface color)
+  // so the settings screen matches the rest of the TUI instead of painting
+  // the whole terminal a solid grey block.
   return core.Box(
     {
       id: 'synax-settings',
@@ -333,11 +352,11 @@ function renderSettingsOverlay(
         },
         core.Text({
           id: `synax-settings-line-${index}`,
-          ...FULL_WIDTH_TEXT,
-          wrapMode: 'none',
           content:
-            index === 1 && activeLabel ? styledActiveSettingsLine(core, line, activeLabel, palette) : stripAnsi(line),
-          ...(index === 1 && activeLabel ? {} : { fg: palette.text }),
+            index === 1 && activeLabel
+              ? styledActiveSettingsLine(core, line, activeLabel, palette)
+              : solidBgLine(core, line, palette),
+          fg: palette.text,
         }),
       ),
     ),
@@ -391,10 +410,23 @@ function styledActiveSettingsLine(
   const active = plain.slice(start, start + activeSegment.length);
   const after = plain.slice(start + activeSegment.length);
   return new core.StyledText([
-    { __isChunk: true, text: before },
+    core.bg(palette.background)(core.fg(palette.text)(before)),
     core.bg(palette.text)(core.fg(palette.background)(active)),
-    { __isChunk: true, text: after },
+    core.bg(palette.background)(core.fg(palette.text)(after)),
   ] as any);
+}
+
+/** Wrap a plain-text line in a StyledText with a solid app-background fill. */
+function solidBgLine(
+  core: OpenTuiCore,
+  line: string,
+  palette: TuiPalette,
+): string | InstanceType<(typeof import('@opentui/core'))['StyledText']> {
+  try {
+    return new core.StyledText([core.bg(palette.background)(core.fg(palette.text)(line))] as any);
+  } catch {
+    return line;
+  }
 }
 
 function styledInlineMarkdown(
@@ -522,7 +554,7 @@ export function renderArtifactCard(
         marginBottom: 1,
       },
       core.Box({ width: 1, minWidth: 1, marginRight: 1 }, core.Text({ content: ' ', fg: color })),
-      core.Box({ ...CARD_BODY_LAYOUT, paddingY: 0 }, ...children),
+      core.Box({ ...CARD_BODY_LAYOUT, paddingX: 1, paddingY: 0 }, ...children),
     );
   }
 
@@ -621,11 +653,35 @@ function renderPayloadRows(
     // Skip inner title when it duplicates the card crown (crown already shows "Result")
     const titleRows: OpenTuiNode[] =
       payload.title !== 'Result' ? [core.Text({ ...FULL_WIDTH_TEXT, content: payload.title, fg: color })] : [];
-    return [
-      ...titleRows,
-      ...renderResultMarkdown(core, payload.body, pal),
-      ...(event ? [renderResultStats(core, event, pal)] : []),
-    ];
+    const resultLines = renderResultMarkdown(core, payload.body, pal);
+    const totalLines = resultLines.length;
+    const truncated = !expanded && totalLines > TOOL_PREVIEW_LINES && eventClass !== 'result_error';
+    if (truncated) {
+      return [
+        ...titleRows,
+        ...resultLines.slice(0, TOOL_PREVIEW_LINES),
+        core.Text({
+          ...FULL_WIDTH_TEXT,
+          content: `▸ ${totalLines - TOOL_PREVIEW_LINES} more lines (Enter to expand)`,
+          fg: pal.textAccent,
+        }),
+        ...(event ? [renderResultStats(core, event, pal)] : []),
+      ];
+    }
+    // Collapse hint when expanded and more lines exist
+    if (expanded && totalLines > TOOL_PREVIEW_LINES && eventClass !== 'result_error') {
+      return [
+        ...titleRows,
+        ...resultLines,
+        core.Text({
+          ...FULL_WIDTH_TEXT,
+          content: `▾ Collapse (Enter)`,
+          fg: pal.textAccent,
+        }),
+        ...(event ? [renderResultStats(core, event, pal)] : []),
+      ];
+    }
+    return [...titleRows, ...resultLines, ...(event ? [renderResultStats(core, event, pal)] : [])];
   }
   if (eventClass === 'prompt' && payload.type === 'text') {
     return textPayloadRows(core, payload.body, eventClass, expanded, pal);
@@ -634,16 +690,7 @@ function renderPayloadRows(
   return [
     core.Text({ ...FULL_WIDTH_TEXT, content: payload.title, fg: color }),
     ...textPayloadRows(core, payload.body, eventClass, expanded, pal),
-    ...(eventClass === 'error'
-      ? [actionText(core, '[Retry] [Skip] [Show raw]', pal.textAccent)]
-      : [
-          ...(isExpandableText(payload.body, eventClass, expanded)
-            ? [actionText(core, '[Show full text]', pal.textAccent, onToggle)]
-            : []),
-          ...(expanded && isCollapsibleText(payload.body, eventClass)
-            ? [actionText(core, '[Collapse text]', pal.textAccent, onToggle)]
-            : []),
-        ]),
+    ...(eventClass === 'error' ? [actionText(core, '[Retry] [Skip] [Show raw]', pal.textAccent)] : []),
   ];
 }
 
@@ -802,22 +849,13 @@ function renderResultTable(core: OpenTuiCore, rows: string[], palette: TuiPalett
 function textPayloadRows(
   core: OpenTuiCore,
   body: string,
-  eventClass: SemanticEventClass,
-  expanded: boolean,
+  _eventClass: SemanticEventClass,
+  _expanded: boolean,
   palette: TuiPalette,
 ): OpenTuiNode[] {
   const lines = body.split('\n');
-  const visibleLines = eventClass === 'tool_result' || expanded ? lines : lines.slice(0, TEXT_PREVIEW_LINES);
-  const fg = eventClass === 'tool_result' ? palette.text : palette.textMuted;
-  return visibleLines.map((line) => core.Text({ ...FULL_WIDTH_TEXT, content: line, fg }));
-}
-
-function isExpandableText(body: string, eventClass: SemanticEventClass, expanded: boolean): boolean {
-  return !expanded && eventClass !== 'tool_result' && body.split('\n').length > TEXT_PREVIEW_LINES;
-}
-
-function isCollapsibleText(body: string, eventClass: SemanticEventClass): boolean {
-  return eventClass !== 'tool_result' && body.split('\n').length > TEXT_PREVIEW_LINES;
+  const fg = palette.textMuted;
+  return lines.map((line) => core.Text({ ...FULL_WIDTH_TEXT, content: line, fg }));
 }
 
 function renderAutocompleteOverlay(
@@ -839,29 +877,13 @@ function renderAutocompleteOverlay(
     const absoluteIndex = windowStart + i;
     const isSelected = absoluteIndex === selectedIndex;
     rows.push(
-      core.Box(
-        {
-          id: `synax-ac-row-${i}`,
-          width: '100%',
-          height: 1,
-          flexDirection: 'row',
-          backgroundColor: palette.surface,
-          visible: i < items.length,
-        },
-        core.Text({
-          id: `synax-ac-marker-${i}`,
-          content: item && isSelected ? '→ ' : '  ',
-          fg: isSelected ? palette.brand : palette.textMuted,
-          width: 2,
-        }),
-        core.Text({
-          id: `synax-ac-label-${i}`,
-          ...FULL_WIDTH_TEXT,
-          wrapMode: 'none',
-          content: item,
-          fg: isSelected ? palette.text : palette.textMuted,
-        }),
-      ),
+      core.Text({
+        id: `synax-ac-row-${i}`,
+        ...FULL_WIDTH_TEXT,
+        content: item ? (isSelected ? `→ ${item}` : `  ${item}`) : '',
+        fg: isSelected ? palette.brand : palette.textAccent,
+        visible: i < items.length,
+      }),
     );
   }
   return core.Box(
@@ -876,9 +898,11 @@ function renderAutocompleteOverlay(
       flexDirection: 'column',
       border: ['top'],
       borderColor: palette.brand,
+      // Solid background: without this the absolutely-positioned dropdown is
+      // transparent and the transcript bleeds through, making it unreadable.
+      backgroundColor: palette.surface,
       paddingX: 2,
       paddingY: 0,
-      backgroundColor: palette.surface,
     },
     ...rows,
   );
@@ -889,6 +913,44 @@ function autocompleteWindowStart(selectedIndex: number, itemCount: number, windo
   const clampedSelected = Math.max(0, Math.min(selectedIndex, itemCount - 1));
   const halfWindow = Math.floor(windowSize / 2);
   return Math.max(0, Math.min(clampedSelected - halfWindow, itemCount - windowSize));
+}
+
+/**
+ * Render a session-start card as the first transcript entry so you can
+ * scroll up and see which model, workspace, and Synax version you started
+ * with — even after the splash screen disappears.
+ */
+function renderSessionHeaderCard(
+  core: OpenTuiCore,
+  rail: ArtifactRailState,
+  modelId?: string,
+  modelPal?: ModelPalette,
+  palette?: TuiPalette,
+): OpenTuiNode {
+  void modelPal;
+  const pal = palette ?? getPalette();
+  const model = modelId ?? rail.model ?? 'local';
+  const provider = rail.provider ?? '-';
+  const cwd = rail.cwd ?? '~';
+  const branch = rail.branch ?? '-';
+  const ctxPct = rail.contextLabel ?? '—';
+  const versionLabel = `synax v${VERSION}`;
+  const title = `${GLYPHS.plan}  ${versionLabel} session`;
+  const color = pal.semantic.plan;
+  const lines = [`${model}  ·  ${provider}`, `workspace  ${cwd}`, `branch     ${branch}`, `context    ${ctxPct}`];
+  return core.Box(
+    {
+      id: 'synax-session-header',
+      width: '100%',
+      flexDirection: 'column',
+      marginBottom: 1,
+      border: ['left'],
+      borderColor: color,
+      paddingX: 1,
+    },
+    core.Text({ content: title, fg: color }),
+    ...lines.map((line) => core.Text({ content: line, fg: pal.textMuted })),
+  );
 }
 
 function renderEmptyState(
@@ -906,14 +968,18 @@ function renderEmptyState(
   const activeModel = modelId ?? rail.model ?? '';
   const visualProfile = resolveCoreVisualProfile(activeModel);
   const inner = width - 2;
-  const model = rail.model ? clip(rail.model, Math.max(8, inner - 14)) : 'local';
-  const workspace = rail.cwd ? clip(rail.cwd, Math.max(8, inner - 14)) : '~';
-  const branch = rail.branch ? clip(rail.branch, inner - 16) : '-';
-  const context = rail.contextLabel ? clip(rail.contextLabel, inner - 14) : `${rail.filesTouched.length} files loaded`;
-  const stateLine = clip(footer.status.replace(/\.$/, '').toLowerCase() || 'ready', inner - 14);
+  const railPrefix = ' │ ';
+  const railInner = inner - 3;
+  const model = rail.model ? clip(rail.model, Math.max(8, railInner - 12)) : 'local';
+  const workspace = rail.cwd ? clip(rail.cwd, Math.max(8, railInner - 12)) : '~';
+  const branch = rail.branch ? clip(rail.branch, railInner - 12) : '-';
+  const context = rail.contextLabel
+    ? clip(rail.contextLabel, railInner - 12)
+    : `${rail.filesTouched.length} files loaded`;
+  const stateLine = clip(footer.status.replace(/\.$/, '').toLowerCase() || 'ready', railInner - 12);
   const coreLines = renderAiCore('idle', (splash?.frame ?? 0) / 8, visualProfile).map(stripAnsi);
   const hr = '─'.repeat(Math.max(20, inner - 6));
-  const labelWidth = 12;
+  const tableLabelWidth = 10;
 
   return core.Box(
     {
@@ -930,31 +996,25 @@ function renderEmptyState(
       core.Text({ content: centerText(line, inner), fg: modelPal?.primary ?? pal.textAccent }),
     ),
     core.Text({ content: '' }),
-    // Clean metadata section — labeled key:value pairs without confusing rail prefix
+    // Metadata table with left rail
     core.Text({
-      content: centerText('─ session ─', inner),
+      content: `${railPrefix}${'model'.padEnd(tableLabelWidth)}${model}`,
       fg: pal.textMuted,
     }),
-    core.Text({ content: '' }),
     core.Text({
-      content: `  ${'model'.padEnd(labelWidth)}  ${model}`,
-      fg: pal.text,
-    }),
-    core.Text({
-      content: `  ${'workspace'.padEnd(labelWidth)}  ${workspace}`,
-      fg: pal.text,
-    }),
-    core.Text({
-      content: `  ${'branch'.padEnd(labelWidth)}  ${branch}`,
-      fg: pal.text,
-    }),
-    core.Text({
-      content: `  ${'context'.padEnd(labelWidth)}  ${context}`,
+      content: `${railPrefix}${'workspace'.padEnd(tableLabelWidth)}${workspace}`,
       fg: pal.textMuted,
     }),
-    core.Text({ content: '' }),
     core.Text({
-      content: `  ${'status'.padEnd(labelWidth)}  ${stateLine}`,
+      content: `${railPrefix}${'branch'.padEnd(tableLabelWidth)}${branch}`,
+      fg: pal.textMuted,
+    }),
+    core.Text({
+      content: `${railPrefix}${'context'.padEnd(tableLabelWidth)}${context}`,
+      fg: pal.textMuted,
+    }),
+    core.Text({
+      content: `${railPrefix}${'state'.padEnd(tableLabelWidth)}${stateLine}`,
       fg: pal.textAccent,
     }),
   );
@@ -1074,7 +1134,7 @@ function renderCompactBand(
   if (payload.type === 'edit') {
     return core.Text({
       ...FULL_WIDTH_TEXT,
-      content: `${glyph} ${payload.file}   +${payload.linesAdded} ~${payload.linesModified} -${payload.linesRemoved}   ${payload.summary.slice(0, 50)}`,
+      content: `${glyph} ${payload.file}   +${payload.linesAdded} ~${payload.linesModified} -${payload.linesRemoved}   ${payload.summary}`,
       fg: color,
     });
   }
@@ -1093,7 +1153,7 @@ function renderCompactBand(
     const status = payload.exitCode === undefined ? '' : payload.exitCode === 0 ? ' ok' : ` exit ${payload.exitCode}`;
     return core.Text({
       ...FULL_WIDTH_TEXT,
-      content: `${glyph} ${(payload.command || 'command').slice(0, 60)}${status}`,
+      content: `${glyph} ${payload.command || 'command'}${status}`,
       fg: payload.exitCode && payload.exitCode !== 0 ? palette.error : color,
     });
   }
@@ -1107,7 +1167,7 @@ function renderCompactBand(
   if (payload.type === 'commit') {
     return core.Text({
       ...FULL_WIDTH_TEXT,
-      content: `${glyph} ${payload.message.slice(0, 70)}`,
+      content: `${glyph} ${payload.message}`,
       fg: color,
     });
   }
@@ -1174,7 +1234,7 @@ function renderDiagnosticCard(
     ) ??
     lines[1] ??
     payload.title;
-  const summary = summaryLine.length > 80 ? `${summaryLine.slice(0, 77)}...` : summaryLine;
+  const summary = summaryLine;
 
   return [
     core.Text({ ...FULL_WIDTH_TEXT, content: `${payload.title}  —  ${summary}`, fg: color }),
@@ -1268,8 +1328,8 @@ function renderAgentStatusCard(core: OpenTuiCore, event: SemanticEvent, palette?
 function renderThinkingCard(
   core: OpenTuiCore,
   event: SemanticEvent,
-  expanded = false,
-  onToggleExpand?: (id: string) => void,
+  _expanded = false,
+  _onToggleExpand?: (id: string) => void,
   palette?: TuiPalette,
 ): OpenTuiNode {
   const pal = palette ?? getPalette();
@@ -1280,47 +1340,29 @@ function renderThinkingCard(
   const color = active ? pal.semantic.thinking : pal.textAccent;
   const normalized = normalizeThinkingText(body);
   const bodyLines = normalized.split('\n').filter((line) => line.trim().length > 0);
-  const preview = thinkingPreview(normalized);
-  const shown = expanded ? bodyLines : [preview];
-  const eventId = event.id;
 
-  return shadedCard(core, event.id, color, pal, `◌  ${title}`, [
-    core.Text({
-      ...FULL_WIDTH_TEXT,
-      content: active && !expanded ? shimmerThinkingLine(preview) : (shown[0] ?? preview),
-      fg: pal.textMuted,
-      onMouseDown: (mouseEvent: { stopPropagation?: () => void; preventDefault?: () => void }) => {
-        mouseEvent.stopPropagation?.();
-        mouseEvent.preventDefault?.();
-        onToggleExpand?.(eventId);
-      },
-    }),
-    ...(expanded
-      ? shown.slice(1).map((line) =>
-          core.Text({
-            ...FULL_WIDTH_TEXT,
-            content: line,
-            fg: pal.textMuted,
-          }),
-        )
-      : [core.Text({ ...FULL_WIDTH_TEXT, content: '[Ctrl+O expand]', fg: pal.textAccent })]),
-  ]);
-}
-
-function shimmerThinkingLine(text: string): string {
-  return `◇ ${text}`;
+  // Always show the full thinking text — no collapse, no expand toggle.
+  // Long thinking blocks are naturally scrollable in the transcript.
+  return shadedCard(
+    core,
+    event.id,
+    color,
+    pal,
+    `◌  ${title}`,
+    bodyLines.map((line) =>
+      core.Text({
+        ...FULL_WIDTH_TEXT,
+        content: line,
+        fg: pal.textMuted,
+      }),
+    ),
+  );
 }
 
 function normalizeThinkingText(text: string): string {
   return stripToolCallMarkup(text)
     .replace(/[ \t]+([,.;:!?])/g, '$1')
     .trim();
-}
-
-function thinkingPreview(text: string): string {
-  if (!text) return 'waiting for reasoning tokens';
-  const maxLength = 120;
-  return text.length > maxLength ? text.slice(0, maxLength).trimEnd() : text;
 }
 
 // ─── Checkpoint divider ────────────────────────────────────────────────────

@@ -190,7 +190,11 @@ export async function detectThemeMode(renderer?: {
 }): Promise<'dark' | 'light'> {
   if (renderer?.waitForThemeMode) {
     try {
-      return await renderer.waitForThemeMode();
+      // OpenTUI resolves null when the terminal does not answer the OSC
+      // theme query (common under some terminals/multiplexers). Only trust
+      // a definite answer; otherwise fall through to COLORFGBG.
+      const mode = (await renderer.waitForThemeMode()) as 'dark' | 'light' | null | undefined;
+      if (mode === 'dark' || mode === 'light') return mode;
     } catch {
       // fall through
     }

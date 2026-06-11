@@ -94,9 +94,10 @@ export function scrollArtifactHistory(
       }
     | undefined;
   if (!scrollBox || typeof scrollBox.scrollBy !== 'function') return false;
-  if (deltaRows < 0 && 'stickyScroll' in scrollBox) {
-    scrollBox.stickyScroll = false;
-  }
+  // ScrollBox's built-in _hasManualScroll tracks when the user has scrolled
+  // away from the sticky edge. When the user scrolls back to the bottom,
+  // updateStickyState() auto-clears _hasManualScroll and resuming following.
+  // We do NOT disable stickyScroll here — doing so prevents recovery.
   scrollBox.scrollBy(deltaRows);
   return true;
 }

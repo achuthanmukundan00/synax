@@ -110,8 +110,8 @@ export function renderResumePicker(state: ResumePickerState, width: number, heig
   if (!state.active) return [];
 
   const innerW = Math.max(50, Math.min(width - 4, 100));
-  const maxVisibleRows = Math.max(4, Math.min(14, height - 10));
-  const visibleRows = state.filtered.length === 0 ? 4 : Math.min(maxVisibleRows, Math.max(4, state.filtered.length));
+  const innerH = Math.max(10, Math.min(height - 4, 30));
+  const visibleRows = Math.max(1, innerH - 6); // header + sort + search + footer
   const scrollOffset = Math.max(0, state.selectedRow - Math.floor(visibleRows / 2));
   const visibleSlice = state.filtered.slice(scrollOffset, scrollOffset + visibleRows);
 
@@ -121,13 +121,13 @@ export function renderResumePicker(state: ResumePickerState, width: number, heig
   const sortLabel = `Sort: ${state.sortBy === 'updated' ? 'Updated' : 'Created'}`;
   const headerLabel = 'Resume Previous Session';
   const headerPad = Math.max(0, innerW - headerLabel.length - sortLabel.length - 2);
-  lines.push(borderLine(innerW));
+  lines.push(borderLine('top', innerW));
   lines.push(frameLine(` ${headerLabel}${' '.repeat(headerPad)}${sortLabel} `, innerW));
 
   // Search
   const searchLabel = state.searchQuery ? `Type to search: ${state.searchQuery}_` : 'Type to search';
   lines.push(frameLine(` ${searchLabel} `, innerW));
-  lines.push(borderLine(innerW));
+  lines.push(borderLine('middle', innerW));
 
   // Column headers
   const colHeader = '  Created        Updated        Msgs Status     Branch      Model       Conversation';
@@ -151,10 +151,10 @@ export function renderResumePicker(state: ResumePickerState, width: number, heig
       const prefix = isSelected ? '> ' : '  ';
       const created = formatRelative(session.createdAt);
       const updated = formatRelative(session.updatedAt);
-      const branch = session.branch || '-';
+      const branch = session.branch || '—';
       const status = session.status || 'active';
       const messageCount = String(session.messageCount ?? 0);
-      const model = session.activeModel || '-';
+      const model = session.activeModel || '—';
       const title = session.title || session.summary || session.id;
 
       const rowContent = `${prefix}${created.padEnd(14)} ${updated.padEnd(14)} ${messageCount.padStart(4)} ${status
@@ -165,10 +165,14 @@ export function renderResumePicker(state: ResumePickerState, width: number, heig
     }
   }
 
+  // Fill remaining rows
+  for (let i = visibleSlice.length; i < visibleRows; i += 1) {
+    lines.push(frameLine('', innerW));
+  }
+
   // Footer
   const footer = ' enter to resume    esc close    ctrl+d quit    tab sort    up/down browse ';
-  const footerText = clipToWidth(footer, innerW);
-  lines.push(`+${footerText}${'-'.repeat(Math.max(0, innerW - footerText.length))}+`);
+  lines.push(borderLine('bottom', innerW, footer));
 
   return lines;
 }
@@ -194,8 +198,12 @@ function formatRelative(isoDate: string): string {
   }
 }
 
-function borderLine(width: number): string {
-  return `+${'-'.repeat(width)}+`;
+function borderLine(kind: 'top' | 'middle' | 'bottom', width: number, label = ''): string {
+  const left = kind === 'bottom' ? '+' : '+';
+  const right = kind === 'bottom' ? '+' : '+';
+  if (!label) return `${left}${'-'.repeat(width)}${right}`;
+  const clipped = clipToWidth(label, width);
+  return `${left}${clipped}${'-'.repeat(Math.max(0, width - clipped.length))}${right}`;
 }
 
 function frameLine(content: string, width: number): string {
@@ -206,5 +214,5 @@ function frameLine(content: string, width: number): string {
 function clipToWidth(text: string, width: number): string {
   if (text.length <= width) return text;
   if (width <= 1) return text.slice(0, width);
-  return `${text.slice(0, width - 2)}..`;
+  return `${text.slice(0, width - 1)}…`;
 }

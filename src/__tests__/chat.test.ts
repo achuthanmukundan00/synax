@@ -29,6 +29,7 @@ jest.mock('node:readline/promises', () => ({
 }));
 
 import {
+  buildConversationMessagesFromSessionEvents,
   createChatSession,
   createInlinePasteInputSession,
   classifyInlineSubmission,
@@ -41,6 +42,7 @@ import {
   type ChatSession,
 } from '../commands/chat';
 import { writeLastEditRecord } from '../agent/safety';
+import { appendSessionEvent, createSession, findSessionMeta, generateSessionId } from '../sessions/session-store';
 
 class FakeTtyInput extends PassThrough {
   isTTY = true;
@@ -95,6 +97,84 @@ describe('chat session', () => {
       session.conversation.messages.filter((message) => message.role === 'user').map((message) => message.content),
     ).toEqual(['one', 'two']);
     expect(requests).toHaveLength(2);
+  });
+
+  it('rebuilds resumed session context from selected JSONL events behind the stable prompt prefix', () => {
+    const originalHome = process.env.HOME;
+    process.env.HOME = join(TMP, 'home');
+    mkdirSync(process.env.HOME, { recursive: true });
+    try {
+      const previousId = generateSessionId();
+      createSession({
+        id: previousId,
+        workspacePath: TMP,
+        title: 'Previous work',
+        activeModel: 'fake',
+        status: 'completed',
+      });
+      appendSessionEvent(previousId, {
+        type: 'user_message',
+        at: '2026-01-01T00:00:00.000Z',
+        content: 'first user turn',
+      });
+      appendSessionEvent(previousId, {
+        type: 'tool_result',
+        at: '2026-01-01T00:00:01.000Z',
+        name: 'read',
+        result: { output: 'not model-visible on resume' },
+      });
+      appendSessionEvent(previousId, {
+        type: 'assistant_message',
+        at: '2026-01-01T00:00:02.000Z',
+        content: 'first assistant reply',
+      });
+
+      const session = createChatSession({
+        repoRoot: TMP,
+        config: { provider: { kind: 'openai-compatible', base_url: 'http://localhost/v1', model: 'fake' } },
+        skillMessages: ['Stable skill instruction.'],
+      });
+      const stablePrefix = session.conversation.messages
+        .filter((message) => message.role === 'system')
+        .map((message) => message.content);
+
+      const report = session.resumeSession?.(previousId);
+
+      expect(report).toMatchObject({ ok: true, sessionId: previousId, eventsRead: 3, restoredMessages: 2 });
+      expect(session.sessionId).toBe(previousId);
+      const systemPrefixLength = stablePrefix.length;
+      expect(session.conversation.messages.slice(0, systemPrefixLength).map((message) => message.content)).toEqual(
+        stablePrefix,
+      );
+      // After resume: restored messages + resume context note
+      const expectedAfterSystem = [
+        ['user', 'first user turn'],
+        ['assistant', 'first assistant reply'],
+        ['user', expect.stringContaining('[Resumed session: Previous work]')],
+      ];
+      expect(
+        session.conversation.messages.slice(systemPrefixLength).map((message) => [message.role, message.content]),
+      ).toEqual(expectedAfterSystem);
+      expect(findSessionMeta(previousId)?.status).toBe('active');
+    } finally {
+      process.env.HOME = originalHome;
+    }
+  });
+
+  it('converts persisted session events to model-visible chat messages only', () => {
+    const restored = buildConversationMessagesFromSessionEvents(
+      [
+        { type: 'user_message', at: '', content: 'hello' },
+        { type: 'tool_call', at: '', name: 'read', args: { path: 'README.md' } },
+        { type: 'tool_result', at: '', name: 'read', result: { content: 'tool output' } },
+        { type: 'assistant_message', at: '', content: 'hi' },
+      ],
+      ['Stable skill instruction.'],
+    );
+
+    expect(restored.restoredCount).toBe(2);
+    expect(restored.messages.map((message) => message.role)).toEqual(['system', 'system', 'user', 'assistant']);
+    expect(restored.messages.slice(2).map((message) => message.content)).toEqual(['hello', 'hi']);
   });
 
   it('routes report-back inspection prompts as read-only so text answers are not swallowed', async () => {

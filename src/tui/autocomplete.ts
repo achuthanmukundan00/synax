@@ -30,6 +30,8 @@ export interface CompletionResult {
   from: number;
   /** End offset (exclusive) of the token being replaced. */
   to: number;
+  /** Completion behavior for accepting the selected item. */
+  kind: Exclude<CompletionContext['kind'], 'none'>;
 }
 
 // ─── Word boundary helpers ─────────────────────────────────────────────────
@@ -118,7 +120,7 @@ export function getPathCompletions(input: string, cursorPos: number, cwd: string
     items.push(fullPrompt);
   }
 
-  return { items, from: start, to: end };
+  return { items, from: start, to: end, kind: 'path' };
 }
 
 // ─── @-mention completion ──────────────────────────────────────────────────
@@ -148,7 +150,7 @@ export function getAtMentionCompletions(input: string, cursorPos: number, repoRo
     items.push(fullPrompt);
   }
 
-  return { items, from: start, to: end };
+  return { items, from: start, to: end, kind: 'at_mention' };
 }
 
 /**
@@ -328,7 +330,7 @@ export function getModelNameCompletions(
     return fullPrompt;
   });
 
-  return { items, from: start, to: end };
+  return { items, from: start, to: end, kind: 'model_name' };
 }
 
 // ─── Combined entry point ──────────────────────────────────────────────────
@@ -371,7 +373,7 @@ export function getCompletions(
     if (items.length === 0) return null;
     const { start, end } = getWordAtCursor(input, cursorPos);
     const completions = items.map((item) => input.slice(0, start) + item + input.slice(end));
-    return { items: completions, from: start, to: end };
+    return { items: completions, from: start, to: end, kind: 'slash_command' };
   }
 
   // For 'none' context, still try path and @-mention as fallback.
