@@ -105,6 +105,8 @@ export interface AgentToolExecutionResult {
   changedFile?: string;
   error?: string;
   terminalState?: TerminalState;
+  /** True when the result was served from the per-turn read cache (not charged against the read budget). */
+  fromCache?: boolean;
 }
 
 // ─── Shared helpers ───────────────────────────────────────
@@ -139,17 +141,69 @@ export function toAgentAction(call: ParsedToolCall): AgentAction | null {
         maxMatches: typeof args.maxMatches === 'number' ? args.maxMatches : undefined,
       };
     case 'edit':
-    case 'replace_in_file':
-      if (typeof args.path !== 'string' || typeof args.oldStr !== 'string' || typeof args.newStr !== 'string') {
-        return null;
-      }
-      return { kind: 'edit', path: args.path, oldStr: args.oldStr, newStr: args.newStr };
+    case 'replace_in_file': {
+      const path =
+        typeof args.path === 'string'
+          ? args.path
+          : typeof args.file === 'string'
+            ? args.file
+            : typeof args.filePath === 'string'
+              ? args.filePath
+              : undefined;
+      const oldStr =
+        typeof args.oldStr === 'string'
+          ? args.oldStr
+          : typeof args.old_str === 'string'
+            ? args.old_str
+            : typeof args.oldText === 'string'
+              ? args.oldText
+              : typeof args.old_text === 'string'
+                ? args.old_text
+                : typeof args.search === 'string'
+                  ? args.search
+                  : typeof args.original === 'string'
+                    ? args.original
+                    : undefined;
+      const newStr =
+        typeof args.newStr === 'string'
+          ? args.newStr
+          : typeof args.new_str === 'string'
+            ? args.new_str
+            : typeof args.newText === 'string'
+              ? args.newText
+              : typeof args.new_text === 'string'
+                ? args.new_text
+                : typeof args.replacement === 'string'
+                  ? args.replacement
+                  : typeof args.replace === 'string'
+                    ? args.replace
+                    : undefined;
+      if (!path || !oldStr || !newStr) return null;
+      return { kind: 'edit', path, oldStr, newStr };
+    }
     case 'write':
-    case 'create_file':
-      if (typeof args.path !== 'string' || typeof args.content !== 'string') {
-        return null;
-      }
-      return { kind: 'write', path: args.path, content: args.content };
+    case 'create_file': {
+      const path =
+        typeof args.path === 'string'
+          ? args.path
+          : typeof args.file === 'string'
+            ? args.file
+            : typeof args.filePath === 'string'
+              ? args.filePath
+              : undefined;
+      const content =
+        typeof args.content === 'string'
+          ? args.content
+          : typeof args.text === 'string'
+            ? args.text
+            : typeof args.contents === 'string'
+              ? args.contents
+              : typeof args.body === 'string'
+                ? args.body
+                : undefined;
+      if (!path || !content) return null;
+      return { kind: 'write', path, content };
+    }
     case 'bash':
       if (typeof args.command !== 'string' || args.command.trim().length === 0) {
         return null;

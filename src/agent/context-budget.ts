@@ -52,9 +52,15 @@ const DEFAULT_SETTINGS: ContextBudgetSettings = {
   reservedOutputTokens: 8192,
   keepRecentTokens: 20000,
   maxSingleReadResultTokens: 12000,
-  maxTotalReadResultTokensPerTurn: 96000,
+  maxTotalReadResultTokensPerTurn: 40000,
   keepRecentToolTurns: 3,
 };
+
+// Read caps scale with the context window so large-window (frontier) models
+// are not starved by caps tuned for ~128k local models. The DEFAULT_SETTINGS
+// values above act as floors for small windows; explicit config always wins.
+const SINGLE_READ_WINDOW_FRACTION = 0.1;
+const TOTAL_READ_WINDOW_FRACTION = 0.35;
 
 const MAX_SUMMARY_CHARS = 8000;
 const MAX_STRUCTURED_SECTION_CHARS = 2000;
@@ -98,17 +104,74 @@ export function resolveContextBudgetSettings(config: {
   const strategyExtra = config.strategyReserveTokens ?? 0;
   const reservedOutputTokens = baseReserved + strategyExtra;
 
+  // Derive read caps from the effective input window (floor = small-window
+  // defaults). A 1M-context model gets ~347k of read budget per turn instead
+  // of a flat 40k, which previously killed long-horizon exploration turns.
+  const effectiveInputTokens = Math.max(0, contextWindowTokens - reservedOutputTokens);
+  const derivedSingleReadCap = Math.max(
+    DEFAULT_SETTINGS.maxSingleReadResultTokens,
+    Math.floor(effectiveInputTokens * SINGLE_READ_WINDOW_FRACTION),
+  );
+  const derivedTotalReadCap = Math.max(
+    DEFAULT_SETTINGS.maxTotalReadResultTokensPerTurn,
+    Math.floor(effectiveInputTokens * TOTAL_READ_WINDOW_FRACTION),
+  );
+
+  // Derive compaction strategy from context window when not explicitly set.
+  // Large-window models (>=262k) get 'none': server-side middle-truncation
+  // is good enough, and Synax's lossy summarization loses semantic precision
+  // the model could still use. Small models benefit from client-side compaction
+  // because random token-level truncation destroys coherence.
+  const strategyMode = config.strategyMode ?? deriveStrategyFromWindow(contextWindowTokens);
+  // Map strategy to compaction threshold.
+  const compactionThreshold = config.assemblyCompactionThreshold ?? strategyThreshold(strategyMode);
+
   return {
     contextWindowTokens,
     reservedOutputTokens,
     keepRecentTokens: config.keepRecentTokens ?? DEFAULT_SETTINGS.keepRecentTokens,
-    maxSingleReadResultTokens: config.maxSingleReadResultTokens ?? DEFAULT_SETTINGS.maxSingleReadResultTokens,
-    maxTotalReadResultTokensPerTurn:
-      config.maxTotalReadResultTokensPerTurn ?? DEFAULT_SETTINGS.maxTotalReadResultTokensPerTurn,
+    maxSingleReadResultTokens: config.maxSingleReadResultTokens ?? derivedSingleReadCap,
+    maxTotalReadResultTokensPerTurn: config.maxTotalReadResultTokensPerTurn ?? derivedTotalReadCap,
     keepRecentToolTurns: config.keepRecentToolTurns ?? DEFAULT_SETTINGS.keepRecentToolTurns,
-    assemblyCompactionThreshold: config.assemblyCompactionThreshold ?? 0.8,
-    strategyMode: config.strategyMode,
+    assemblyCompactionThreshold: compactionThreshold,
+    strategyMode,
   };
+}
+
+/**
+ * Derive compaction strategy from the model context window.
+ *
+ * Large models: the provider does server-side middle-truncation. Synax
+ * should not compete with that via lossy summarization — preserve verbatim
+ * history for the prompt cache and trust the runner.
+ *
+ * Small models: server-side truncation destroys coherence because it drops
+ * tool-call/result pairs and task state randomly. Synax-side semantic
+ * compaction (file cards, range metadata, anti-reread steering) is more
+ * precise than token-level middle-drop.
+ */
+function deriveStrategyFromWindow(window: number): NonNullable<ContextBudgetSettings['strategyMode']> {
+  if (window >= 262_000) return 'none'; // Frontier: let provider handle it
+  if (window >= 128_000) return 'light'; // Large local: compact only at 95%
+  if (window >= 65_000) return 'moderate'; // Normal: existing 0.8 threshold
+  if (window >= 32_000) return 'moderate'; // Small: compact at 0.75
+  return 'aggressive'; // Tiny: compact early, force action
+}
+
+/** Map strategy mode to assembly compaction threshold. */
+function strategyThreshold(mode: ContextBudgetSettings['strategyMode']): number {
+  switch (mode) {
+    case 'none':
+    case 'off':
+      return 1.0; // never compact proactively
+    case 'light':
+      return 0.95;
+    case 'aggressive':
+      return 0.6;
+    case 'moderate':
+    default:
+      return 0.8;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1013,8 +1076,12 @@ export function assembleModelMessages(
     return { messages: [...messages], stats };
   }
 
-  // For 'light' strategy: compute oversized threshold (25% of effective window)
-  const shouldSkipOldResultCompaction = settings.strategyMode === 'light';
+  // For 'light' strategy with high threshold, keep old results verbatim
+  // unless truly enormous. But when the threshold itself is low (aggressive
+  // pressure signaled by the caller or test), compact normally.
+  const isLightStrategy = settings.strategyMode === 'light';
+  const thresholdIsAggressive = (settings.assemblyCompactionThreshold ?? 0.8) < 0.5;
+  const shouldSkipOldResultCompaction = isLightStrategy && !thresholdIsAggressive;
   const effectiveLimit = settings.contextWindowTokens - settings.reservedOutputTokens;
   const lightOversizedThreshold = Math.max(50, Math.floor(effectiveLimit * 0.25));
 
@@ -1515,7 +1582,12 @@ export function estimateTaskBudget(params: {
 
   // Estimate repo overhead: each file contributes ~60 tokens for path + metadata,
   // plus ~1 token per KB of source for file listing overhead.
-  const repoOverheadTokens = Math.ceil(repoMetadata.fileCount * 60 + repoMetadata.sourceKB * 1);
+  // Cap at 40% of effective window to prevent repo size from dominating
+  // task-relative estimation (avoids over-triggering orchestration on large repos
+  // for small tasks).
+  const rawRepoOverhead = Math.ceil(repoMetadata.fileCount * 60 + repoMetadata.sourceKB * 1);
+  const maxRepoOverhead = Math.floor(effectiveWindow * 0.4);
+  const repoOverheadTokens = Math.min(rawRepoOverhead, maxRepoOverhead);
 
   // System overhead: system prompt + tool definitions ≈ 2500 tokens (baseline)
   const systemOverheadTokens = 2500;

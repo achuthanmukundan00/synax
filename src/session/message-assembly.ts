@@ -95,17 +95,9 @@ export function buildModelRequest(
   const effectiveLimit = settings.contextWindowTokens - settings.reservedOutputTokens;
   const estimatedTokens = estimateRequestTokens(baseMessages);
 
-  // Strategy-aware compaction threshold:
-  // - 'none'/'off': never compact proactively (threshold = 1.0)
-  // - 'light': rarely compact proactively (threshold = 0.95)
-  // - default: existing behavior (threshold = 0.8)
-  const baseThreshold = settings.assemblyCompactionThreshold ?? 0.8;
-  const threshold =
-    settings.strategyMode === 'none' || settings.strategyMode === 'off'
-      ? 1.0
-      : settings.strategyMode === 'light'
-        ? 0.95
-        : baseThreshold;
+  // assemblyCompactionThreshold is resolved by resolveContextBudgetSettings
+  // from the auto-derived strategy (or explicit config). No need to re-derive here.
+  const threshold = settings.assemblyCompactionThreshold ?? 0.8;
   const nearBudget = estimatedTokens > effectiveLimit * threshold;
 
   let assembled: AgentMessage[];

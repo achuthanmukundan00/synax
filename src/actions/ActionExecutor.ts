@@ -31,6 +31,23 @@ export type ActionKind = AgentAction['kind'];
 
 export type HandlerMap = Map<ActionKind, ActionHandler>;
 
+/**
+ * Required argument names for built-in tools.
+ * Used to generate actionable error messages when a model sends wrong
+ * argument names (common with local models that use Python-style names).
+ */
+const BUILTIN_ARG_ERRORS = new Map<string, string>([
+  ['read', 'path (optional), startLine (optional), endLine (optional), query (optional)'],
+  ['edit', 'path, oldStr, newStr'],
+  ['replace_in_file', 'path, oldStr, newStr'],
+  ['write', 'path, content'],
+  ['create_file', 'path, content'],
+  ['bash', 'command'],
+  ['search_memory', 'query (required), maxResults (optional)'],
+  ['save_memory', 'content (required), domainTags (optional)'],
+  ['view_image', 'path'],
+]);
+
 // ─── Default handler map factory ──────────────────────────
 
 /**
@@ -100,6 +117,21 @@ export class ActionExecutor {
         const toolResult = await this.registry.execute(call.name, call.arguments);
         result = { success: toolResult.success, toolResult, error: toolResult.error };
       }
+    } else if (BUILTIN_ARG_ERRORS.has(call.name)) {
+      // Known built-in tool but arguments don't match → give actionable error
+      // so the model can self-correct (local models frequently use Python-style
+      // arg names like old_text instead of oldStr).
+      const received = Object.keys(call.arguments).join(', ') || '(none)';
+      const expected = BUILTIN_ARG_ERRORS.get(call.name)!;
+      result = {
+        success: false,
+        error: `invalid arguments for ${call.name}: received [${received}]. Expected: ${expected}. Re-emit the tool call with the correct argument names.`,
+        toolResult: {
+          success: false,
+          toolName: call.name,
+          error: `invalid arguments for ${call.name}`,
+        },
+      };
     } else {
       const toolResult = await this.registry.execute(call.name, call.arguments);
       result = { success: toolResult.success, toolResult, error: toolResult.error };

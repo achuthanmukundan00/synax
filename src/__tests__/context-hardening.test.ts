@@ -354,7 +354,7 @@ describe('hard read omission', () => {
   beforeEach(() => resetTmp());
   afterEach(() => rmSync(TMP, { recursive: true, force: true }));
 
-  it('does not omit reads regardless of token budget (dogfooding mode)', async () => {
+  it('omits read results when per-turn token budget is exceeded', async () => {
     writeFileSync(join(TMP, 'a.txt'), `${'data\n'.repeat(500)}`, 'utf-8');
     writeFileSync(join(TMP, 'b.txt'), `${'more\n'.repeat(500)}`, 'utf-8');
 
@@ -379,13 +379,13 @@ describe('hard read omission', () => {
       (m) => m.role === 'tool' && m.tool_call_id === '2',
     )?.content;
     expect(secondToolContent).toBeDefined();
-    // Dogfooding mode: read results are passed through without omission
+    // Per-turn cap enforced: second read is refused (omitted=true).
+    // Classified as a recoverable policy error so the turn continues.
     const parsed = JSON.parse(secondToolContent as string);
-    expect(parsed.output).toBeDefined();
-    expect(JSON.stringify(parsed.output)).toContain('more');
+    expect(parsed.output.omitted).toBe(true);
   });
 
-  it('full read results are passed through regardless of per-turn budget', async () => {
+  it('blocks further reads once per-turn read token budget is hardened', async () => {
     writeFileSync(join(TMP, 'a.txt'), `${'big\n'.repeat(5000)}`, 'utf-8');
     writeFileSync(join(TMP, 'b.txt'), `${'big\n'.repeat(3000)}`, 'utf-8');
 
@@ -406,14 +406,117 @@ describe('hard read omission', () => {
     });
 
     expect(result.terminalState).toBe('completed');
-    // Dogfooding mode: both reads pass through without omission
+    // Per-turn cap enforced: second read is refused (omitted=true).
     const toolMsgs2 = (client.requests[2].messages as AgentMessage[]).filter(
       (m) => m.role === 'tool' && m.tool_call_id === '2',
     );
     expect(toolMsgs2.length).toBe(1);
     const parsed2 = JSON.parse(extractTextContent(toolMsgs2[0].content) ?? '{}');
-    expect(parsed2.output).toBeDefined();
-    expect(JSON.stringify(parsed2.output)).toContain('big');
+    expect(parsed2.output.omitted).toBe(true);
+  });
+
+  it('does not terminate the turn after 3+ consecutive read-cap refusals (policy refusals are not errors)', async () => {
+    writeFileSync(join(TMP, 'a.txt'), `${'big\n'.repeat(2000)}`, 'utf-8');
+    writeFileSync(join(TMP, 'b.txt'), 'b\n', 'utf-8');
+    writeFileSync(join(TMP, 'c.txt'), 'c\n', 'utf-8');
+    writeFileSync(join(TMP, 'd.txt'), 'd\n', 'utf-8');
+    writeFileSync(join(TMP, 'e.txt'), 'e\n', 'utf-8');
+
+    const client = fakeClient([
+      { toolCalls: [{ id: '1', name: 'read', arguments: { path: 'a.txt' } }] },
+      {
+        toolCalls: [
+          { id: '2', name: 'read', arguments: { path: 'b.txt' } },
+          { id: '3', name: 'read', arguments: { path: 'c.txt' } },
+          { id: '4', name: 'read', arguments: { path: 'd.txt' } },
+          { id: '5', name: 'read', arguments: { path: 'e.txt' } },
+        ],
+      },
+      { content: 'Summary: a.txt contains repeated data lines.' },
+    ]);
+
+    const result = await runTurn({
+      repoRoot: TMP,
+      task: 'read many files',
+      client,
+      contextBudget: {
+        maxSingleReadResultTokens: 5000,
+        maxTotalReadResultTokensPerTurn: 100,
+      },
+    });
+
+    // Previously, a batch of 3+ reads issued after the cap tripped the
+    // consecutive-recoverable-error kill switch and discarded the turn.
+    expect(result.terminalState).toBe('completed');
+    expect(result.finalAnswer).toBe('Summary: a.txt contains repeated data lines.');
+    expect(result.error).toBeUndefined();
+  });
+
+  it('serves identical re-reads from cache without charging the read budget', async () => {
+    writeFileSync(join(TMP, 'a.txt'), `${'big\n'.repeat(2000)}`, 'utf-8');
+
+    const client = fakeClient([
+      { toolCalls: [{ id: '1', name: 'read', arguments: { path: 'a.txt' } }] },
+      // Budget is now exhausted; an identical re-read must still succeed.
+      { toolCalls: [{ id: '2', name: 'read', arguments: { path: 'a.txt' } }] },
+      { content: 'done' },
+    ]);
+
+    const result = await runTurn({
+      repoRoot: TMP,
+      task: 'read and re-read',
+      client,
+      contextBudget: {
+        maxSingleReadResultTokens: 5000,
+        maxTotalReadResultTokensPerTurn: 100,
+      },
+    });
+
+    expect(result.terminalState).toBe('completed');
+    const toolMsgs2 = (client.requests[2].messages as AgentMessage[]).filter(
+      (m) => m.role === 'tool' && m.tool_call_id === '2',
+    );
+    expect(toolMsgs2.length).toBe(1);
+    const parsed2 = JSON.parse(extractTextContent(toolMsgs2[0].content) ?? '{}');
+    // Cache hit: real content, not an omitted refusal.
+    expect(parsed2.success).toBe(true);
+    expect(parsed2.output.omitted).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 3b. Window-scaled read cap resolution
+// ---------------------------------------------------------------------------
+
+describe('window-scaled read caps', () => {
+  it('uses floor caps for the default 131072 window', () => {
+    const settings = resolveContextBudgetSettings({});
+    // effective = 131072 - 8192 = 122880 → 10% = 12288, 35% = 43008
+    expect(settings.maxSingleReadResultTokens).toBe(12288);
+    expect(settings.maxTotalReadResultTokensPerTurn).toBe(43008);
+  });
+
+  it('keeps floors for small local-model windows', () => {
+    const settings = resolveContextBudgetSettings({ contextWindowTokens: 16000, reservedOutputTokens: 4000 });
+    expect(settings.maxSingleReadResultTokens).toBe(12000);
+    expect(settings.maxTotalReadResultTokensPerTurn).toBe(40000);
+  });
+
+  it('scales read budget up for large frontier windows', () => {
+    const settings = resolveContextBudgetSettings({ contextWindowTokens: 1000000 });
+    // effective = 1000000 - 8192 = 991808 → 10% = 99180, 35% = 347132
+    expect(settings.maxSingleReadResultTokens).toBe(99180);
+    expect(settings.maxTotalReadResultTokensPerTurn).toBe(347132);
+  });
+
+  it('explicit config always wins over scaling', () => {
+    const settings = resolveContextBudgetSettings({
+      contextWindowTokens: 1000000,
+      maxSingleReadResultTokens: 5000,
+      maxTotalReadResultTokensPerTurn: 700,
+    });
+    expect(settings.maxSingleReadResultTokens).toBe(5000);
+    expect(settings.maxTotalReadResultTokensPerTurn).toBe(700);
   });
 });
 

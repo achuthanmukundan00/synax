@@ -394,6 +394,9 @@ export function systemPrompt(options: SystemPromptOptions): string {
     lines.push(
       'Keep working until the task is done, then stop and summarize.',
       'When completing a task that requires file changes, use write or edit tools to make the actual changes — do not just explain what you would do.',
+      'After making file changes, run the relevant tests (or build) to verify your work before claiming completion.',
+      'Plan your approach before acting: read relevant files, understand the code, then make targeted edits.',
+      'When using edit, the oldText must match the file exactly — read the file first to get the exact text.',
     );
   }
 

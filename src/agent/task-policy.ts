@@ -43,6 +43,29 @@ export function guardBroadTask(_task: string): BroadTaskGuardResult | null {
   return null;
 }
 
+/**
+ * Heuristic: does the task ask for information rather than file changes?
+ *
+ * Used to relax the `files_changed` verification contract in patch mode so
+ * Q&A / analysis tasks ("explain X", "why does Y fail?") are not pushed into
+ * making spurious edits just to satisfy the contract.
+ *
+ * Conservative by design: returns true only when the task BOTH looks
+ * informational AND contains no mutation verbs. Ambiguous tasks keep the
+ * strict contract.
+ */
+export function isInformationalTask(task: string): boolean {
+  const lower = task.toLowerCase().trim();
+
+  const mutationIntent =
+    /\b(fix|change|modif|add|edit|write|implement|update|refactor|resolve|patch|correct|repair|create|delete|remove|rename|move|migrate|upgrade|install|bump|revert|apply|format|cleanup|clean up|optimi[sz]e)\b/;
+  if (mutationIntent.test(lower)) return false;
+
+  const informationalIntent =
+    /\b(explain|describe|summari[sz]e|analy[sz]e|review|inspect|compare|what|why|how|where|which|who|list|show|find|tell me|walk me through|document for me)\b/;
+  return informationalIntent.test(lower) || lower.endsWith('?');
+}
+
 export function guardUnsupportedTask(_task: string, _shellEnabled: boolean): UnsupportedTaskGuardResult | null {
   return null;
 }
@@ -77,7 +100,7 @@ export function describeToolCall(name: string, input: Record<string, unknown>): 
   }
 
   if (name === 'search_memory') {
-    return typeof input.query === 'string' ? `search_memory: ${input.query.slice(0, 80)}` : 'search_memory';
+    return typeof input.query === 'string' ? `search_memory: ${input.query}` : 'search_memory';
   }
 
   return `${name}`;
