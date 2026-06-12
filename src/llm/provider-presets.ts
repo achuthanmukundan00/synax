@@ -8,6 +8,23 @@
 
 import type { ProviderId, ProviderPreset } from './types';
 
+// ─── Per-model context window overrides ─────────────────
+
+/**
+ * Canonical context windows for specific models.
+ * Checked before falling back to the provider-level preset value.
+ *
+ * Values sourced from official provider documentation.
+ * Update this map when provider models change.
+ */
+const modelContextWindows: Record<string, number> = {
+  // DeepSeek
+  'deepseek-v4-pro': 128_000,
+  'deepseek-v4-flash': 128_000,
+  'deepseek-chat': 128_000, // V3
+  'deepseek-reasoner': 64_000, // R1
+};
+
 // ─── Preset registry ────────────────────────────────────
 
 const providerPresets: Record<ProviderId, ProviderPreset> = {
@@ -60,7 +77,7 @@ const providerPresets: Record<ProviderId, ProviderPreset> = {
     apiKeyRequired: true,
     cloud: true,
     defaultModel: 'deepseek-v4-pro',
-    contextWindow: 1_000_000,
+    contextWindow: 128_000,
     supportsStreaming: true,
     supportsToolCalling: true,
     inputPricePer1MTokens: 0.27,
@@ -157,4 +174,36 @@ export function getAllProviderPresets(): ProviderPreset[] {
 
 export function isKnownProviderId(id: string): id is ProviderId {
   return id in providerPresets;
+}
+
+/**
+ * Get the canonical context window for a specific model, if known.
+ * Returns undefined when no per-model override exists (callers should
+ * fall back to the provider-level preset value).
+ */
+export function getModelContextWindow(modelId: string): number | undefined {
+  const normalized = modelId.trim().toLowerCase();
+  return modelContextWindows[normalized];
+}
+
+/**
+ * Resolve the effective context window for a provider + optional model.
+ * Checks per-model overrides first, then provider preset, then returns
+ * a conservative default (131072).
+ *
+ * This is the single source of truth for context window values.
+ */
+export function resolveContextWindow(providerId: string, modelId?: string): number {
+  // 1. Per-model override (highest priority)
+  if (modelId) {
+    const modelWindow = getModelContextWindow(modelId);
+    if (modelWindow !== undefined) return modelWindow;
+  }
+
+  // 2. Provider preset
+  const preset = getProviderPreset(providerId);
+  if (preset?.contextWindow !== undefined) return preset.contextWindow;
+
+  // 3. Conservative fallback
+  return 131072;
 }
