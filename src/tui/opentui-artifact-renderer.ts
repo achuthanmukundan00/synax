@@ -294,6 +294,7 @@ export function renderArtifactRoot(
         border: ['top'],
         borderColor: pal.border,
         backgroundColor: pal.background,
+        overflow: 'hidden',
         zIndex: 20,
         paddingX: 1,
       },
@@ -1044,10 +1045,44 @@ export function formatEventCrown(eventClass: SemanticEventClass): string {
 
 export function promptInputHeight(prompt: string, terminalWidth = 80): number {
   const wrapColumns = Math.max(16, terminalWidth - 6);
-  const explicitLines = stripAnsi(prompt).split('\n');
+  const text = stripAnsi(prompt);
+  // Empty prompt still needs 1 line for the placeholder/cursor.
+  if (text.length === 0) return 1;
+  const explicitLines = text.split('\n');
   const visualLines = explicitLines.reduce((count, line) => {
-    const lineLength = Math.max(1, line.length);
-    return count + Math.max(1, Math.ceil(lineLength / wrapColumns));
+    if (line.length === 0) return count + 1;
+    // Simulate word-wrapping to match OpenTUI TextareaRenderable wrapMode: 'word'.
+    // Breaks at word boundaries when the accumulated width exceeds wrapColumns.
+    // Words that are themselves longer than wrapColumns are force-broken.
+    const words = line.split(/ +/);
+    let currentLen = 0;
+    let lineCount = 0;
+    for (const word of words) {
+      if (word.length === 0) continue;
+      const space = currentLen === 0 ? 0 : 1;
+      if (currentLen + space + word.length <= wrapColumns) {
+        // Word fits on current visual line.
+        currentLen += space + word.length;
+      } else {
+        // Word does not fit; start a new visual line.
+        lineCount++;
+        if (word.length > wrapColumns) {
+          // Word is longer than the wrap width — force-break it across
+          // ceil(word.length / wrapColumns) visual lines.
+          const extraLines = Math.floor(word.length / wrapColumns);
+          lineCount += extraLines - 1; // -1 because we already counted 1 above
+          currentLen = word.length % wrapColumns;
+          if (currentLen === 0 && extraLines > 0) {
+            // Exact multiple: last full line has no remainder.
+            currentLen = 0;
+          }
+        } else {
+          currentLen = word.length;
+        }
+      }
+    }
+    if (currentLen > 0) lineCount++;
+    return count + Math.max(1, lineCount);
   }, 0);
   return Math.max(1, visualLines);
 }

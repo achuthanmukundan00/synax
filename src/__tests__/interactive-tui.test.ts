@@ -762,6 +762,30 @@ describe('OpenTUI polish helpers', () => {
     expect(promptInputHeight('wrap '.repeat(30), 40)).toBeGreaterThan(1);
   });
 
+  it('simulates word-wrap to match TextareaRenderable wrapping', () => {
+    // Short words: should all fit on one line.
+    expect(promptInputHeight('hello world', 80)).toBe(1);
+    // Long line that wraps: each word is short, should wrap at word boundaries.
+    const manyWords = Array.from({ length: 20 }, (_, i) => `word${i}`).join(' ');
+    expect(promptInputHeight(manyWords, 80)).toBeGreaterThan(1);
+    // Mixed hard newlines and soft wrapping.
+    expect(promptInputHeight('short\n' + manyWords, 80)).toBeGreaterThan(2);
+    // Empty line in the middle.
+    expect(promptInputHeight('a\n\nb')).toBe(3);
+    // Trailing newline.
+    expect(promptInputHeight('a\n')).toBe(2);
+    // Long unbreakable word: must be force-broken across multiple lines.
+    const longWord = 'x'.repeat(50);
+    const heightForLongWord = promptInputHeight(longWord, 30); // wrapColumns = 24
+    expect(heightForLongWord).toBeGreaterThan(2);
+    // Exact-width word fits on one visual line when it matches wrapColumns.
+    const exactWord = 'y'.repeat(24);
+    // 24 chars at wrapCols=24 (terminal 30): fits exactly, 1 line
+    expect(promptInputHeight(exactWord, 30)).toBe(1);
+    // One char longer forces a second line.
+    expect(promptInputHeight('y'.repeat(25), 30)).toBe(2);
+  });
+
   it('renders an AI morphology splash fallback instead of plain text only', () => {
     const logo = renderSplashLogo(2, { color: false });
     const plain = logo.join('\n');
