@@ -969,18 +969,49 @@ function renderEmptyState(
   const activeModel = modelId ?? rail.model ?? '';
   const visualProfile = resolveCoreVisualProfile(activeModel);
   const inner = width - 2;
-  const railPrefix = ' │ ';
-  const railInner = inner - 3;
-  const model = rail.model ? clip(rail.model, Math.max(8, railInner - 12)) : 'local';
-  const workspace = rail.cwd ? clip(rail.cwd, Math.max(8, railInner - 12)) : '~';
-  const branch = rail.branch ? clip(rail.branch, railInner - 12) : '-';
-  const context = rail.contextLabel
-    ? clip(rail.contextLabel, railInner - 12)
-    : `${rail.filesTouched.length} files loaded`;
-  const stateLine = clip(footer.status.replace(/\.$/, '').toLowerCase() || 'ready', railInner - 12);
-  const coreLines = renderAiCore('idle', (splash?.frame ?? 0) / 8, visualProfile).map(stripAnsi);
-  const hr = '─'.repeat(Math.max(20, inner - 6));
-  const tableLabelWidth = 10;
+  const mp = modelPal ?? getModelPalette(activeModel);
+  const frame = splash?.frame ?? 0;
+
+  const model = rail.model ? clip(rail.model, Math.max(8, 24)) : 'local';
+  const workspace = rail.cwd ? clip(rail.cwd, Math.max(8, 26)) : '~';
+  const provider = rail.provider ? clip(rail.provider, Math.max(8, 24)) : '-';
+  const branch = rail.branch ? clip(rail.branch, 26) : '-';
+  const context = rail.contextLabel ? clip(rail.contextLabel, 26) : `${rail.filesTouched.length} files`;
+  const stateLine = clip(footer.status.replace(/\.$/, '').toLowerCase() || 'ready', 24);
+  const uptime = clip(rail.uptimeLabel, 16);
+
+  const coreLines = renderAiCore('idle', frame / 8, visualProfile).map(stripAnsi);
+  // Use only the first 9 lines of core for a tighter splash
+  const coreDisplay = coreLines.slice(0, 9);
+  const hr = '─'.repeat(Math.min(inner, 52));
+
+  const wordmark = [
+    { text: centerText('▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄', inner), color: mp.dim },
+  ];
+
+  const synaxMark = renderSynaxMark(inner, frame, mp);
+
+  // Two-column metadata grid
+  const labelW = 10;
+  const leftW = Math.min(28, Math.floor(inner / 2));
+  const padL = (s: string) => s.padEnd(leftW).slice(0, leftW);
+
+  const metaRows = [
+    {
+      left: `${'model'.padEnd(labelW)}${model}`,
+      right: `${'provider'.padEnd(labelW)}${provider}`,
+    },
+    {
+      left: `${'project'.padEnd(labelW)}${workspace}`,
+      right: `${'branch'.padEnd(labelW)}${branch}`,
+    },
+    {
+      left: `${'context'.padEnd(labelW)}${context}`,
+      right: `${'uptime'.padEnd(labelW)}${uptime}`,
+    },
+  ];
+
+  const gutter = '  ';
 
   return core.Box(
     {
@@ -990,40 +1021,70 @@ function renderEmptyState(
       paddingX: 1,
       paddingY: 0,
     },
-    // Title with horizontal rule
-    core.Text({ content: centerText(`── synax ──${hr}`, inner), fg: pal.brand }),
-    // Core morphology
-    ...coreLines.map((line) =>
-      core.Text({ content: centerText(line, inner), fg: modelPal?.primary ?? pal.textAccent }),
-    ),
+    // Decorative top border
+    ...wordmark.map((l) => core.Text({ content: l.text, fg: l.color })),
     core.Text({ content: '' }),
-    // Metadata table with left rail
+    // Synax wordmark with model-palette gradient
+    ...synaxMark.map((l) => core.Text({ content: centerText(l.text, inner), fg: l.color })),
+    // Tagline
+    core.Text({ content: centerText('coding agent for local models', inner), fg: mp.secondary }),
+    core.Text({ content: centerText(`v${VERSION}  ·  just type to start`, inner), fg: pal.textMuted }),
+    core.Text({ content: '' }),
+    // AI core framed by rules
+    core.Text({ content: centerText(hr, inner), fg: mp.dim }),
+    ...coreDisplay.map((line) => core.Text({ content: centerText(line, inner), fg: mp.primary })),
+    core.Text({ content: centerText(hr, inner), fg: mp.dim }),
+    core.Text({ content: '' }),
+    // Metadata in two columns
+    ...metaRows.map((row) =>
+      core.Text({
+        content: centerText(`${padL(row.left)}${gutter}${row.right}`, inner),
+        fg: pal.textMuted,
+      }),
+    ),
     core.Text({
-      content: `${railPrefix}${'model'.padEnd(tableLabelWidth)}${model}`,
-      fg: pal.textMuted,
-    }),
-    core.Text({
-      content: `${railPrefix}${'workspace'.padEnd(tableLabelWidth)}${workspace}`,
-      fg: pal.textMuted,
-    }),
-    core.Text({
-      content: `${railPrefix}${'branch'.padEnd(tableLabelWidth)}${branch}`,
-      fg: pal.textMuted,
-    }),
-    core.Text({
-      content: `${railPrefix}${'context'.padEnd(tableLabelWidth)}${context}`,
-      fg: pal.textMuted,
-    }),
-    core.Text({
-      content: `${railPrefix}${'state'.padEnd(tableLabelWidth)}${stateLine}`,
+      content: centerText(`state  ${stateLine}`, inner),
       fg: pal.textAccent,
     }),
   );
 }
 
+/** Render the Synax wordmark with gradient coloring across letters.
+ *  Uses the model palette's splashAccents for a warm gradient effect.
+ *  The animation frame subtly shifts the accent distribution.
+ *
+ *  Each "line" returned is actually a set of individual letter nodes
+ *  that can be composed into a horizontal box for true gradient coloring. */
+function renderSynaxMark(inner: number, frame: number, mp: ModelPalette): { text: string; color: string }[] {
+  const accents = mp.splashAccents;
+  const shift = Math.floor(frame) % accents.length;
+
+  if (inner < 32) {
+    return [{ text: `SYNAX`, color: accents[(0 + shift) % accents.length] }];
+  }
+  if (inner < 44) {
+    return [{ text: `S Y N A X`, color: accents[(0 + shift) % accents.length] }];
+  }
+
+  // Wide terminals: spaced-out letters with a decorative frame and
+  // subtle gradient via position-based accent selection.
+  // We render each letter as a separate "line" that will be centered
+  // — but since each Text node is a single color, we use a single
+  // color per line, cycling through accents for a pulsing effect.
+  const primary = accents[(0 + shift) % accents.length];
+
+  return [
+    { text: '', color: mp.dim },
+    { text: '╭' + '─'.repeat(inner - 2) + '╮', color: mp.dim },
+    { text: `│${centerText('S Y N A X', inner - 2)}│`, color: primary },
+    { text: '╰' + '─'.repeat(inner - 2) + '╯', color: mp.dim },
+    { text: '', color: mp.dim },
+  ];
+}
+
 function compactEmptyStateHeight(rail: ArtifactRailState): number {
   void rail;
-  return 22;
+  return 26;
 }
 
 function centerText(text: string, width: number): string {
