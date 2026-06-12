@@ -111,6 +111,13 @@ export function upsertSessionMeta(meta: SessionMetadata): void {
 // ─── Session creation ───────────────────────────────────────
 
 export function createSession(meta: Partial<SessionMetadata> & { id: string }): SessionMetadata {
+  // Guard against session ID collision — prevent multiple processes from
+  // sharing the same session and interleaving writes to the JSONL event log.
+  const existing = findSessionMeta(meta.id);
+  if (existing) {
+    throw new Error(`Session ID collision: ${meta.id}`);
+  }
+
   const now = new Date().toISOString();
   const session: SessionMetadata = {
     createdAt: now,

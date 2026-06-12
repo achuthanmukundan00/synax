@@ -214,8 +214,12 @@ export function createAgentSession(options: CreateAgentSessionOptions): AgentSes
         activeProvider: options.config.provider?.preset ?? options.config.provider?.kind,
         activeModel: options.config.provider?.model ?? undefined,
       });
-    } catch {
-      // Best-effort
+    } catch (err) {
+      if (err instanceof Error && err.message.startsWith('Session ID collision')) {
+        components.logger.error('Session ID collision in session-store', err);
+        throw err;
+      }
+      // Other errors (filesystem, etc.) are best-effort.
     }
   }
 
