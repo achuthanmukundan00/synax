@@ -1374,24 +1374,127 @@ function renderThinkingCard(
   const active = /^thinking/i.test(title);
   const color = active ? pal.semantic.thinking : pal.textAccent;
   const normalized = normalizeThinkingText(body);
-  const bodyLines = normalized.split('\n').filter((line) => line.trim().length > 0);
 
   // Always show the full thinking text — no collapse, no expand toggle.
   // Long thinking blocks are naturally scrollable in the transcript.
-  return shadedCard(
-    core,
-    event.id,
-    color,
-    pal,
-    `◌  ${title}`,
-    bodyLines.map((line) =>
+  return shadedCard(core, event.id, color, pal, `◌  ${title}`, renderThinkingBody(core, normalized, pal));
+}
+
+/**
+ * Render thinking/reasoning content with markdown structural formatting.
+ * Uses thinking-block styling (muted colors, subdued appearance) to
+ * preserve distinct identity from assistant messages while making
+ * structured reasoning (headings, lists, code) scannable.
+ */
+function renderThinkingBody(core: OpenTuiCore, body: string, pal: TuiPalette): OpenTuiNode[] {
+  const nodes: OpenTuiNode[] = [];
+  const lines = body.split('\n');
+  let inCodeBlock = false;
+  const codeBlockLines: string[] = [];
+
+  for (let idx = 0; idx < lines.length; idx += 1) {
+    const rawLine = lines[idx] ?? '';
+    const line = rawLine.trimEnd();
+
+    // Code fences
+    if (/^```/.test(line)) {
+      if (inCodeBlock) {
+        if (codeBlockLines.length > 0) {
+          nodes.push(
+            core.Box(
+              { paddingLeft: 2, flexDirection: 'column' },
+              ...codeBlockLines.map((cl) => core.Text({ ...FULL_WIDTH_TEXT, content: cl, fg: pal.info })),
+            ),
+          );
+          codeBlockLines.length = 0;
+        }
+        inCodeBlock = false;
+        continue;
+      }
+      inCodeBlock = true;
+      continue;
+    }
+
+    if (inCodeBlock) {
+      codeBlockLines.push(line);
+      continue;
+    }
+
+    // ATX headings: ## text, ### text, etc.
+    const hMatch = line.match(/^(#{1,4})\s+(.+)/);
+    if (hMatch && hMatch[1] && hMatch[2]) {
+      const text = plainInlineMarkdown(hMatch[2]);
+      // Wrap in bold markers so styledInlineMarkdown applies bold styling,
+      // making headings visually distinct from body text in the thinking block.
+      nodes.push(
+        core.Text({
+          ...FULL_WIDTH_TEXT,
+          content: styledInlineMarkdown(core, `**${text}**`, pal, pal.textMuted),
+          fg: pal.textMuted,
+        }),
+      );
+      continue;
+    }
+
+    // Bold heading: **text** or __text__ on its own line
+    const boldHeadingMatch = line.match(/^(\*\*|__)(.+?)\1$/);
+    if (boldHeadingMatch) {
+      const text = boldHeadingMatch[2].trim();
+      nodes.push(
+        core.Text({
+          ...FULL_WIDTH_TEXT,
+          content: styledInlineMarkdown(core, `**${text}**`, pal, pal.textMuted),
+          fg: pal.textMuted,
+        }),
+      );
+      continue;
+    }
+
+    // Bullet lists (unordered): - item, * item, + item
+    const bMatch = line.match(/^(\s*)([-*+])\s+(.+)/);
+    if (bMatch) {
+      const indent = bMatch[1];
+      const content = bMatch[3];
+      nodes.push(
+        core.Text({
+          ...FULL_WIDTH_TEXT,
+          content: styledInlineMarkdown(core, `${indent}• ${content}`, pal, pal.textMuted),
+          fg: pal.textMuted,
+        }),
+      );
+      continue;
+    }
+
+    // Numbered lists: 1. item
+    const nMatch = line.match(/^(\s*)(\d+\.)\s+(.+)/);
+    if (nMatch) {
+      nodes.push(
+        core.Text({
+          ...FULL_WIDTH_TEXT,
+          content: styledInlineMarkdown(core, `${nMatch[1]}${nMatch[2]} ${nMatch[3]}`, pal, pal.textMuted),
+          fg: pal.textMuted,
+        }),
+      );
+      continue;
+    }
+
+    // Empty lines — preserve paragraph breaks
+    if (line.trim() === '') {
+      nodes.push(core.Text({ ...FULL_WIDTH_TEXT, content: '', fg: pal.textMuted }));
+      continue;
+    }
+
+    // Regular line with inline markdown styling
+    nodes.push(
       core.Text({
         ...FULL_WIDTH_TEXT,
-        content: line,
+        content: styledInlineMarkdown(core, line, pal, pal.textMuted),
         fg: pal.textMuted,
       }),
-    ),
-  );
+    );
+  }
+
+  return nodes;
 }
 
 function normalizeThinkingText(text: string): string {
