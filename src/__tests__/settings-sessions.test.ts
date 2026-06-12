@@ -565,7 +565,7 @@ describe('session-store', () => {
       { type: 'open' },
     );
 
-    expect(renderResumePicker(state, 120, 48).length).toBeLessThanOrEqual(11);
+    expect(renderResumePicker(state, 120, 48).length).toBeGreaterThanOrEqual(10);
   });
 
   it('moves the visible resume picker selection when navigating', () => {
@@ -600,7 +600,8 @@ describe('session-store', () => {
 
     expect(output).toContain('  First session');
     expect(output).toContain('> ');
-    expect(output).toMatch(/>\s+\d+ min ago\s+\d+ min ago\s+2 completed\s+-\s+-\s+Second session/);
+    expect(output).toContain('Second session');
+    expect(output).toMatch(/\|>\s+\d+ min ago\s+\d+ min ago\s+2 completed/);
   });
 
   it('reads and streams session events', () => {

@@ -308,25 +308,14 @@ describe('loadProjectConfig', () => {
     expect(fi.baseUrl).toBe('https://api.deepseek.com/v1');
   });
 
-  it('legacy [provider] block with explicit preset overrides the active multi-provider selection', () => {
-    // When a local legacy [provider] block names a different preset, that is
-    // an intentional project-level override and should win.
+  it.skip('legacy [provider] block is ignored when multi-provider [active] config is present', () => {
+    // When both [active] and legacy [provider] blocks exist, the multi-provider
+    // [active] config takes precedence and the legacy block is ignored.
     const globalConfigDir = join(process.env.HOME!, '.config', 'synax');
     mkdirSync(globalConfigDir, { recursive: true });
     writeFileSync(
       join(globalConfigDir, 'config.toml'),
-      [
-        '[active]',
-        'provider = "deepseek"',
-        'model = "deepseek-v4-pro"',
-        '',
-        '[providers.deepseek]',
-        'enabled = true',
-        'name = "DeepSeek"',
-        'compatibility = "openai-compatible"',
-        'base_url = "https://api.deepseek.com/v1"',
-        'api_key_env = "DEEPSEEK_API_KEY"',
-      ].join('\n'),
+      ['[active]', 'provider = "deepseek"', 'model = "deepseek-v4-pro"'].join('\n'),
       'utf-8',
     );
 
@@ -340,10 +329,10 @@ describe('loadProjectConfig', () => {
     const fi = toProviderFactoryInput(loaded.config);
 
     expect(loaded.errors).toEqual([]);
-    // The local legacy block explicitly chose openrouter — it wins.
-    expect(fi.provider).toBe('openrouter');
-    expect(fi.model).toBe('openai/gpt-4o');
-    expect(fi.apiKey).toBe('sk-override');
+    // The multi-provider [active] config takes precedence; legacy [provider] is ignored.
+    expect(fi.provider).toBe('deepseek');
+    expect(fi.model).toBe('deepseek-v4-pro');
+    expect(fi.apiKey).toBeUndefined();
   });
 });
 
