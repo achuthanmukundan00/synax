@@ -846,8 +846,6 @@ function updateSessionCost(state: RunStateSnapshot): RunStateSnapshot {
   };
 }
 
-
-
 /**
  * Fallback for when no verification lifecycle events were emitted.
  * The TUI should not normally hit this path once the runtime emits events.

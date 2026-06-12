@@ -2145,7 +2145,8 @@ function railState(
     branch: options?.gitBranch,
     cwd: options?.cwdLabel,
     filesTouched: unique([...state.filesChangedThisRun, ...state.changes.items.map((item) => item.path)]),
-    costLabel: state.sessionSpendLabel ?? (state.sessionCostUsd !== undefined ? formatCost(state.sessionCostUsd) : undefined),
+    costLabel:
+      state.sessionSpendLabel ?? (state.sessionCostUsd !== undefined ? formatCost(state.sessionCostUsd) : undefined),
     contextLabel,
     uptimeLabel: elapsed(state.startedAtMs, state.nowMs),
     provider: options?.providerName ?? state.providerName,
@@ -2508,8 +2509,6 @@ function elapsed(startedAtMs: number, nowMs: number): string {
   const minutes = Math.floor(seconds / 60);
   return `${minutes}m${String(seconds % 60).padStart(2, '0')}s`;
 }
-
-
 
 function providerNameFromEndpoint(endpoint: string): string | undefined {
   if (!endpoint) return undefined;

@@ -345,6 +345,7 @@ describe('CLI', () => {
           'search_memory',
           'view_image',
           'context_range_paste',
+          'paste_context_range',
         ]);
         expect(parsed.messages[0].content).not.toContain('sk-context-secret');
       } finally {
@@ -433,6 +434,7 @@ describe('CLI', () => {
           'search_memory',
           'view_image',
           'context_range_paste',
+          'paste_context_range',
         ]);
       } finally {
         await closeServer(srv);

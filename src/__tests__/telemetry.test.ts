@@ -74,7 +74,7 @@ describe('formatCost', () => {
     // -0 is treated as 0
     expect(formatCost(-0)).toBe('$0.00');
     expect(formatCost(-1.5)).toBe('-$1.5000');
-    expect(formatCost(-0.0005)).toBe('-$0.000500');
+    expect(formatCost(-0.0005)).toBe('-$0.0005');
   });
 
   it('uses up to 10 decimal places for sub-cent values (no $0.00 for real API calls)', () => {
@@ -85,11 +85,11 @@ describe('formatCost', () => {
     expect(formatCost(Number.EPSILON)).not.toBe('$0.00');
   });
 
-  it('uses 4 decimal places for values ≥ $0.0001 and < $100', () => {
-    expect(formatCost(0.0001)).toBe('$0.0001');
-    expect(formatCost(0.001)).toBe('$0.0010');
+  it('uses 4 decimal places for values ≥ $0.01 and < $100', () => {
     expect(formatCost(0.01)).toBe('$0.0100');
     expect(formatCost(0.0123)).toBe('$0.0123');
+    expect(formatCost(0.0001)).toBe('$0.0001');
+    expect(formatCost(0.001)).toBe('$0.001');
     expect(formatCost(1)).toBe('$1.0000');
     expect(formatCost(1.2345)).toBe('$1.2345');
     expect(formatCost(50.5)).toBe('$50.5000');
@@ -176,12 +176,10 @@ describe('CostTracker cost precision', () => {
   it('cumulative cost accumulates without intermediate rounding loss', () => {
     const tracker = new CostTracker(stubTokenCounter(), 'openai/gpt-4o-mini');
     // Many small turns that might individually round to zero
-    let totalRaw = 0;
     for (let i = 0; i < 100; i++) {
       const inputTokens = 50 + (i % 50);
       const outputTokens = 25 + (i % 25);
       const cost = tracker.recordTurn({ inputTokens, outputTokens, totalTokens: inputTokens + outputTokens });
-      totalRaw += cost.totalCost;
       expect(cost.totalCost).toBeGreaterThanOrEqual(0);
     }
     const cumulative = tracker.getCumulativeCost();

@@ -67,6 +67,7 @@ describe('shared bounded agent runner', () => {
       'search_memory',
       'view_image',
       'context_range_paste',
+      'paste_context_range',
     ]);
   });
 
@@ -153,6 +154,7 @@ describe('shared bounded agent runner', () => {
       'search_memory',
       'view_image',
       'context_range_paste',
+      'paste_context_range',
     ]);
   });
 

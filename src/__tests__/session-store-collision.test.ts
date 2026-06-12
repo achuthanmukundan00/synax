@@ -6,7 +6,7 @@
  */
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { existsSync, mkdirSync, rmSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, rmSync, unlinkSync, writeFileSync } from 'fs';
 
 import { EventStore } from '../store/EventStore';
 import { createSession, findSessionMeta, generateSessionId } from '../sessions/session-store';
@@ -51,7 +51,7 @@ describe('EventStore collision detection', () => {
     for (const suffix of ['', '-wal', '-shm']) {
       const p = dbPath + suffix;
       try {
-        if (existsSync(p)) require('fs').unlinkSync(p);
+        if (existsSync(p)) unlinkSync(p);
       } catch {
         /* ignore */
       }

@@ -1,10 +1,8 @@
 import { execSync } from 'child_process';
-import { existsSync, mkdirSync, rmSync, writeFileSync } from 'fs';
+import { createHash } from 'crypto';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { homedir, tmpdir } from 'os';
 import { join } from 'path';
-
-import { createHash } from 'crypto';
-import { existsSync, readFileSync } from 'fs';
 
 import { createInspectionLedger, createToolRegistry } from '../tools';
 import type { PasteContextRangeOutput } from '../tools/paste-context-range';

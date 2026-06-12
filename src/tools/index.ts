@@ -18,3 +18,5 @@ export { createToolRegistry } from './registry';
 export type { ToolRegistryOptions } from './registry';
 export type { LedgerBehavior, ToolDefinition, ToolRegistry, ToolResult, ToolSafetyPolicy, ToolContext } from './types';
 export type { AgentContext } from './types';
+export { pasteContextRangeTool } from './paste-context-range';
+export type { PasteContextRangeInput, PasteContextRangeOutput } from './paste-context-range';

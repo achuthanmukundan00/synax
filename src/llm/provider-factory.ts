@@ -126,8 +126,7 @@ function resolveProviderConfig(input: ProviderFactoryInput): ResolvedProviderFac
   // The config DEFAULTS (contextWindowTokens: 131072) should not override
   // known provider presets — that's handled by ensuring toProviderFactoryInput
   // only passes an explicit user setting. Here we trust the resolved value.
-  const contextWindow =
-    input.contextWindow ?? resolveContextWindow(providerId, model || undefined);
+  const contextWindow = input.contextWindow ?? resolveContextWindow(providerId, model || undefined);
 
   // Merge default headers from preset with custom headers
   const mergedHeaders: Record<string, string> = {};
