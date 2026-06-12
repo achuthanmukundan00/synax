@@ -1192,9 +1192,12 @@ export class Session {
             }
 
             // ── Verification contract check: before claiming completion,
-            // verify the contract is satisfied (only when explicitly configured).
-            if (this._verificationContract !== null) {
-              const contract = this._verificationContract;
+            // verify the contract is satisfied. Resolve from mode if not set.
+            const contract = this._verificationContract ??
+              (mode === 'verify' ? { level: 'verification_passed' as const, label: 'Verification passed' } :
+               mode === 'patch' ? { level: 'files_changed' as const, label: 'Files changed' } :
+               { level: 'none' as const, label: 'No verification required' });
+            if (contract.level !== 'none') {
               const nudge = checkCompletionAgainstContract(
                 contract,
                 {
