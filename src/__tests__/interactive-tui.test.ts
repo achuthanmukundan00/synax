@@ -140,8 +140,8 @@ describe('OpenTUI startup layout', () => {
       100,
     ) as unknown as FakeOpenTuiNode;
 
-    expect(root.props.height).toBe(29);
-    expect(root.children[0].props.height).toBe(22);
+    expect(root.props.height).toBe(33);
+    expect(root.children[0].props.height).toBe(26);
     expect(findNodeById(root, 'synax-input-frame')?.props.height).toBe(3);
     expect(findNodeById(root, 'synax-location')).toBeUndefined();
   });
