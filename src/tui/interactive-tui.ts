@@ -44,7 +44,7 @@ import {
   type SemanticEvent,
 } from './semantic-events';
 import { getPalette, detectThemeMode, type TuiPalette } from './theme';
-import { tuiStats } from './telemetry';
+import { tuiStats, formatCost, formatPricePer1M } from './telemetry';
 import { tokenStreamFrame, tokenStreamFrameText, tokenStreamRoleColor } from './token-stream';
 import { stripToolCallMarkup } from './markup-sanitizer';
 import {
@@ -2116,7 +2116,8 @@ function railState(
     branch: options?.gitBranch,
     cwd: options?.cwdLabel,
     filesTouched: unique([...state.filesChangedThisRun, ...state.changes.items.map((item) => item.path)]),
-    costLabel: state.sessionSpendLabel ?? formatCost(state.sessionCostUsd),
+    costLabel:
+      state.sessionSpendLabel ?? (state.sessionCostUsd !== undefined ? formatCost(state.sessionCostUsd) : undefined),
     contextLabel,
     uptimeLabel: elapsed(state.startedAtMs, state.nowMs),
     provider: options?.providerName ?? state.providerName,
@@ -2223,11 +2224,11 @@ function buildContextInfo(state: RunStateSnapshot, barWidth: number): string | u
 /** Build a compact cost suffix from session pricing data. */
 function buildCostSuffix(state: RunStateSnapshot): string | undefined {
   const spend = state.sessionSpendLabel;
-  if (spend === undefined || spend === '$0.00') return undefined;
+  if (spend === undefined || spend === '$0.00' || spend === 'local') return undefined;
   const inPrice = state.inputPricePer1MTokens;
   const outPrice = state.outputPricePer1MTokens;
   if (inPrice !== undefined && outPrice !== undefined) {
-    return `${spend}  ·  $${inPrice.toFixed(0)}/M in  $${outPrice.toFixed(0)}/M out`;
+    return `${spend}  ·  ${formatPricePer1M(inPrice)} in  ${formatPricePer1M(outPrice)} out`;
   }
   return `${spend} this session`;
 }
@@ -2478,11 +2479,6 @@ function elapsed(startedAtMs: number, nowMs: number): string {
   const seconds = Math.max(0, Math.floor((nowMs - startedAtMs) / 1000));
   const minutes = Math.floor(seconds / 60);
   return `${minutes}m${String(seconds % 60).padStart(2, '0')}s`;
-}
-
-function formatCost(cost?: number): string | undefined {
-  if (cost === undefined) return undefined;
-  return `$${cost.toFixed(4)}`;
 }
 
 function providerNameFromEndpoint(endpoint: string): string | undefined {

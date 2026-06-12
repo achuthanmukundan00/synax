@@ -99,11 +99,11 @@ describe('strategy classification thresholds', () => {
     expect(['orchestrate', 'decompose']).toContain(result.strategy);
   });
 
-  it('classifies everything as inline for 1M context window', () => {
+  it('classifies everything as inline for a large context window', () => {
     const result = estimateTaskBudget({
       task: largeTask(),
       repoMetadata: largeRepo(),
-      contextWindow: 1048576, // 1M
+      contextWindow: 1_048_576, // ~1M
     });
 
     expect(result.strategy).toBe('inline');
@@ -335,8 +335,8 @@ describe('per-model context window scenarios', () => {
     expect(result.utilization).toBeLessThan(0.5);
   });
 
-  it('1M context window (DeepSeek) is always inline for normal repos', () => {
-    const result = estimateTaskBudget({ task, repoMetadata: repo, contextWindow: 1048576 });
+  it('~1M context window is always inline for normal repos', () => {
+    const result = estimateTaskBudget({ task, repoMetadata: repo, contextWindow: 1_048_576 });
     expect(result.strategy).toBe('inline');
     expect(result.utilization).toBeLessThan(0.1);
   });

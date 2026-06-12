@@ -87,3 +87,45 @@ class TuiStatsCollector {
 }
 
 export const tuiStats = new TuiStatsCollector();
+
+// ─── Cost formatting ────────────────────────────────────────────────────────
+
+/**
+ * Format a USD cost with adaptive decimal precision.
+ *
+ * - ≥ $100:    2 decimal places (e.g. $123.45)
+ * - ≥ $0.0001: 4 decimal places (e.g. $1.2345, $0.0123)
+ * - < $0.0001: up to 10 decimal places, trailing zeros stripped (e.g. $0.000342)
+ * - $0.00:     explicit zero display
+ */
+export function formatCost(usd: number): string {
+  if (usd === 0 || Object.is(usd, -0)) return '$0.00';
+  const abs = Math.abs(usd);
+  const sign = usd < 0 ? '-' : '';
+  if (abs >= 100) return `${sign}$${abs.toFixed(2)}`;
+  if (abs >= 0.01) return `${sign}$${abs.toFixed(4)}`;
+  // Very small: show significant digits up to 10 decimal places, strip trailing zeros
+  const raw = abs.toFixed(10);
+  const trimmed = raw.replace(/0+$/, '').replace(/\.$/, '.0');
+  return `${sign}$${trimmed}`;
+}
+
+/**
+ * Format a per-1M-token price compactly.
+ *
+ * Strips trailing zeros and unnecessary decimal points for readability.
+ * Handles sub-cent per-1M pricing with appropriate precision.
+ */
+export function formatPricePer1M(price: number): string {
+  if (price === 0) return '$0/M';
+  // For prices ≥ 1, strip trailing zeros after 2 decimal places
+  if (price >= 1) {
+    const s = price.toFixed(2);
+    const trimmed = s.replace(/0+$/, '').replace(/\.$/, '');
+    return `$${trimmed}/M`;
+  }
+  // For prices < 1, show up to 6 decimal places, strip trailing zeros
+  const s = price.toFixed(6);
+  const trimmed = s.replace(/0+$/, '').replace(/\.$/, '');
+  return `$${trimmed}/M`;
+}

@@ -140,7 +140,13 @@ export class EventStore {
           changedFiles: changedFilesJson,
         });
     } catch (err: unknown) {
-      if (err && typeof err === 'object' && 'code' in err && (err as { code: string }).code === 'SQLITE_CONSTRAINT') {
+      if (
+        err &&
+        typeof err === 'object' &&
+        'code' in err &&
+        typeof (err as { code: unknown }).code === 'string' &&
+        (err as { code: string }).code.startsWith('SQLITE_CONSTRAINT')
+      ) {
         throw new Error(`Session ID collision: ${session.id}`);
       }
       throw err;

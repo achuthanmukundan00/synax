@@ -345,7 +345,6 @@ import {
   upsertSessionMeta,
   type SessionEvent,
 } from '../sessions/session-store';
-import { createResumePickerState, renderResumePicker, resumePickerReducer } from '../sessions/resume-renderer';
 
 const TMP_SESSIONS = join(tmpdir(), 'synax-session-tests-' + Date.now());
 

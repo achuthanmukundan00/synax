@@ -11,7 +11,7 @@
 
 import { createOpenAICompatibleClient } from './client';
 import { createAnthropicAdapter } from './anthropic-adapter';
-import { getAllProviderPresets, getProviderPreset, isKnownProviderId } from './provider-presets';
+import { getAllProviderPresets, getProviderPreset, isKnownProviderId, resolveContextWindow } from './provider-presets';
 import type { AgentClient } from '../session/Session';
 import type { NormalizedProviderConfig, ProviderMetadata, ProviderPreset, ProviderProtocol } from './types';
 import type { ContextLedger } from '../tools';
@@ -122,11 +122,11 @@ function resolveProviderConfig(input: ProviderFactoryInput): ResolvedProviderFac
   const apiKey = resolveApiKey(input, preset.apiKeyEnv);
 
   const model = input.model ?? preset.defaultModel ?? '';
-  // Context window: explicit input overrides preset, preset overrides default.
+  // Context window: explicit input > per-model canonical > provider preset > fallback.
   // The config DEFAULTS (contextWindowTokens: 131072) should not override
   // known provider presets — that's handled by ensuring toProviderFactoryInput
-  // only passes an explicit user setting. Here we trust the input or preset.
-  const contextWindow = input.contextWindow ?? preset.contextWindow ?? 131072;
+  // only passes an explicit user setting. Here we trust the resolved value.
+  const contextWindow = input.contextWindow ?? resolveContextWindow(providerId, model || undefined);
 
   // Merge default headers from preset with custom headers
   const mergedHeaders: Record<string, string> = {};

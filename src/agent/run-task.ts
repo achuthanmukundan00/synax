@@ -95,6 +95,11 @@ export interface RunTaskReport {
   workingTreeClean?: boolean;
   checkpoint?: { id: string; statusPath: string; diffPath: string } | null;
   error?: string;
+  /** DeepSeek / thinking-model reasoning content (bug #114).
+   *  Preserved separately from finalAnswer so downstream consumers
+   *  (session store, TUI, run log) can access it even when finalAnswer
+   *  already absorbs it via the reasoningContent→content fallback. */
+  reasoningContent?: string;
 }
 
 const execFileAsync = promisify(execFile);
@@ -753,6 +758,8 @@ export async function runAgentTask(options: RunTaskOptions): Promise<RunTaskRepo
     terminalState = repairedTurn.terminalState === 'blocked' ? 'failed_verification' : repairedTurn.terminalState;
   }
   const finalAnswer = repairedTurn === turn ? turn.finalAnswer : repairedTurn.finalAnswer || turn.finalAnswer;
+  const reasoningContent =
+    repairedTurn === turn ? turn.reasoningContent : repairedTurn.reasoningContent || turn.reasoningContent;
   const filesRead = unique(turn.conversation.inspectionLedger.getInspectedRanges().map((range) => range.path));
   const afterHead = await gitHead(options.repoRoot);
   const changedByCommit =
@@ -905,6 +912,7 @@ export async function runAgentTask(options: RunTaskOptions): Promise<RunTaskRepo
         }
       : null,
     error: turn.error,
+    reasoningContent,
   };
 }
 

@@ -6,7 +6,6 @@ import { promisify } from 'util';
 
 import { ToolContext, ToolDefinition, ToolResult } from './types';
 import { GeneratedContentStore } from './generated-content';
-import { pasteContextRangeTool } from './paste-context-range';
 
 const execFileAsync = promisify(execFile);
 
@@ -79,7 +78,6 @@ export function createInspectionTools(): ToolDefinition[] {
     showGitStatusTool,
     showGitDiffTool,
     contextRangePasteTool,
-    pasteContextRangeTool,
   ];
 }
 

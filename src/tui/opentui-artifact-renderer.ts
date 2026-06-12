@@ -294,6 +294,7 @@ export function renderArtifactRoot(
         border: ['top'],
         borderColor: pal.border,
         backgroundColor: pal.background,
+        overflow: 'hidden',
         zIndex: 20,
         paddingX: 1,
       },
@@ -1044,10 +1045,44 @@ export function formatEventCrown(eventClass: SemanticEventClass): string {
 
 export function promptInputHeight(prompt: string, terminalWidth = 80): number {
   const wrapColumns = Math.max(16, terminalWidth - 6);
-  const explicitLines = stripAnsi(prompt).split('\n');
+  const text = stripAnsi(prompt);
+  // Empty prompt still needs 1 line for the placeholder/cursor.
+  if (text.length === 0) return 1;
+  const explicitLines = text.split('\n');
   const visualLines = explicitLines.reduce((count, line) => {
-    const lineLength = Math.max(1, line.length);
-    return count + Math.max(1, Math.ceil(lineLength / wrapColumns));
+    if (line.length === 0) return count + 1;
+    // Simulate word-wrapping to match OpenTUI TextareaRenderable wrapMode: 'word'.
+    // Breaks at word boundaries when the accumulated width exceeds wrapColumns.
+    // Words that are themselves longer than wrapColumns are force-broken.
+    const words = line.split(/ +/);
+    let currentLen = 0;
+    let lineCount = 0;
+    for (const word of words) {
+      if (word.length === 0) continue;
+      const space = currentLen === 0 ? 0 : 1;
+      if (currentLen + space + word.length <= wrapColumns) {
+        // Word fits on current visual line.
+        currentLen += space + word.length;
+      } else {
+        // Word does not fit; start a new visual line.
+        lineCount++;
+        if (word.length > wrapColumns) {
+          // Word is longer than the wrap width — force-break it across
+          // ceil(word.length / wrapColumns) visual lines.
+          const extraLines = Math.floor(word.length / wrapColumns);
+          lineCount += extraLines - 1; // -1 because we already counted 1 above
+          currentLen = word.length % wrapColumns;
+          if (currentLen === 0 && extraLines > 0) {
+            // Exact multiple: last full line has no remainder.
+            currentLen = 0;
+          }
+        } else {
+          currentLen = word.length;
+        }
+      }
+    }
+    if (currentLen > 0) lineCount++;
+    return count + Math.max(1, lineCount);
   }, 0);
   return Math.max(1, visualLines);
 }
@@ -1339,24 +1374,127 @@ function renderThinkingCard(
   const active = /^thinking/i.test(title);
   const color = active ? pal.semantic.thinking : pal.textAccent;
   const normalized = normalizeThinkingText(body);
-  const bodyLines = normalized.split('\n').filter((line) => line.trim().length > 0);
 
   // Always show the full thinking text — no collapse, no expand toggle.
   // Long thinking blocks are naturally scrollable in the transcript.
-  return shadedCard(
-    core,
-    event.id,
-    color,
-    pal,
-    `◌  ${title}`,
-    bodyLines.map((line) =>
+  return shadedCard(core, event.id, color, pal, `◌  ${title}`, renderThinkingBody(core, normalized, pal));
+}
+
+/**
+ * Render thinking/reasoning content with markdown structural formatting.
+ * Uses thinking-block styling (muted colors, subdued appearance) to
+ * preserve distinct identity from assistant messages while making
+ * structured reasoning (headings, lists, code) scannable.
+ */
+function renderThinkingBody(core: OpenTuiCore, body: string, pal: TuiPalette): OpenTuiNode[] {
+  const nodes: OpenTuiNode[] = [];
+  const lines = body.split('\n');
+  let inCodeBlock = false;
+  const codeBlockLines: string[] = [];
+
+  for (let idx = 0; idx < lines.length; idx += 1) {
+    const rawLine = lines[idx] ?? '';
+    const line = rawLine.trimEnd();
+
+    // Code fences
+    if (/^```/.test(line)) {
+      if (inCodeBlock) {
+        if (codeBlockLines.length > 0) {
+          nodes.push(
+            core.Box(
+              { paddingLeft: 2, flexDirection: 'column' },
+              ...codeBlockLines.map((cl) => core.Text({ ...FULL_WIDTH_TEXT, content: cl, fg: pal.info })),
+            ),
+          );
+          codeBlockLines.length = 0;
+        }
+        inCodeBlock = false;
+        continue;
+      }
+      inCodeBlock = true;
+      continue;
+    }
+
+    if (inCodeBlock) {
+      codeBlockLines.push(line);
+      continue;
+    }
+
+    // ATX headings: ## text, ### text, etc.
+    const hMatch = line.match(/^(#{1,4})\s+(.+)/);
+    if (hMatch && hMatch[1] && hMatch[2]) {
+      const text = plainInlineMarkdown(hMatch[2]);
+      // Wrap in bold markers so styledInlineMarkdown applies bold styling,
+      // making headings visually distinct from body text in the thinking block.
+      nodes.push(
+        core.Text({
+          ...FULL_WIDTH_TEXT,
+          content: styledInlineMarkdown(core, `**${text}**`, pal, pal.textMuted),
+          fg: pal.textMuted,
+        }),
+      );
+      continue;
+    }
+
+    // Bold heading: **text** or __text__ on its own line
+    const boldHeadingMatch = line.match(/^(\*\*|__)(.+?)\1$/);
+    if (boldHeadingMatch) {
+      const text = boldHeadingMatch[2].trim();
+      nodes.push(
+        core.Text({
+          ...FULL_WIDTH_TEXT,
+          content: styledInlineMarkdown(core, `**${text}**`, pal, pal.textMuted),
+          fg: pal.textMuted,
+        }),
+      );
+      continue;
+    }
+
+    // Bullet lists (unordered): - item, * item, + item
+    const bMatch = line.match(/^(\s*)([-*+])\s+(.+)/);
+    if (bMatch) {
+      const indent = bMatch[1];
+      const content = bMatch[3];
+      nodes.push(
+        core.Text({
+          ...FULL_WIDTH_TEXT,
+          content: styledInlineMarkdown(core, `${indent}• ${content}`, pal, pal.textMuted),
+          fg: pal.textMuted,
+        }),
+      );
+      continue;
+    }
+
+    // Numbered lists: 1. item
+    const nMatch = line.match(/^(\s*)(\d+\.)\s+(.+)/);
+    if (nMatch) {
+      nodes.push(
+        core.Text({
+          ...FULL_WIDTH_TEXT,
+          content: styledInlineMarkdown(core, `${nMatch[1]}${nMatch[2]} ${nMatch[3]}`, pal, pal.textMuted),
+          fg: pal.textMuted,
+        }),
+      );
+      continue;
+    }
+
+    // Empty lines — preserve paragraph breaks
+    if (line.trim() === '') {
+      nodes.push(core.Text({ ...FULL_WIDTH_TEXT, content: '', fg: pal.textMuted }));
+      continue;
+    }
+
+    // Regular line with inline markdown styling
+    nodes.push(
       core.Text({
         ...FULL_WIDTH_TEXT,
-        content: line,
+        content: styledInlineMarkdown(core, line, pal, pal.textMuted),
         fg: pal.textMuted,
       }),
-    ),
-  );
+    );
+  }
+
+  return nodes;
 }
 
 function normalizeThinkingText(text: string): string {

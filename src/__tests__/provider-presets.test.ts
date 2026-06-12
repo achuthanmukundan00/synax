@@ -36,7 +36,7 @@ describe('Provider presets registry', () => {
       expect(p.apiKeyRequired).toBe(true);
       expect(p.cloud).toBe(true);
       expect(p.defaultModel).toBe('deepseek-v4-pro');
-      expect(p.contextWindow).toBe(1_000_000);
+      expect(p.contextWindow).toBe(128_000);
     });
 
     it('returns openrouter preset with default headers', () => {
