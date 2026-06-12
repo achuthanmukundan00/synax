@@ -1,4 +1,5 @@
 import type { AgentEvent, TerminalState } from './events';
+import { formatCost } from '../tui/telemetry';
 
 export type TuiSeverity = 'S0' | 'S1' | 'S2' | 'S3';
 export type TuiPhase =
@@ -845,13 +846,7 @@ function updateSessionCost(state: RunStateSnapshot): RunStateSnapshot {
   };
 }
 
-/** Format cost as a compact dollar string. */
-function formatCost(usd: number): string {
-  if (usd >= 0.01) return `$${usd.toFixed(2)}`;
-  if (usd >= 0.0001) return `$${usd.toFixed(3)}`;
-  if (usd > 0) return '<$0.001';
-  return '$0.00';
-}
+
 
 /**
  * Fallback for when no verification lifecycle events were emitted.
