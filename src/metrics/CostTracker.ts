@@ -72,5 +72,5 @@ export class CostTracker {
 }
 
 function roundCost(value: number): number {
-  return Math.round(value * 10000) / 10000;
+  return Math.round(value * 100_000_000) / 100_000_000;
 }

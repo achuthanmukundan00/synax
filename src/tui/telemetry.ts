@@ -99,13 +99,15 @@ export const tuiStats = new TuiStatsCollector();
  * - $0.00:     explicit zero display
  */
 export function formatCost(usd: number): string {
-  if (usd === 0) return '$0.00';
-  if (usd >= 100) return `$${usd.toFixed(2)}`;
-  if (usd >= 0.0001) return `$${usd.toFixed(4)}`;
+  if (usd === 0 || Object.is(usd, -0)) return '$0.00';
+  const abs = Math.abs(usd);
+  const sign = usd < 0 ? '-' : '';
+  if (abs >= 100) return `${sign}$${abs.toFixed(2)}`;
+  if (abs >= 0.01) return `${sign}$${abs.toFixed(4)}`;
   // Very small: show significant digits up to 10 decimal places, strip trailing zeros
-  const raw = usd.toFixed(10);
+  const raw = abs.toFixed(10);
   const trimmed = raw.replace(/0+$/, '').replace(/\.$/, '.0');
-  return `$${trimmed}`;
+  return `${sign}$${trimmed}`;
 }
 
 /**
