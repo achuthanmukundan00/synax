@@ -254,6 +254,36 @@ describe('EventStore', () => {
     store.close();
   });
 
+  test('should throw on session ID collision', () => {
+    const store = new EventStore(dbPath);
+    if (!store.isOpen) {
+      store.close();
+      return;
+    }
+
+    const sessionId = 'collision-test-1';
+    store.startSession({
+      id: sessionId,
+      repoRoot: '/tmp/test-repo',
+      mode: 'patch',
+      model: 'test-model',
+      createdAt: new Date().toISOString(),
+    });
+
+    // Starting the same session ID again should throw
+    expect(() =>
+      store.startSession({
+        id: sessionId,
+        repoRoot: '/tmp/test-repo-2',
+        mode: 'ask',
+        model: 'other-model',
+        createdAt: new Date().toISOString(),
+      }),
+    ).toThrow(/Session ID collision/);
+
+    store.close();
+  });
+
   test('should store and retrieve spans', () => {
     const store = new EventStore(dbPath);
     if (!store.isOpen) {

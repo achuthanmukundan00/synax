@@ -2001,10 +2001,11 @@ function generatePersistentSessionId(): string {
   const hh = now.getHours().toString().padStart(2, '0');
   const min = now.getMinutes().toString().padStart(2, '0');
   const ss = now.getSeconds().toString().padStart(2, '0');
+  const ms = now.getMilliseconds().toString().padStart(3, '0');
   const pid = process.pid.toString(36);
   const rand = randomBytes(4).toString('hex');
   globalSessionCounter += 1;
-  return `syn-${yyyy}${mm}${dd}-${hh}${min}${ss}-${pid}-${rand}-${globalSessionCounter}`;
+  return `syn-${yyyy}${mm}${dd}-${hh}${min}${ss}${ms}-${pid}-${rand}-${globalSessionCounter}`;
 }
 
 // ─── Repo metadata collection ─────────────────────────────────────────────────
