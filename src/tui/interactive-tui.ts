@@ -1559,11 +1559,24 @@ export async function runInteractiveTui(
   }
 
   function handleRawBracketedPasteInput(sequence: string): boolean {
-    const startsPaste = sequence.includes('\x1b[200~');
-    const endsPaste = sequence.includes('\x1b[201~');
+    // Use position-aware matching: the start bracket must appear at or near
+    // the beginning of the sequence (after any whitespace).  In cross-chunk
+    // mode, rawPasteActive is already true so we don't need to match the start.
+    const startIdx = sequence.indexOf('\x1b[200~');
+    const endIdx = sequence.indexOf('\x1b[201~');
+    const prefix = startIdx >= 0 ? sequence.slice(0, startIdx) : '';
+    const startsPaste = startIdx >= 0 && (rawPasteActive || prefix.trim() === '');
+    const endsPaste = endIdx >= 0 && (startIdx < 0 || endIdx > startIdx);
+
     if (!rawPasteActive && !startsPaste) return false;
-    rawPasteActive = rawPasteActive || startsPaste;
+
+    if (startsPaste) rawPasteActive = true;
+
+    // Feed the full sequence to the stateful parser.  It handles the
+    // bracket protocol correctly across chunks, accumulating text between
+    // \e[200~ and \e[201~ and emitting a single `paste` event.
     const parsed = bracketedPasteParser.parse(sequence);
+
     if (endsPaste) rawPasteActive = false;
 
     for (const event of parsed) {
@@ -1579,10 +1592,10 @@ export async function runInteractiveTui(
         appendPromptText('\n');
         continue;
       }
-      if (event.type === 'submit') {
-        const value = promptValueFromInput();
-        if (value.trim()) handleInputSubmit(value);
-      }
+      // Ignore submit, escape, tab, backspace, arrow keys, etc. — only
+      // paste-mode events are relevant during bracketed paste handling.
+      // Trailing newlines after \e[201~ would otherwise trigger accidental
+      // sends on the user's behalf.
     }
     render('input', { immediate: true });
     return true;
@@ -1641,6 +1654,13 @@ export async function runInteractiveTui(
   renderer.prependInputHandler(handleRawHistoryScrollInput);
 
   renderer.keyInput.on('keypress', (key) => {
+    // ── Suppress all keypress events during raw bracketed paste ──────
+    // When the raw input handler (prependInputHandler) is actively
+    // processing a bracketed paste, individual keypress events must be
+    // ignored to prevent double-insertion and to stop newlines from
+    // triggering submit, tab-completion, or other keybindings.
+    if (rawPasteActive) return;
+
     // --- Ctrl+C: double-press ---
     if (key.ctrl && key.name === 'c') {
       const input = renderer.root.findDescendantById('synax-input');
@@ -1956,11 +1976,20 @@ export async function runInteractiveTui(
         key.preventDefault();
         return;
       }
-      if (key.name && key.name.length === 1) {
+      // Use key.sequence for printable characters — this handles
+      // multi-byte UTF-8, emoji, and other non-ASCII input that
+      // `key.name` alone would miss or mangle.
+      if (key.sequence && key.sequence.length === 1 && key.sequence >= ' ' && key.sequence !== '\x7f') {
+        pasteBuffer += key.sequence;
+        key.preventDefault();
+        return;
+      }
+      // Fallback for terminals that only set key.name
+      if (key.name && key.name.length === 1 && key.name >= ' ' && key.name !== '\x7f') {
         pasteBuffer += key.name;
         return;
       }
-      // Eat all other keys during paste
+      // Eat all other keys during paste (includes control chars, escapes, etc.)
       return;
     }
 
