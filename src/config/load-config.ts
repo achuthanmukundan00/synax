@@ -46,7 +46,7 @@ const DEFAULT_MODELS: Record<string, ResolvedModelConfig[]> = {
     {
       id: 'deepseek-v4-pro',
       displayName: 'DeepSeek V4 Pro',
-      contextWindow: 1_000_000,
+      contextWindow: 128_000,
       supportsThinking: true,
       thinkingLevels: ['off', 'high', 'xhigh'],
       defaultThinkingLevel: 'high',
@@ -54,7 +54,7 @@ const DEFAULT_MODELS: Record<string, ResolvedModelConfig[]> = {
     {
       id: 'deepseek-v4-flash',
       displayName: 'DeepSeek V4 Flash',
-      contextWindow: 1_000_000,
+      contextWindow: 128_000,
       supportsThinking: false,
       thinkingLevels: [],
     },
