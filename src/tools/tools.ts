@@ -6,6 +6,7 @@ import { promisify } from 'util';
 
 import { ToolContext, ToolDefinition, ToolResult } from './types';
 import { GeneratedContentStore } from './generated-content';
+import { pasteContextRangeTool } from './paste-context-range';
 
 const execFileAsync = promisify(execFile);
 
@@ -71,7 +72,15 @@ function isWithinRoot(absolutePath: string, root: string): boolean {
 }
 
 export function createInspectionTools(): ToolDefinition[] {
-  return [listFilesTool, readFileRangeTool, searchTextTool, showGitStatusTool, showGitDiffTool, contextRangePasteTool];
+  return [
+    listFilesTool,
+    readFileRangeTool,
+    searchTextTool,
+    showGitStatusTool,
+    showGitDiffTool,
+    contextRangePasteTool,
+    pasteContextRangeTool,
+  ];
 }
 
 const readOnlySafety = {

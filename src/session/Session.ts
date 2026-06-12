@@ -115,6 +115,21 @@ export function finalAnswerFromResponse(response: ChatResponse): string {
   return '';
 }
 
+/**
+ * Find the most recent user message text in a conversation.
+ * Returns null if no user message is found.
+ */
+function resolveLastUserMessageText(conversation: {
+  messages: Array<{ role: string; content: import('../llm/types').ChatContent }>;
+}): string | null {
+  const userMessages = conversation.messages.filter(
+    (m) => m.role === 'user' && !extractTextContent(m.content).startsWith('Context was compacted'),
+  );
+  if (userMessages.length === 0) return null;
+  const last = userMessages[userMessages.length - 1];
+  return extractTextContent(last.content);
+}
+
 // ─── Agent event type guard ──────────────────────────────────────────────────
 
 /**
@@ -1353,6 +1368,13 @@ export class Session {
   }> {
     // ── Tool execution loop ─────────────────────────────────────
     const contentToolResults: Array<{ id: string; content: string }> = [];
+
+    // Keep paste_context_range tool informed of the last user message
+    const lastUserMsg = resolveLastUserMessageText(options.conversation);
+    if (lastUserMsg !== null) {
+      options.registry.setLastUserMessage(lastUserMsg);
+    }
+
     for (const call of options.response.toolCalls) {
       // ── Steering: check abort before each tool call ─────────
       if (this.abortSignal?.aborted) {

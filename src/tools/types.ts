@@ -21,6 +21,7 @@ export interface ToolContext {
   repoRoot: string;
   ledger: InspectionLedger;
   generatedContent?: GeneratedContentStore;
+  lastUserMessage?: string;
 }
 
 export interface AgentContext {
@@ -50,4 +51,5 @@ export interface ToolRegistry {
   get(name: string): ToolDefinition | undefined;
   execute(name: string, input: unknown): Promise<ToolResult>;
   register(definition: ToolDefinition): void;
+  setLastUserMessage(message: string): void;
 }

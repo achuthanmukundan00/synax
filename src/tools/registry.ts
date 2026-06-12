@@ -1,6 +1,6 @@
 import { createInspectionLedger, InspectionLedger } from './ledger';
 import { createInspectionTools } from './tools';
-import { ToolDefinition, ToolRegistry, ToolResult } from './types';
+import { ToolContext, ToolDefinition, ToolRegistry, ToolResult } from './types';
 import { GeneratedContentStore } from './generated-content';
 
 export interface ToolRegistryOptions {
@@ -11,7 +11,12 @@ export interface ToolRegistryOptions {
 
 export function createToolRegistry(options: ToolRegistryOptions): ToolRegistry {
   const ledger = options.ledger ?? createInspectionLedger();
-  const context = { repoRoot: options.repoRoot, ledger, generatedContent: options.generatedContent };
+  const context: ToolContext = {
+    repoRoot: options.repoRoot,
+    ledger,
+    generatedContent: options.generatedContent,
+    lastUserMessage: undefined,
+  };
   const tools = createInspectionTools();
   const byName = new Map<string, ToolDefinition>(tools.map((tool) => [tool.name, tool]));
 
@@ -30,6 +35,10 @@ export function createToolRegistry(options: ToolRegistryOptions): ToolRegistry {
       }
       byName.set(definition.name, definition);
       tools.push(definition);
+    },
+
+    setLastUserMessage(message: string): void {
+      context.lastUserMessage = message;
     },
 
     async execute(name: string, input: unknown): Promise<ToolResult> {
