@@ -712,6 +712,7 @@ export function createChatSession(options: {
       return {
         terminalState: runReport.terminalState,
         finalAnswer: runReport.finalAnswer,
+        reasoningContent: runReport.reasoningContent,
         changedFiles: runReport.filesChanged,
         workingTreeClean: runReport.workingTreeClean,
         steps: runReport.steps,
@@ -1398,7 +1399,12 @@ function countLines(text: string): number {
 }
 
 function printTurnReport(report: ChatTurnReport): void {
-  if (report.finalAnswer) console.log(report.finalAnswer);
+  if (report.finalAnswer) {
+    console.log(report.finalAnswer);
+  } else if (report.reasoningContent) {
+    // Fallback: model returned only reasoning, no visible content (bug #114)
+    console.log(report.reasoningContent);
+  }
   if (report.error) console.log(`[synax] ${report.error}`);
   console.log(`[synax] terminal state: ${report.terminalState}`);
   if (report.changedFiles.length > 0) {
