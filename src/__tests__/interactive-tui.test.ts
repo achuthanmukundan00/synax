@@ -614,6 +614,58 @@ describe('tui input parser', () => {
     expect(pasteEvent?.value).toBe('paste');
   });
 
+  it('preserves multi-line content inside bracketed paste without triggering submit on newlines', () => {
+    const events = parseInputChunk('\x1b[200~line one\nline two\nline three\x1b[201~');
+    const pasteEvent = events.find((e) => e.type === 'paste');
+    expect(pasteEvent?.value).toBe('line one\nline two\nline three');
+    // No submit events — newlines inside brackets are part of the paste text
+    expect(events.every((e) => e.type !== 'submit')).toBe(true);
+  });
+
+  it('handles empty bracketed paste (no content between brackets)', () => {
+    const events = parseInputChunk('\x1b[200~\x1b[201~');
+    const pasteEvent = events.find((e) => e.type === 'paste');
+    expect(pasteEvent?.value).toBe('');
+  });
+
+  it('preserves special characters inside bracketed paste verbatim', () => {
+    const events = parseInputChunk('\x1b[200~code: "hello" & <world>\n  indent\there\x1b[201~');
+    const pasteEvent = events.find((e) => e.type === 'paste');
+    expect(pasteEvent?.value).toBe('code: "hello" & <world>\n  indent\there');
+    // Tab, quotes, angle brackets, ampersand — all preserved literally
+    expect(events.every((e) => e.type !== 'submit')).toBe(true);
+  });
+
+  it('preserves unicode characters inside bracketed paste', () => {
+    const events = parseInputChunk('\x1b[200~emoji 🎉 unicode üöä chinese 你好\x1b[201~');
+    const pasteEvent = events.find((e) => e.type === 'paste');
+    expect(pasteEvent?.value).toBe('emoji 🎉 unicode üöä chinese 你好');
+  });
+
+  it('cancels bracketed paste on Ctrl+C and emits ctrl_c', () => {
+    const events = parseInputChunk('\x1b[200~partial text\u0003');
+    expect(events).toHaveLength(1);
+    expect(events[0]?.type).toBe('ctrl_c');
+    // Paste text is discarded — no paste event emitted
+  });
+
+  it('resumes normal key handling after bracketed paste ends', () => {
+    const parser = createInputParser();
+    // Complete paste — emits a single paste event
+    const pasteResult = parser.parse('\x1b[200~pasted content\x1b[201~');
+    expect(pasteResult).toEqual([{ type: 'paste', value: 'pasted content' }]);
+    // Normal typing afterward — newlines trigger submit again
+    const result = parser.parse('hello\n');
+    expect(result).toEqual([
+      { type: 'text', value: 'h' },
+      { type: 'text', value: 'e' },
+      { type: 'text', value: 'l' },
+      { type: 'text', value: 'l' },
+      { type: 'text', value: 'o' },
+      { type: 'submit' },
+    ]);
+  });
+
   it('keeps bracketed paste state across terminal chunks', () => {
     const parser = createInputParser();
 
