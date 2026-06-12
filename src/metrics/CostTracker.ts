@@ -39,9 +39,20 @@ export class CostTracker {
   /** Record a turn and accumulate cost. */
   recordTurn(stats: TurnTokenStats): TurnCost {
     this.tokenCounter.recordTurn(stats);
-    const cost = this.estimateTurnCost(stats);
-    this.cumulativeCost += cost.totalCost;
-    return cost;
+    const pricing = resolvePricing(this.model);
+    const inputCost = (stats.inputTokens / 1_000_000) * pricing.inputPer1M;
+    const outputCost = (stats.outputTokens / 1_000_000) * pricing.outputPer1M;
+    const rawTotal = inputCost + outputCost;
+
+    // Accumulate raw value to avoid intermediate rounding loss.
+    // Display rounding is applied only at the boundaries.
+    this.cumulativeCost += rawTotal;
+
+    return {
+      inputCost: roundCost(inputCost),
+      outputCost: roundCost(outputCost),
+      totalCost: roundCost(rawTotal),
+    };
   }
 
   /** Get the cumulative cost across all recorded turns. */
@@ -54,7 +65,7 @@ export class CostTracker {
     return resolvePricing(this.model);
   }
 
-  /** Check whether a budget limit has been exceeded. */
+  /** Check whether a budget limit has been exceeded.  Compares raw cumulative against the budget. */
   isOverBudget(maxBudget: number): boolean {
     return this.cumulativeCost > maxBudget;
   }
