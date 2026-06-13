@@ -83,6 +83,8 @@ export interface TuiConfig {
   /** Reduce TUI frame rate, event churn, and live nodes for cmux/high-load sessions. */
   cmuxMode?: boolean;
   cmux_mode?: boolean;
+  /** If true, only shows the glyph for active thinking artifacts. Default false. */
+  hideThinking?: boolean;
 }
 
 export interface ResolvedTuiConfig {

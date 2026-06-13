@@ -306,6 +306,78 @@ describe('tui-state', () => {
     );
   });
 
+  it('starts a new model transcript entry for assistant deltas after a tool boundary', () => {
+    let state = createInitialRunStateSnapshot(0);
+
+    state = applyEventToRunState(
+      state,
+      { type: 'assistant_delta', timestamp: new Date(1).toISOString(), reasoningContent: 'checking repo' },
+      1,
+    );
+    state = applyEventToRunState(
+      state,
+      {
+        type: 'tool_started',
+        timestamp: new Date(2).toISOString(),
+        toolCallId: 'call-1',
+        toolName: 'bash',
+        summary: '{"command":"git status --short"}',
+      },
+      2,
+    );
+    state = applyEventToRunState(
+      state,
+      {
+        type: 'tool_finished',
+        timestamp: new Date(3).toISOString(),
+        toolCallId: 'call-1',
+        toolName: 'bash',
+        summary: 'completed',
+        status: 'ok',
+        detail: 'stdout:\n',
+      },
+      3,
+    );
+    state = applyEventToRunState(
+      state,
+      { type: 'assistant_delta', timestamp: new Date(4).toISOString(), reasoningContent: 'checking stashes' },
+      4,
+    );
+
+    expect(state.debugHistory.map((item) => item.kind)).toEqual(['model', 'tool_call', 'tool_result', 'model']);
+    expect(state.debugHistory[0].detail).toBe('<thinking>checking repo</thinking>');
+    expect(state.debugHistory[3].detail).toBe('<thinking>checking stashes</thinking>');
+  });
+
+  it('does not replace an earlier model transcript entry with matching text across a tool boundary', () => {
+    let state = createInitialRunStateSnapshot(0);
+
+    state = applyEventToRunState(
+      state,
+      { type: 'assistant_message', timestamp: new Date(1).toISOString(), content: 'I will inspect the repo.' },
+      1,
+    );
+    state = applyEventToRunState(
+      state,
+      {
+        type: 'tool_started',
+        timestamp: new Date(2).toISOString(),
+        toolCallId: 'call-1',
+        toolName: 'bash',
+        summary: '{"command":"git status --short"}',
+      },
+      2,
+    );
+    state = applyEventToRunState(
+      state,
+      { type: 'assistant_message', timestamp: new Date(3).toISOString(), content: 'I will inspect the repo.' },
+      3,
+    );
+
+    expect(state.debugHistory.map((item) => item.kind)).toEqual(['model', 'tool_call', 'model']);
+    expect(state.debugHistory.filter((item) => item.kind === 'model')).toHaveLength(2);
+  });
+
   it('does not duplicate token fragments from streaming delta events (regression)', () => {
     // Simulates the real-world streaming chunks from a model producing
     // "Here's the markdown table". Each chunk should appear exactly once
@@ -340,7 +412,7 @@ describe('tui-state', () => {
     expect(state.debugHistory[0].detail).not.toMatch(/table table/);
   });
 
-  it('deduplicates repeated assistant notes across intervening tool events', () => {
+  it('preserves repeated assistant notes across intervening tool events', () => {
     let state = createInitialRunStateSnapshot(0);
 
     state = applyEventToRunState(
@@ -386,7 +458,8 @@ describe('tui-state', () => {
       4,
     );
 
-    expect(state.debugHistory.filter((item) => item.kind === 'model')).toHaveLength(1);
+    expect(state.debugHistory.map((item) => item.kind)).toEqual(['model', 'tool_call', 'tool_result', 'model']);
+    expect(state.debugHistory.filter((item) => item.kind === 'model')).toHaveLength(2);
   });
 
   it('records a terminal completion summary', () => {

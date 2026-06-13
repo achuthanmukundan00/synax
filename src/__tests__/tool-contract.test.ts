@@ -109,6 +109,12 @@ describe('coding mode mutation tools', () => {
     expect(tools).not.toContain('write');
     expect(tools).not.toContain('edit');
   });
+
+  it('getAllowedModelTools includes bash in read-only mode when enabled (git status/diff questions)', () => {
+    expect(getAllowedModelTools('read-only', true)).toContain('bash');
+    expect(getAllowedModelTools('docs', true)).toContain('bash');
+    expect(getAllowedModelTools('read-only', false)).not.toContain('bash');
+  });
 });
 
 // ─── 3. Status-only final outputs rejected ─────────────────────────────────

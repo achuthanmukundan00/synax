@@ -119,6 +119,18 @@ describe('isRecoverableToolError', () => {
     expect(isRecoverableToolError(call('edit'), errorResult('file not found'))).toBe(false);
   });
 
+  // invalid argument names (any tool) — the "Re-emit the tool call" path
+  it('invalid-arguments error is recoverable for any tool', () => {
+    const msg =
+      'invalid arguments for edit: received [newStr, path]. Expected: path, oldStr, newStr. ' +
+      'Re-emit the tool call with the correct argument names.';
+    expect(isRecoverableToolError(call('edit'), errorResult(msg))).toBe(true);
+    expect(isRecoverableToolError(call('write'), errorResult('invalid arguments for write: received [(none)]'))).toBe(
+      true,
+    );
+    expect(isRecoverableToolError(call('view_image'), errorResult('invalid arguments for view_image'))).toBe(true);
+  });
+
   // replace_in_file (aliased to edit rules)
   it('replace_in_file + "oldStr" mismatch is recoverable', () => {
     expect(isRecoverableToolError(call('replace_in_file'), errorResult('oldStr must match exactly once'))).toBe(true);

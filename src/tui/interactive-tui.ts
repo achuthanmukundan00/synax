@@ -5,7 +5,7 @@ import {
   type RunStateSnapshot,
 } from '../agent/tui-state';
 import { isSecretTrigger } from '../backrooms/trigger';
-import type { ChatSession } from '../commands/chat';
+import type { ChatSession, ImageAttachment } from '../commands/chat';
 import type { EffectiveSynaxConfig } from '../config/schema';
 import { persistConfig } from '../config/load-config';
 import { renderSettings } from '../settings/settings-renderer';
@@ -18,7 +18,7 @@ import {
 } from '../settings/settings-state';
 import { getCommand } from '../settings/slash-command-registry';
 import type { Readable, Writable } from 'node:stream';
-import { listSessionsSorted } from '../sessions/session-store';
+import { listSessionsSorted, readSessionEvents } from '../sessions/session-store';
 import {
   createResumePickerState,
   resumePickerReducer,
@@ -30,21 +30,22 @@ import {
   renderArtifactCard,
   promptInputHeight,
   footerLayoutHeight,
+  settingsOverlayLineContent,
   type ArtifactRailState,
   type FooterState,
-  type ExpandedState,
   type AutocompleteState,
   type CheckpointRailEntry,
 } from './opentui-artifact-renderer';
 import {
   classifyAgentEvent,
   semanticEventsFromDebugHistory,
+  semanticEventsFromSessionEvents,
   createCheckpointEvent,
   shouldEmitCheckpoint,
   type SemanticEvent,
 } from './semantic-events';
 import { getPalette, detectThemeMode, type TuiPalette } from './theme';
-import { tuiStats, formatCost, formatPricePer1M } from './telemetry';
+import { tuiStats, formatCost } from './telemetry';
 import { tokenStreamFrame, tokenStreamFrameText, tokenStreamRoleColor } from './token-stream';
 import { stripToolCallMarkup } from './markup-sanitizer';
 import {
@@ -56,6 +57,7 @@ import {
   DEFAULT_LIVE_CARD_LIMIT,
   DEFAULT_TUI_COALESCE_MS,
   IncrementalFeedModel,
+  applyFeedOperations,
   type DirtyReason,
 } from './opentui-render-scheduler';
 import { gitCreateCheckpoint, gitListCheckpoints, gitRestoreCheckpoint, type CheckpointInfo } from './git-helpers';
@@ -69,9 +71,9 @@ import {
   ACTIVITY_LINE_ID,
   ACTIVITY_GLYPH_ID,
   ACTIVITY_TEXT_ID,
-  TOOL_PREVIEW_LINES,
 } from './tui-constants';
-import { padAnsi, visibleLength } from './text-utils';
+import { padAnsi, visibleLength, wordWrapLines } from './text-utils';
+import { isImageFile, SUPPORTED_IMAGE_EXTENSIONS } from '../llm/image-utils';
 import { getModelPalette, type ModelPalette } from './model-palette';
 import { createInputParser, parseInputChunk } from './input';
 
@@ -87,7 +89,6 @@ const DISABLE_BRACKETED_PASTE = '\x1b[?2004l';
 
 import {
   resolveCtrlCBehavior,
-  latestExpandableEventId,
   slashAutocompleteItems,
   movePromptCursorVertically,
   scrollArtifactHistory,
@@ -95,9 +96,7 @@ import {
   setPromptValue,
   placePromptCursorAtEnd,
   splashFrame,
-  clip,
   stripAnsi,
-  truncateTitle,
   unique,
   tuiNote,
   slashOutputClass,
@@ -162,7 +161,7 @@ export async function runInteractiveTui(
     targetFps: activeFps,
     maxFps: activeFps,
     useMouse: options?.enableMouse ?? false,
-    backgroundColor: '#050505',
+    backgroundColor: 'transparent',
     consoleMode: 'disabled',
   });
   stdout.write(ENABLE_BRACKETED_PASTE);
@@ -179,16 +178,6 @@ export async function runInteractiveTui(
   // --- Theme ---
   const themeMode: 'dark' | 'light' = (await detectThemeMode(renderer as any)) ?? 'dark';
   const currentPalette: TuiPalette = getPalette(options?.blockedMessage ? 'default' : themeMode);
-  // Align the renderer clear color with the resolved palette. The renderer
-  // was created before theme detection, so a hardcoded dark background would
-  // otherwise clash with light terminal themes (e.g. Ghostty light mode).
-  try {
-    (renderer as unknown as { setBackgroundColor?: (color: string) => void }).setBackgroundColor?.(
-      currentPalette.background,
-    );
-  } catch {
-    // best-effort: keep the creation-time background
-  }
 
   // --- Keyboard shortcut state ---
   let ctrlCPressedAt: number | null = null;
@@ -206,9 +195,26 @@ export async function runInteractiveTui(
   const pasteBlocks: { blockNumber: number; charCount: number }[] = [];
   const bracketedPasteParser = createInputParser();
   let rawPasteActive = false;
+  /** Set when a bracketed paste ends; cleared in doRender after the
+   *  render cycle consumes the raw bytes.  Keeps rawPasteActive true
+   *  across the gap so trailing keypress events from the paste bytes
+   *  are suppressed. */
+  let rawPasteComplete = false;
   let activeThinkingEventId: string | null = null;
+  /** Raw accumulated text for the live thinking card.
+   *  Preserves spacing when token boundaries split words across
+   *  streaming chunks. Sanitized before display. */
   let thinkingRawBody = '';
-  let expandCollapseVersion = 0;
+  /** Sanitized body of the most recently finalized thinking card.
+   *  Some servers send cumulative reasoning_content (not incremental),
+   *  so the next thinking burst's first delta repeats the previous
+   *  block. We strip this prefix so each Thinking card shows only its
+   *  own content. */
+  let lastFinalizedThinkingBody = '';
+
+  /** Tracked image file paths from paste/drag. Encoded at submit time. */
+  let imageAttachments: ImageAttachment[] = [];
+  let preinsertedPromptText: string | null = null;
   let promptDirty = false;
   let layoutDirty = false;
   let settingsState = options?.settingsConfig ? createSettingsState(options.settingsConfig) : undefined;
@@ -220,9 +226,6 @@ export async function runInteractiveTui(
   const cwd = options?.cwd ?? process.cwd();
   /** Repository root for @-mention completion. */
   const repoRoot = options?.repoRoot ?? process.cwd();
-
-  // --- Expanded state for cards ---
-  const expandedState: ExpandedState = {};
 
   // --- Recent checkpoints ---
   let recentCheckpoints: CheckpointInfo[] = [];
@@ -263,6 +266,7 @@ export async function runInteractiveTui(
   };
   applyOptionsToState();
   let treeBuilt = false;
+  let overlayWasActive = false;
   let animationTimer: ReturnType<typeof setTimeout> | null = null;
   let eventsVersion = 0;
   let lastRenderedEventsVersion = -1;
@@ -291,11 +295,19 @@ export async function runInteractiveTui(
 
   const handleInputSubmit = (value: string): void => {
     if (busy) return;
-    const text = value.trim();
+    // Normalize absolute paths under $HOME to ~/ prefix.  Bracketed paste
+    // already normalizes, but some terminals insert file paths directly.
+    const home = process.env.HOME || process.env.USERPROFILE;
+    let text = value.trim();
+    if (home && text.includes(home)) {
+      const sep = home.endsWith('/') ? '' : '/';
+      text = text.replace(new RegExp(home.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + sep, 'g'), '~/');
+    }
     if (!text) return;
     prompt = '';
     autocompleteDraft = null;
     autocompleteIsFile = false;
+    imageAttachments = [];
     promptDirty = true;
     void submit(text);
   };
@@ -366,6 +378,16 @@ export async function runInteractiveTui(
           : baseFooter.hints,
     };
     const renderedEvents = visibleEvents(events, state);
+    const overlayLines = resumePickerState?.active
+      ? renderResumePicker(resumePickerState, renderer.width, renderer.height)
+      : settingsState?.active
+        ? renderSettings(settingsState, renderer.width, renderer.height).map(stripAnsi)
+        : undefined;
+    const overlayActiveLabel = resumePickerState?.active
+      ? 'Resume'
+      : settingsState?.active
+        ? tabLabel(settingsState.tab)
+        : undefined;
     const footerSignature = stableFooterSignature(footer);
     const rootLayoutSignature = rootLayoutModeSignature({
       visibleEventCount: renderedEvents.length,
@@ -374,14 +396,27 @@ export async function runInteractiveTui(
       slashInfoActive: (slashInfoLines?.length ?? 0) > 0,
       terminalWidth: renderer.width,
       terminalHeight: renderer.height,
+      overlayLineCount: overlayLines?.length ?? 0,
     });
     if (treeBuilt && footerSignature !== lastRenderedFooterSignature) {
       treeBuilt = false;
     }
     const currentSlashInfoCount = slashInfoLines?.length ?? 0;
-    if (treeBuilt && currentSlashInfoCount !== lastSlashInfoLineCount) {
+    // Pre-wrap to get the actual visual row count for layout tracking.
+    // footerLayoutHeight and renderSlashInfoPanel both pre-wrap internally;
+    // this count must match what they compute or the incremental render
+    // path will miss height changes.
+    const wrapWidth = renderer.width > 2 ? renderer.width - 2 : undefined;
+    const currentSlashInfoWrappedCount =
+      currentSlashInfoCount > 0 && wrapWidth
+        ? Math.min(
+            slashInfoLines!.reduce((n, line) => n + wordWrapLines(line, wrapWidth).length, 0),
+            14,
+          )
+        : currentSlashInfoCount;
+    if (treeBuilt && currentSlashInfoWrappedCount !== lastSlashInfoLineCount) {
       treeBuilt = false;
-      lastSlashInfoLineCount = currentSlashInfoCount;
+      lastSlashInfoLineCount = currentSlashInfoWrappedCount;
     }
     if (treeBuilt && rootLayoutSignature !== lastRenderedRootLayoutSignature) {
       treeBuilt = false;
@@ -395,16 +430,37 @@ export async function runInteractiveTui(
         }
       : undefined;
     autocompleteVisibleRows = nextAutocompleteVisibleRows;
-    const overlayLines = resumePickerState?.active
-      ? renderResumePicker(resumePickerState, renderer.width, renderer.height)
-      : settingsState?.active
-        ? renderSettings(settingsState, renderer.width, renderer.height).map(stripAnsi)
-        : undefined;
-    const overlayActiveLabel = resumePickerState?.active
-      ? 'Resume'
-      : settingsState?.active
-        ? tabLabel(settingsState.tab)
-        : undefined;
+    // Overlay/tree desync guards: rebuild if the overlay should exist but
+    // its nodes are missing, or it was closed but its nodes linger.
+    const overlayActive = (overlayLines?.length ?? 0) > 0;
+    if (treeBuilt && overlayActive && !findNode('synax-settings-line-0')) {
+      treeBuilt = false;
+    }
+    if (treeBuilt && !overlayActive && findNode('synax-settings')) {
+      treeBuilt = false;
+    }
+    // Blur the prompt input while an overlay (settings / resume picker) is
+    // open so the terminal cursor doesn't keep blinking behind the modal.
+    // Refocus when the overlay closes.
+    if (overlayActive !== overlayWasActive) {
+      overlayWasActive = overlayActive;
+      queueMicrotask(() => {
+        const input = renderer.root.findDescendantById('synax-input') as {
+          focus?: () => void;
+          blur?: () => void;
+          showCursor?: boolean;
+        } | null;
+        if (!input) return;
+        if (overlayActive) {
+          input.blur?.();
+          if ('showCursor' in input) input.showCursor = false;
+        } else {
+          if ('showCursor' in input) input.showCursor = true;
+          input.focus?.();
+          placePromptCursorAtEnd(input, prompt);
+        }
+      });
+    }
     if (!treeBuilt) {
       removeRenderedRoot();
       renderer.root.add(
@@ -414,13 +470,6 @@ export async function runInteractiveTui(
           rail,
           footer,
           renderer.width,
-          expandedState,
-          (id) => {
-            expandedState[id] = !expandedState[id];
-            tuiStats.recordExpandToggle();
-            expandCollapseVersion++;
-            render('input', { immediate: true });
-          },
           currentPalette,
           acState,
           overlayLines,
@@ -435,6 +484,7 @@ export async function runInteractiveTui(
             // Clear slash info panel when user starts typing
             if (slashInfoLines && value.trim()) {
               slashInfoLines = null;
+              prompt = value;
               render('input', { immediate: true });
               return;
             }
@@ -465,16 +515,35 @@ export async function runInteractiveTui(
       lastRenderedSplashFrame = splashFrame(state.nowMs);
       lastRenderedFooterSignature = footerSignature;
       lastRenderedRootLayoutSignature = rootLayoutSignature;
-      lastSlashInfoLineCount = currentSlashInfoCount;
-      expandCollapseVersion = 0;
+      lastSlashInfoLineCount = currentSlashInfoWrappedCount;
+      // Deferred bracketed-paste cleanup: the render cycle has consumed
+      // the raw paste bytes, so trailing keypress events from the same
+      // paste can be safely suppressed until the next input.
+      if (rawPasteComplete) {
+        rawPasteActive = false;
+        rawPasteComplete = false;
+      }
       feedModel.reset();
-      feedModel.plan(renderedEvents, expandedState);
+      feedModel.plan(renderedEvents);
       syncActivityLine(true);
       // Focus and position the input after rebuilds. OpenTUI applies initialValue
-      // without guaranteeing the cursor is at the end of that value.
+      // without guaranteeing the cursor is at the end of that value. Skip
+      // focusing while an overlay is open — the modal owns the keyboard and
+      // a focused input would paint a stray cursor behind it.
       queueMicrotask(() => {
-        const input = renderer.root.findDescendantById('synax-input');
-        input?.focus();
+        const input = renderer.root.findDescendantById('synax-input') as {
+          focus?: () => void;
+          blur?: () => void;
+          showCursor?: boolean;
+        } | null;
+        if (!input) return;
+        if (overlayActive) {
+          input.blur?.();
+          if ('showCursor' in input) input.showCursor = false;
+          return;
+        }
+        if ('showCursor' in input) input.showCursor = true;
+        input.focus?.();
         placePromptCursorAtEnd(input, prompt);
       });
     } else {
@@ -512,6 +581,16 @@ export async function runInteractiveTui(
           layoutDirty = true;
         }
       }
+      // Keep root height synced with the terminal on resize so Yoga
+      // recalculates the flex layout without a full tree rebuild.
+      const rootNode = findNode('synax-root');
+      if (rootNode && 'height' in (rootNode as any)) {
+        const currentRootHeight = (rootNode as any).height;
+        if (typeof currentRootHeight === 'number' && currentRootHeight !== renderer.height) {
+          (rootNode as any).height = renderer.height;
+          layoutDirty = true;
+        }
+      }
       // Force yoga layout recalculation when input or footer height changed.
       // OpenTUI's native height setter doesn't always propagate through
       // the yoga layout tree on its own.
@@ -519,10 +598,15 @@ export async function runInteractiveTui(
         renderer.root.calculateLayout();
         layoutDirty = false;
       }
+      updateOverlayLines();
       updateAutocompleteNode();
       rebuildEvents();
       lastRenderedFooterSignature = footerSignature;
       lastRenderedRootLayoutSignature = rootLayoutSignature;
+      if (rawPasteComplete) {
+        rawPasteActive = false;
+        rawPasteComplete = false;
+      }
     }
     tuiStats.recordRepaint();
     tuiStats.recordFrame(renderScheduler.getStats());
@@ -567,20 +651,18 @@ export async function runInteractiveTui(
       const currentSplashFrame = splashFrame(state.nowMs);
       if (
         eventsVersion === lastRenderedEventsVersion &&
-        expandCollapseVersion === 0 &&
         (events.length > 0 || currentSplashFrame === lastRenderedSplashFrame)
       )
         return;
       lastRenderedEventsVersion = eventsVersion;
       lastRenderedSplashFrame = currentSplashFrame;
-      expandCollapseVersion = 0;
       const scrollBox = findNode('synax-artifacts');
       if (!scrollBox) return;
       const visible = visibleEvents(events, state);
       if (visible.length > 0) {
         removeNode(scrollBox, 'synax-empty-state');
       }
-      const plan = feedModel.plan(visible, expandedState);
+      const plan = feedModel.plan(visible);
       if (plan.operations.length === 0) return;
       if (typeof (scrollBox as any).add !== 'function' || typeof (scrollBox as any).remove !== 'function') {
         treeBuilt = false;
@@ -589,30 +671,42 @@ export async function runInteractiveTui(
         doRender();
         return;
       }
-      for (const operation of plan.operations) {
-        if (operation.type === 'remove') {
-          removeNode(scrollBox, operation.id);
-          continue;
+      // The session header card occupies the first ScrollBox slot, so event
+      // index N maps to child index N + 1. Without this offset, updated
+      // cards (e.g. the streaming Thinking card) are re-inserted one slot
+      // too early and drift above the previous prompt or tool call.
+      const cardIndexOffset = findNode('synax-session-header') ? 1 : 0;
+      applyFeedOperations(
+        plan,
+        scrollBox as { add(node: unknown, index?: number): void },
+        (id) => removeNode(scrollBox, id),
+        (event) => renderArtifactCard(core, event, currentPalette),
+        cardIndexOffset,
+      );
+    }
+    /**
+     * Update settings/resume overlay line contents in place. Navigation
+     * within an overlay changes only line text — rebuilding the whole tree
+     * for every keypress caused visible flicker (and the resume picker
+     * previously never updated at all, because nothing refreshed the
+     * overlay nodes on the incremental path).
+     */
+    function updateOverlayLines(): void {
+      if (!overlayLines || overlayLines.length === 0) return;
+      for (let i = 0; i < overlayLines.length; i++) {
+        const node = findNode(`synax-settings-line-${i}`);
+        if (!node || typeof node !== 'object' || !('content' in node)) {
+          treeBuilt = false;
+          return;
         }
-        if (!operation.event) continue;
-        const card = renderArtifactCard(
+        (node as { content: unknown }).content = settingsOverlayLineContent(
           core,
-          operation.event,
-          expandedState[operation.event.id] ?? false,
-          (id: string) => {
-            expandedState[id] = !expandedState[id];
-            tuiStats.recordExpandToggle();
-            expandCollapseVersion++;
-            render('input', { immediate: true });
-          },
+          overlayLines[i] ?? '',
+          i,
+          overlayActiveLabel,
           currentPalette,
+          renderer.width,
         );
-        if (operation.type === 'update') {
-          removeNode(scrollBox, operation.id);
-          (scrollBox as any).add(card, operation.index);
-        } else {
-          (scrollBox as any).add(card);
-        }
       }
     }
     function updateAutocompleteNode(): void {
@@ -791,7 +885,9 @@ export async function runInteractiveTui(
       statusOverride = changed.providerWarning ? `! ${changed.providerWarning}` : '';
       applyOptionsToState();
     }
-    treeBuilt = false;
+    // No tree rebuild: overlay line contents are updated in place by the
+    // incremental render path, which avoids full-screen flicker on every
+    // settings navigation keypress.
     render('input', { immediate: true });
   };
 
@@ -877,9 +973,11 @@ export async function runInteractiveTui(
     steeringBuffer = '';
     busy = true;
     statusOverride = '';
+    const img = imageAttachments.length > 0 ? [...imageAttachments] : undefined;
+    imageAttachments = [];
     render();
     try {
-      await session.handleUserMessage(text);
+      await session.handleUserMessage(text, img);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       eventsVersion++;
@@ -906,12 +1004,28 @@ export async function runInteractiveTui(
     prompt = '';
     autocompleteDraft = null;
     autocompleteIsFile = false;
+    imageAttachments = [];
     promptDirty = true;
     statusOverride = '';
     busy = true;
+    const shouldPreinsertPrompt = !value.startsWith('/') && !(value.startsWith('!') && session.handleShellCommand);
+    if (shouldPreinsertPrompt) {
+      appendPromptCard(value);
+    } else {
+      preinsertedPromptText = null;
+    }
+    // Finalize any live thinking card from the previous turn before the
+    // first render of the new turn. Thinking cards are kept in the
+    // transcript (collapsed to one line) so the historical order of
+    // prompts, thinking blocks, and tool calls stays intact. The event
+    // sink also finalizes on task_started/user_message, but those arrive
+    // asynchronously — after this render call.
+    finalizeThinkingCard();
     render();
     try {
       if (value.startsWith('/')) {
+        // Slash commands don't use image attachments — clear them.
+        imageAttachments = [];
         // Handle /checkpoint locally (still functional, not advertised)
         if (value === '/checkpoint') {
           const result = await gitCreateCheckpoint('manual checkpoint');
@@ -1009,6 +1123,8 @@ export async function runInteractiveTui(
           options?.resetLastModelOutput?.();
         }
       } else if (value.startsWith('!') && session.handleShellCommand) {
+        // Shell commands don't use image attachments — clear them.
+        imageAttachments = [];
         const command = value.slice(1).trim();
         const report = await session.handleShellCommand(command);
         eventsVersion++;
@@ -1028,7 +1144,9 @@ export async function runInteractiveTui(
           metadata: { duration: report.durationMs },
         });
       } else {
-        await session.handleUserMessage(value);
+        const img = imageAttachments.length > 0 ? [...imageAttachments] : undefined;
+        imageAttachments = [];
+        await session.handleUserMessage(value, img);
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -1041,18 +1159,76 @@ export async function runInteractiveTui(
     }
   };
 
+  /**
+   * Scan pasted text for image file paths. When an image is detected,
+   * track it in imageAttachments (for submit-time encoding) and append
+   * a compact indicator to the prompt instead of the raw absolute path.
+   */
+  const detectAndTrackImages = (value: string): string => {
+    if (!value) return value;
+    const home = process.env.HOME || process.env.USERPROFILE;
+    // Build a regex that matches file paths ending in a supported image
+    // extension.  Allows spaces in filenames (macOS screenshots) and
+    // handles both /Users/… and ~/… prefixes.
+    const extList = [...SUPPORTED_IMAGE_EXTENSIONS].join('|');
+    const extPattern = `\\.(${extList})(\\s|$)`;
+    // Match: optional home prefix, then non-whitespace chars with spaces
+    // allowed mid-path, ending in an image extension.
+    const pathPattern = home
+      ? `(?:(?:${home.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}|~)/[^\\s]*${extPattern}`
+      : `(?:~|/[^\\s]*)/[^\\s]*${extPattern}`;
+    const imageRe = new RegExp(pathPattern, 'gi');
+    return value.replace(imageRe, (match) => {
+      const trimmed = match.trim();
+      if (!isImageFile(trimmed)) return match;
+      const realPath = home && trimmed.startsWith('~/') ? home + trimmed.slice(1) : trimmed;
+      imageAttachments.push({
+        path: trimmed,
+        realPath,
+      });
+      const displayPath = trimmed.length > 60 ? `…${trimmed.slice(-57)}` : trimmed;
+      return `[📷 ${displayPath}]`;
+    });
+  };
+
   const appendPromptText = (value: string): void => {
     if (!value) return;
+    // Normalize absolute paths under $HOME to ~/ prefix so the model's
+    // read/view_image tools accept them (they reject /Users/... abs paths).
+    const home = process.env.HOME || process.env.USERPROFILE;
+    if (home) {
+      const sep = home.endsWith('/') ? '' : '/';
+      value = value.replace(new RegExp(home.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + sep, 'g'), '~/');
+    }
     const input = renderer.root.findDescendantById('synax-input');
     const currentPrompt = input ? readPromptValue(input) : prompt;
-    syncPromptValue(`${currentPrompt}${value}`);
+    const newValue = `${currentPrompt}${value}`;
+    syncPromptValue(newValue);
   };
 
   const appendPasteText = (value: string): void => {
     if (!value) return;
+    // Detect image paths and replace with compact indicators.
+    // Only runs for bracketed paste, not for raw text/newline events.
+    value = detectAndTrackImages(value);
     pasteBlockCount++;
     pasteBlocks.push({ blockNumber: pasteBlockCount, charCount: value.length });
     appendPromptText(value);
+  };
+
+  const appendPromptCard = (text: string): void => {
+    const body = text.trim();
+    if (!body) return;
+    preinsertedPromptText = body;
+    eventsVersion++;
+    events.push({
+      id: `prompt-${Date.now()}-${events.length}`,
+      class: 'prompt',
+      timestamp: Date.now(),
+      artifact: { type: 'text', title: 'Prompt', body },
+      metadata: { model: state.modelId || undefined },
+    });
+    events = events.slice(Math.max(0, events.length - MAX_TRANSCRIPT_EVENTS));
   };
 
   /**
@@ -1072,20 +1248,35 @@ export async function runInteractiveTui(
   };
 
   const upsertThinkingCard = (chunk: string): void => {
-    // Accumulate raw text to preserve original spacing between streaming chunks.
-    // Individual chunks may be split at token boundaries without spaces, so
-    // concatenating sanitized chunks would join words. Instead we accumulate
-    // the raw body and sanitize the whole thing each time.
+    // Accumulate raw text to preserve original spacing.  When token
+    // boundaries split words across streaming chunks, concatenating
+    // sanitized chunks would join them ("reposi" + "tory" →
+    // "repository" but "repository" + "I need" → "repositoryI need"
+    // without the raw middle ground).  The raw body carries whatever
+    // spacing the server included.
+    //
+    // Some providers send cumulative reasoning (the full accumulated
+    // text) in each SSE delta.  For those, the accumulated raw body
+    // IS the full text, and we detect newness by comparing sanitized
+    // bodies across updates.
     if (!activeThinkingEventId) {
       const sanitized = sanitizeThinkingContent(chunk);
       if (!sanitized.trim()) return;
+      let body = sanitized;
+      // Strip prefix from a previously-finalized block when the
+      // server re-sends block 1 at the start of block 2.
+      if (lastFinalizedThinkingBody && body.startsWith(lastFinalizedThinkingBody)) {
+        body = body.slice(lastFinalizedThinkingBody.length).trimStart();
+        if (!body) return;
+      }
+      lastFinalizedThinkingBody = '';
       thinkingRawBody = chunk;
       activeThinkingEventId = `thinking-${Date.now()}-${events.length}`;
       events.push({
         id: activeThinkingEventId,
         class: 'thinking',
         timestamp: Date.now(),
-        artifact: { type: 'text', title: 'Thinking', body: sanitized.trimStart() },
+        artifact: { type: 'text', title: 'Thinking', body },
         metadata: { model: state.modelId || undefined },
       });
       events = events.slice(Math.max(0, events.length - MAX_TRANSCRIPT_EVENTS));
@@ -1102,9 +1293,12 @@ export async function runInteractiveTui(
       return;
     }
 
-    // Concatenate the raw chunk onto the accumulated raw body, then
-    // sanitize the whole thing. This preserves spacing that the model
-    // included between tokens even when chunk boundaries split words.
+    // Accumulate raw body and re-sanitize the whole thing each
+    // update.  This is what preserves spacing across token boundaries.
+    // Then compute the delta — what's genuinely new since the *last
+    // time we computed a sanitized body* — so we only append novel
+    // text to the card, even for cumulative servers.
+    const previousSanitized = sanitizeThinkingContent(thinkingRawBody);
     thinkingRawBody += chunk;
     const sanitized = sanitizeThinkingContent(thinkingRawBody).trim();
     if (!sanitized) {
@@ -1115,27 +1309,53 @@ export async function runInteractiveTui(
       return;
     }
 
+    // Compute what's new: for incremental servers the accumulated
+    // sanitized text grows; for cumulative servers it is identical
+    // across updates and the delta is the new suffix.
+    let delta = sanitized;
+    if (previousSanitized && sanitized.startsWith(previousSanitized)) {
+      delta = sanitized.slice(previousSanitized.length);
+    }
+    if (!delta.trim()) return;
+
     const next = {
       ...existing,
-      timestamp: Date.now(),
       artifact: {
         ...existing.artifact,
-        body: sanitized,
+        body: (existing.artifact.body + delta).trimStart(),
       },
     };
     events = [...events.slice(0, index), next, ...events.slice(index + 1)];
     eventsVersion++;
   };
 
-  const stopThinkingCard = (): void => {
+  /**
+   * Finalize the live thinking card in place: collapse it to a one-line
+   * preview and retitle it, without moving or removing it. The card keeps
+   * its position in the transcript so the order of prompts, thinking
+   * blocks, and tool calls always matches the stream. The next reasoning
+   * delta starts a fresh card appended at the end of the feed.
+   */
+  const finalizeThinkingCard = (): void => {
     if (!activeThinkingEventId) return;
     const index = events.findIndex((existing) => existing.id === activeThinkingEventId);
     const existing = index >= 0 ? events[index] : undefined;
+    if (existing?.artifact.type === 'text') {
+      lastFinalizedThinkingBody = existing.artifact.body;
+    }
     activeThinkingEventId = null;
+    thinkingRawBody = '';
     if (!existing || existing.artifact.type !== 'text') return;
+    // Collapse to first line only — full reasoning body from a completed
+    // thinking block overwhelms the scrollback above the next prompt.
+    const firstLine = existing.artifact.body.split('\n')[0] ?? '';
+    const collapsed = firstLine;
     events = [
       ...events.slice(0, index),
-      { ...existing, artifact: { ...existing.artifact, title: 'Stopped thinking' } },
+      {
+        ...existing,
+        artifact: { ...existing.artifact, title: 'Thought', body: collapsed },
+      },
       ...events.slice(index + 1),
     ];
     eventsVersion++;
@@ -1145,19 +1365,25 @@ export async function runInteractiveTui(
     if (exiting) return;
     if (event.type === 'task_started' || event.type === 'user_message') {
       hasAssistantResultThisTurn = false;
-      // Reset thinking state for the new turn — a new prompt starts a fresh
-      // thinking block rather than appending to the previous turn's.
-      activeThinkingEventId = null;
-      thinkingRawBody = '';
+      // Finalize any live thinking card from the previous turn. Collapsed
+      // thinking cards stay in the transcript at their original position
+      // so the order of prompts, thinking, and tool calls is preserved.
+      finalizeThinkingCard();
     }
     if (event.type === 'assistant_delta' && event.reasoningContent) {
       upsertThinkingCard(event.reasoningContent);
     }
-    if (event.type === 'tool_started') {
-      stopThinkingCard();
+    if (event.type === 'tool_started' || event.type === 'assistant_message' || event.type === 'task_finished') {
+      // A tool call or final answer ends the current thinking burst.
+      // Later reasoning deltas open a new card after this point in the
+      // feed, keeping multiple thinking cards in true stream order.
+      finalizeThinkingCard();
     }
     state = applyEventToRunState(state, event, Date.now());
-    const newEvents = classifyAgentEvent(event, state, Date.now());
+    const suppressPreinsertedPrompt =
+      event.type === 'user_message' && preinsertedPromptText !== null && event.content.trim() === preinsertedPromptText;
+    if (suppressPreinsertedPrompt) preinsertedPromptText = null;
+    const newEvents = suppressPreinsertedPrompt ? [] : classifyAgentEvent(event, state, Date.now());
     if (event.type === 'assistant_message' && newEvents.length > 0) {
       hasAssistantResultThisTurn = true;
     }
@@ -1332,9 +1558,7 @@ export async function runInteractiveTui(
   /** Ctrl+R: raw event stream debug overlay */
   function handleCtrlR(): void {
     const visible = visibleEvents(events, state);
-    const rawDump = visible
-      .map((ev) => `${ev.class}:${ev.id.slice(0, 8)} ${ev.artifact.type} "${truncateTitle(ev)}"`)
-      .join('\n');
+    const rawDump = visible.map((ev) => `${ev.class}:${ev.id.slice(0, 8)} ${ev.artifact.type}`).join('\n');
     const header = `Raw event stream (${visible.length} events):`;
     eventsVersion++;
     events.push(tuiNote('slash', `${header}\n${rawDump || '(empty)'}`));
@@ -1577,7 +1801,7 @@ export async function runInteractiveTui(
     // \e[200~ and \e[201~ and emitting a single `paste` event.
     const parsed = bracketedPasteParser.parse(sequence);
 
-    if (endsPaste) rawPasteActive = false;
+    if (endsPaste) rawPasteComplete = true;
 
     for (const event of parsed) {
       if (event.type === 'paste') {
@@ -1596,6 +1820,15 @@ export async function runInteractiveTui(
       // paste-mode events are relevant during bracketed paste handling.
       // Trailing newlines after \e[201~ would otherwise trigger accidental
       // sends on the user's behalf.
+    }
+    // After bracketed paste completes, clear the autocomplete draft so
+    // a pasted path that starts with '/' doesn't lock the prompt into
+    // slash-autocomplete mode (where Enter can behave differently). Also
+    // defer the render so the rawPasteActive flag is definitively false
+    // before the next render cycle reads it.
+    if (endsPaste) {
+      autocompleteDraft = null;
+      promptDirty = false;
     }
     render('input', { immediate: true });
     return true;
@@ -1687,17 +1920,6 @@ export async function runInteractiveTui(
       return;
     }
 
-    if (key.ctrl && key.name === 'o') {
-      const id = activeThinkingEventId ?? latestThinkingEventId(events);
-      if (id) {
-        expandedState[id] = !expandedState[id];
-        tuiStats.recordExpandToggle();
-        expandCollapseVersion++;
-        render('input', { immediate: true });
-      }
-      return;
-    }
-
     if (handleSettingsKey(key)) {
       return;
     }
@@ -1726,15 +1948,45 @@ export async function runInteractiveTui(
       if (isEnterKey(key.name)) {
         const selected = resumePickerState.filtered[resumePickerState.selectedRow];
         if (selected) {
+          // Switch to the session's recorded model before restoring.
+          if (selected.activeProvider && selected.activeModel && options?.settingsConfig) {
+            const cfg = options.settingsConfig;
+            const provider = cfg.providers[selected.activeProvider];
+            if (provider?.models?.some((m) => m.id === selected.activeModel)) {
+              cfg.active = {
+                ...cfg.active,
+                provider: selected.activeProvider,
+                model: selected.activeModel,
+              };
+              const changed = options.onSettingsConfigChanged?.(cfg);
+              if (changed) {
+                options.settingsConfig = cfg;
+                options.modelLabel = changed.modelLabel;
+                options.thinkingEnabled = changed.thinkingEnabled;
+                options.endpointLabel = changed.endpointLabel;
+                options.providerName = changed.providerName;
+                options.contextWindowTokens = changed.contextWindowTokens;
+              }
+            }
+          }
+
           const report = session.resumeSession?.(selected.id);
           if (report?.ok) {
-            events = [];
-            eventsVersion = 0;
+            // Rebuild the visible transcript from the persisted event log so
+            // the user sees the full prior conversation, not a blank feed.
+            const restored = semanticEventsFromSessionEvents(
+              readSessionEvents(selected.id),
+              selected.activeModel || options?.modelLabel,
+            );
+            events = restored.slice(Math.max(0, restored.length - MAX_TRANSCRIPT_EVENTS));
+            eventsVersion++;
             state = createInitialRunStateSnapshot(Date.now());
+            applyOptionsToState();
             options?.resetLastModelOutput?.();
+            feedModel.reset();
             slashInfoLines = [
               `Resumed ${selected.title || selected.id}`,
-              `${report.restoredMessages} message${report.restoredMessages === 1 ? '' : 's'} restored from ${report.eventsRead} event${report.eventsRead === 1 ? '' : 's'}.`,
+              `${report.restoredMessages} message${report.restoredMessages === 1 ? '' : 's'} restored from ${report.eventsRead} event${report.eventsRead === 1 ? '' : 's'}. Transcript above is from the previous session.`,
             ];
           } else {
             slashInfoLines = [`Resume failed: ${report?.error ?? 'session could not be restored'}`];
@@ -1784,61 +2036,6 @@ export async function runInteractiveTui(
     // --- Tab: autocomplete ---
     if (isTabKey(key.name)) {
       handleTab(key.name === 'shift_tab');
-      return;
-    }
-
-    // --- e (empty prompt only): expand/collapse the latest expandable card.
-    // Gated on an empty prompt so typing words containing "e" never toggles cards.
-    if (key.name === 'e' && !key.ctrl && !key.shift && !key.meta && !busy && promptValueFromInput() === '') {
-      const id = latestExpandableEventId(visibleEvents(events, state));
-      if (id) {
-        expandedState[id] = !expandedState[id];
-        tuiStats.recordExpandToggle();
-        expandCollapseVersion++;
-        key.preventDefault?.();
-        render();
-        return;
-      }
-    }
-
-    // --- Enter (empty prompt only): expand/collapse truncated card.
-    // When the prompt has text, Enter must always submit — never toggle cards.
-    if (
-      isEnterKey(key.name) &&
-      !busy &&
-      !autocompleteVisible &&
-      !pasteActive &&
-      !key.shift &&
-      !key.ctrl &&
-      promptValueFromInput().trim() === ''
-    ) {
-      const id = latestExpandableEventId(visibleEvents(events, state));
-      if (id) {
-        expandedState[id] = !expandedState[id];
-        tuiStats.recordExpandToggle();
-        expandCollapseVersion++;
-        key.preventDefault?.();
-        render();
-        return;
-      }
-    }
-
-    // --- Ctrl+E: toggle all expandable cards ---
-    if (key.ctrl && key.name === 'e' && !busy) {
-      const visible = visibleEvents(events, state);
-      const expandable = visible.filter(
-        (e) =>
-          e.class === 'tool_result' &&
-          e.artifact.type === 'text' &&
-          e.artifact.body.split('\n').length > TOOL_PREVIEW_LINES,
-      );
-      const allExpanded = expandable.every((e) => expandedState[e.id]);
-      for (const e of expandable) {
-        expandedState[e.id] = !allExpanded;
-      }
-      tuiStats.recordExpandToggle();
-      expandCollapseVersion++;
-      render();
       return;
     }
 
@@ -2031,12 +2228,30 @@ export async function runInteractiveTui(
   let resizeDebounce: ReturnType<typeof setTimeout> | null = null;
 
   renderer.on('resize', () => {
-    // Coalesce rapid resize events (e.g. corner drag) to avoid flicker.
+    // Coalesce rapid resize events (e.g. corner drag). On resize we
+    // update dimensions in place so the layout recalc doesn't destroy
+    // the tree — avoids the blank-frame flicker that a full rebuild
+    // caused between removeRenderedRoot() and renderer.root.add().
     if (resizeDebounce) clearTimeout(resizeDebounce);
     resizeDebounce = setTimeout(() => {
       resizeDebounce = null;
-      treeBuilt = false;
-      feedModel.reset();
+      // Only rebuild if the overlay state is desynced.  Otherwise keep
+      // the tree intact and let the incremental render path update
+      // terminal-dependent components (footer, autocomplete, etc.) and
+      // recalculate layout in place.
+      const overlayLinesNow = resumePickerState?.active
+        ? renderResumePicker(resumePickerState, renderer.width, renderer.height)
+        : settingsState?.active
+          ? renderSettings(settingsState, renderer.width, renderer.height).map(stripAnsi)
+          : undefined;
+      const overlayActiveNow = (overlayLinesNow?.length ?? 0) > 0;
+      if (overlayActiveNow && !findNode('synax-settings-line-0')) {
+        treeBuilt = false;
+        feedModel.reset();
+      } else if (!overlayActiveNow && findNode('synax-settings')) {
+        treeBuilt = false;
+        feedModel.reset();
+      }
       render('resize', { immediate: true });
     }, 100);
   });
@@ -2059,7 +2274,6 @@ export {
   movePromptCursorVertically,
   scrollArtifactHistory,
   resolveCtrlCBehavior,
-  latestExpandableEventId,
 } from './key-handlers';
 
 function eventRenderReason(event: import('../agent/events').AgentEvent): DirtyReason {
@@ -2116,14 +2330,6 @@ function visibleEvents(events: SemanticEvent[], state: RunStateSnapshot): Semant
   return semanticEventsFromDebugHistory(state);
 }
 
-function latestThinkingEventId(events: SemanticEvent[]): string | undefined {
-  for (let index = events.length - 1; index >= 0; index -= 1) {
-    const event = events[index];
-    if (event?.class === 'thinking') return event.id;
-  }
-  return undefined;
-}
-
 function railState(
   state: RunStateSnapshot,
   options?: {
@@ -2158,30 +2364,30 @@ function railState(
 
 function activitySummary(state: RunStateSnapshot): string {
   if (state.phase === 'verifying') {
-    return state.verification.currentCheckLabel ? clip(state.verification.currentCheckLabel, 58) : 'running checks';
+    return state.verification.currentCheckLabel || 'running checks';
   }
 
   const latest = state.timeline[state.timeline.length - 1]?.summary ?? '';
   const cleaned = cleanActivitySummary(latest);
 
   if (state.phase === 'tool_execution') {
-    return clip(cleaned || toolNameFromStatus(state.statusNote) || 'running tool', 58);
+    return cleaned || toolNameFromStatus(state.statusNote) || 'running tool';
   }
 
   if (state.phase === 'thinking') {
     if (/^Tool\s*·/i.test(latest)) {
-      return clip(`reviewing ${cleaned || 'tool'} result`, 58);
+      return `reviewing ${cleaned || 'tool'} result`;
     }
     if (/verification/i.test(latest)) {
-      return clip(cleaned || 'reviewing checks', 58);
+      return cleaned || 'reviewing checks';
     }
     if (cleaned && !/objective registered/i.test(cleaned) && !/^step\s+\d+/i.test(cleaned)) {
-      return clip(cleaned, 58);
+      return cleaned;
     }
-    return clip(state.objective.nextCheckpoint || 'awaiting model response', 58);
+    return state.objective.nextCheckpoint || 'awaiting model response';
   }
 
-  return clip(cleaned || state.objective.nextCheckpoint || 'working', 58);
+  return cleaned || state.objective.nextCheckpoint || 'working';
 }
 
 export function activityLineActive(
@@ -2240,7 +2446,10 @@ function buildContextInfo(state: RunStateSnapshot, barWidth: number): string | u
   const pct = Math.min(100, Math.round((used / total) * 100));
   const filled = Math.round((pct / 100) * barWidth);
   const empty = barWidth - filled;
-  const bar = `▐${'█'.repeat(filled)}${'░'.repeat(empty)}▌`;
+  // Block-element bar: █ for filled, ░ for empty. These render on every
+  // terminal.  The half-block glyphs ▰/▱ were replaced because they fall
+  // back to empty rectangles on many terminals.
+  const bar = `${'█'.repeat(filled)}${'░'.repeat(empty)}`;
 
   const usedFmt = used.toLocaleString();
   const totalFmt = total.toLocaleString();
@@ -2250,15 +2459,12 @@ function buildContextInfo(state: RunStateSnapshot, barWidth: number): string | u
   return cost ? `${bar} ${countPart}  ·  ${cost}` : `${bar} ${countPart}`;
 }
 
-/** Build a compact cost suffix from session pricing data. */
+/** Build a compact cost suffix: cumulative session spend only. Per-token
+ *  in/out pricing is user-configured — repeating it here just cluttered
+ *  the footer. */
 function buildCostSuffix(state: RunStateSnapshot): string | undefined {
   const spend = state.sessionSpendLabel;
   if (spend === undefined || spend === '$0.00' || spend === 'local') return undefined;
-  const inPrice = state.inputPricePer1MTokens;
-  const outPrice = state.outputPricePer1MTokens;
-  if (inPrice !== undefined && outPrice !== undefined) {
-    return `${spend}  ·  ${formatPricePer1M(inPrice)} in  ${formatPricePer1M(outPrice)} out`;
-  }
   return `${spend} this session`;
 }
 
@@ -2315,7 +2521,7 @@ function footerState({
     };
   }
   if (state.phase === 'tool_execution') {
-    const steerHint = steeringBuffer ? ` [Steering: ${clip(steeringBuffer, 40)}]` : '';
+    const steerHint = steeringBuffer ? ` [Steering: ${steeringBuffer}]` : '';
     return {
       status: `Working · ${activitySummary(state)}${steerHint}`,
       prompt,
@@ -2326,7 +2532,7 @@ function footerState({
     };
   }
   if (busy || state.phase === 'thinking') {
-    const steerHint = steeringBuffer ? ` [Steering: ${clip(steeringBuffer, 40)}]` : '';
+    const steerHint = steeringBuffer ? ` [Steering: ${steeringBuffer}]` : '';
     return {
       status: `Thinking · ${activitySummary(state)}${steerHint}`,
       prompt,
@@ -2380,7 +2586,6 @@ function settingsTabForCommand(commandName: string): SettingsTab | undefined {
   if (commandName === 'model') return 'model';
   if (commandName === 'providers' || commandName === 'login') return 'providers';
   if (commandName === 'skills') return 'skills';
-  if (commandName === 'mcp') return 'mcp';
   return undefined;
 }
 
@@ -2474,11 +2679,14 @@ function printableKeyValue(key: { name?: string; sequence?: string; shift?: bool
   return key.shift ? key.name.toUpperCase() : key.name;
 }
 
-function sessionsForCurrentWorkspace<T extends { workspacePath?: string; repoRoot?: string }>(
+function sessionsForCurrentWorkspace<T extends { workspacePath?: string; repoRoot?: string; eventCount?: number }>(
   sessions: T[],
   repoRoot: string,
 ): T[] {
   return sessions.filter((session) => {
+    // Sessions with no recorded events have nothing to restore — offering
+    // them in the picker produces "no restorable messages" dead-ends.
+    if ((session.eventCount ?? 0) === 0) return false;
     const workspace = session.workspacePath ?? session.repoRoot;
     return !workspace || workspace === repoRoot;
   });
@@ -2497,11 +2705,18 @@ function rootLayoutModeSignature(args: {
   slashInfoActive: boolean;
   terminalWidth: number;
   terminalHeight: number;
+  overlayLineCount?: number;
 }): string {
-  const compactStartup =
-    args.visibleEventCount === 0 && !args.settingsActive && !args.slashInfoActive && args.footer.status === 'Ready.';
-  const mode = compactStartup ? 'compact' : 'full';
-  return [mode, String(args.slashInfoActive), String(args.terminalWidth), String(args.terminalHeight)].join('\0');
+  // Always use full layout — the root structure never changes between
+  // splash and transcript, so transitions are handled incrementally.
+  // Only terminal dimensions, overlay presence, and slash-info panel
+  // presence can change the root layout.
+  return [
+    String(args.slashInfoActive),
+    String(args.terminalWidth),
+    String(args.terminalHeight),
+    String(args.overlayLineCount ?? 0),
+  ].join('\0');
 }
 
 function elapsed(startedAtMs: number, nowMs: number): string {

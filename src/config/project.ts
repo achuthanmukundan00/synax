@@ -142,7 +142,8 @@ export function toProviderFactoryInput(config: ProjectConfig): ProviderFactoryIn
   if (headersInput) {
     for (const [name, value] of Object.entries(headersInput)) {
       if (value.startsWith('$')) {
-        const envName = value.slice(1);
+        const braceMatch = /^\$\{(.+)}$/.exec(value);
+        const envName = braceMatch ? braceMatch[1] : value.slice(1);
         const resolved = process.env[envName];
         if (resolved) customHeaders[name] = resolved;
         continue;
@@ -198,7 +199,8 @@ export function normalizeProviderConfig(
   const customHeaders: Record<string, string> = {};
   for (const [name, value] of Object.entries(headersInput ?? {})) {
     if (value.startsWith('$')) {
-      const envName = value.slice(1);
+      const braceMatch = /^\$\{(.+)}$/.exec(value);
+      const envName = braceMatch ? braceMatch[1] : value.slice(1);
       const resolved = process.env[envName];
       if (resolved) customHeaders[name] = resolved;
       continue;
@@ -806,6 +808,8 @@ export function loadProjectConfig(baseDir?: string): LoadProjectConfigResult {
     // Only let the project config override non-provider fields.
     const projectRest = { ...config };
     delete projectRest.provider;
+    delete projectRest.contextWindowTokens;
+    delete projectRest.contextBudgetTokens;
     config = {
       ...effectiveProjectConfig,
       ...projectRest,

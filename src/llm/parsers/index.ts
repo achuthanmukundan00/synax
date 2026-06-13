@@ -49,6 +49,7 @@ export function ensureParsersRegistered(): void {
   toolCallParserRegistry.register('step3', createStep3Parser);
   toolCallParserRegistry.register('step3p5', createStep3p5Parser);
   toolCallParserRegistry.register('functiongemma', createFunctionGemmaParser);
+  toolCallParserRegistry.register('gemma_native', createGenericParser);
   toolCallParserRegistry.register('olmo3', createOlmo3Parser);
   toolCallParserRegistry.register('glm45', createGlm45Parser);
   toolCallParserRegistry.register('glm47', createGlm47Parser);

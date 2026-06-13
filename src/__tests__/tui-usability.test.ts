@@ -213,7 +213,7 @@ describe('TUI usability floor', () => {
     ]);
 
     // Feed model plan should include all events without truncating content.
-    const plan = model.plan(events, {});
+    const plan = model.plan(events);
     expect(plan.visibleIds.length).toBeGreaterThanOrEqual(1);
     expect(plan.operations.length).toBeGreaterThanOrEqual(1);
 
@@ -266,10 +266,10 @@ describe('TUI usability floor', () => {
     // Feed the first N-1 events (streaming phase), then the full set.
     const partial = allSemantic.slice(0, allSemantic.length - 1);
     const model = new IncrementalFeedModel(300);
-    model.plan(partial, {});
+    model.plan(partial);
 
     // Now feed all events — the last assistant_message should be detected as a transition.
-    const plan = model.plan(allSemantic, {});
+    const plan = model.plan(allSemantic);
     // After partial feed, the full set adds an event. Either an append (new ID)
     // or an update (same ID, changed signature) proves correct incremental behavior.
     const appendOrUpdate = plan.operations.filter((op) => op.type === 'append' || op.type === 'update');

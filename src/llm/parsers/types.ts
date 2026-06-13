@@ -138,9 +138,14 @@ export function detectParserId(modelId: string): string | undefined {
     // InternLM
     { pattern: /\binternlm/i, parser: 'internlm' },
 
-    // FunctionGemma
+    // FunctionGemma / Gemma
     { pattern: /\bfunctiongemma\b/i, parser: 'functiongemma' },
     { pattern: /\bgemma-?2.*function/i, parser: 'functiongemma' },
+    // Gemma 3/4 (including QAT/quantized variants). These models use the
+    // OpenAI native tool_calls convention (role: 'tool', tool_call_id)
+    // rather than XML-wrapped <tool_response> user messages.
+    { pattern: /\bgemma-?[34]/i, parser: 'gemma_native' },
+    { pattern: /\bgemma\b/i, parser: 'gemma_native' },
 
     // OLMo3
     { pattern: /\bolmo[e3]/i, parser: 'olmo3' },

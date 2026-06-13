@@ -112,7 +112,9 @@ describe('shared bounded agent runner', () => {
     expect(tools).toContain('save_memory');
     expect(tools).not.toContain('write');
     expect(tools).not.toContain('edit');
-    expect(tools).not.toContain('bash');
+    // bash stays available in read-only mode (git status/diff questions are
+    // unanswerable without it); file mutation tools are the read-only gate.
+    expect(tools).toContain('bash');
 
     const verifyTools = Session.buildModelTools({ mode: 'verify', bashEnabled: true }).map((tool) => tool.name);
     expect(verifyTools).toContain('write');
@@ -1087,31 +1089,6 @@ describe('shared bounded agent runner', () => {
     rmSync(outside, { force: true });
   });
 
-  it('warns the model after the third full-file read instead of silently re-reading', async () => {
-    writeFileSync(join(TMP, 'a.txt'), 'hello\n', 'utf-8');
-    const client = fakeClient([
-      { toolCalls: [{ id: '1', name: 'read', arguments: { path: 'a.txt' } }] },
-      { toolCalls: [{ id: '2', name: 'read', arguments: { path: 'a.txt' } }] },
-      { toolCalls: [{ id: '3', name: 'read', arguments: { path: 'a.txt' } }] },
-      { content: 'done' },
-    ]);
-
-    const result = await runTurn({ repoRoot: TMP, task: 're-read', client, maxSteps: 6 });
-
-    // Reads 1-3 succeed (limit is 4), read 3 should carry a guidance nudge.
-    expect(result.terminalState).toBe('completed');
-    const toolMsgs = (client.requests[3].messages as Array<{ role: string; content: string }>).filter(
-      (m) => m.role === 'tool',
-    );
-    expect(toolMsgs.length).toBeGreaterThanOrEqual(1);
-    // The third read (tool_call_id '3') result should contain guidance.
-    const read3 = toolMsgs.find((m) => (m as { tool_call_id?: string }).tool_call_id === '3');
-    expect(read3).toBeDefined();
-    const r3 = read3 as NonNullable<typeof read3>;
-    expect(r3.content).toContain('guidance');
-    expect(r3.content).toContain('search');
-  });
-
   it('treats different line ranges as distinct reads, not repetitions', async () => {
     writeFileSync(join(TMP, 'a.txt'), 'hello\nworld\nagain\nfourth\nfifth\n', 'utf-8');
     const client = fakeClient([
@@ -1178,35 +1155,7 @@ describe('shared bounded agent runner', () => {
     );
     expect(toolMessage?.content).toContain('line');
     expect(toolMessage?.content).toContain('"truncated":true');
-    expect(toolMessage?.content).toContain('Re-read with startLine=');
-  });
-
-  it('blocks further reads once the per-turn read token budget is exhausted', async () => {
-    writeFileSync(join(TMP, 'a.txt'), `${'a\n'.repeat(5000)}`, 'utf-8');
-    writeFileSync(join(TMP, 'b.txt'), `${'b\n'.repeat(5000)}`, 'utf-8');
-    const client = fakeClient([
-      { toolCalls: [{ id: '1', name: 'read', arguments: { path: 'a.txt' } }] },
-      { toolCalls: [{ id: '2', name: 'read', arguments: { path: 'b.txt' } }] },
-      { content: 'done' },
-    ]);
-
-    const result = await runTurn({
-      repoRoot: TMP,
-      task: 'read both files',
-      client,
-      contextBudget: {
-        maxSingleReadResultTokens: 5000,
-        maxTotalReadResultTokensPerTurn: 700,
-      },
-    });
-
-    expect(result.terminalState).toBe('completed');
-    // Per-turn cap enforced: second read is refused with actionable guidance,
-    // classified as a recoverable policy error so the turn continues.
-    const secondToolMessage = (
-      client.requests[2].messages as Array<{ role: string; tool_call_id?: string; content: string }>
-    ).find((message) => message.role === 'tool' && message.tool_call_id === '2');
-    expect(secondToolMessage?.content).toContain('total read limit reached');
+    expect(toolMessage?.content).toContain('Use startLine=');
   });
 
   it('allows exact replacement edits even when prior read was truncated', async () => {

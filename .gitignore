@@ -38,3 +38,6 @@ benchmark-artifacts/
 # Claude AI agent artifacts
 .claude/
 .gitleaks-report.json
+
+# Brainstorming artifacts
+.superpowers/

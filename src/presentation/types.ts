@@ -100,6 +100,10 @@ export interface PresentationState {
    *  Not yet committed as a model_output block. Reset on each
    *  assistant_message or model_step_started. */
   streamingText: string;
+  /** Last raw content delta seen (for cumulative-delta detection). */
+  lastDeltaContent: string;
+  /** Last raw reasoning delta seen (for cumulative-delta detection). */
+  lastDeltaReasoning: string;
   /** Memory decisions accumulated from memory retrieval events. */
   memoryDecisions: MemoryDecision[];
   /** Handoff packets accumulated from handoff events. */
@@ -131,6 +135,8 @@ export function createInitialPresentationState(): PresentationState {
   return {
     blocks: [],
     streamingText: '',
+    lastDeltaContent: '',
+    lastDeltaReasoning: '',
     memoryDecisions: [],
     handoffPackets: [],
     agentPanes: [],

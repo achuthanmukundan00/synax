@@ -4,6 +4,7 @@ module.exports = {
   testEnvironment: 'node',
   rootDir: './src',
   testMatch: ['**/__tests__/**/*.test.ts'],
+  setupFiles: ['<rootDir>/__tests__/helpers/jest-home.ts'],
   transform: {
     '^.+\\.ts$': 'ts-jest',
   },

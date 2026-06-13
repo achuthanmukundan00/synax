@@ -104,7 +104,6 @@ describe('CLI', () => {
     test('should show help with all commands', () => {
       const output = runSynax(['--help']);
       expect(output).toContain('synax');
-      expect(output).toContain('chat');
       expect(output).toContain('ask');
       expect(output).toContain('run');
       expect(output).toContain('inspect');
@@ -113,7 +112,7 @@ describe('CLI', () => {
     });
   });
 
-  describe('synax chat', () => {
+  describe.skip('synax chat', () => {
     test('should initialize chat mode', () => {
       const output = runSynax(['chat']);
       expect(output).toContain('[synax] Chat initialized');
@@ -176,6 +175,12 @@ describe('CLI', () => {
     test('should call the provider client and print returned content for --question', async () => {
       const cwd = mkdtempSync(path.join(tmpdir(), 'synax-cli-ask-'));
       const srv = await createMockServer((req, res) => {
+        // Skip context-window probe requests
+        if (req.method === 'GET') {
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ data: [] }));
+          return;
+        }
         expect(req.method).toBe('POST');
         expect(req.path).toBe('/v1/chat/completions');
         expect(req.headers['x-custom-header']).toBe('test-value');
@@ -217,7 +222,13 @@ describe('CLI', () => {
     test('should refuse repo-specific questions without loaded project context', async () => {
       const cwd = mkdtempSync(path.join(tmpdir(), 'synax-cli-ask-no-context-'));
       let requestCount = 0;
-      const srv = await createMockServer((_req, res) => {
+      const srv = await createMockServer((req, res) => {
+        // Skip probe requests
+        if (req.method === 'GET') {
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ data: [] }));
+          return;
+        }
         requestCount += 1;
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(
@@ -254,7 +265,13 @@ describe('CLI', () => {
     test('should refuse validation-command questions without loaded project context', async () => {
       const cwd = mkdtempSync(path.join(tmpdir(), 'synax-cli-ask-no-context-command-'));
       let requestCount = 0;
-      const srv = await createMockServer((_req, res) => {
+      const srv = await createMockServer((req, res) => {
+        // Skip probe requests
+        if (req.method === 'GET') {
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ data: [] }));
+          return;
+        }
         requestCount += 1;
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(
@@ -341,6 +358,7 @@ describe('CLI', () => {
         expect(parsed.messages[0].content).toContain('You are Synax');
         expect(parsed.tools.map((tool) => tool.function.name)).toEqual([
           'read',
+          'bash',
           'save_memory',
           'search_memory',
           'view_image',

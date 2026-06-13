@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 import { Command } from 'commander';
-import { chatCommand } from './commands/chat.js';
+import { runChatTui } from './commands/chat.js';
 import { askCommand } from './commands/ask.js';
 import { runCommand } from './commands/run.js';
 import { runInspectCommand } from './commands/inspect.js';
@@ -20,17 +20,6 @@ program
     throw new Error(`Invalid log level: ${value}. Must be one of: trace, debug, info, warn, error`);
   });
 
-// Default command: shows help
-program
-  .command('synax')
-  .description('Show help information about Synax CLI')
-  .action(() => {
-    process.stdout.write(program.helpInformation());
-  });
-
-// Chat command
-chatCommand(program);
-
 // Ask command
 askCommand(program);
 
@@ -43,7 +32,7 @@ runConfigCommand(program);
 // Doctor command
 doctorCommand(program);
 
-// Inspect command (options registered in runInspectCommand)
+// Inspect command
 runInspectCommand(program);
 
 // Set global log level from CLI option before any command runs.
@@ -65,11 +54,10 @@ if (process.argv[2] === '__liminal__') {
       process.exit(1);
     });
   // don't let commander parse this
+} else if (process.argv.length === 2) {
+  // No subcommand — launch the interactive TUI directly.
+  runChatTui();
 } else {
-  if (process.argv.length === 2) {
-    process.argv.push('chat');
-  }
-
-  // Parse command line arguments
+  // Parse command line arguments for subcommands.
   void program.parseAsync(process.argv);
 }

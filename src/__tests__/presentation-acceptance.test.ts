@@ -82,6 +82,8 @@ function richState(): PresentationState {
       { kind: 'debug_detail', tag: 'lifecycle', text: 'session started' },
     ],
     streamingText: '',
+    lastDeltaContent: '',
+    lastDeltaReasoning: '',
     agentPanes: [
       { id: 'agent-1', role: 'scout', model: 'qwen-7b', phase: 'completed', lastAction: 'done', finding: 'ok' },
       { id: 'agent-2', role: 'fixer', model: 'qwen-7b', phase: 'active', lastAction: 'editing' },

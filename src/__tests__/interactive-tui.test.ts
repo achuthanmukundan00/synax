@@ -1,14 +1,15 @@
 import { createChatSession, shouldUseInteractiveTui } from '../commands/chat';
 import { applyEventToRunState, createInitialRunStateSnapshot } from '../agent/tui-state';
-import { resolveCoreVisualProfile } from '../tui/core-visual-profile';
-import { CORE_HEIGHT, CORE_WIDTH, modeColor, renderAiCore, renderDottedCore } from '../tui/ai-core';
 import { renderAnsiTokenStreamFrame, tokenStreamFrameText } from '../tui/token-stream';
 import { createInputParser, parseInputChunk } from '../tui/input';
 import { renderSettings } from '../settings/settings-renderer';
 import { createSettingsState, settingsReducer } from '../settings/settings-state';
-import { classifyAgentEvent, semanticEventsFromDebugHistory } from '../tui/semantic-events';
 import {
-  latestExpandableEventId,
+  classifyAgentEvent,
+  semanticEventsFromDebugHistory,
+  semanticEventsFromSessionEvents,
+} from '../tui/semantic-events';
+import {
   activityLineActive,
   computeOrchestrationStepText,
   movePromptCursorVertically,
@@ -17,7 +18,7 @@ import {
   shouldHideCompletionResultCard,
   slashAutocompleteItems,
 } from '../tui/interactive-tui';
-import { setPromptValue } from '../tui/key-handlers';
+import { setPromptValue, latestExpandableEventId } from '../tui/key-handlers';
 import {
   formatEventCrown,
   promptInputHeight,
@@ -117,8 +118,38 @@ describe('interactive tui wiring', () => {
   });
 });
 
+describe('resumed session transcript', () => {
+  it('rebuilds prompt, result, and tool cards from persisted session events in order', () => {
+    const events = semanticEventsFromSessionEvents(
+      [
+        { type: 'user_message', at: '2026-06-12T00:00:00.000Z', content: 'fix the failing test' },
+        { type: 'tool_call', at: '2026-06-12T00:00:01.000Z', name: 'read', args: { path: 'src/a.ts' } },
+        { type: 'tool_result', at: '2026-06-12T00:00:02.000Z', result: 'file contents' },
+        { type: 'assistant_message', at: '2026-06-12T00:00:03.000Z', content: 'Fixed the test.' },
+        { type: 'state_snapshot', at: '2026-06-12T00:00:04.000Z', snapshot: {} },
+      ],
+      'qwen-local',
+    );
+
+    expect(events.map((e) => e.class)).toEqual(['prompt', 'command', 'tool_result']);
+    expect(events[0]?.artifact).toEqual(expect.objectContaining({ type: 'text', body: 'fix the failing test' }));
+    expect(events[1]?.metadata.toolName).toBe('read');
+    expect(events[2]?.artifact).toEqual(expect.objectContaining({ body: 'Fixed the test.' }));
+    expect(events.every((e) => e.metadata.model === 'qwen-local')).toBe(true);
+  });
+
+  it('skips empty messages and keeps stable resumed ids', () => {
+    const events = semanticEventsFromSessionEvents([
+      { type: 'user_message', at: '2026-06-12T00:00:00.000Z', content: '' },
+      { type: 'assistant_message', at: '2026-06-12T00:00:01.000Z', content: 'hello' },
+    ]);
+    expect(events).toHaveLength(1);
+    expect(events[0]?.id).toBe('resumed-1');
+  });
+});
+
 describe('OpenTUI startup layout', () => {
-  it('keeps the initial empty session compact instead of filling the terminal', () => {
+  it('uses the full flexible layout for the initial empty session', () => {
     const core = createFakeOpenTuiCore();
     const root = renderArtifactRoot(
       core,
@@ -140,8 +171,10 @@ describe('OpenTUI startup layout', () => {
       100,
     ) as unknown as FakeOpenTuiNode;
 
-    expect(root.props.height).toBe(33);
-    expect(root.children[0].props.height).toBe(26);
+    // Always uses full flexible layout so splash→transcript transitions
+    // are handled incrementally without a full tree rebuild.
+    expect(root.props.height).toBe('100%');
+    expect(root.children[0].props.flexGrow).toBe(1);
     expect(findNodeById(root, 'synax-input-frame')?.props.height).toBe(3);
     expect(findNodeById(root, 'synax-location')).toBeUndefined();
   });
@@ -250,8 +283,6 @@ describe('OpenTUI startup layout', () => {
       undefined,
       undefined,
       undefined,
-      undefined,
-      undefined,
       'qwen3-local',
       40,
     ) as unknown as FakeOpenTuiNode;
@@ -287,8 +318,6 @@ describe('OpenTUI startup layout', () => {
       100,
       undefined,
       undefined,
-      undefined,
-      undefined,
       ['┌ Settings ┐', '│ Model    │', '└ Esc close┘'],
       undefined,
       undefined,
@@ -306,11 +335,10 @@ describe('OpenTUI startup layout', () => {
     expect(overlay?.props.zIndex).toBe(100);
     expect(backingRows).toHaveLength(37);
     expect(backingRows.every((node) => node.type === 'Box' && node.props.width === '100%')).toBe(true);
-    // The settings overlay must use the app background, not the lighter
-    // surface color — a solid grey full-screen block clashes with the TUI.
-    const palette = getPalette();
-    expect(overlay?.props.backgroundColor).toBe(palette.background);
-    expect(backingRows.every((node) => node.props.backgroundColor === palette.background)).toBe(true);
+    // The settings overlay no longer sets a solid background — the terminal
+    // theme shows through the transparent canvas.
+    expect(overlay?.props.backgroundColor).toBeUndefined();
+    expect(backingRows.every((node) => node.props.backgroundColor === undefined)).toBe(true);
   });
 
   it('renders the autocomplete dropdown with a solid background so the transcript does not bleed through', () => {
@@ -338,8 +366,6 @@ describe('OpenTUI startup layout', () => {
         hints: 'Enter send',
       },
       100,
-      undefined,
-      undefined,
       undefined,
       { visible: true, items: ['/help'], selectedIndex: 0 },
       undefined,
@@ -374,8 +400,6 @@ describe('OpenTUI startup layout', () => {
         hints: 'Ctrl+D quit',
       },
       100,
-      undefined,
-      undefined,
       undefined,
       undefined,
       undefined,
@@ -456,18 +480,13 @@ describe('OpenTUI startup layout', () => {
   it('shows full tool results without truncation', () => {
     const core = createFakeOpenTuiCore();
     const body = Array.from({ length: 80 }, (_, index) => `line ${index + 1}`).join('\n');
-    const card = renderArtifactCard(
-      core,
-      {
-        id: 'result-long',
-        class: 'tool_result',
-        timestamp: '2026-05-16T00:00:00.000Z',
-        artifact: { type: 'text', title: 'Result', body },
-        metadata: {},
-      } as any,
-      false,
-      jest.fn(),
-    ) as unknown as FakeOpenTuiNode;
+    const card = renderArtifactCard(core, {
+      id: 'result-long',
+      class: 'tool_result',
+      timestamp: '2026-05-16T00:00:00.000Z',
+      artifact: { type: 'text', title: 'Result', body },
+      metadata: {},
+    } as any) as unknown as FakeOpenTuiNode;
 
     const text = collectTextContent(card).join('\n');
     // All 80 lines are visible — no truncation.
@@ -480,18 +499,13 @@ describe('OpenTUI startup layout', () => {
   it('shows full tool result identically when expanded', () => {
     const core = createFakeOpenTuiCore();
     const body = Array.from({ length: 80 }, (_, index) => `line ${index + 1}`).join('\n');
-    const card = renderArtifactCard(
-      core,
-      {
-        id: 'result-expanded',
-        class: 'tool_result',
-        timestamp: '2026-05-16T00:00:00.000Z',
-        artifact: { type: 'text', title: 'Result', body },
-        metadata: {},
-      } as any,
-      true,
-      jest.fn(),
-    ) as unknown as FakeOpenTuiNode;
+    const card = renderArtifactCard(core, {
+      id: 'result-expanded',
+      class: 'tool_result',
+      timestamp: '2026-05-16T00:00:00.000Z',
+      artifact: { type: 'text', title: 'Result', body },
+      metadata: {},
+    } as any) as unknown as FakeOpenTuiNode;
 
     const text = collectTextContent(card).join('\n');
     expect(text).toContain('line 1');
@@ -838,6 +852,36 @@ describe('OpenTUI polish helpers', () => {
     expect(promptInputHeight('y'.repeat(25), 30)).toBe(2);
   });
 
+  it('keeps the splash card within narrow terminals and ellipsizes long model names', () => {
+    const core = createFakeOpenTuiCore();
+    const root = renderArtifactRoot(
+      core,
+      [],
+      {
+        model: 'Qwen3.6-35B-A3B-UD-IQ3_XXS.gguf',
+        filesTouched: [],
+        uptimeLabel: '0:00',
+        provider: 'Relay',
+        branch: 'main',
+      },
+      {
+        status: 'Ready.',
+        prompt: '',
+        placeholder: 'Ask Synax...',
+        hints: 'Enter send',
+      },
+      30,
+    ) as unknown as FakeOpenTuiNode;
+
+    const splash = findNodeById(root, 'synax-empty-state');
+    expect(splash).toBeDefined();
+    expect(splash?.props.width as number).toBeLessThanOrEqual(28);
+    const texts = collectTextContent(splash!);
+    // Long GGUF filename is middle-ellipsized instead of overflowing.
+    expect(texts.some((t) => t.includes('…'))).toBe(true);
+    expect(texts.every((t) => t.length <= 30)).toBe(true);
+  });
+
   it('renders an AI morphology splash fallback instead of plain text only', () => {
     const logo = renderSplashLogo(2, { color: false });
     const plain = logo.join('\n');
@@ -903,7 +947,8 @@ describe('OpenTUI polish helpers', () => {
   it('detects common light terminal backgrounds when theme query is unavailable', () => {
     expect(detectColorFgBgTheme('0;15')).toBe('light');
     expect(detectColorFgBgTheme('15;0')).toBe('dark');
-    expect(getPalette('light').text).toBe('#1a1a1a');
+    // When no matching theme is found, getPalette falls back to mono
+    expect(getPalette('light').name).toBe('mono');
   });
 });
 
@@ -923,170 +968,8 @@ describe('settings renderer', () => {
 
     expect(plain).toContain('Tab tabs');
     expect(plain).not.toContain('←/→ tabs');
-    expect(plain).toContain('Settings  Model | Providers | Skills | MCP | Config | Help');
+    expect(plain).toContain('Settings  Model | Providers | Skills | Config | Help');
     expect(renderSettings(state, 100, 24).join('\n')).toContain('\u001b[7m Model \u001b[0m');
-  });
-});
-
-describe('ai core renderer', () => {
-  it('resolves model-aware core visual profiles from model IDs only', () => {
-    expect(resolveCoreVisualProfile('Qwen3.6-35B-A3B-UD-IQ3_XXS.gguf').id).toBe('qwen');
-    expect(resolveCoreVisualProfile('gpt-5.5-thinking').id).toBe('openai');
-    expect(resolveCoreVisualProfile('OPENAI/local-compatible').id).toBe('openai');
-    expect(resolveCoreVisualProfile('frontier-sonnet-4.5').id).toBe('frontier');
-    expect(resolveCoreVisualProfile('deepseekv4-pro').id).toBe('deepseek');
-    expect(resolveCoreVisualProfile('gemini-2.5-pro').id).toBe('gemini');
-    expect(resolveCoreVisualProfile('local-unknown-model.gguf').id).toBe('default');
-    expect(resolveCoreVisualProfile('qwen3-local').geometry).toBe('lattice');
-    expect(resolveCoreVisualProfile('qwen3-local').motion.phaseStyle).toBe('snap');
-    expect(resolveCoreVisualProfile('deepseek-r1').motion.scanStyle).toBe('beam');
-  });
-
-  it('renders distinct inner morphology for qwen, frontier, and default profiles in the same state', () => {
-    const base = { mode: 'thinking' as const, frame: 8, width: 24, height: 9, unicode: true };
-    const qwen = renderDottedCore({ ...base, profile: resolveCoreVisualProfile('qwen3-local') })
-      .map(stripAnsi)
-      .join('\n');
-    const frontier = renderDottedCore({ ...base, profile: resolveCoreVisualProfile('frontier-sonnet-4.5') })
-      .map(stripAnsi)
-      .join('\n');
-    const fallback = renderDottedCore({ ...base, profile: resolveCoreVisualProfile('unknown-local') })
-      .map(stripAnsi)
-      .join('\n');
-
-    expect(qwen).not.toEqual(frontier);
-    expect(qwen).not.toEqual(fallback);
-    expect(frontier).not.toEqual(fallback);
-    expect(qwen).toMatch(/[╱╲]/);
-    expect(frontier).toMatch(/[◎◉]/);
-    expect(fallback).toMatch(/[●◎]/);
-  });
-
-  it('renders a stable inner containment chamber across model profiles', () => {
-    const base = { mode: 'idle' as const, frame: 4, width: 24, height: 9, unicode: true };
-    const openai = renderDottedCore({ ...base, profile: resolveCoreVisualProfile('gpt-5') })
-      .map(stripAnsi)
-      .join('\n');
-    const frontier = renderDottedCore({ ...base, profile: resolveCoreVisualProfile('frontier-sonnet-4.5') })
-      .map(stripAnsi)
-      .join('\n');
-
-    for (const rendered of [openai, frontier]) {
-      expect(rendered).toMatch(/[╭╮╰╯]/);
-      expect(rendered).toMatch(/[─│]/);
-    }
-
-    expect(openai).not.toEqual(frontier);
-    expect(openai).not.toMatch(/[╱╲]/);
-    expect(frontier).toMatch(/[◎◉]/);
-  });
-
-  it('renders prominent model-specific morphology signatures', () => {
-    const base = { mode: 'thinking' as const, frame: 8, width: 26, height: 9, unicode: true };
-    const profiles = {
-      qwen: renderDottedCore({ ...base, profile: resolveCoreVisualProfile('qwen3-local') })
-        .map(stripAnsi)
-        .join('\n'),
-      openai: renderDottedCore({ ...base, profile: resolveCoreVisualProfile('gpt-5') })
-        .map(stripAnsi)
-        .join('\n'),
-      frontier: renderDottedCore({ ...base, profile: resolveCoreVisualProfile('frontier-sonnet-4.5') })
-        .map(stripAnsi)
-        .join('\n'),
-      deepseek: renderDottedCore({ ...base, profile: resolveCoreVisualProfile('deepseek-v4') })
-        .map(stripAnsi)
-        .join('\n'),
-      gemini: renderDottedCore({ ...base, profile: resolveCoreVisualProfile('gemini-2.5-pro') })
-        .map(stripAnsi)
-        .join('\n'),
-    };
-
-    expect(new Set(Object.values(profiles)).size).toBe(Object.values(profiles).length);
-    expect(profiles.qwen).toMatch(/[╱╲]/);
-    expect(profiles.openai).toMatch(/[◎●]/);
-    expect(profiles.openai).not.toMatch(/[╱╲]/);
-    expect(profiles.frontier).toMatch(/[◎◉]/);
-    expect(profiles.deepseek).toMatch(/[═━◎◉]/);
-    expect(profiles.gemini).toMatch(/●[\s\S]*●/);
-    expect(profiles.gemini).toMatch(/│/);
-  });
-
-  it('renders an unboxed containment field with consistent footprint', () => {
-    const idle = renderAiCore('idle', 0);
-    const thinking = renderAiCore('thinking', 0.25);
-    const tool = renderAiCore('tool_execution', 0.4);
-    const verifying = renderAiCore('verifying', 0.5);
-    const failure = renderAiCore('failure', 0.75);
-
-    expect(CORE_WIDTH).toBeGreaterThanOrEqual(24);
-    expect(CORE_WIDTH).toBeLessThanOrEqual(34);
-    expect(CORE_HEIGHT).toBeGreaterThanOrEqual(10);
-    expect(CORE_HEIGHT).toBeLessThanOrEqual(14);
-
-    expect(idle).toHaveLength(CORE_HEIGHT);
-    expect(idle.every((line) => stripAnsi(line).length === CORE_WIDTH)).toBe(true);
-    expect(thinking.every((line) => stripAnsi(line).length === CORE_WIDTH)).toBe(true);
-    expect(tool.every((line) => stripAnsi(line).length === CORE_WIDTH)).toBe(true);
-    expect(verifying.every((line) => stripAnsi(line).length === CORE_WIDTH)).toBe(true);
-    expect(failure.every((line) => stripAnsi(line).length === CORE_WIDTH)).toBe(true);
-
-    expect(stripAnsi(idle[0])).not.toMatch(/^┌─+┐$/);
-    expect(stripAnsi(idle[idle.length - 1])).not.toMatch(/^└─+┘$/);
-    expect(stripAnsi(idle.join('\n'))).toMatch(/[.·●◎╱╲─│]/);
-    expect(idle.join('\n')).toContain('\u001b[38;2;');
-
-    expect(thinking.join('\n')).not.toEqual(idle.join('\n'));
-    expect(stripAnsi(tool.join('\n'))).toMatch(/[═◎◉]/);
-    expect(stripAnsi(verifying.join('\n'))).toMatch(/[━]/);
-    expect(stripAnsi(failure.join('\n'))).toMatch(/[×]/);
-  });
-
-  it('keeps material state color selection stable', () => {
-    expect(modeColor('blocked')).toBe('\u001b[33m');
-    expect(modeColor('failure')).toBe('\u001b[31m');
-    expect(modeColor('verifying')).toBe('\u001b[34m');
-    expect(modeColor('completed')).toBe('\u001b[32m');
-    expect(modeColor('planning')).toBe('\u001b[34m');
-  });
-
-  it('keeps normal running work out of warning amber', () => {
-    const runningModes = ['tool_execution', 'bash', 'verifying'] as const;
-
-    for (const mode of runningModes) {
-      const colors = extractTrueColors(renderAiCore(mode, 0.4).join(''));
-      expect(colors.some(isWarningAmber)).toBe(false);
-    }
-
-    expect(extractTrueColors(renderAiCore('blocked', 0.4).join('')).some(isWarningAmber)).toBe(true);
-  });
-
-  it('uses restrained truecolor inside the containment field', () => {
-    const core = renderAiCore('thinking', 1).join('');
-    // eslint-disable-next-line no-control-regex
-    const colors = Array.from(core.matchAll(/\u001b\[38;2;(\d+);(\d+);(\d+)m/g));
-
-    expect(colors.length).toBeGreaterThan(6);
-    expect(core).not.toContain('\u001b[35m');
-    expect(core).not.toContain('\u001b[36m\u001b[33m');
-  });
-
-  it('changes deterministic animation frames over time', () => {
-    const first = renderAiCore('thinking', 1).map(stripAnsi);
-    const second = renderAiCore('thinking', 1.5).map(stripAnsi);
-
-    expect(second).not.toEqual(first);
-    expect(second).toHaveLength(first.length);
-    expect(second.every((line) => line.length === CORE_WIDTH)).toBe(true);
-  });
-
-  it('falls back to ascii-safe dotted marks', () => {
-    const fallback = renderDottedCore({ mode: 'thinking', frame: 3, width: 18, height: 8, unicode: false });
-    const plain = fallback.map(stripAnsi).join('');
-
-    expect(fallback).toHaveLength(8);
-    expect(fallback.every((line) => stripAnsi(line).length === 18)).toBe(true);
-    expect(plain).toMatch(/[.ox]/);
-    expect(plain).not.toMatch(/[·•×]/);
   });
 });
 
@@ -1365,19 +1248,6 @@ function stripAnsi(input: string): string {
   return input.replace(/\u001b\[[0-9;]*m/g, '');
 }
 
-function extractTrueColors(input: string): Array<{ r: number; g: number; b: number }> {
-  // eslint-disable-next-line no-control-regex
-  return Array.from(input.matchAll(/\u001b\[38;2;(\d+);(\d+);(\d+)m/g), ([, r, g, b]) => ({
-    r: Number(r),
-    g: Number(g),
-    b: Number(b),
-  }));
-}
-
-function isWarningAmber(color: { r: number; g: number; b: number }): boolean {
-  return color.r >= 150 && color.g >= 95 && color.g > color.b * 1.35 && color.r > color.b * 2;
-}
-
 describe('dispatch card conciseness', () => {
   it('orchestration_plan_generated returns no visible card', () => {
     const state = createInitialRunStateSnapshot(0);
@@ -1526,9 +1396,9 @@ describe('subagent result card visual semantics', () => {
     } as Parameters<typeof renderArtifactCard>[1];
     const card = renderArtifactCard(core, event) as unknown as FakeOpenTuiNode;
 
-    // The completed agent_status card uses pal.info (#8be9fd cyan) not pal.success (#00ff87 green)
+    // The completed agent_status card uses pal.info (#888888 muted) not pal.success (#7ec87e green)
     const colorBar = card.children[0] as FakeOpenTuiNode;
-    expect(colorBar.props.backgroundColor).toBe('#8be9fd');
+    expect(colorBar.props.backgroundColor).toBe('#888888');
     // Card crown header shows the subagent name, not generic "Result"
     const cardBody = card.children[1] as FakeOpenTuiNode;
     const crown = cardBody.children[0] as FakeOpenTuiNode;
@@ -1549,9 +1419,9 @@ describe('subagent result card visual semantics', () => {
     } as Parameters<typeof renderArtifactCard>[1];
     const card = renderArtifactCard(core, event) as unknown as FakeOpenTuiNode;
 
-    // The final result card uses pal.success (#00ff87 green)
+    // The final result card uses pal.success (#7ec87e green)
     const colorBar = card.children[0] as FakeOpenTuiNode;
-    expect(colorBar.props.backgroundColor).toBe('#00ff87');
+    expect(colorBar.props.backgroundColor).toBe('#7ec87e');
   });
 
   it('failed agent_status card uses error/red color', () => {
@@ -1565,9 +1435,9 @@ describe('subagent result card visual semantics', () => {
     } as Parameters<typeof renderArtifactCard>[1];
     const card = renderArtifactCard(core, event) as unknown as FakeOpenTuiNode;
 
-    // Failed agent_status uses pal.error (#ff5555 red)
+    // Failed agent_status uses pal.error (#cc6666 muted red)
     const colorBar = card.children[0] as FakeOpenTuiNode;
-    expect(colorBar.props.backgroundColor).toBe('#ff5555');
+    expect(colorBar.props.backgroundColor).toBe('#cc6666');
   });
 });
 

@@ -2,24 +2,21 @@ import type { TuiPalette } from './theme';
 import { getPalette } from './theme';
 import type { ArtifactPayload, RiskLevel, SemanticEvent, SemanticEventClass } from './semantic-events';
 import { tuiStats } from './telemetry';
-import { renderAiCore } from './ai-core';
 import pkg from '../../package.json';
 
 const VERSION = pkg.version;
-import { resolveCoreVisualProfile } from './core-visual-profile';
-import { visibleLength } from './text-utils';
+import { visibleLength, wordWrapLines } from './text-utils';
 import type { ModelPalette } from './model-palette';
 import { getModelPalette } from './model-palette';
 import { stripToolCallMarkup } from './markup-sanitizer';
 import {
-  HUNK_PREVIEW_LINES,
-  TOOL_PREVIEW_LINES,
   PERSISTENT_STATUS_CARD_ID,
   ACTIVITY_LINE_ID,
   ACTIVITY_GLYPH_ID,
   ACTIVITY_TEXT_ID,
   AUTOCOMPLETE_MAX_ROWS,
 } from './tui-constants';
+import { tokenStreamFrameText } from './token-stream';
 
 type OpenTuiCore = typeof import('@opentui/core');
 type OpenTuiNode =
@@ -113,8 +110,6 @@ export interface AutocompleteState {
   maxVisibleItems?: number;
 }
 
-export type ExpandedState = Record<string, boolean>;
-
 export interface SplashOptions {
   frame: number;
   color?: boolean;
@@ -178,8 +173,6 @@ export function renderArtifactRoot(
   rail: ArtifactRailState,
   footer: FooterState,
   terminalWidth: number,
-  expanded?: ExpandedState,
-  onToggleExpand?: (id: string) => void,
   palette?: TuiPalette,
   autocomplete?: AutocompleteState,
   settingsLines?: string[],
@@ -193,8 +186,24 @@ export function renderArtifactRoot(
 ): OpenTuiNode {
   const pal = palette ?? getPalette();
   const modelPal = modelId ? getModelPalette(modelId) : getModelPalette('');
-  const compactStartup =
-    events.length === 0 && (!settingsLines || settingsLines.length === 0) && footer.status === 'Ready.';
+  const inputHeightEarly = footer.inputHeight ?? promptInputHeight(footer.prompt);
+  // Pre-wrap slash-info lines so the physical row count matches footer layout
+  // height exactly (previously the height counted logical lines while
+  // Text wrapMode produced more visual rows, causing overlap and garbled text).
+  const wrapWidth = typeof terminalWidth === 'number' ? Math.max(1, terminalWidth - 2) : undefined;
+  const wrappedInfoLines: string[] = [];
+  if (infoLines) {
+    for (const line of infoLines.slice(0, 14)) {
+      const parts = wrapWidth ? wordWrapLines(line, wrapWidth) : [line];
+      wrappedInfoLines.push(...parts);
+    }
+  }
+  const infoRowCount = Math.min(wrappedInfoLines.length, 14);
+  const footerHeightEarly = footerLayoutHeight(footer, infoRowCount);
+
+  // Always use the full flexible layout so splash→transcript transitions
+  // are handled incrementally by the feed model, avoiding a full tree
+  // destroy+rebuild that causes visible flicker.
 
   // Keep the session start info as the first transcript card so you can
   // scroll up and see what model, workspace, and Synax version you started
@@ -203,17 +212,12 @@ export function renderArtifactRoot(
 
   const mainChildren =
     events.length > 0
-      ? [
-          ...sessionHeaderCard,
-          ...events.map((event) => renderArtifactCard(core, event, expanded?.[event.id] ?? false, onToggleExpand, pal)),
-        ]
-      : [renderEmptyState(core, rail, terminalWidth, footer, pal, splash, modelPal, modelId)];
-  const inputHeight = footer.inputHeight ?? promptInputHeight(footer.prompt);
+      ? [...sessionHeaderCard, ...events.map((event) => renderArtifactCard(core, event, pal))]
+      : [renderEmptyState(core, rail, terminalWidth, terminalHeight, footer, pal, splash, modelPal, modelId)];
+  const inputHeight = inputHeightEarly;
   const inputFrameHeight = inputHeight + 2;
-  const footerHeight = footerLayoutHeight(footer, infoLines?.length ?? 0);
-  const activityHeight = 1;
-  const emptyStateHeight = compactEmptyStateHeight(rail);
-  const rootHeight = compactStartup ? emptyStateHeight + activityHeight + footerHeight : (terminalHeight ?? '100%');
+  const footerHeight = footerHeightEarly;
+  const rootHeight = terminalHeight ?? '100%';
   const input = core.h(core.TextareaRenderable, {
     id: 'synax-input',
     initialValue: footer.prompt,
@@ -228,7 +232,7 @@ export function renderArtifactRoot(
     focusedBackgroundColor: pal.surface,
     focusedTextColor: pal.text,
     placeholderColor: pal.textAccent,
-    cursorStyle: { style: 'line', blinking: true },
+    cursorStyle: { style: 'block', blinking: false },
     keyBindings: [
       { name: 'return', shift: true, action: 'newline' },
       { name: 'linefeed', shift: true, action: 'newline' },
@@ -248,21 +252,22 @@ export function renderArtifactRoot(
       height: rootHeight,
       flexDirection: 'column',
       overflow: 'hidden',
-      backgroundColor: pal.background,
     },
     core.Box(
-      compactStartup
-        ? { height: emptyStateHeight, flexDirection: 'row', minHeight: 1, overflow: 'hidden' }
-        : { flexGrow: 1, flexDirection: 'row', minHeight: 1, overflow: 'hidden' },
+      { flexGrow: 1, flexDirection: 'row', minHeight: 1, overflow: 'hidden' },
       core.ScrollBox(
         {
           id: 'synax-artifacts',
-          ...(compactStartup ? { height: emptyStateHeight } : { flexGrow: 1 }),
+          flexGrow: 1,
           overflow: 'hidden',
           viewportCulling: true,
           stickyScroll: true,
           stickyStart: 'bottom',
           padding: 1,
+          // Hide the vertical scrollbar — with stickyScroll locked to
+          // the bottom, a scrollbar is just visual noise. At worst it
+          // paints block-char columns over the right edge of result cards.
+          verticalScrollbarOptions: { visible: false } as Record<string, unknown>,
         },
         ...mainChildren,
       ),
@@ -277,28 +282,27 @@ export function renderArtifactRoot(
         paddingX: 1,
         paddingY: 0,
         visible: true,
-        backgroundColor: pal.background,
       },
       core.Text({ id: ACTIVITY_GLYPH_ID, content: '', width: 11 }),
       core.Text({ id: ACTIVITY_TEXT_ID, content: 'Ready.', fg: pal.textAccent }),
     ),
     ...(settingsLines && settingsLines.length > 0
-      ? [renderSettingsOverlay(core, settingsLines, pal, settingsActiveLabel, terminalHeight)]
+      ? [renderSettingsOverlay(core, settingsLines, pal, settingsActiveLabel, terminalHeight, terminalWidth)]
       : []),
     renderAutocompleteOverlay(core, autocomplete, pal, footerHeight),
     core.Box(
       {
         id: 'synax-footer',
         width: '100%',
+        height: footerHeightEarly,
         flexDirection: 'column',
         border: ['top'],
         borderColor: pal.border,
-        backgroundColor: pal.background,
         overflow: 'hidden',
         zIndex: 20,
         paddingX: 1,
       },
-      ...(infoLines && infoLines.length > 0 ? [renderSlashInfoPanel(core, infoLines, pal)] : []),
+      ...(wrappedInfoLines.length > 0 ? [renderSlashInfoPanel(core, wrappedInfoLines, pal)] : []),
       core.Box(
         {
           id: 'synax-input-frame',
@@ -325,6 +329,7 @@ function renderSettingsOverlay(
   palette: TuiPalette,
   activeLabel?: string,
   terminalHeight?: number,
+  terminalWidth?: number,
 ): OpenTuiNode {
   const overlayHeight = terminalHeight ?? '100%';
   const backingLineCount = typeof terminalHeight === 'number' ? Math.max(0, terminalHeight - lines.length) : 0;
@@ -341,7 +346,6 @@ function renderSettingsOverlay(
       left: 0,
       zIndex: 100,
       flexDirection: 'column',
-      backgroundColor: palette.background,
     },
     ...lines.map((line, index) =>
       core.Box(
@@ -349,33 +353,58 @@ function renderSettingsOverlay(
           id: `synax-settings-row-${index}`,
           width: '100%',
           height: 1,
-          backgroundColor: palette.background,
         },
         core.Text({
           id: `synax-settings-line-${index}`,
-          content:
-            index === 1 && activeLabel
-              ? styledActiveSettingsLine(core, line, activeLabel, palette)
-              : solidBgLine(core, line, palette),
+          content: settingsOverlayLineContent(core, line, index, activeLabel, palette, terminalWidth),
           fg: palette.text,
         }),
       ),
     ),
     ...Array.from({ length: backingLineCount }, (_, index) =>
-      core.Box({
-        id: `synax-settings-backdrop-${index}`,
-        width: '100%',
-        height: 1,
-        backgroundColor: palette.background,
-      }),
+      core.Box(
+        {
+          id: `synax-settings-backdrop-${index}`,
+          width: '100%',
+          height: 1,
+        },
+        // Solid app-background fill so the transcript behind the overlay
+        // does not bleed through below the modal frame.
+        core.Text({
+          content: solidBgLine(core, ' '.repeat(Math.max(0, terminalWidth ?? 0)), palette),
+          fg: palette.text,
+        }),
+      ),
     ),
   );
 }
 
+/**
+ * Styled content for one settings/resume overlay line. Pads the line to the
+ * full terminal width so the solid background fill covers the whole row —
+ * otherwise the transcript behind the overlay bleeds through to the right
+ * of the modal frame. Exported so the live render path can update overlay
+ * lines in place (no full tree rebuild, no flicker) during navigation.
+ */
+export function settingsOverlayLineContent(
+  core: OpenTuiCore,
+  line: string,
+  index: number,
+  activeLabel: string | undefined,
+  palette: TuiPalette,
+  terminalWidth?: number,
+): string | InstanceType<(typeof import('@opentui/core'))['StyledText']> {
+  const padded =
+    typeof terminalWidth === 'number' && terminalWidth > line.length
+      ? line + ' '.repeat(terminalWidth - line.length)
+      : line;
+  return index === 1 && activeLabel
+    ? styledActiveSettingsLine(core, padded, activeLabel, palette)
+    : solidBgLine(core, padded, palette);
+}
+
 /** Render slash-command info as a panel inside the footer, above the input. */
 function renderSlashInfoPanel(core: OpenTuiCore, lines: string[], palette: TuiPalette): OpenTuiNode {
-  const maxLines = Math.min(lines.length, 14);
-  const displayed = lines.slice(0, maxLines);
   return core.Box(
     {
       id: 'synax-slash-info',
@@ -387,13 +416,14 @@ function renderSlashInfoPanel(core: OpenTuiCore, lines: string[], palette: TuiPa
       paddingY: 0,
       marginBottom: 0,
     },
-    ...displayed.map((line) =>
-      core.Text({
-        content: line || ' ',
-        fg: palette.textAccent,
-        wrapMode: 'word',
-      }),
-    ),
+    ...lines.map((line) => {
+      // Solid surface-fill background behind every character cell so the
+      // ScrollBox content doesn't bleed through transparent space cells.
+      const styled = line
+        ? new core.StyledText([core.bg(palette.surface)(core.fg(palette.textAccent)(line))] as any)
+        : ' ';
+      return core.Text({ content: styled as any, fg: palette.textAccent });
+    }),
   );
 }
 
@@ -493,13 +523,7 @@ function plainInlineMarkdown(text: string): string {
     .replace(/_([^_\n]+)_/g, '$1');
 }
 
-export function renderArtifactCard(
-  core: OpenTuiCore,
-  event: SemanticEvent,
-  expanded = false,
-  onToggleExpand?: (id: string) => void,
-  palette?: TuiPalette,
-): OpenTuiNode {
+export function renderArtifactCard(core: OpenTuiCore, event: SemanticEvent, palette?: TuiPalette): OpenTuiNode {
   // Route the persistent status card to a special compact renderer
   if (event.id === PERSISTENT_STATUS_CARD_ID) {
     return renderPersistentStatusCard(core, event, palette);
@@ -516,7 +540,7 @@ export function renderArtifactCard(
   }
 
   if (event.class === 'thinking') {
-    return renderThinkingCard(core, event, expanded, onToggleExpand, palette);
+    return renderThinkingCard(core, event, palette);
   }
 
   // Checkpoint — full-width visible divider
@@ -525,16 +549,11 @@ export function renderArtifactCard(
   }
 
   const pal = palette ?? getPalette();
-  const color = eventColor(event.class, pal);
-  const children = renderPayloadRows(
-    core,
-    event.artifact,
-    event.class,
-    expanded,
-    onToggleExpand ? () => onToggleExpand(event.id) : undefined,
-    event,
-    pal,
-  );
+  // Prompts are the user's anchor when scrolling a long transcript — use
+  // the bright brand color instead of the muted semantic grey so they
+  // stand out from thinking/result cards.
+  const color = event.class === 'prompt' ? pal.brand : eventColor(event.class, pal);
+  const children = renderPayloadRows(core, event.artifact, event.class, event, pal);
   tuiStats.recordCardRendered(children.length);
 
   // Determine if this should be a full bordered card or a compact row.
@@ -606,8 +625,6 @@ function renderPayloadRows(
   core: OpenTuiCore,
   payload: ArtifactPayload,
   eventClass: SemanticEventClass,
-  expanded = false,
-  onToggle?: () => void,
   event?: SemanticEvent,
   palette?: TuiPalette,
 ): OpenTuiNode[] {
@@ -623,7 +640,7 @@ function renderPayloadRows(
 
   // Render compact band for everything else.
   if (!useFullCard) {
-    const nodes = [renderCompactBand(core, payload, eventClass, pal, onToggle, expanded)];
+    const nodes = [renderCompactBand(core, payload, eventClass, pal)];
     // Shell commands carry stdout / stderr in the payload — surface it below the band.
     if (eventClass === 'command' && payload.type === 'command') {
       const output = [payload.stdout?.trimEnd(), payload.stderr?.trimEnd()].filter(Boolean).join('\n');
@@ -651,46 +668,19 @@ function renderPayloadRows(
     if (isDiagnosticTitle(payload.title)) {
       return renderDiagnosticCard(core, payload, eventClass, pal);
     }
-    // Skip inner title when it duplicates the card crown (crown already shows "Result")
     const titleRows: OpenTuiNode[] =
       payload.title !== 'Result' ? [core.Text({ ...FULL_WIDTH_TEXT, content: payload.title, fg: color })] : [];
     const resultLines = renderResultMarkdown(core, payload.body, pal);
-    const totalLines = resultLines.length;
-    const truncated = !expanded && totalLines > TOOL_PREVIEW_LINES && eventClass !== 'result_error';
-    if (truncated) {
-      return [
-        ...titleRows,
-        ...resultLines.slice(0, TOOL_PREVIEW_LINES),
-        core.Text({
-          ...FULL_WIDTH_TEXT,
-          content: `▸ ${totalLines - TOOL_PREVIEW_LINES} more lines (Enter to expand)`,
-          fg: pal.textAccent,
-        }),
-        ...(event ? [renderResultStats(core, event, pal)] : []),
-      ];
-    }
-    // Collapse hint when expanded and more lines exist
-    if (expanded && totalLines > TOOL_PREVIEW_LINES && eventClass !== 'result_error') {
-      return [
-        ...titleRows,
-        ...resultLines,
-        core.Text({
-          ...FULL_WIDTH_TEXT,
-          content: `▾ Collapse (Enter)`,
-          fg: pal.textAccent,
-        }),
-        ...(event ? [renderResultStats(core, event, pal)] : []),
-      ];
-    }
     return [...titleRows, ...resultLines, ...(event ? [renderResultStats(core, event, pal)] : [])];
   }
   if (eventClass === 'prompt' && payload.type === 'text') {
-    return textPayloadRows(core, payload.body, eventClass, expanded, pal);
+    return textPayloadRows(core, payload.body, eventClass, pal);
   }
+  // (prompt body brightness is handled inside textPayloadRows)
   // Error card: full bordered.
   return [
     core.Text({ ...FULL_WIDTH_TEXT, content: payload.title, fg: color }),
-    ...textPayloadRows(core, payload.body, eventClass, expanded, pal),
+    ...textPayloadRows(core, payload.body, eventClass, pal),
     ...(eventClass === 'error' ? [actionText(core, '[Retry] [Skip] [Show raw]', pal.textAccent)] : []),
   ];
 }
@@ -850,12 +840,13 @@ function renderResultTable(core: OpenTuiCore, rows: string[], palette: TuiPalett
 function textPayloadRows(
   core: OpenTuiCore,
   body: string,
-  _eventClass: SemanticEventClass,
-  _expanded: boolean,
+  eventClass: SemanticEventClass,
   palette: TuiPalette,
 ): OpenTuiNode[] {
   const lines = body.split('\n');
-  const fg = palette.textMuted;
+  // Prompt bodies render at full text brightness so the user's own words
+  // are the easiest thing to spot when scanning a giant transcript.
+  const fg = eventClass === 'prompt' ? palette.text : palette.textMuted;
   return lines.map((line) => core.Text({ ...FULL_WIDTH_TEXT, content: line, fg }));
 }
 
@@ -928,17 +919,32 @@ function renderSessionHeaderCard(
   modelPal?: ModelPalette,
   palette?: TuiPalette,
 ): OpenTuiNode {
-  void modelPal;
   const pal = palette ?? getPalette();
+  const mp = modelPal ?? getModelPalette(modelId ?? rail.model ?? '');
   const model = modelId ?? rail.model ?? 'local';
   const provider = rail.provider ?? '-';
   const cwd = rail.cwd ?? '~';
   const branch = rail.branch ?? '-';
-  const ctxPct = rail.contextLabel ?? '—';
   const versionLabel = `synax v${VERSION}`;
-  const title = `${GLYPHS.plan}  ${versionLabel} session`;
-  const color = pal.semantic.plan;
-  const lines = [`${model}  ·  ${provider}`, `workspace  ${cwd}`, `branch     ${branch}`, `context    ${ctxPct}`];
+  // Bold-white title with the model family's accent palette shimmering
+  // across the brand name (same palette as the splash screen).
+  const accents = mp.splashAccents;
+  const titleText = `${versionLabel}`;
+  let titleContent: string | unknown = titleText;
+  try {
+    const StyledText = (core as any).StyledText as new (chunks: unknown[]) => unknown;
+    const boldMod = (core as any).bold as () => (s: string) => unknown;
+    const chunks: unknown[] = [];
+    for (let i = 0; i < titleText.length; i++) {
+      const color = accents[i % accents.length];
+      const styled = (core as any).fg(color)(titleText[i]);
+      chunks.push(boldMod ? boldMod()(styled) : styled);
+    }
+    titleContent = new StyledText(chunks);
+  } catch {
+    /* fallback: plain text */
+  }
+  const lines = [`${model}  ·  ${provider}`, `workspace  ${cwd}`, `branch     ${branch}`];
   return core.Box(
     {
       id: 'synax-session-header',
@@ -946,10 +952,10 @@ function renderSessionHeaderCard(
       flexDirection: 'column',
       marginBottom: 1,
       border: ['left'],
-      borderColor: color,
+      borderColor: mp.primary,
       paddingX: 1,
     },
-    core.Text({ content: title, fg: color }),
+    core.Text({ content: titleContent as any, fg: pal.text }),
     ...lines.map((line) => core.Text({ content: line, fg: pal.textMuted })),
   );
 }
@@ -958,133 +964,129 @@ function renderEmptyState(
   core: OpenTuiCore,
   rail: ArtifactRailState,
   terminalWidth: number,
-  footer: FooterState,
+  terminalHeight: number | undefined,
+  _footer: FooterState,
   palette?: TuiPalette,
   splash?: SplashOptions,
   modelPal?: ModelPalette,
   modelId?: string,
 ): OpenTuiNode {
   const pal = palette ?? getPalette();
-  const width = Math.min(64, Math.max(42, terminalWidth - 8));
-  const activeModel = modelId ?? rail.model ?? '';
-  const visualProfile = resolveCoreVisualProfile(activeModel);
-  const inner = width - 2;
-  const mp = modelPal ?? getModelPalette(activeModel);
+  const mp = modelPal ?? getModelPalette(modelId ?? rail.model ?? '');
   const frame = splash?.frame ?? 0;
+  // Match the session message block width — discrete card, no fill.
+  const width = Math.max(20, Math.min(64, terminalWidth - 2));
+  const inner = Math.max(12, width - 2); // 2px paddingX
+  const narrow = inner < 36;
+  // Absolute centering on both axes so the splash card sits dead-center
+  // on ultrawide displays instead of pinning top-left.  Cap the top
+  // offset so the card doesn't drift into dead space on short terminals
+  // (tmux splits, narrow viewports).
+  const left = Math.max(0, Math.floor((terminalWidth - width) / 2));
+  const cardRows = 10; // token-stream (3) + gaps (2) + model (1) + sep (1) + meta (1) + paddingY (2)
+  const top =
+    typeof terminalHeight === 'number' ? Math.min(3, Math.max(0, Math.floor((terminalHeight - cardRows) / 2))) : 1;
 
-  const model = rail.model ? clip(rail.model, Math.max(8, 24)) : 'local';
-  const workspace = rail.cwd ? clip(rail.cwd, Math.max(8, 26)) : '~';
-  const provider = rail.provider ? clip(rail.provider, Math.max(8, 24)) : '-';
-  const branch = rail.branch ? clip(rail.branch, 26) : '-';
-  const context = rail.contextLabel ? clip(rail.contextLabel, 26) : `${rail.filesTouched.length} files`;
-  const stateLine = clip(footer.status.replace(/\.$/, '').toLowerCase() || 'ready', 24);
-  const uptime = clip(rail.uptimeLabel, 16);
+  const model = middleEllipsis(rail.model ?? 'local', inner);
+  const provider = rail.provider ?? '-';
+  const branch = rail.branch ?? '-';
+  const context = rail.contextLabel ?? `${rail.filesTouched.length} files`;
 
-  const coreLines = renderAiCore('idle', frame / 8, visualProfile).map(stripAnsi);
-  // Use only the first 9 lines of core for a tighter splash
-  const coreDisplay = coreLines.slice(0, 9);
-  const hr = '─'.repeat(Math.min(inner, 52));
-
-  const wordmark = [
-    { text: centerText('▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄', inner), color: mp.dim },
-  ];
-
-  const synaxMark = renderSynaxMark(inner, frame, mp);
-
-  // Two-column metadata grid
-  const labelW = 10;
-  const leftW = Math.min(28, Math.floor(inner / 2));
-  const padL = (s: string) => s.padEnd(leftW).slice(0, leftW);
-
-  const metaRows = [
-    {
-      left: `${'model'.padEnd(labelW)}${model}`,
-      right: `${'provider'.padEnd(labelW)}${provider}`,
-    },
-    {
-      left: `${'project'.padEnd(labelW)}${workspace}`,
-      right: `${'branch'.padEnd(labelW)}${branch}`,
-    },
-    {
-      left: `${'context'.padEnd(labelW)}${context}`,
-      right: `${'uptime'.padEnd(labelW)}${uptime}`,
-    },
-  ];
-
-  const gutter = '  ';
+  const family = mp.family;
+  const rowWide = (f: number): string => {
+    const spaced = [...tokenStreamFrameText(family, f)].join(' ');
+    return spaced.length <= inner ? spaced : tokenStreamFrameText(family, f);
+  };
+  const rowDense = (f: number): string => tokenStreamFrameText(family, f);
+  const sep = '─'.repeat(Math.max(4, Math.min(28, inner)));
 
   return core.Box(
     {
       id: 'synax-empty-state',
+      position: 'absolute',
+      top,
+      left,
       width,
       flexDirection: 'column',
+      backgroundColor: pal.surface,
       paddingX: 1,
-      paddingY: 0,
+      paddingY: 1,
     },
-    // Decorative top border
-    ...wordmark.map((l) => core.Text({ content: l.text, fg: l.color })),
+    // Token-stream rows — staggered spacing; collapse to one row when narrow
+    ...(narrow
+      ? [core.Text({ content: centerText(rowDense(frame + 1), inner), fg: mp.accent })]
+      : [
+          core.Text({ content: centerText(rowWide(frame), inner), fg: mp.primary }),
+          core.Text({ content: centerText(rowDense(frame + 1), inner), fg: mp.accent }),
+          core.Text({ content: centerText(rowWide(frame + 2), inner), fg: mp.secondary }),
+        ]),
+    // Gap — visually anchor the model name below the logo
     core.Text({ content: '' }),
-    // Synax wordmark with model-palette gradient
-    ...synaxMark.map((l) => core.Text({ content: centerText(l.text, inner), fg: l.color })),
-    // Tagline
-    core.Text({ content: centerText('coding agent for local models', inner), fg: mp.secondary }),
-    core.Text({ content: centerText(`v${VERSION}  ·  just type to start`, inner), fg: pal.textMuted }),
     core.Text({ content: '' }),
-    // AI core framed by rules
-    core.Text({ content: centerText(hr, inner), fg: mp.dim }),
-    ...coreDisplay.map((line) => core.Text({ content: centerText(line, inner), fg: mp.primary })),
-    core.Text({ content: centerText(hr, inner), fg: mp.dim }),
-    core.Text({ content: '' }),
-    // Metadata in two columns
-    ...metaRows.map((row) =>
-      core.Text({
-        content: centerText(`${padL(row.left)}${gutter}${row.right}`, inner),
-        fg: pal.textMuted,
-      }),
-    ),
-    core.Text({
-      content: centerText(`state  ${stateLine}`, inner),
-      fg: pal.textAccent,
-    }),
+    // Model name (middle-ellipsized for long GGUF filenames)
+    core.Text({ content: centerText(model, inner), fg: pal.text }),
+    // Thin separator
+    core.Text({ content: centerText(sep, inner), fg: pal.border }),
+    // Metadata row with green-colored branch; segments drop when narrow
+    buildSplashMeta(core, pal, provider, branch, context, inner),
   );
 }
 
-/** Render the Synax wordmark with gradient coloring across letters.
- *  Uses the model palette's splashAccents for a warm gradient effect.
- *  The animation frame subtly shifts the accent distribution.
- *
- *  Each "line" returned is actually a set of individual letter nodes
- *  that can be composed into a horizontal box for true gradient coloring. */
-function renderSynaxMark(inner: number, frame: number, mp: ModelPalette): { text: string; color: string }[] {
-  const accents = mp.splashAccents;
-  const shift = Math.floor(frame) % accents.length;
-
-  if (inner < 32) {
-    return [{ text: `SYNAX`, color: accents[(0 + shift) % accents.length] }];
-  }
-  if (inner < 44) {
-    return [{ text: `S Y N A X`, color: accents[(0 + shift) % accents.length] }];
-  }
-
-  // Wide terminals: spaced-out letters with a decorative frame and
-  // subtle gradient via position-based accent selection.
-  // We render each letter as a separate "line" that will be centered
-  // — but since each Text node is a single color, we use a single
-  // color per line, cycling through accents for a pulsing effect.
-  const primary = accents[(0 + shift) % accents.length];
-
-  return [
-    { text: '', color: mp.dim },
-    { text: '╭' + '─'.repeat(inner - 2) + '╮', color: mp.dim },
-    { text: `│${centerText('S Y N A X', inner - 2)}│`, color: primary },
-    { text: '╰' + '─'.repeat(inner - 2) + '╯', color: mp.dim },
-    { text: '', color: mp.dim },
+function buildSplashMeta(
+  core: OpenTuiCore,
+  pal: TuiPalette,
+  provider: string,
+  branch: string,
+  context: string,
+  inner: number,
+): OpenTuiNode {
+  // Drop segments right-to-left until the row fits the card — keeps the
+  // splash legible in narrow panes instead of overflowing the frame.
+  let sep = '  ·  ';
+  let segments: Array<{ text: string; kind: 'muted' | 'branch' }> = [
+    { text: provider, kind: 'muted' },
+    { text: branch, kind: 'branch' },
+    { text: context, kind: 'muted' },
   ];
+  const rowText = (): string => segments.map((s) => s.text).join(sep);
+  if (rowText().length > inner) sep = ' · ';
+  while (segments.length > 1 && rowText().length > inner) {
+    segments = segments.slice(0, -1);
+  }
+  const baseStr = rowText();
+  const padding = Math.max(0, Math.floor((inner - visibleLength(baseStr)) / 2));
+  const spacer = ' '.repeat(padding);
+  // Use StyledText for a mixed-color metadata row so the branch appears green
+  try {
+    const StyledTextCtor = (core as any).StyledText as (new (chunks: unknown[]) => unknown) | undefined;
+    const fgFn = (core as any).fg as ((color: string) => (text: string) => unknown) | undefined;
+    if (StyledTextCtor && fgFn) {
+      const chunks: unknown[] = [fgFn(pal.textMuted)(spacer)];
+      segments.forEach((segment, index) => {
+        if (index > 0) chunks.push(fgFn(pal.textMuted)(sep));
+        chunks.push(fgFn(segment.kind === 'branch' ? pal.success : pal.textMuted)(segment.text));
+      });
+      const styled = new StyledTextCtor(chunks);
+      return core.Text({ content: styled as any, width: '100%' });
+    }
+  } catch {
+    // fallback: single-color row
+  }
+  return core.Text({
+    content: spacer + baseStr,
+    fg: pal.textMuted,
+    width: '100%',
+  });
 }
 
-function compactEmptyStateHeight(rail: ArtifactRailState): number {
-  void rail;
-  return 26;
+/** Clip long names (e.g. GGUF filenames) from the middle, preserving the
+ *  distinctive start and the quant/extension suffix. */
+function middleEllipsis(text: string, max: number): string {
+  if (text.length <= max) return text;
+  if (max <= 3) return text.slice(0, max);
+  const head = Math.ceil((max - 1) / 2);
+  const tail = max - 1 - head;
+  return `${text.slice(0, head)}…${tail > 0 ? text.slice(-tail) : ''}`;
 }
 
 function centerText(text: string, width: number): string {
@@ -1148,11 +1150,14 @@ export function promptInputHeight(prompt: string, terminalWidth = 80): number {
   return Math.max(1, visualLines);
 }
 
-export function renderSplashLogo(frame: number, options?: { color?: boolean }): string[] {
-  const useColor = options?.color !== false;
-  return renderAiCore('idle', frame / 8)
-    .slice(0, 9)
-    .map((line) => (useColor ? stripAnsi(line) : stripAnsi(line).replace(/[╭╮╰╯─│○◎●•·]/g, '.')));
+export function renderSplashLogo(frame: number, _options?: { color?: boolean }): string[] {
+  return [
+    [...tokenStreamFrameText('default', frame)].join(' '),
+    tokenStreamFrameText('default', frame),
+    [...tokenStreamFrameText('default', frame + 1)].join(' '),
+    tokenStreamFrameText('default', frame + 1),
+    [...tokenStreamFrameText('default', frame + 2)].join(' '),
+  ];
 }
 
 const ANSI_PATTERN = new RegExp(String.fromCharCode(27) + '\\[[0-9;]*m', 'g');
@@ -1189,10 +1194,6 @@ function riskColor(risk: RiskLevel): string {
   return '#00ff87';
 }
 
-function clip(text: string, width: number): string {
-  return text.length <= width ? text : text.slice(0, Math.max(0, width));
-}
-
 // ─── Diagnostic slash-command compact card rendering ────────────────────────
 
 /** Titles that should render as compact diagnostic bands instead of full cards. */
@@ -1214,8 +1215,6 @@ function renderCompactBand(
   payload: ArtifactPayload,
   eventClass: SemanticEventClass,
   palette: TuiPalette,
-  _onToggle?: () => void,
-  expanded?: boolean,
 ): OpenTuiNode {
   const glyph = GLYPHS[eventClass] ?? '·';
   const color = eventColor(eventClass, palette);
@@ -1235,13 +1234,9 @@ function renderCompactBand(
     });
   }
   if (payload.type === 'diff') {
-    const countLabel =
-      payload.hunks.length > HUNK_PREVIEW_LINES && !expanded
-        ? ` [${payload.hunks.length - HUNK_PREVIEW_LINES} more]`
-        : '';
     return core.Text({
       ...FULL_WIDTH_TEXT,
-      content: `${glyph} ${payload.file}${countLabel}`,
+      content: `${glyph} ${payload.file}`,
       fg: color,
     });
   }
@@ -1249,7 +1244,7 @@ function renderCompactBand(
     const status = payload.exitCode === undefined ? '' : payload.exitCode === 0 ? ' ok' : ` exit ${payload.exitCode}`;
     return core.Text({
       ...FULL_WIDTH_TEXT,
-      content: `${glyph} ${payload.command || 'command'}${status}`,
+      content: `${glyph} ${payload.command || ''}${status}`,
       fg: payload.exitCode && payload.exitCode !== 0 ? palette.error : color,
     });
   }
@@ -1421,19 +1416,20 @@ function renderAgentStatusCard(core: OpenTuiCore, event: SemanticEvent, palette?
   ]);
 }
 
-function renderThinkingCard(
-  core: OpenTuiCore,
-  event: SemanticEvent,
-  _expanded = false,
-  _onToggleExpand?: (id: string) => void,
-  palette?: TuiPalette,
-): OpenTuiNode {
+function renderThinkingCard(core: OpenTuiCore, event: SemanticEvent, palette?: TuiPalette): OpenTuiNode {
+  const { config } = core;
+  if (config?.hideThinking) {
+    return renderGlyph(core, 'thinking', palette);
+  }
+  // ... existing implementation ...
   const pal = palette ?? getPalette();
   const payload = event.artifact;
   const title = payload.type === 'text' ? payload.title : 'Thinking';
   const body = payload.type === 'text' ? payload.body : '';
   const active = /^thinking/i.test(title);
-  const color = active ? pal.semantic.thinking : pal.textAccent;
+  // Finalized "Thought" cards drop to muted so they recede behind prompts
+  // and results when scanning the transcript; only the live card is tinted.
+  const color = active ? pal.semantic.thinking : pal.textMuted;
   const normalized = normalizeThinkingText(body);
 
   // Always show the full thinking text — no collapse, no expand toggle.

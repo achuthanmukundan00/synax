@@ -178,7 +178,18 @@ export function truncateTitle(ev: SemanticEvent): string {
 // ─── Theme names ─────────────────────────────────────────────────────────────
 
 export function getThemeNames(): string[] {
-  return ['default', 'dark', 'light', 'high-contrast'];
+  return [
+    'default',
+    'mono',
+    'gruvbox',
+    'kanagawa',
+    'catppuccin',
+    'nord',
+    'rose-pine',
+    'tokyo-night',
+    'pink',
+    'dracula',
+  ];
 }
 
 // ─── Misc ────────────────────────────────────────────────────────────────────

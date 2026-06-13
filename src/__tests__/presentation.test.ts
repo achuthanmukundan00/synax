@@ -92,6 +92,38 @@ describe('PresentationState reducer', () => {
     expect(state.blocks.filter((b) => b.kind === 'model_output')).toHaveLength(0);
   });
 
+  it('clears assistant streaming text at tool boundaries', () => {
+    const state = reduceEvents([
+      {
+        type: 'assistant_delta',
+        timestamp: ts('2026-01-01T00:00:01.000Z'),
+        reasoningContent: 'checking repo',
+      },
+      {
+        type: 'tool_started',
+        timestamp: ts('2026-01-01T00:00:02.000Z'),
+        toolCallId: 'call-1',
+        toolName: 'bash',
+        summary: '{"command":"git status --short"}',
+      },
+      {
+        type: 'tool_finished',
+        timestamp: ts('2026-01-01T00:00:03.000Z'),
+        toolCallId: 'call-1',
+        toolName: 'bash',
+        summary: 'completed',
+        status: 'ok',
+      },
+      {
+        type: 'assistant_delta',
+        timestamp: ts('2026-01-01T00:00:04.000Z'),
+        reasoningContent: 'checking stashes',
+      },
+    ]);
+
+    expect(state.streamingText).toBe('checking stashes');
+  });
+
   it('replaces orchestration block in-place on child events', () => {
     const orchestrationEvent: AgentEvent = {
       type: 'orchestration_plan_generated',

@@ -1,119 +1,56 @@
 /**
- * Read tool handler — extracted from Session.ts.
+ * Read tool handler.
  *
- * Handles: file reads, text search, directory listing, with read cache,
- * repetition detection, read budget limits, and result truncation.
+ * Handles: file reads, text search, directory listing, with read cache
+ * and per-read size truncation. No per-turn budget — the context window,
+ * compaction, and subagent handoff are the natural budget.
  */
 
 import type { ReadAction, ExecutionContext, AgentToolExecutionResult } from '../types';
 import type { ToolResult } from '../../tools/types';
 import { estimateTokens } from '../../agent/context-budget';
 
-// ─── Constants ────────────────────────────────────────────
-
 // ─── Public handler ───────────────────────────────────────
 
 export async function handleRead(action: ReadAction, context: ExecutionContext): Promise<AgentToolExecutionResult> {
-  const repetitionKey = readRepetitionKey(action);
-  const seenCount = context.identicalReadCounts.get(repetitionKey) ?? 0;
-  context.identicalReadCounts.set(repetitionKey, seenCount + 1);
-
-  const showNudge = seenCount >= 2;
-
-  // Cache hits are served BEFORE the per-turn budget check: they re-surface
-  // content the model already paid for, so refusing them only strands the
-  // model (it can neither re-read nor act). They are also marked fromCache
-  // so the Session does not charge the read budget twice.
   const signature = readSignature(action);
   const cached = context.readCache.get(signature);
   if (cached) {
-    if (showNudge && cached.success && typeof cached.output === 'object' && cached.output !== null) {
-      // Return a shallow copy with the nudge appended — do NOT mutate the
-      // cached object, which would stick to all future cache hits.
-      const nudged = {
-        ...cached,
-        output: {
-          ...(cached.output as Record<string, unknown>),
-          guidance:
-            'Already read this file. Use search (query) or targeted line ranges (startLine/endLine) to inspect specific sections.',
-        },
-      };
-      return { ...publicToolResult('read', nudged), fromCache: true };
-    }
     return { ...publicToolResult('read', cached), fromCache: true };
   }
 
-  // Per-turn read token budget: once cumulative read output exceeds the cap,
-  // refuse further uncached reads. The error message is classified as a
-  // recoverable policy error (isReadPolicyLimitError), so the model gets a
-  // clear signal to act on what it has instead of the turn dying.
-  const totalCap = context.readResultBudget.maxTotalReadResultTokensPerTurn;
-  if (totalCap > 0 && context.totalReadResultTokens >= totalCap) {
-    return {
-      success: false,
-      error: `total read limit reached: ${context.totalReadResultTokens} tokens of read output this turn (cap ${totalCap}). Stop reading and act on the information you already have (use edit/write/bash), or use search_memory to recall earlier reads. Re-reading identical ranges is still allowed (served from cache).`,
-      toolResult: {
-        success: false,
-        toolName: 'read',
-        error: `total read limit reached (cap ${totalCap} tokens per turn)`,
-        output: { omitted: true },
-      },
-    };
-  }
-
   if (action.query && action.query.trim().length > 0) {
-    const result = await context.registry.execute('search_text', { query: action.query, path: action.path });
-    const normalized = normalizeReadToolResult(
-      result,
-      context.readResultBudget,
-      context.totalReadResultTokens,
-      context.ledger,
-    );
+    const result = await context.registry.execute('search_text', {
+      query: action.query,
+      path: action.path,
+    });
+    const normalized = normalizeReadResult(result, context.readResultBudget);
     context.readCache.set(signature, normalized);
     return publicToolResult('read', normalized);
   }
+
   if (action.path && action.path.trim().length > 0) {
     const result = await context.registry.execute('read_file_range', {
       path: action.path,
       startLine: action.startLine,
       endLine: action.endLine,
     });
-    let normalized = normalizeReadToolResult(
-      result,
-      context.readResultBudget,
-      context.totalReadResultTokens,
-      context.ledger,
-    );
-    if (showNudge && normalized.success && typeof normalized.output === 'object' && normalized.output !== null) {
-      // Create a shallow copy so the nudge does not mutate the cached object
-      normalized = {
-        ...normalized,
-        output: {
-          ...(normalized.output as Record<string, unknown>),
-          guidance:
-            'Already read this file. Use search (query) or targeted line ranges (startLine/endLine) to inspect specific sections.',
-        },
-      };
-    }
+    const normalized = normalizeReadResult(result, context.readResultBudget);
     context.readCache.set(signature, normalized);
     return publicToolResult('read', normalized);
   }
+
   const result = await context.registry.execute('list_files', {
     path: action.path,
     maxFiles: action.maxFiles,
     maxMatches: action.maxMatches,
   });
-  const normalized = normalizeReadToolResult(
-    result,
-    context.readResultBudget,
-    context.totalReadResultTokens,
-    context.ledger,
-  );
+  const normalized = normalizeReadResult(result, context.readResultBudget);
   context.readCache.set(signature, normalized);
   return publicToolResult('read', normalized);
 }
 
-// ─── Cache & repetition helpers ───────────────────────────
+// ─── Cache helpers ────────────────────────────────────────
 
 function readSignature(action: ReadAction): string {
   return JSON.stringify({
@@ -126,18 +63,6 @@ function readSignature(action: ReadAction): string {
   });
 }
 
-function readRepetitionKey(action: ReadAction): string {
-  if (action.query && action.query.trim().length > 0) {
-    return `query:${action.query.trim()}`;
-  }
-  if (action.path && action.path.trim().length > 0) {
-    const start = action.startLine ?? 0;
-    const end = action.endLine ?? 0;
-    return `path:${action.path.trim()}:${start}-${end}`;
-  }
-  return 'list:.';
-}
-
 function publicToolResult(toolName: string, result: ToolResult): AgentToolExecutionResult {
   return {
     success: result.success,
@@ -146,19 +71,19 @@ function publicToolResult(toolName: string, result: ToolResult): AgentToolExecut
   };
 }
 
-// ─── Read result normalization ────────────────────────────
+// ─── Per-read size truncation ─────────────────────────────
 
-function normalizeReadToolResult(
+/**
+ * Truncate oversized read results to stay under the per-read token ceiling.
+ * Only the lines/matches/files arrays are truncated; metadata (totalLines,
+ * startLine, endLine) passes through intact so the guidance message is accurate.
+ */
+function normalizeReadResult(
   result: ToolResult,
   settings: import('../../agent/context-budget').ContextBudgetSettings,
-  _totalReadResultTokens: number,
-  _ledger: import('../../tools').InspectionLedger,
 ): ToolResult {
   if (!result.success) return result;
-  // Enforce per-read size limit on the actual output shapes:
-  //   read_file_range → { lines: [{lineNumber, text}], ... }
-  //   search_text     → { matches: [{path, lineNumber, line}], ... }
-  //   list_files      → { files: string[], ... }
+
   const maxSingle = settings.maxSingleReadResultTokens;
   if (!(maxSingle > 0) || !result.output || typeof result.output !== 'object') return result;
 
@@ -166,27 +91,16 @@ function normalizeReadToolResult(
   const estimatedTokens = estimateTokens(JSON.stringify(output));
   if (estimatedTokens <= maxSingle) return result;
 
-  const truncateArray = <T>(items: T[], serialize: (item: T) => string): { kept: T[]; dropped: number } => {
-    let used = 0;
-    let cut = items.length;
-    for (let i = 0; i < items.length; i += 1) {
-      used += estimateTokens(serialize(items[i]));
-      if (used > maxSingle) {
-        cut = i;
-        break;
-      }
-    }
-    // Always keep at least one item so the model gets a usable sample.
-    cut = Math.max(cut, 1);
-    return { kept: items.slice(0, cut), dropped: items.length - cut };
-  };
-
+  // ── File read (lines array) ──
   if (Array.isArray(output.lines)) {
-    const { kept, dropped } = truncateArray(output.lines as Array<{ lineNumber: number; text: string }>, (l) =>
-      JSON.stringify(l),
-    );
+    const lines = output.lines as Array<{ lineNumber: number; text: string }>;
+    const { kept, dropped } = truncateToBudget(lines, (l) => JSON.stringify(l), maxSingle);
     if (dropped <= 0) return result;
-    const lastLine = kept.length > 0 ? kept[kept.length - 1].lineNumber : 0;
+
+    const firstKept = kept[0].lineNumber;
+    const lastLine = kept[kept.length - 1].lineNumber;
+    const total = typeof output.totalLines === 'number' ? output.totalLines : kept.length + dropped;
+
     return {
       ...result,
       output: {
@@ -194,35 +108,41 @@ function normalizeReadToolResult(
         lines: kept,
         endLine: lastLine,
         truncated: true,
-        guidance: `Read result truncated (${estimatedTokens} > ${maxSingle} token budget): ${dropped} line(s) after line ${lastLine} omitted. Re-read with startLine=${lastLine + 1} and a bounded endLine to continue.`,
+        guidance: `Showing lines ${firstKept}-${lastLine} of ${total}. Use startLine=${lastLine + 1} to continue.`,
       },
     };
   }
 
+  // ── Text search (matches array) ──
   if (Array.isArray(output.matches)) {
-    const { kept, dropped } = truncateArray(output.matches as unknown[], (m) => JSON.stringify(m));
+    const matches = output.matches as unknown[];
+    const { kept, dropped } = truncateToBudget(matches, (m) => JSON.stringify(m), maxSingle);
     if (dropped <= 0) return result;
+
     return {
       ...result,
       output: {
         ...output,
         matches: kept,
         truncated: true,
-        guidance: `Search result truncated (${estimatedTokens} > ${maxSingle} token budget): ${dropped} match(es) omitted. Narrow the query or pass a path to scope the search.`,
+        guidance: `${dropped} match(es) omitted — narrow the query or pass a path to scope the search.`,
       },
     };
   }
 
+  // ── Directory listing (files array) ──
   if (Array.isArray(output.files)) {
-    const { kept, dropped } = truncateArray(output.files as string[], (f) => f);
+    const files = output.files as string[];
+    const { kept, dropped } = truncateToBudget(files, (f) => f, maxSingle);
     if (dropped <= 0) return result;
+
     return {
       ...result,
       output: {
         ...output,
         files: kept,
         truncated: true,
-        guidance: `File listing truncated (${estimatedTokens} > ${maxSingle} token budget): ${dropped} file(s) omitted. Pass a subdirectory path or lower maxFiles.`,
+        guidance: `${dropped} file(s) omitted — pass a subdirectory path or lower maxFiles.`,
       },
     };
   }
@@ -230,8 +150,26 @@ function normalizeReadToolResult(
   return result;
 }
 
+function truncateToBudget<T>(
+  items: T[],
+  serialize: (item: T) => string,
+  budget: number,
+): { kept: T[]; dropped: number } {
+  let used = 0;
+  let cut = items.length;
+  for (let i = 0; i < items.length; i += 1) {
+    used += estimateTokens(serialize(items[i]));
+    if (used > budget) {
+      cut = i;
+      break;
+    }
+  }
+  cut = Math.max(cut, 1);
+  return { kept: items.slice(0, cut), dropped: items.length - cut };
+}
+
 /**
- * Estimate the token count of a read result for budget tracking.
+ * Estimate token count of a read result for context tracking.
  */
 export function estimateReadResultTokens(toolResult: ToolResult): number {
   if (!toolResult.success) return 0;

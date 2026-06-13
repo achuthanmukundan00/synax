@@ -52,7 +52,11 @@ const DEFAULT_SETTINGS: ContextBudgetSettings = {
   reservedOutputTokens: 8192,
   keepRecentTokens: 20000,
   maxSingleReadResultTokens: 12000,
-  maxTotalReadResultTokensPerTurn: 40000,
+  // 0 = unlimited — the context window itself and subagent handoff act as
+  // the natural budget. Hard-capping reads per turn amputates the model
+  // mid-investigation: once exhausted, every read returns an error and the
+  // model cannot gather any new information.
+  maxTotalReadResultTokensPerTurn: 0,
   keepRecentToolTurns: 3,
 };
 

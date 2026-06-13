@@ -1528,6 +1528,59 @@ export class Session {
         if (!result.fromCache) {
           options.totalReadResultTokens += estimateReadResultTokens(result.toolResult);
         }
+
+        // ── Identical-read loop detection ──────────────────────────
+        // When the model calls the same read with the same arguments
+        // repeatedly (e.g. reading "." over and over for the same
+        // directory listing), stop the turn early before burning
+        // through the full tool-call budget. The recovery loop picks
+        // this up via classifyResultForRecovery and injects a steering
+        // nudge to break the loop.
+        //
+        // The key includes path + line range so different ranges are
+        // NOT treated as identical (reading lines 1-50 vs 51-100 are
+        // distinct, valid reads).
+        const args =
+          typeof call.arguments === 'object' && call.arguments !== null
+            ? (call.arguments as Record<string, unknown>)
+            : {};
+        const readPath = typeof args.path === 'string' ? args.path : '';
+        const startLine = typeof args.startLine === 'number' ? args.startLine : undefined;
+        const endLine = typeof args.endLine === 'number' ? args.endLine : undefined;
+        const readKey =
+          startLine !== undefined || endLine !== undefined
+            ? `${readPath}:${startLine ?? ''}-${endLine ?? ''}`
+            : readPath;
+        const priorCount = options.identicalReadCounts.get(readKey) ?? 0;
+        const nextCount = priorCount + 1;
+        options.identicalReadCounts.set(readKey, nextCount);
+
+        // Dogfooding: when Synax is developing Synax, disable identical-read
+        // loop detection so the agent can re-read the same file many times
+        // without being interrupted.
+        const MAX_IDENTICAL_READS = process.env.SYNAX_DOGFOOD ? Number.POSITIVE_INFINITY : 5;
+        if (nextCount >= MAX_IDENTICAL_READS) {
+          const actionLabel = readPath || '.';
+          return {
+            terminalResult: {
+              terminalState: 'tool_error',
+              finalAnswer: '',
+              reasoningContent: options.response.reasoningContent,
+              steps: options.step,
+              toolCalls: options.toolCalls,
+              changedFiles: options.changedFiles,
+              conversation: options.conversation,
+              error: `too many consecutive identical reads on "${actionLabel}": ${nextCount} in a row`,
+            },
+            toolCalls: options.toolCalls,
+            changedFiles: options.changedFiles,
+            consecutiveRecoverableToolErrors: options.consecutiveRecoverableToolErrors + 1,
+            totalReadCalls: options.totalReadCalls,
+            totalReadResultTokens: options.totalReadResultTokens,
+            contentToolResults,
+            conversation: options.conversation,
+          };
+        }
       }
       // Invalidate read cache on any successful mutation so subsequent
       // reads return fresh content (prevents stale-read→edit mismatch loops).

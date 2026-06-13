@@ -164,6 +164,31 @@ at the bottom of the screen: `Spend: $0.004`. Local providers show
 "X-Custom" = "value"
 ```
 
+Header values can reference environment variables using either `$VAR` or `${VAR}` syntax:
+
+```toml
+[providers.relay.headers]
+"CF-Access-Client-Id" = "${CF_ACCESS_CLIENT_ID}"
+"CF-Access-Client-Secret" = "${CF_ACCESS_CLIENT_SECRET}"
+```
+
+Synax resolves the variable from `process.env` at runtime. If the env var is unset or empty, the header is omitted entirely.
+
+### Multi-provider headers
+
+When using the multi-provider config format, headers live under the provider definition:
+
+```toml
+[providers.relay]
+enabled = true
+compatibility = "openai-compatible"
+base_url = "https://ai.watchyourtemper.com/v1"
+
+[providers.relay.headers]
+"CF-Access-Client-Id" = "${CF_ACCESS_CLIENT_ID}"
+"CF-Access-Client-Secret" = "${CF_ACCESS_CLIENT_SECRET}"
+```
+
 ## Model Configuration
 
 Each provider supports context window configuration:

@@ -94,6 +94,54 @@ function charDisplayWidth(cp: number): number {
   return 1;
 }
 
+/**
+ * Wrap text into lines that fit within `width` visible columns.
+ * Splits on word boundaries where possible; fallback to character-level
+ * break when a single word exceeds the width.
+ */
+export function wordWrapLines(text: string, width: number): string[] {
+  if (width <= 0) return [text];
+  const lines: string[] = [];
+  for (const paragraph of text.split('\n')) {
+    if (!paragraph.trim()) {
+      lines.push('');
+      continue;
+    }
+    const words = paragraph.split(' ');
+    let current = '';
+    for (const word of words) {
+      const test = current ? `${current} ${word}` : word;
+      if (visibleLength(test) <= width) {
+        current = test;
+      } else {
+        if (current) {
+          lines.push(current);
+          current = '';
+        }
+        // Word longer than width: break character-by-character.
+        let remaining = word;
+        while (visibleLength(remaining) > width) {
+          // Chop front of `remaining` into a line that fits.
+          let fit = '';
+          let vi = 0;
+          for (let ci = 0; ci < remaining.length; ) {
+            const [cw, adv] = charWidthAt(remaining, ci);
+            if (vi + cw > width) break;
+            fit += remaining.slice(ci, ci + adv);
+            vi += cw;
+            ci += adv;
+          }
+          lines.push(fit || remaining.slice(0, 1));
+          remaining = remaining.slice(fit.length);
+        }
+        current = remaining;
+      }
+    }
+    if (current) lines.push(current);
+  }
+  return lines;
+}
+
 export function charWidthAt(text: string, i: number): [number, number] {
   const code = text.charCodeAt(i);
   if (code === 0x1b) {

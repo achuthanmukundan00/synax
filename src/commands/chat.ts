@@ -20,6 +20,8 @@ import { discoverSkills, buildSkillMessages } from '../skills/SkillLoader';
 import { resetTokenLedger, resolveContextBudgetSettings } from '../agent/context-budget';
 import pkg from '../../package.json';
 import { createLLMClient, describeLLMProvider } from '../llm/provider-factory';
+import { probeModelContextWindow } from '../llm/probe-context-window';
+import type { ImageContentBlock } from '../llm/image-utils';
 import {
   Session,
   type AgentConversation,
@@ -33,7 +35,7 @@ import { runVerification, type VerificationResult } from '../agent/verification'
 import { buildProjectProfile, formatTextProfile } from '../config/profile';
 import { buildInspectConfigProfile } from './inspect';
 import { join } from 'path';
-import { writeFileSync, mkdirSync } from 'fs';
+import { writeFileSync, mkdirSync, readFileSync } from 'fs';
 import type { NormalizedProviderConfig, ProviderMetadata } from '../llm/types';
 import { readLatestCheckpoint, undoLastEdit } from '../agent/safety';
 import { createInspectionLedger } from '../tools';
@@ -58,7 +60,7 @@ export interface ChatSession {
   conversation: AgentConversation;
   /** Persistent session ID for cross-session resume. */
   sessionId: string;
-  handleUserMessage(message: string): Promise<ChatTurnReport>;
+  handleUserMessage(message: string, images?: ImageAttachment[]): Promise<ChatTurnReport>;
   handleSlashCommand(command: string): Promise<SlashCommandReport>;
   handleShellCommand?(command: string): Promise<ShellCommandReport>;
   /** Install a runtime event sink for real-time TUI state updates. */
@@ -266,6 +268,12 @@ export function buildConversationMessagesFromSessionEvents(
 }
 
 export type InlineInputSegment = InlineTextSegment | InlinePasteAttachment;
+
+/** Image file attachment passed from TUI paste to the chat session. */
+export interface ImageAttachment {
+  path: string;
+  realPath: string;
+}
 
 export interface InlineTextSegment {
   kind: 'text';
@@ -574,7 +582,7 @@ export function createChatSession(options: {
     },
     resumeSession: resumeSessionById,
     appendSessionEvent: appendSessionEventFn,
-    async handleUserMessage(message: string): Promise<ChatTurnReport> {
+    async handleUserMessage(message: string, images?: ImageAttachment[]): Promise<ChatTurnReport> {
       const userMessageAt = new Date().toISOString();
       appendSessionEventFn({
         type: 'user_message',
@@ -586,6 +594,27 @@ export function createChatSession(options: {
         timestamp: userMessageAt,
         content: message,
       });
+
+      // ── Image encoding ──────────────────────────────────────────────
+      // Pasted/dragged images are encoded here so the session can send
+      // them as multimodal content to the vision model.
+      const { encodeImageBase64, buildImageContentBlock } = await import('../llm/image-utils');
+      const imageContents: ImageContentBlock[] = [];
+      if (images && images.length > 0) {
+        const { stat } = await import('fs/promises');
+        for (const img of images) {
+          try {
+            const s = await stat(img.realPath);
+            if (!s.isFile()) continue;
+            const encoded = await encodeImageBase64(img.realPath);
+            imageContents.push(buildImageContentBlock(encoded.dataUrl));
+          } catch (err) {
+            const reason = err instanceof Error ? err.message : String(err);
+            console.error(`[synax] image encode failed (${img.path}): ${reason}`);
+          }
+        }
+      }
+
       const config = getConfig();
       const factoryInput = toProviderFactoryInput(config);
       if (thinkingLevelRef) factoryInput.thinkingLevel = thinkingLevelRef;
@@ -643,6 +672,16 @@ export function createChatSession(options: {
       };
 
       // ── Route through runAgentTask for orchestration, verification, repair ──
+      // Inject pasted images as multimodal content blocks before the text
+      // prompt so vision models see them as part of the user request.
+      if (imageContents.length > 0) {
+        const imageText = images!.map((img) => `Image file: ${img.path}`).join('\n');
+        conversation.messages.push({
+          role: 'user',
+          content: [{ type: 'text', text: imageText }, ...imageContents],
+        });
+      }
+
       let runReport: RunTaskReport;
       try {
         runReport = await runAgentTask({
@@ -1062,6 +1101,124 @@ export function createInlinePasteInputSession(): InlinePasteInputSession {
   };
 }
 
+/** Launch the interactive TUI directly (synax with no subcommand). */
+export async function runChatTui(): Promise<void> {
+  const repoRoot = process.cwd();
+  const loaded = loadProjectConfig(repoRoot);
+  if (loaded.errors.length > 0) {
+    console.error(`[synax] Config error:\n${loaded.errors.map((e) => `${e.path}: ${e.message}`).join('\n')}`);
+    process.exitCode = 1;
+    return;
+  }
+  const providerDescription = describeLLMProvider(toProviderFactoryInput(loaded.config));
+  const metadata = providerDescription.metadata;
+  const provider = providerDescription.normalizedConfig;
+
+  let thinkingLevel: import('../config/schema').ThinkingLevel = 'off';
+  let skillMessages: string[] | undefined;
+  let skillDiagnostics: SkillDiagnostic[] | undefined;
+  try {
+    const effectiveConfig = loadSynaxConfig(repoRoot);
+    thinkingLevel = effectiveConfig.active.thinking ?? 'off';
+    const configSkills = loadSkills(effectiveConfig.skills, repoRoot);
+    if (configSkills.systemMessages.length > 0) {
+      skillMessages = configSkills.systemMessages;
+      skillDiagnostics = configSkills.diagnostics;
+    }
+    try {
+      const discovery = discoverSkills(repoRoot);
+      if (discovery.loaded.length > 0) {
+        const autoMessages = buildSkillMessages(discovery.loaded);
+        skillMessages = [...(skillMessages ?? []), ...autoMessages];
+      }
+    } catch {
+      /* best-effort */
+    }
+    if (skillMessages?.length === 0) skillMessages = undefined;
+  } catch {
+    /* best-effort */
+  }
+
+  let lastModelOutput = '';
+  const modelLabel = metadata.modelId || undefined;
+  const cwdLabel = compactHome(repoRoot);
+  const gitBranch = await currentGitBranch(repoRoot);
+
+  if (!metadata.cloud) {
+    const probed = await probeModelContextWindow(
+      provider.baseUrl,
+      provider.model,
+      provider.apiKey,
+      provider.customHeaders,
+    );
+    if (probed !== undefined && probed > 0) {
+      loaded.config.contextWindowTokens = probed;
+      loaded.config.contextBudgetTokens = probed;
+    }
+  }
+
+  const session = createChatSession({
+    repoRoot,
+    config: loaded.config,
+    thinkingLevel,
+    skillMessages,
+    skillDiagnostics,
+    tui: true,
+  });
+
+  const effectiveSettingsConfig = loadSynaxConfig(repoRoot);
+  await runInteractiveTui(session, {
+    enableMouse: false,
+    alternateScreen: true,
+    cmuxMode: false,
+    blockedMessage: undefined,
+    lastModelOutput: () => lastModelOutput,
+    resetLastModelOutput: () => {
+      lastModelOutput = '';
+    },
+    modelLabel,
+    thinkingEnabled: thinkingLevel !== 'off',
+    endpointLabel: metadata.baseUrl !== '(not set)' ? metadata.baseUrl : undefined,
+    providerName: metadata.displayName,
+    cwdLabel,
+    cwd: repoRoot,
+    repoRoot,
+    gitBranch,
+    contextWindowTokens: loaded.config.contextWindowTokens ?? loaded.config.contextBudgetTokens,
+    coreLoaded: true,
+    activeSkills: skillDiagnostics?.filter((d) => d.loaded).map((d) => d.id),
+    inputPricePer1MTokens: metadata.inputPricePer1MTokens,
+    outputPricePer1MTokens: metadata.outputPricePer1MTokens,
+    settingsConfig: effectiveSettingsConfig,
+    onSettingsConfigChanged: (settingsConfig) => {
+      loaded.config = applyEffectiveSynaxConfigToProjectConfig(loaded.config, settingsConfig);
+      const nextThinkingLevel = settingsConfig.active.thinking ?? thinkingLevel;
+      session.refreshConfig?.(loaded.config, nextThinkingLevel);
+      const nextDescription = describeLLMProvider(toProviderFactoryInput(loaded.config));
+      const activeProvider = settingsConfig.providers[settingsConfig.active.provider];
+      const activeModel = activeProvider?.models.find((model) => model.id === settingsConfig.active.model);
+      return {
+        modelLabel: nextDescription.normalizedConfig.model.trim() || undefined,
+        endpointLabel: nextDescription.normalizedConfig.baseUrl || undefined,
+        providerName:
+          activeProvider?.name ??
+          nextDescription.metadata.displayName ??
+          providerNameFromPreset(loaded.config.provider?.preset),
+        contextWindowTokens:
+          activeModel?.contextWindow ??
+          activeProvider?.models?.[0]?.contextWindow ??
+          loaded.config.contextWindowTokens ??
+          loaded.config.contextBudgetTokens,
+        thinkingEnabled: nextThinkingLevel !== 'off',
+        coreLoaded: true,
+        providerWarning: providerRuntimeBlockedMessage(nextDescription.metadata, nextDescription.normalizedConfig),
+        inputPricePer1MTokens: nextDescription.metadata.inputPricePer1MTokens,
+        outputPricePer1MTokens: nextDescription.metadata.outputPricePer1MTokens,
+      };
+    },
+  });
+}
+
 export function chatCommand(program: Command): void {
   const chat = new Command('chat');
   chat
@@ -1159,6 +1316,20 @@ export function chatCommand(program: Command): void {
         const cwdLabel = compactHome(repoRoot);
         const gitBranch = await currentGitBranch(repoRoot);
 
+        // ── Probe relay/custom providers for actual model context window ──
+        if (!metadata.cloud) {
+          const probed = await probeModelContextWindow(
+            provider.baseUrl,
+            provider.model,
+            provider.apiKey,
+            provider.customHeaders,
+          );
+          if (probed !== undefined && probed > 0) {
+            loaded.config.contextWindowTokens = probed;
+            loaded.config.contextBudgetTokens = probed;
+          }
+        }
+
         const session = createChatSession({
           repoRoot,
           config: loaded.config,
@@ -1233,7 +1404,10 @@ export function chatCommand(program: Command): void {
                   nextDescription.metadata.displayName ??
                   providerNameFromPreset(loaded.config.provider?.preset),
                 contextWindowTokens:
-                  activeModel?.contextWindow ?? loaded.config.contextWindowTokens ?? loaded.config.contextBudgetTokens,
+                  activeModel?.contextWindow ??
+                  activeProvider?.models?.[0]?.contextWindow ??
+                  loaded.config.contextWindowTokens ??
+                  loaded.config.contextBudgetTokens,
                 thinkingEnabled: nextThinkingLevel !== 'off',
                 coreLoaded: true,
                 providerWarning: nextBlockedMessage,
@@ -1704,6 +1878,18 @@ async function handleSlashCommand(
   }
   if (command === '/settings') {
     return { handled: true, output: renderSettingsPanel(context.repoRoot, context.config) };
+  }
+  if (command === '/changelog') {
+    try {
+      const changelog = readFileSync(join(context.repoRoot, 'CHANGELOG.md'), 'utf-8');
+      const releaseMatch = changelog.match(/^##\s+\[([^\]]+)\]([\s\S]*?)(?=\n##\s|\n\[|$)/m);
+      if (releaseMatch) {
+        return { handled: true, output: `## [${releaseMatch[1]}]\n\n${releaseMatch[2].trim()}` };
+      }
+      return { handled: true, output: 'No release entries found in CHANGELOG.md.' };
+    } catch {
+      return { handled: true, output: 'CHANGELOG.md not found or unreadable.' };
+    }
   }
   if (command.startsWith('/settings set ')) {
     return { handled: true, output: applySettingsSet(trimmedCommand, context.config) };

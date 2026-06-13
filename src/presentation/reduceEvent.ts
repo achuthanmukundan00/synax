@@ -118,7 +118,7 @@ export function reduceEvent(
     case 'task_started': {
       c = { ...c, taskStarted: true, lastOrchestrationIndex: -1, lastToolName: '' };
       // Reset streaming text on new task
-      s = { ...s, streamingText: '' };
+      s = { ...s, streamingText: '', lastDeltaContent: '', lastDeltaReasoning: '' };
 
       const modelSummary = event.model ? `${event.model} @ ${event.endpoint}` : 'local';
       ({ state: s, ctx: c } = appendBlock(s, c, {
@@ -138,7 +138,7 @@ export function reduceEvent(
 
     case 'model_step_started': {
       // Reset streaming buffer so leftover delta doesn't carry across steps
-      return { state: { ...s, streamingText: '' }, ctx: c };
+      return { state: { ...s, streamingText: '', lastDeltaContent: '', lastDeltaReasoning: '' }, ctx: c };
     }
 
     case 'context_budget_updated': {
@@ -158,13 +158,26 @@ export function reduceEvent(
       const content = event.content ?? '';
       const reasoning = event.reasoningContent ?? '';
       let text = s.streamingText;
-      if (reasoning) text += reasoning;
-      if (content) text += content;
+      // Some providers re-send the full accumulated text in each SSE
+      // content/reasoning delta (same pattern as thinking cards).
+      // Detect and skip the prefix we've already seen so text doesn't
+      // double-accumulate and display repeated paragraphs.
+      let newContent = content;
+      let newReasoning = reasoning;
+      if (s.lastDeltaContent && content.startsWith(s.lastDeltaContent)) {
+        newContent = content.slice(s.lastDeltaContent.length);
+      }
+      if (s.lastDeltaReasoning && reasoning.startsWith(s.lastDeltaReasoning)) {
+        newReasoning = reasoning.slice(s.lastDeltaReasoning.length);
+      }
+      s = { ...s, lastDeltaContent: content, lastDeltaReasoning: reasoning };
+      if (newReasoning) text += newReasoning;
+      if (newContent) text += newContent;
       return { state: { ...s, streamingText: text }, ctx: c };
     }
 
     case 'assistant_message': {
-      s = { ...s, streamingText: '' };
+      s = { ...s, streamingText: '', lastDeltaContent: '', lastDeltaReasoning: '' };
       const prose = extractProse(event.content);
       if (!prose) return { state: s, ctx: c };
 
@@ -200,6 +213,7 @@ export function reduceEvent(
 
     case 'tool_started': {
       c = { ...c, lastToolName: event.toolName };
+      s = { ...s, streamingText: '', lastDeltaContent: '', lastDeltaReasoning: '' };
       ({ state: s, ctx: c } = appendBlock(s, c, {
         kind: 'tool_activity',
         toolName: event.toolName,
@@ -210,6 +224,7 @@ export function reduceEvent(
     }
 
     case 'tool_finished': {
+      s = { ...s, streamingText: '', lastDeltaContent: '', lastDeltaReasoning: '' };
       ({ state: s, ctx: c } = appendBlock(s, c, {
         kind: 'tool_activity',
         toolName: event.toolName,
@@ -407,7 +422,7 @@ export function reduceEvent(
             text: prose,
           }));
         }
-        s = { ...s, streamingText: '' };
+        s = { ...s, streamingText: '', lastDeltaContent: '', lastDeltaReasoning: '' };
       }
 
       // Update orchestration phase if active

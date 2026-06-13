@@ -1,6 +1,7 @@
 import { loadProjectConfig, toProviderFactoryInput, type ProjectConfig } from '../config/project';
 import { loadSynaxConfig } from '../config/load-config';
 import { createLLMClient } from '../llm/provider-factory';
+import { probeModelContextWindow } from '../llm/probe-context-window';
 import { Session, type AgentActivity, type AgentTerminalState } from '../session/Session';
 import { createSessionComponents, createAgentSession, type SessionComponents } from '../session/SessionFactory';
 import type { Logger } from '../logging/Logger';
@@ -136,7 +137,7 @@ function blockedReport(options: RunTaskOptions, mode: RunMode, messages: string[
     steps: 0,
     toolCalls: [],
     messages,
-    contextBudgetTokens: options.projectConfigOverride?.contextBudgetTokens ?? 131072,
+    contextBudgetTokens: options.projectConfigOverride?.contextBudgetTokens ?? 0,
     maxModelSteps: options.projectConfigOverride?.maxModelSteps ?? 64,
     maxToolCalls: options.projectConfigOverride?.maxToolCalls ?? 192,
     error,
@@ -241,12 +242,25 @@ export async function runAgentTask(options: RunTaskOptions): Promise<RunTaskRepo
     client = factoryResult.client;
     metadata = factoryResult.metadata;
 
+    // ── Probe relay/custom providers for actual model context window ──
+    if (!metadata.cloud) {
+      const probed = await probeModelContextWindow(
+        factoryResult.normalizedConfig.baseUrl,
+        metadata.modelId,
+        factoryResult.normalizedConfig.apiKey,
+        factoryResult.normalizedConfig.customHeaders,
+      );
+      if (probed !== undefined) {
+        metadata = { ...metadata, contextWindow: probed };
+      }
+    }
+
     // ── Create shared observability components via factory ──
     const modelContextWindow =
       metadata.contextWindow ??
       projectConfig.config.contextWindowTokens ??
       projectConfig.config.contextBudgetTokens ??
-      131072;
+      0;
 
     components = createSessionComponents({
       repoRoot: options.repoRoot,
@@ -300,9 +314,12 @@ export async function runAgentTask(options: RunTaskOptions): Promise<RunTaskRepo
       endpoint: metadata.baseUrl,
       model: metadata.modelId,
       providerName: metadata.displayName,
-      contextBudgetTokens: projectConfig.config.contextBudgetTokens ?? 131072,
+      contextBudgetTokens: metadata.contextWindow ?? projectConfig.config.contextBudgetTokens ?? 0,
       contextWindowTokens:
-        projectConfig.config.contextWindowTokens ?? projectConfig.config.contextBudgetTokens ?? 131072,
+        metadata.contextWindow ??
+        projectConfig.config.contextWindowTokens ??
+        projectConfig.config.contextBudgetTokens ??
+        0,
       maxModelSteps: projectConfig.config.maxModelSteps ?? 64,
       maxToolCalls: projectConfig.config.maxToolCalls ?? 192,
       tools,
@@ -900,7 +917,7 @@ export async function runAgentTask(options: RunTaskOptions): Promise<RunTaskRepo
       ...(dirtyTree.dirty ? ['working tree was dirty before run', ...dirtyTree.summary] : []),
       ...(checkpointRecord ? [`checkpoint: ${checkpointRecord.id}`] : []),
     ],
-    contextBudgetTokens: projectConfig.config.contextBudgetTokens ?? 131072,
+    contextBudgetTokens: projectConfig.config.contextBudgetTokens ?? metadata.contextWindow ?? 131072,
     maxModelSteps: projectConfig.config.maxModelSteps ?? 64,
     maxToolCalls: projectConfig.config.maxToolCalls ?? 192,
     workingTreeClean: !finalDirtyTree.dirty,

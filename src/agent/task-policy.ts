@@ -18,9 +18,14 @@ export function getAllowedModelTools(mode: RunMode, bashEnabled: boolean): strin
   // Always-available read-only tools
   const base = ['read', 'save_memory', 'search_memory', 'view_image'];
 
-  // Mutation tools only in patch mode
+  // Bash is available in every mode when the config enables it. Read-only
+  // questions routinely need `git status`/`git diff`/`git log`; without bash
+  // the model has no way to answer them and loops on directory listings
+  // until the identical-read guard kills the turn.
+  if (bashEnabled) base.push('bash');
+
+  // File mutation tools only in patch/verify mode
   if (mode === 'patch' || mode === 'verify') {
-    if (bashEnabled) base.push('bash');
     base.push('write', 'edit');
   }
 

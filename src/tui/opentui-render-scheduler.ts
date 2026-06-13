@@ -31,7 +31,7 @@ export class IncrementalFeedModel {
 
   constructor(private readonly liveCardLimit = DEFAULT_LIVE_CARD_LIMIT) {}
 
-  plan(events: SemanticEvent[], expanded: Record<string, boolean>): FeedRenderPlan {
+  plan(events: SemanticEvent[]): FeedRenderPlan {
     const limited = events.slice(Math.max(0, events.length - this.liveCardLimit));
     const nextIds = limited.map((event) => event.id);
     const nextIdSet = new Set(nextIds);
@@ -44,20 +44,22 @@ export class IncrementalFeedModel {
       }
     }
 
+    const orderAfterRemovals = this.order.filter((id) => nextIdSet.has(id));
     const nextOrder: string[] = [];
     for (const event of limited) {
-      const isExpanded = expanded[event.id] ?? false;
       const previous = this.rendered.get(event.id);
       const signature = eventSignature(event);
       nextOrder.push(event.id);
       if (!previous) {
         operations.push({ type: 'append', id: event.id, event });
-        this.rendered.set(event.id, { event, expanded: isExpanded, signature });
+        this.rendered.set(event.id, { event, expanded: false, signature });
         continue;
       }
-      if (previous.signature !== signature || previous.expanded !== isExpanded) {
-        operations.push({ type: 'update', id: event.id, event, index: nextOrder.length - 1 });
-        this.rendered.set(event.id, { event, expanded: isExpanded, signature });
+      const previousIndex = orderAfterRemovals.indexOf(event.id);
+      const nextIndex = nextOrder.length - 1;
+      if (previous.signature !== signature || previousIndex !== nextIndex) {
+        operations.push({ type: 'update', id: event.id, event, index: nextIndex });
+        this.rendered.set(event.id, { event, expanded: false, signature });
       }
     }
 
@@ -68,6 +70,39 @@ export class IncrementalFeedModel {
   reset(): void {
     this.rendered.clear();
     this.order = [];
+  }
+}
+
+/**
+ * Apply a feed render plan to a card container (the transcript ScrollBox).
+ *
+ * `cardIndexOffset` accounts for non-event children that precede the event
+ * cards in the container — e.g. the session header card is child 0 of the
+ * ScrollBox, so event index N lives at child index N + 1. Without the offset,
+ * updated cards (notably the streaming Thinking card, whose body changes on
+ * every reasoning delta) get re-inserted one slot above their true position
+ * and drift above the previous prompt or tool call.
+ */
+export function applyFeedOperations(
+  plan: FeedRenderPlan,
+  target: { add(node: unknown, index?: number): void },
+  removeCard: (id: string) => void,
+  renderCard: (event: SemanticEvent) => unknown,
+  cardIndexOffset = 0,
+): void {
+  for (const operation of plan.operations) {
+    if (operation.type === 'remove') {
+      removeCard(operation.id);
+      continue;
+    }
+    if (!operation.event) continue;
+    const card = renderCard(operation.event);
+    if (operation.type === 'update') {
+      removeCard(operation.id);
+      target.add(card, (operation.index ?? 0) + cardIndexOffset);
+    } else {
+      target.add(card);
+    }
   }
 }
 

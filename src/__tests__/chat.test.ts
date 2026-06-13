@@ -229,8 +229,10 @@ describe('chat session', () => {
     const report = await session.handleSlashCommand('/clear');
 
     expect(report.output).toContain('cleared');
-    expect(session.conversation.messages).toHaveLength(1);
+    // System prompt + runtime environment context (injected by SessionFactory)
+    expect(session.conversation.messages).toHaveLength(2);
     expect(session.conversation.messages[0].role).toBe('system');
+    expect(session.conversation.messages[1].role).toBe('system');
   });
 
   it('buffers multiline input until /end and submits one message', async () => {

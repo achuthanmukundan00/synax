@@ -20,6 +20,7 @@ import { TokenCounter } from '../metrics/TokenCounter';
 import { CostTracker } from '../metrics/CostTracker';
 import { resolveStrategy, getStrategy, type ContextStrategyMode } from '../context/ContextStrategy';
 import { createLogger, type Logger } from '../logging/index';
+import * as os from 'node:os';
 import { discoverSkills, buildSkillMessages } from '../skills/SkillLoader';
 import { loadSkills } from '../agent/skills';
 import { loadSynaxConfig } from '../config/load-config';
@@ -124,7 +125,19 @@ export function createSessionComponents(options: CreateSessionComponentsOptions)
       // Config loading is best-effort
     }
 
-    skillMessages = [...autoMessages, ...configMessages];
+    // Runtime context: the model doesn't know where it is, who the
+    // user is, or what ~/ resolves to. Inject this before all skills so
+    // it can ground tool-call paths in the real environment instead of
+    // hallucinating /home/user or random absolute paths.
+    const runtimeContext = [
+      `Environment:`,
+      `  repo: ${options.repoRoot}`,
+      `  home: ${os.homedir()}`,
+      `  user: ${os.userInfo().username}`,
+      `  platform: ${os.platform()}`,
+    ].join('\n');
+
+    skillMessages = [runtimeContext, ...autoMessages, ...configMessages];
     if (skillMessages.length === 0) skillMessages = undefined;
   }
 

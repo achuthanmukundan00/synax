@@ -70,8 +70,8 @@ export const FOOTER_BASE_HEIGHT = 3;
 /** Slash command autocomplete query matching. */
 export const CTRL_C_QUIT_TIMEOUT_MS = 800;
 
-/** Scroll amount (rows) for up/down keys. */
-export const SCROLL_STEP_ROWS = 9;
+/** Scroll amount (rows) for up/down keys and mouse wheel. */
+export const SCROLL_STEP_ROWS = 2;
 /** Scroll amount (proportion of terminal height) for page up/down. */
 export const SCROLL_PAGE_FACTOR = 0.7;
 

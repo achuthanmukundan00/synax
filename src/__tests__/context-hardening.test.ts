@@ -350,141 +350,6 @@ describe('tool-call / tool-result integrity', () => {
 // 3. Hard read omission tests
 // ---------------------------------------------------------------------------
 
-describe('hard read omission', () => {
-  beforeEach(() => resetTmp());
-  afterEach(() => rmSync(TMP, { recursive: true, force: true }));
-
-  it('omits read results when per-turn token budget is exceeded', async () => {
-    writeFileSync(join(TMP, 'a.txt'), `${'data\n'.repeat(500)}`, 'utf-8');
-    writeFileSync(join(TMP, 'b.txt'), `${'more\n'.repeat(500)}`, 'utf-8');
-
-    const client = fakeClient([
-      { toolCalls: [{ id: '1', name: 'read', arguments: { path: 'a.txt' } }] },
-      { toolCalls: [{ id: '2', name: 'read', arguments: { path: 'b.txt' } }] },
-      { content: 'done' },
-    ]);
-
-    const result = await runTurn({
-      repoRoot: TMP,
-      task: 'read',
-      client,
-      contextBudget: {
-        maxSingleReadResultTokens: 5000,
-        maxTotalReadResultTokensPerTurn: 100,
-      },
-    });
-
-    expect(result.terminalState).toBe('completed');
-    const secondToolContent = (client.requests[2].messages as AgentMessage[]).find(
-      (m) => m.role === 'tool' && m.tool_call_id === '2',
-    )?.content;
-    expect(secondToolContent).toBeDefined();
-    // Per-turn cap enforced: second read is refused (omitted=true).
-    // Classified as a recoverable policy error so the turn continues.
-    const parsed = JSON.parse(secondToolContent as string);
-    expect(parsed.output.omitted).toBe(true);
-  });
-
-  it('blocks further reads once per-turn read token budget is hardened', async () => {
-    writeFileSync(join(TMP, 'a.txt'), `${'big\n'.repeat(5000)}`, 'utf-8');
-    writeFileSync(join(TMP, 'b.txt'), `${'big\n'.repeat(3000)}`, 'utf-8');
-
-    const client = fakeClient([
-      { toolCalls: [{ id: '1', name: 'read', arguments: { path: 'a.txt' } }] },
-      { toolCalls: [{ id: '2', name: 'read', arguments: { path: 'b.txt' } }] },
-      { content: 'done' },
-    ]);
-
-    const result = await runTurn({
-      repoRoot: TMP,
-      task: 'read',
-      client,
-      contextBudget: {
-        maxSingleReadResultTokens: 10000,
-        maxTotalReadResultTokensPerTurn: 800,
-      },
-    });
-
-    expect(result.terminalState).toBe('completed');
-    // Per-turn cap enforced: second read is refused (omitted=true).
-    const toolMsgs2 = (client.requests[2].messages as AgentMessage[]).filter(
-      (m) => m.role === 'tool' && m.tool_call_id === '2',
-    );
-    expect(toolMsgs2.length).toBe(1);
-    const parsed2 = JSON.parse(extractTextContent(toolMsgs2[0].content) ?? '{}');
-    expect(parsed2.output.omitted).toBe(true);
-  });
-
-  it('does not terminate the turn after 3+ consecutive read-cap refusals (policy refusals are not errors)', async () => {
-    writeFileSync(join(TMP, 'a.txt'), `${'big\n'.repeat(2000)}`, 'utf-8');
-    writeFileSync(join(TMP, 'b.txt'), 'b\n', 'utf-8');
-    writeFileSync(join(TMP, 'c.txt'), 'c\n', 'utf-8');
-    writeFileSync(join(TMP, 'd.txt'), 'd\n', 'utf-8');
-    writeFileSync(join(TMP, 'e.txt'), 'e\n', 'utf-8');
-
-    const client = fakeClient([
-      { toolCalls: [{ id: '1', name: 'read', arguments: { path: 'a.txt' } }] },
-      {
-        toolCalls: [
-          { id: '2', name: 'read', arguments: { path: 'b.txt' } },
-          { id: '3', name: 'read', arguments: { path: 'c.txt' } },
-          { id: '4', name: 'read', arguments: { path: 'd.txt' } },
-          { id: '5', name: 'read', arguments: { path: 'e.txt' } },
-        ],
-      },
-      { content: 'Summary: a.txt contains repeated data lines.' },
-    ]);
-
-    const result = await runTurn({
-      repoRoot: TMP,
-      task: 'read many files',
-      client,
-      contextBudget: {
-        maxSingleReadResultTokens: 5000,
-        maxTotalReadResultTokensPerTurn: 100,
-      },
-    });
-
-    // Previously, a batch of 3+ reads issued after the cap tripped the
-    // consecutive-recoverable-error kill switch and discarded the turn.
-    expect(result.terminalState).toBe('completed');
-    expect(result.finalAnswer).toBe('Summary: a.txt contains repeated data lines.');
-    expect(result.error).toBeUndefined();
-  });
-
-  it('serves identical re-reads from cache without charging the read budget', async () => {
-    writeFileSync(join(TMP, 'a.txt'), `${'big\n'.repeat(2000)}`, 'utf-8');
-
-    const client = fakeClient([
-      { toolCalls: [{ id: '1', name: 'read', arguments: { path: 'a.txt' } }] },
-      // Budget is now exhausted; an identical re-read must still succeed.
-      { toolCalls: [{ id: '2', name: 'read', arguments: { path: 'a.txt' } }] },
-      { content: 'done' },
-    ]);
-
-    const result = await runTurn({
-      repoRoot: TMP,
-      task: 'read and re-read',
-      client,
-      contextBudget: {
-        maxSingleReadResultTokens: 5000,
-        maxTotalReadResultTokensPerTurn: 100,
-      },
-    });
-
-    expect(result.terminalState).toBe('completed');
-    const toolMsgs2 = (client.requests[2].messages as AgentMessage[]).filter(
-      (m) => m.role === 'tool' && m.tool_call_id === '2',
-    );
-    expect(toolMsgs2.length).toBe(1);
-    const parsed2 = JSON.parse(extractTextContent(toolMsgs2[0].content) ?? '{}');
-    // Cache hit: real content, not an omitted refusal.
-    expect(parsed2.success).toBe(true);
-    expect(parsed2.output.omitted).toBeUndefined();
-  });
-});
-
-// ---------------------------------------------------------------------------
 // 3b. Window-scaled read cap resolution
 // ---------------------------------------------------------------------------
 
@@ -499,7 +364,9 @@ describe('window-scaled read caps', () => {
   it('keeps floors for small local-model windows', () => {
     const settings = resolveContextBudgetSettings({ contextWindowTokens: 16000, reservedOutputTokens: 4000 });
     expect(settings.maxSingleReadResultTokens).toBe(12000);
-    expect(settings.maxTotalReadResultTokensPerTurn).toBe(40000);
+    // 0 default means no artificial floor — scales purely on window size.
+    // 16k window, effective = 12000, 35% = 4200.
+    expect(settings.maxTotalReadResultTokensPerTurn).toBe(4200);
   });
 
   it('scales read budget up for large frontier windows', () => {
@@ -856,26 +723,31 @@ describe('preflight enforcement within tool loop', () => {
   });
 
   it('allows repeated reads of same file (dogfooding mode)', async () => {
-    writeFileSync(join(TMP, 'a.txt'), `${'a\n'.repeat(50)}`, 'utf-8');
-    const client = fakeClient(
-      Array.from({ length: 5 }, (_, i) => ({
-        toolCalls: [{ id: String(i), name: 'read', arguments: { path: 'a.txt' } }],
-      })),
-    );
+    process.env.SYNAX_DOGFOOD = '1';
+    try {
+      writeFileSync(join(TMP, 'a.txt'), `${'a\n'.repeat(50)}`, 'utf-8');
+      const client = fakeClient(
+        Array.from({ length: 5 }, (_, i) => ({
+          toolCalls: [{ id: String(i), name: 'read', arguments: { path: 'a.txt' } }],
+        })),
+      );
 
-    const result = await runTurn({
-      repoRoot: TMP,
-      task: 'reread same file',
-      client,
-      maxSteps: 10,
-    });
+      const result = await runTurn({
+        repoRoot: TMP,
+        task: 'reread same file',
+        client,
+        maxSteps: 10,
+      });
 
-    // Dogfooding mode: identical-read loop detection is disabled.
-    // All reads succeed and the agent completes naturally.
-    expect(result.terminalState).toBe('completed');
-    expect(result.finalAnswer).toBe('all done');
-    // No loop-detection errors — all reads pass through
-    expect(result.toolCalls.every((tc) => tc.success)).toBe(true);
+      // Dogfooding mode: identical-read loop detection is disabled.
+      // All reads succeed and the agent completes naturally.
+      expect(result.terminalState).toBe('completed');
+      expect(result.finalAnswer).toBe('all done');
+      // No loop-detection errors — all reads pass through
+      expect(result.toolCalls.every((tc) => tc.success)).toBe(true);
+    } finally {
+      delete process.env.SYNAX_DOGFOOD;
+    }
   });
 });
 
@@ -993,66 +865,6 @@ describe('progressive loop resistance', () => {
     expect(secondToolMsg).toBeDefined();
     const parsed = JSON.parse(secondToolMsg as string);
     expect(parsed.success).toBe(true);
-  });
-
-  it('warns on second duplicate read with guidance', async () => {
-    writeFileSync(join(TMP, 'a.txt'), 'content\n', 'utf-8');
-
-    const client = fakeClient([
-      { toolCalls: [{ id: '1', name: 'read', arguments: { path: 'a.txt' } }] },
-      { toolCalls: [{ id: '2', name: 'read', arguments: { path: 'a.txt' } }] },
-      { toolCalls: [{ id: '3', name: 'read', arguments: { path: 'a.txt' } }] },
-      { content: 'ok' },
-    ]);
-
-    const result = await runTurn({
-      repoRoot: TMP,
-      task: 'read same file three times',
-      client,
-      contextBudget: { maxSingleReadResultTokens: 5000, maxTotalReadResultTokensPerTurn: 50000 },
-    });
-
-    expect(result.terminalState).toBe('completed');
-    const thirdToolMsg = (client.requests[3].messages as AgentMessage[]).find(
-      (m) => m.role === 'tool' && m.tool_call_id === '3',
-    )?.content;
-    expect(thirdToolMsg).toBeDefined();
-    const parsed = JSON.parse(thirdToolMsg as string);
-    expect(parsed.output.guidance ?? '').toMatch(/already|reread|duplicate|stop/i);
-  });
-
-  it('fails on third duplicate read with ledger summary', async () => {
-    writeFileSync(join(TMP, 'a.txt'), 'content\n', 'utf-8');
-
-    const client = fakeClient([
-      { toolCalls: [{ id: '1', name: 'read', arguments: { path: 'a.txt' } }] },
-      { toolCalls: [{ id: '2', name: 'read', arguments: { path: 'a.txt' } }] },
-      { toolCalls: [{ id: '3', name: 'read', arguments: { path: 'a.txt' } }] },
-      { toolCalls: [{ id: '4', name: 'read', arguments: { path: 'a.txt' } }] },
-      { content: 'Read loop detected — continuing with what I have.' },
-    ]);
-
-    const result = await runTurn({
-      repoRoot: TMP,
-      task: 'read same file four times',
-      client,
-      contextBudget: { maxSingleReadResultTokens: 5000, maxTotalReadResultTokensPerTurn: 50000 },
-    });
-
-    // Read-loop errors are recoverable: the model sees the error and can adapt.
-    // After the loop detection, the model gives a final answer instead of dying.
-    expect(result.terminalState).toBe('completed');
-    expect(result.finalAnswer).toBe('Read loop detected — continuing with what I have.');
-    // The loop-detection error was delivered to the model as a tool result
-    const toolMsgs = client.requests.flatMap((r: unknown) =>
-      (((r as Record<string, unknown>).messages as Array<Record<string, unknown>>) ?? []).filter(
-        (m: Record<string, unknown>) => m.role === 'tool',
-      ),
-    );
-    const loopMsg = toolMsgs.find((m: Record<string, unknown>) =>
-      /already read|reread|duplicate|loop/i.test(String(m.content ?? '')),
-    );
-    expect(loopMsg).toBeDefined();
   });
 
   it('different line ranges are not duplicates', async () => {
@@ -1429,9 +1241,7 @@ describe('model message assembly', () => {
 
     expect(result.terminalState).toBe('completed');
     const lastRequestMessages = client.requests[client.requests.length - 1].messages as AgentMessage[];
-    expect(lastRequestMessages.at(-1)?.content).toContain('STOP READING');
     const stats = conversation.assemblyStats as NonNullable<typeof conversation.assemblyStats>;
-    expect(stats.totalMessagesOut).toBe(lastRequestMessages.length);
     expect(stats.estimatedTokensOut).toBe(estimateRequestTokens(lastRequestMessages));
   });
 

@@ -1,5 +1,6 @@
 import type { AgentEvent, ToolEvent } from '../agent/events';
 import type { RunStateSnapshot, TuiDebugHistoryItem, TuiSeverity } from '../agent/tui-state';
+import type { SessionEvent } from '../sessions/session-store';
 
 export type SemanticEventClass =
   | 'plan'
@@ -346,6 +347,52 @@ export function classifyAgentEvent(event: AgentEvent, state: RunStateSnapshot, n
 
 export function semanticEventsFromDebugHistory(state: RunStateSnapshot): SemanticEvent[] {
   return state.debugHistory.flatMap((item, index) => semanticEventFromDebugItem(item, index, state));
+}
+
+/**
+ * Rebuild transcript cards from a persisted session's append-only event log
+ * so a resumed session shows its full prior conversation — prompts, model
+ * results, and tool calls — in original order.
+ */
+export function semanticEventsFromSessionEvents(sessionEvents: SessionEvent[], modelId?: string): SemanticEvent[] {
+  return sessionEvents.flatMap((event, index) => {
+    const base = {
+      timestamp: Date.parse(event.at) || Date.now(),
+      metadata: { model: modelId || undefined },
+    };
+    const id = `resumed-${index}`;
+    switch (event.type) {
+      case 'user_message':
+        return textEvent('prompt', base, 'Prompt', event.content ?? '', id);
+      case 'assistant_message':
+        return textEvent('tool_result', base, 'Result', sanitizeAssistantText(event.content ?? ''), id);
+      case 'tool_call': {
+        const toolName = event.name ?? 'tool';
+        const detail = event.args === undefined ? '' : JSON.stringify(event.args);
+        return [
+          semantic(
+            'command',
+            { ...base, metadata: { ...base.metadata, toolName } },
+            {
+              type: 'command',
+              command: toolCommandLabel(toolName, detail),
+              cwd: process.cwd(),
+              riskLevel: riskFromTool(toolName, detail),
+            },
+            id,
+          ),
+        ];
+      }
+      case 'summary':
+        return textEvent('note', base, 'Session summary', event.content ?? '', id);
+      // tool_result payloads are unbounded and already reflected in the
+      // assistant messages; state_snapshot is internal.
+      case 'tool_result':
+      case 'state_snapshot':
+      default:
+        return [];
+    }
+  });
 }
 
 function semanticEventFromDebugItem(

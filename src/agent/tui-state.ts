@@ -617,7 +617,7 @@ function upsertModelHistory(state: RunStateSnapshot, item: TuiDebugHistoryItem):
     let duplicateIndex = -1;
     for (let i = state.debugHistory.length - 1; i >= 0; i -= 1) {
       const historyItem = state.debugHistory[i];
-      if (historyItem.kind === 'user') break;
+      if (isModelHistoryBoundary(historyItem)) break;
       if (historyItem.kind === 'model' && summarizeModelOutput(historyItem.detail) === itemSummary) {
         duplicateIndex = i;
         break;
@@ -657,6 +657,10 @@ function appendModelDeltaHistory(state: RunStateSnapshot, content: string, nowMs
 function appendToLatestModelDetail(state: RunStateSnapshot, content: string): string {
   const last = state.debugHistory[state.debugHistory.length - 1];
   return last?.kind === 'model' ? `${last.detail}${content}` : content;
+}
+
+function isModelHistoryBoundary(item: TuiDebugHistoryItem): boolean {
+  return item.kind !== 'model';
 }
 
 function formatAssistantDelta(content?: string, reasoningContent?: string): string {

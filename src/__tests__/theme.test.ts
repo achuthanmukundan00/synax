@@ -1,25 +1,30 @@
 import { getPalette, getPaletteNames, applyConfigOverrides } from '../tui/theme';
 
 describe('theme system', () => {
-  it('returns the default palette when no name given', () => {
+  it('returns the mono palette when no name given', () => {
     const pal = getPalette();
-    expect(pal.name).toBe('default');
-    expect(pal.semantic.plan).toBe('#bd93f9');
-    expect(pal.semantic.error).toBe('#ff5555');
-    expect(pal.semantic.command).toBe('#8be9fd');
+    expect(pal.name).toBe('mono');
+    expect(pal.semantic.plan).toBe('#888888');
+    expect(pal.semantic.error).toBe('#cc6666');
+    expect(pal.semantic.command).toBe('#5f8fc7');
   });
 
-  it('returns the default palette for unknown names', () => {
+  it('returns the mono palette for unknown names', () => {
     const pal = getPalette('nonexistent');
-    expect(pal.name).toBe('default');
+    expect(pal.name).toBe('mono');
   });
 
   it('returns all palette presets', () => {
     const names = getPaletteNames();
-    expect(names).toContain('default');
-    expect(names).toContain('dark');
-    expect(names).toContain('light');
-    expect(names).toContain('high-contrast');
+    expect(names).toContain('mono');
+    expect(names).toContain('gruvbox');
+    expect(names).toContain('kanagawa');
+    expect(names).toContain('catppuccin');
+    expect(names).toContain('nord');
+    expect(names).toContain('rose-pine');
+    expect(names).toContain('tokyo-night');
+    expect(names).toContain('pink');
+    expect(names).toContain('dracula');
   });
 
   it('each palette has all semantic slots', () => {
@@ -49,22 +54,25 @@ describe('theme system', () => {
     }
   });
 
-  it('dark palette differs from default', () => {
+  it('default name resolves to mono palette', () => {
     const def = getPalette('default');
-    const dark = getPalette('dark');
-    expect(dark.background).not.toBe(def.background);
+    const mono = getPalette('mono');
+    expect(def.name).toBe('mono');
+    expect(def.background).toBe(mono.background);
   });
 
-  it('light palette has light background', () => {
-    const light = getPalette('light');
-    expect(light.background).toBe('#f8f8f8');
-    expect(light.text).toBe('#1a1a1a');
+  it('dracula palette has dark background', () => {
+    const dracula = getPalette('dracula');
+    expect(dracula.background).toBe('#14111a');
+    expect(dracula.semantic.error).toBe('#ff5555');
+    expect(dracula.semantic.command).toBe('#8be9fd');
   });
 
-  it('high-contrast palette has white borders', () => {
-    const hc = getPalette('high-contrast');
-    expect(hc.border).toBe('#ffffff');
-    expect(hc.background).toBe('#000000');
+  it('catppuccin palette has distinct semantic colors', () => {
+    const cat = getPalette('catppuccin');
+    expect(cat.background).toBe('#1e1e2e');
+    expect(cat.semantic.plan).toBe('#cba6f7');
+    expect(cat.semantic.tool_result).toBe('#a6e3a1');
   });
 
   it('applyConfigOverrides overrides specific semantic slots', () => {

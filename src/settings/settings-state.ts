@@ -6,21 +6,20 @@
  */
 import { existsSync, readdirSync } from 'fs';
 import { join } from 'path';
-import type { EffectiveSynaxConfig, ResolvedMcpServerConfig, ThinkingLevel } from '../config/schema';
+import type { EffectiveSynaxConfig, ThinkingLevel } from '../config/schema';
 import { buildConfigUpdate, globalConfigPath } from '../config/load-config';
 
 // ─── Tab definitions ───────────────────────────────────────
 
-export type SettingsTab = 'model' | 'providers' | 'skills' | 'mcp' | 'config' | 'help';
+export type SettingsTab = 'model' | 'providers' | 'skills' | 'config' | 'help';
 
-export const SETTINGS_TABS: SettingsTab[] = ['model', 'providers', 'skills', 'mcp', 'config', 'help'];
+export const SETTINGS_TABS: SettingsTab[] = ['model', 'providers', 'skills', 'config', 'help'];
 
 export function tabLabel(tab: SettingsTab): string {
   const labels: Record<SettingsTab, string> = {
     model: 'Model',
     providers: 'Providers',
     skills: 'Skills',
-    mcp: 'MCP',
     config: 'Config',
     help: 'Help',
   };
@@ -235,8 +234,6 @@ export function getTabRows(tab: SettingsTab, config: EffectiveSynaxConfig): Sett
       return buildProviderRows(config);
     case 'skills':
       return buildSkillsRows(config);
-    case 'mcp':
-      return buildMcpRows(config);
     case 'config':
       return buildConfigRows(config);
     case 'help':
@@ -373,27 +370,6 @@ function buildSkillsRows(config: EffectiveSynaxConfig): SettingsRow[] {
   return rows;
 }
 
-function buildMcpRows(config: EffectiveSynaxConfig): SettingsRow[] {
-  const rows: SettingsRow[] = [];
-  const servers = config.mcp.servers;
-
-  for (const [name, server] of Object.entries(servers)) {
-    const statusIcon = server.enabled ? '✓' : '○';
-    const cmdStr = `${server.command} ${server.args?.join(' ') ?? ''}`.trim();
-    const errors = validateMcpServer(server);
-
-    rows.push({
-      id: `mcp-${name}`,
-      label: `${statusIcon} ${name}`,
-      value: errors.length > 0 ? errors[0] : cmdStr,
-      kind: 'toggle',
-      enabled: server.enabled,
-    });
-  }
-
-  return rows;
-}
-
 function buildConfigRows(config: EffectiveSynaxConfig): SettingsRow[] {
   const rows: SettingsRow[] = [];
 
@@ -461,14 +437,6 @@ function buildConfigRows(config: EffectiveSynaxConfig): SettingsRow[] {
     kind: 'info',
   });
 
-  const mcpCount = Object.keys(config.mcp.servers).length;
-  rows.push({
-    id: 'config-loaded-mcp',
-    label: '✓ mcp',
-    value: `${mcpCount} servers`,
-    kind: 'info',
-  });
-
   if (config.errors.length > 0) {
     rows.push({ id: 'config-errors-header', label: 'Errors', value: '', kind: 'info', dimmed: true });
     for (const err of config.errors.slice(0, 5)) {
@@ -525,12 +493,6 @@ function handleToggle(state: SettingsState, row: SettingsRow): SettingsState {
   if (row.id.startsWith('skill-')) {
     const skillId = row.id.slice('skill-'.length);
     next.config = buildConfigUpdate(next.config, { toggleSkill: skillId });
-  }
-
-  // MCP toggle
-  if (row.id.startsWith('mcp-')) {
-    const serverId = row.id.slice('mcp-'.length);
-    next.config = buildConfigUpdate(next.config, { toggleMcpServer: serverId });
   }
 
   // Provider toggle
@@ -719,16 +681,4 @@ function discoverInstalledSkills(): InstalledSkill[] {
   }
 
   return skills;
-}
-
-function validateMcpServer(server: ResolvedMcpServerConfig): string[] {
-  const errors: string[] = [];
-  if (!server.command.trim()) errors.push('Missing command');
-  // Check for missing env vars that look like tokens
-  for (const [key, value] of Object.entries(server.env)) {
-    if (!value && key.includes('TOKEN')) {
-      errors.push(`Missing ${key}`);
-    }
-  }
-  return errors;
 }

@@ -85,15 +85,34 @@ export function filterCommands(query: string): SlashCommand[] {
 export function registerBuiltinCommands(): void {
   const commands: SlashCommand[] = [
     {
+      name: 'changelog',
+      description: 'Show the latest release changelog',
+      category: 'navigation',
+      handler: async () => {
+        try {
+          const { readFileSync } = await import('fs');
+          const { join } = await import('path');
+          const changelog = readFileSync(join(process.cwd(), 'CHANGELOG.md'), 'utf-8');
+          const releaseMatch = changelog.match(/^##\s+\[([^\]]+)\]([\s\S]*?)(?=\n##\s|\n\[|$)/m);
+          if (!releaseMatch) return { handled: true, output: 'No release entries found in CHANGELOG.md.' };
+          const version = releaseMatch[1];
+          const body = releaseMatch[2].trim();
+          return { handled: true, output: `## [${version}]\n\n${body}` };
+        } catch {
+          return { handled: true, output: 'CHANGELOG.md not found.' };
+        }
+      },
+    },
+    {
       name: 'settings',
-      description: 'Open settings menu',
+      description: 'Open settings',
       category: 'settings',
       handler: () => ({ handled: true, openSettings: true }),
       opensSettings: true,
     },
     {
       name: 'model',
-      description: 'Select model',
+      description: 'Change model',
       category: 'settings',
       aliases: ['models'],
       handler: () => ({ handled: true, openSettings: true }),
@@ -108,14 +127,7 @@ export function registerBuiltinCommands(): void {
     },
     {
       name: 'skills',
-      description: 'View or toggle installed skills',
-      category: 'settings',
-      handler: () => ({ handled: true, openSettings: true }),
-      opensSettings: true,
-    },
-    {
-      name: 'mcp',
-      description: 'View or toggle configured MCP servers',
+      description: 'Manage skills',
       category: 'settings',
       handler: () => ({ handled: true, openSettings: true }),
       opensSettings: true,
@@ -128,83 +140,29 @@ export function registerBuiltinCommands(): void {
       opensResume: true,
     },
     {
-      name: 'restore-checkpoint',
-      description: 'Restore to a checkpoint by hash (e.g. /restore-checkpoint abc1234)',
-      category: 'session',
-      handler: () => ({ handled: true, output: '[synax] restore-checkpoint — use /restore-checkpoint <hash>' }),
-    },
-    {
-      name: 'status',
-      description: 'Show runtime status',
-      category: 'runtime',
-      handler: () => ({ handled: false, output: '[synax] use /inspect for full status' }),
-    },
-    {
       name: 'help',
       description: 'Show help',
       category: 'navigation',
-      handler: () => ({ handled: false }), // pass through to session for inline help
+      handler: () => ({ handled: false }),
     },
     {
       name: 'exit',
       description: 'Exit Synax',
       category: 'navigation',
       aliases: ['quit'],
-      handler: () => ({ handled: true, exit: true, output: '[synax] bye' }),
+      handler: () => ({ handled: true, exit: true }),
     },
     {
       name: 'clear',
       description: 'Clear conversation',
       category: 'session',
-      handler: () => ({ handled: true, newSession: true, output: '[synax] conversation cleared' }),
+      handler: () => ({ handled: true, newSession: true }),
     },
     {
       name: 'new',
       description: 'Start a fresh session',
       category: 'session',
-      handler: () => ({ handled: true, newSession: true, output: '[synax] new session started' }),
-    },
-    {
-      name: 'tools',
-      description: 'Show model-facing tools',
-      category: 'debug',
-      handler: () => ({ handled: false }),
-    },
-    {
-      name: 'budget',
-      description: 'Show context budget',
-      category: 'debug',
-      handler: () => ({ handled: false }),
-    },
-    {
-      name: 'test-provider',
-      description: 'Probe provider connection',
-      category: 'debug',
-      handler: () => ({ handled: false }),
-    },
-    {
-      name: 'inspect',
-      description: 'Show project profile',
-      category: 'debug',
-      handler: () => ({ handled: false }),
-    },
-    {
-      name: 'diff',
-      description: 'Show bounded git diff',
-      category: 'debug',
-      handler: () => ({ handled: false }),
-    },
-    {
-      name: 'undo-last-edit',
-      description: 'Revert last Synax edit',
-      category: 'debug',
-      handler: () => ({ handled: false }),
-    },
-    {
-      name: 'verify',
-      description: 'Run verification command',
-      category: 'debug',
-      handler: () => ({ handled: false }),
+      handler: () => ({ handled: true, newSession: true }),
     },
   ];
 

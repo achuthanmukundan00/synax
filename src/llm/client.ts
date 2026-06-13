@@ -315,13 +315,20 @@ function parseSuccessResponse(bodyText: string, parserMode: ToolCallParserMode):
     }
   }
 
+  // Gemma 3/4 models expect native tool messages (role: 'tool',
+  // tool_call_id) rather than XML-wrapped <tool_response> user
+  // messages. Force the format to 'openai' even when tool calls are
+  // parsed from text content, so tool results use the native
+  // convention that Gemma chat templates understand.
+  const forceOpenaiFormat = parserMode.startsWith('gemma_');
+
   return {
     content,
     model: json.model ?? '',
     finishReason: finishReason ?? 'stop',
     reasoningContent,
     toolCallFormat:
-      standardToolCallResult.calls.length > 0
+      standardToolCallResult.calls.length > 0 || forceOpenaiFormat
         ? 'openai'
         : fallbackToolCallResult.calls.length > 0
           ? 'content_xml'
